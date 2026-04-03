@@ -1,0 +1,121 @@
+package vault
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/apresai/2ndbrain/internal/document"
+	"github.com/apresai/2ndbrain/internal/store"
+)
+
+type IndexStats struct {
+	FilesScanned  int `json:"files_scanned"`
+	DocsIndexed   int `json:"docs_indexed"`
+	ChunksCreated int `json:"chunks_created"`
+	LinksFound    int `json:"links_found"`
+	Errors        int `json:"errors"`
+}
+
+// IndexVault walks all markdown files and indexes them into the database.
+func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
+	stats := &IndexStats{}
+
+	err := filepath.Walk(v.Root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip inaccessible paths
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if strings.HasPrefix(base, ".") || base == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Only markdown files
+		if !strings.HasSuffix(strings.ToLower(path), ".md") {
+			return nil
+		}
+
+		relPath := v.RelPath(path)
+		if IsIgnored(relPath) {
+			return nil
+		}
+
+		stats.FilesScanned++
+		if onProgress != nil {
+			onProgress(relPath)
+		}
+
+		if err := indexFile(v.DB, path, relPath); err != nil {
+			stats.Errors++
+			fmt.Fprintf(os.Stderr, "warning: index %s: %v\n", relPath, err)
+			return nil
+		}
+
+		stats.DocsIndexed++
+		return nil
+	})
+
+	if err != nil {
+		return stats, fmt.Errorf("walk vault: %w", err)
+	}
+
+	// Count chunks and links
+	stats.ChunksCreated = countRows(v.DB, "chunks")
+	stats.LinksFound = countRows(v.DB, "links")
+
+	return stats, nil
+}
+
+func indexFile(db *store.DB, absPath, relPath string) error {
+	doc, err := document.ParseFile(absPath)
+	if err != nil {
+		return err
+	}
+	doc.Path = relPath
+
+	// Ensure document has an ID
+	if doc.ID == "" {
+		return fmt.Errorf("document %s has no id in frontmatter", relPath)
+	}
+
+	// Upsert document
+	if err := db.UpsertDocument(doc); err != nil {
+		return fmt.Errorf("upsert document: %w", err)
+	}
+
+	// Delete old chunks for this doc then insert new ones
+	if err := db.DeleteChunksByDoc(doc.ID); err != nil {
+		return fmt.Errorf("delete old chunks: %w", err)
+	}
+
+	chunks := document.ChunkDocument(doc)
+	if err := db.UpsertChunks(chunks); err != nil {
+		return fmt.Errorf("upsert chunks: %w", err)
+	}
+
+	// Tags
+	if err := db.UpsertTags(doc.ID, doc.Tags); err != nil {
+		return fmt.Errorf("upsert tags: %w", err)
+	}
+
+	// Links
+	links := document.ExtractWikiLinks(doc.Body)
+	if err := db.UpsertLinks(doc.ID, links); err != nil {
+		return fmt.Errorf("upsert links: %w", err)
+	}
+
+	return nil
+}
+
+func countRows(db *store.DB, table string) int {
+	var count int
+	row := db.Conn().QueryRow("SELECT COUNT(*) FROM " + table)
+	row.Scan(&count)
+	return count
+}

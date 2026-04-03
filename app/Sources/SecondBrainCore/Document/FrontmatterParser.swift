@@ -1,0 +1,84 @@
+import Foundation
+import Yams
+
+public enum FrontmatterParser {
+    public static func parse(_ content: String) -> (frontmatter: [String: Any], body: String) {
+        guard content.hasPrefix("---\n") || content.hasPrefix("---\r\n") else {
+            return ([:], content)
+        }
+
+        let rest = String(content.dropFirst(4))
+        guard let endIndex = rest.range(of: "\n---\n") else {
+            return ([:], content)
+        }
+
+        let yamlString = String(rest[rest.startIndex..<endIndex.lowerBound])
+        let bodyStart = rest[endIndex.upperBound...]
+
+        do {
+            if let parsed = try Yams.load(yaml: yamlString) as? [String: Any] {
+                return (parsed, String(bodyStart))
+            }
+        } catch {
+            // Malformed YAML - return raw content
+        }
+
+        return ([:], content)
+    }
+
+    public static func serialize(frontmatter: [String: Any], body: String) -> String {
+        var result = "---\n"
+        if let yaml = try? Yams.dump(object: frontmatter, sortKeys: true) {
+            result += yaml
+        }
+        result += "---\n"
+        result += body
+        return result
+    }
+
+    public static func loadDocument(from url: URL) throws -> MarkdownDocument {
+        let content = try String(contentsOf: url, encoding: .utf8)
+        let (fm, body) = parse(content)
+
+        let id = fm["id"] as? String ?? UUID().uuidString
+        let title = fm["title"] as? String ?? url.deletingPathExtension().lastPathComponent
+        let docType = fm["type"] as? String ?? "note"
+        let status = fm["status"] as? String ?? ""
+        let tags = extractTags(from: fm)
+
+        let createdAt = parseDate(fm["created"]) ?? Date()
+        let modifiedAt = parseDate(fm["modified"]) ?? Date()
+
+        return MarkdownDocument(
+            id: id,
+            path: url.path,
+            title: title,
+            docType: docType,
+            status: status,
+            tags: tags,
+            createdAt: createdAt,
+            modifiedAt: modifiedAt,
+            frontmatterJSON: fmToJSON(fm),
+            body: body
+        )
+    }
+
+    private static func extractTags(from fm: [String: Any]) -> [String] {
+        guard let raw = fm["tags"] else { return [] }
+        if let arr = raw as? [String] { return arr }
+        if let arr = raw as? [Any] { return arr.compactMap { $0 as? String } }
+        return []
+    }
+
+    private static func parseDate(_ value: Any?) -> Date? {
+        guard let str = value as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        return formatter.date(from: str)
+    }
+
+    private static func fmToJSON(_ fm: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: fm, options: [.sortedKeys]),
+              let str = String(data: data, encoding: .utf8) else { return "{}" }
+        return str
+    }
+}

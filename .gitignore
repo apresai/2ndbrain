@@ -2,3 +2,22 @@
 .env.*
 node_modules/
 .DS_Store
+
+# Go
+cli/bin/
+*.exe
+
+# Swift / Xcode
+app/DerivedData/
+app/*.xcodeproj/xcuserdata/
+app/*.xcworkspace/xcuserdata/
+.build/
+.swiftpm/
+
+# 2ndbrain vault data (generated)
+.2ndbrain/index.db
+.2ndbrain/index.db-wal
+.2ndbrain/index.db-shm
+.2ndbrain/models/
+.2ndbrain/recovery/
+.2ndbrain/logs/
