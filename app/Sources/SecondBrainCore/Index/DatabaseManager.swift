@@ -116,6 +116,21 @@ public final class DatabaseManager: Sendable {
             return try DocumentRecord.fetchAll(db, sql: sql, arguments: StatementArguments(args))
         }
     }
+    /// Fetch all link edges (source_id -> target_id).
+    public func allLinks() throws -> [(source: String, target: String)] {
+        try dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT source_id, target_id FROM links
+                WHERE target_id IS NOT NULL
+            """)
+            return rows.compactMap { row in
+                guard let source = row["source_id"] as String?,
+                      let target = row["target_id"] as String? else { return nil }
+                return (source: source, target: target)
+            }
+        }
+    }
+
     /// Find documents that link to the given target name.
     public func backlinks(for targetName: String) throws -> [(path: String, title: String, linkText: String)] {
         try dbPool.read { db in

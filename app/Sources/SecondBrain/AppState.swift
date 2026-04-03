@@ -14,6 +14,8 @@ final class AppState {
     // Sidebar
     var sidebarVisible = true
     var focusModeActive = false
+    var showGraphView = false
+    var spotlightIndexer: SpotlightIndexer?
     var files: [FileItem] = []
     var outline: [HeadingItem] = []
 
@@ -34,6 +36,11 @@ final class AppState {
                 print("Failed to open index: \(error)")
             }
         }
+
+        // Initialize Spotlight indexer and index vault
+        let indexer = SpotlightIndexer()
+        self.spotlightIndexer = indexer
+        indexer.indexAll(vault: vm)
 
         // Refresh file list
         refreshFiles()
@@ -143,6 +150,12 @@ final class AppState {
         // Extract body (skip frontmatter)
         let (_, body) = FrontmatterParser.parse(tab.content)
         outline = MarkdownRenderer.extractOutline(body)
+    }
+
+    func reindexSpotlight() {
+        guard let vault, let indexer = spotlightIndexer else { return }
+        indexer.clearAll()
+        indexer.indexAll(vault: vault)
     }
 
     private func reloadIfOpen(path: String) {

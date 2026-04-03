@@ -26,6 +26,14 @@ struct ContentView: View {
                 CommandPaletteView(isPresented: $showCommandPalette)
             }
         }
+        .sheet(isPresented: Binding(
+            get: { appState.showGraphView },
+            set: { appState.showGraphView = $0 }
+        )) {
+            GraphView()
+                .environment(appState)
+                .frame(minWidth: 600, minHeight: 400)
+        }
         .sheet(isPresented: $showProperties) {
             PropertiesView(isPresented: $showProperties)
                 .environment(appState)

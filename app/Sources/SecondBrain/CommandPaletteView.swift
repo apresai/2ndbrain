@@ -92,6 +92,12 @@ struct CommandPaletteView: View {
             PaletteCommand(title: "Refresh File List", icon: "arrow.clockwise", shortcut: "") { state in
                 state.refreshFiles()
             },
+            PaletteCommand(title: "Show Graph View", icon: "point.3.connected.trianglepath.dotted", shortcut: "") { state in
+                state.showGraphView = true
+            },
+            PaletteCommand(title: "Reindex Spotlight", icon: "magnifyingglass", shortcut: "") { state in
+                state.reindexSpotlight()
+            },
         ]
     }
 }
