@@ -116,6 +116,26 @@ public final class DatabaseManager: Sendable {
             return try DocumentRecord.fetchAll(db, sql: sql, arguments: StatementArguments(args))
         }
     }
+    /// Find documents that link to the given target name.
+    public func backlinks(for targetName: String) throws -> [(path: String, title: String, linkText: String)] {
+        try dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT d.path, d.title, l.target_raw
+                FROM links l
+                JOIN documents d ON d.id = l.source_id
+                WHERE l.target_raw = ?
+                LIMIT 50
+            """, arguments: [targetName])
+
+            return rows.map { row in
+                (
+                    path: row["path"] as String? ?? "",
+                    title: row["title"] as String? ?? "",
+                    linkText: row["target_raw"] as String? ?? ""
+                )
+            }
+        }
+    }
 }
 
 /// GRDB record for the documents table.

@@ -3,22 +3,98 @@ import SecondBrainCore
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
+    @State private var showSearch = false
+    @State private var showQuickOpen = false
+    @State private var showCommandPalette = false
+    @State private var showProperties = false
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView()
-        } detail: {
+        ZStack {
+            mainContent
+
+            // Modal overlays
+            if showSearch {
+                overlayBackground { showSearch = false }
+                SearchPanelView(isPresented: $showSearch)
+            }
+            if showQuickOpen {
+                overlayBackground { showQuickOpen = false }
+                QuickOpenView(isPresented: $showQuickOpen)
+            }
+            if showCommandPalette {
+                overlayBackground { showCommandPalette = false }
+                CommandPaletteView(isPresented: $showCommandPalette)
+            }
+        }
+        .sheet(isPresented: $showProperties) {
+            PropertiesView(isPresented: $showProperties)
+                .environment(appState)
+        }
+        .onKeyPress(keys: [.init("f")], phases: .down) { press in
+            if press.modifiers.contains([.command, .shift]) {
+                showSearch.toggle()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(keys: [.init("p")], phases: .down) { press in
+            if press.modifiers.contains([.command, .shift]) {
+                showCommandPalette.toggle()
+                return .handled
+            }
+            if press.modifiers.contains(.command) {
+                showQuickOpen.toggle()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(keys: [.init("e")], phases: .down) { press in
+            if press.modifiers.contains([.command, .shift]) {
+                appState.focusModeActive.toggle()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(keys: [.init("i")], phases: .down) { press in
+            if press.modifiers.contains([.command, .option]) {
+                showProperties.toggle()
+                return .handled
+            }
+            return .ignored
+        }
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        if appState.focusModeActive {
+            // Focus mode: just the editor, no chrome
             if appState.openDocuments.isEmpty {
                 WelcomeView()
             } else {
-                VStack(spacing: 0) {
-                    TabBarView()
-                    EditorArea()
-                    StatusBarView()
+                EditorArea()
+            }
+        } else {
+            NavigationSplitView {
+                SidebarView()
+            } detail: {
+                if appState.openDocuments.isEmpty {
+                    WelcomeView()
+                } else {
+                    VStack(spacing: 0) {
+                        TabBarView()
+                        EditorArea()
+                        StatusBarView()
+                    }
                 }
             }
+            .navigationSplitViewStyle(.balanced)
         }
-        .navigationSplitViewStyle(.balanced)
+    }
+
+    private func overlayBackground(onTap: @escaping () -> Void) -> some View {
+        Color.black.opacity(0.3)
+            .ignoresSafeArea()
+            .onTapGesture(perform: onTap)
     }
 }
 

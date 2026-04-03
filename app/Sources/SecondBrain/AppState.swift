@@ -13,6 +13,7 @@ final class AppState {
 
     // Sidebar
     var sidebarVisible = true
+    var focusModeActive = false
     var files: [FileItem] = []
     var outline: [HeadingItem] = []
 

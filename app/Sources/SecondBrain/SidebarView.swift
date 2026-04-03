@@ -12,6 +12,7 @@ struct SidebarView: View {
             Picker("Panel", selection: $selectedPanel) {
                 Image(systemName: "doc.text").tag(SidebarPanel.files)
                 Image(systemName: "list.bullet.indent").tag(SidebarPanel.outline)
+                Image(systemName: "link").tag(SidebarPanel.backlinks)
             }
             .pickerStyle(.segmented)
             .padding(8)
@@ -21,6 +22,8 @@ struct SidebarView: View {
             switch selectedPanel {
             case .files:
                 fileList
+            case .backlinks:
+                BacklinksView()
             case .outline:
                 outlineList
             }
@@ -74,5 +77,5 @@ struct SidebarView: View {
 }
 
 enum SidebarPanel {
-    case files, outline
+    case files, outline, backlinks
 }
