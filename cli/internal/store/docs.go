@@ -138,6 +138,19 @@ func (db *DB) GetDocumentByPath(path string) (*document.Document, error) {
 	return &doc, nil
 }
 
+// ResolveLinks matches unresolved wikilinks to existing documents by path or title.
+func (db *DB) ResolveLinks() error {
+	_, err := db.conn.Exec(`
+		UPDATE links SET target_id = d.id, resolved = 1
+		FROM documents d
+		WHERE (links.target_raw = replace(d.path, '.md', '')
+		   OR links.target_raw = d.title
+		   OR links.target_raw = d.path)
+		AND links.resolved = 0
+	`)
+	return err
+}
+
 func (db *DB) DeleteDocument(docID string) error {
 	_, err := db.conn.Exec("DELETE FROM documents WHERE id = ?", docID)
 	return err

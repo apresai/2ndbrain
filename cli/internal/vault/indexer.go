@@ -65,6 +65,11 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 		return stats, fmt.Errorf("walk vault: %w", err)
 	}
 
+	// Resolve wikilinks now that all documents are indexed
+	if err := v.DB.ResolveLinks(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: resolve links: %v\n", err)
+	}
+
 	// Count chunks and links
 	stats.ChunksCreated = countRows(v.DB, "chunks")
 	stats.LinksFound = countRows(v.DB, "links")

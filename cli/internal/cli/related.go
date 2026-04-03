@@ -35,8 +35,7 @@ func runRelated(cmd *cobra.Command, args []string) error {
 	relPath := args[0]
 	doc, err := v.DB.GetDocumentByPath(relPath)
 	if err != nil {
-		exitWithCode(ExitNotFound, fmt.Sprintf("document not found: %s", relPath))
-		return nil
+		return exitWithError(ExitNotFound, fmt.Sprintf("document not found: %s", relPath))
 	}
 
 	g, err := graph.Traverse(v.DB.Conn(), doc.ID, relatedDepth)

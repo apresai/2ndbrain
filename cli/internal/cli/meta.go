@@ -35,8 +35,7 @@ func runMeta(cmd *cobra.Command, args []string) error {
 	path := v.AbsPath(args[0])
 	doc, err := document.ParseFile(path)
 	if err != nil {
-		exitWithCode(ExitNotFound, fmt.Sprintf("error: %v", err))
-		return nil
+		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))
 	}
 
 	doc.Path = v.RelPath(path)
@@ -55,22 +54,19 @@ func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 	for _, kv := range metaSet {
 		parts := strings.SplitN(kv, "=", 2)
 		if len(parts) != 2 {
-			exitWithCode(ExitValidation, fmt.Sprintf("invalid --set format: %q (expected key=value)", kv))
-			return nil
+			return exitWithError(ExitValidation, fmt.Sprintf("invalid --set format: %q (expected key=value)", kv))
 		}
 		key, value := parts[0], parts[1]
 
 		// Validate against schema
 		if err := v.Schemas.ValidateField(doc.Type, key, value); err != nil {
-			exitWithCode(ExitValidation, fmt.Sprintf("validation error: %v", err))
-			return nil
+			return exitWithError(ExitValidation, fmt.Sprintf("validation error: %v", err))
 		}
 
 		// Validate status transitions
 		if key == "status" && doc.Status != "" {
 			if err := v.Schemas.ValidateStatusTransition(doc.Type, doc.Status, value); err != nil {
-				exitWithCode(ExitValidation, fmt.Sprintf("validation error: %v", err))
-				return nil
+				return exitWithError(ExitValidation, fmt.Sprintf("validation error: %v", err))
 			}
 		}
 

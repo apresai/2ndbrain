@@ -35,8 +35,7 @@ func runRead(cmd *cobra.Command, args []string) error {
 	path := v.AbsPath(args[0])
 	doc, err := document.ParseFile(path)
 	if err != nil {
-		exitWithCode(ExitNotFound, fmt.Sprintf("error: %v", err))
-		return nil
+		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))
 	}
 
 	doc.Path = v.RelPath(path)
@@ -62,8 +61,7 @@ func readSpecificChunk(cmd *cobra.Command, doc *document.Document) error {
 		}
 	}
 
-	exitWithCode(ExitNotFound, fmt.Sprintf("chunk not found: %s", readChunk))
-	return nil
+	return exitWithError(ExitNotFound, fmt.Sprintf("chunk not found: %s", readChunk))
 }
 
 func containsHeading(headingPath, target string) bool {

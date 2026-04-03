@@ -21,6 +21,8 @@ func Start(v *vault.Vault, version string) error {
 	s.AddTool(kbCreateTool(), h.handleKBCreate)
 	s.AddTool(kbUpdateMetaTool(), h.handleKBUpdateMeta)
 	s.AddTool(kbStructureTool(), h.handleKBStructure)
+	s.AddTool(kbDeleteTool(), h.handleKBDelete)
+	s.AddTool(kbListTool(), h.handleKBList)
 
 	return server.ServeStdio(s)
 }
@@ -113,6 +115,36 @@ func kbStructureTool() mcplib.Tool {
 				"path": map[string]any{"type": "string", "description": "Vault-relative path to the document"},
 			},
 			Required: []string{"path"},
+		},
+	}
+}
+
+func kbDeleteTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name:        "kb_delete",
+		Description: "Delete a document from the vault. Removes both the file from disk and all index entries (chunks, tags, links).",
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path": map[string]any{"type": "string", "description": "Vault-relative path to the document to delete"},
+			},
+			Required: []string{"path"},
+		},
+	}
+}
+
+func kbListTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name:        "kb_list",
+		Description: "List all documents in the vault with optional filters. Returns document metadata without content.",
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"type":   map[string]any{"type": "string", "description": "Filter by document type (e.g. adr, runbook)"},
+				"status": map[string]any{"type": "string", "description": "Filter by status"},
+				"tag":    map[string]any{"type": "string", "description": "Filter by tag"},
+				"limit":  map[string]any{"type": "integer", "description": "Maximum results (default 100)"},
+			},
 		},
 	}
 }

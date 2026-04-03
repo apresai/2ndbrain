@@ -1,0 +1,108 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
+	"github.com/spf13/cobra"
+)
+
+var (
+	listType   string
+	listStatus string
+	listTag    string
+	listLimit  int
+	listSort   string
+)
+
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all documents in the vault with optional filters",
+	RunE:  runList,
+}
+
+func init() {
+	listCmd.Flags().StringVar(&listType, "type", "", "Filter by document type")
+	listCmd.Flags().StringVar(&listStatus, "status", "", "Filter by status")
+	listCmd.Flags().StringVar(&listTag, "tag", "", "Filter by tag")
+	listCmd.Flags().IntVar(&listLimit, "limit", 100, "Maximum results")
+	listCmd.Flags().StringVar(&listSort, "sort", "modified", "Sort by: modified, created, title, path")
+	rootCmd.AddCommand(listCmd)
+}
+
+type ListItem struct {
+	ID         string `json:"id"`
+	Path       string `json:"path"`
+	Title      string `json:"title"`
+	Type       string `json:"type"`
+	Status     string `json:"status"`
+	ModifiedAt string `json:"modified_at"`
+}
+
+func runList(cmd *cobra.Command, args []string) error {
+	v, err := vault.Open(".")
+	if err != nil {
+		return fmt.Errorf("open vault: %w", err)
+	}
+	defer v.Close()
+
+	query := "SELECT id, path, title, doc_type, status, modified_at FROM documents"
+	var conditions []string
+	var qArgs []any
+
+	if listType != "" {
+		conditions = append(conditions, "doc_type = ?")
+		qArgs = append(qArgs, listType)
+	}
+	if listStatus != "" {
+		conditions = append(conditions, "status = ?")
+		qArgs = append(qArgs, listStatus)
+	}
+	if listTag != "" {
+		conditions = append(conditions, "id IN (SELECT doc_id FROM tags WHERE tag = ?)")
+		qArgs = append(qArgs, listTag)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	switch listSort {
+	case "created":
+		query += " ORDER BY created_at DESC"
+	case "title":
+		query += " ORDER BY title ASC"
+	case "path":
+		query += " ORDER BY path ASC"
+	default:
+		query += " ORDER BY modified_at DESC"
+	}
+
+	query += " LIMIT ?"
+	qArgs = append(qArgs, listLimit)
+
+	rows, err := v.DB.Conn().Query(query, qArgs...)
+	if err != nil {
+		return fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var items []ListItem
+	for rows.Next() {
+		var item ListItem
+		if err := rows.Scan(&item.ID, &item.Path, &item.Title, &item.Type, &item.Status, &item.ModifiedAt); err != nil {
+			continue
+		}
+		items = append(items, item)
+	}
+
+	if len(items) == 0 {
+		fmt.Fprintln(os.Stderr, "No documents found.")
+	}
+
+	format := getFormat(cmd)
+	return output.Write(os.Stdout, format, items)
+}

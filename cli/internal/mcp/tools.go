@@ -257,3 +257,92 @@ func (h *handlers) handleKBStructure(ctx context.Context, request mcplib.CallToo
 	data, _ := json.MarshalIndent(result, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil
 }
+
+func (h *handlers) handleKBDelete(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+
+	if path == "" {
+		return mcplib.NewToolResultError("path is required"), nil
+	}
+	if strings.Contains(path, "..") {
+		return mcplib.NewToolResultError("path traversal not allowed"), nil
+	}
+
+	doc, err := h.vault.DB.GetDocumentByPath(path)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("document not found: %s", path)), nil
+	}
+
+	absPath := h.vault.AbsPath(path)
+	if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
+		return mcplib.NewToolResultError(fmt.Sprintf("delete file failed: %v", err)), nil
+	}
+
+	if err := h.vault.DB.DeleteDocument(doc.ID); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("delete from index failed: %v", err)), nil
+	}
+
+	deleteResult := map[string]any{"deleted": true, "id": doc.ID, "path": path, "title": doc.Title}
+	deleteData, _ := json.MarshalIndent(deleteResult, "", "  ")
+	return mcplib.NewToolResultText(string(deleteData)), nil
+}
+
+func (h *handlers) handleKBList(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	docType, _ := request.GetArguments()["type"].(string)
+	status, _ := request.GetArguments()["status"].(string)
+	tag, _ := request.GetArguments()["tag"].(string)
+	limit := 100
+	if l, ok := request.GetArguments()["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	query := "SELECT id, path, title, doc_type, status, modified_at FROM documents"
+	var conditions []string
+	var args []any
+
+	if docType != "" {
+		conditions = append(conditions, "doc_type = ?")
+		args = append(args, docType)
+	}
+	if status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, status)
+	}
+	if tag != "" {
+		conditions = append(conditions, "id IN (SELECT doc_id FROM tags WHERE tag = ?)")
+		args = append(args, tag)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY modified_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := h.vault.DB.Conn().Query(query, args...)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("query failed: %v", err)), nil
+	}
+	defer rows.Close()
+
+	type listItem struct {
+		ID         string `json:"id"`
+		Path       string `json:"path"`
+		Title      string `json:"title"`
+		Type       string `json:"type"`
+		Status     string `json:"status"`
+		ModifiedAt string `json:"modified_at"`
+	}
+
+	var items []listItem
+	for rows.Next() {
+		var i listItem
+		if err := rows.Scan(&i.ID, &i.Path, &i.Title, &i.Type, &i.Status, &i.ModifiedAt); err != nil {
+			continue
+		}
+		items = append(items, i)
+	}
+
+	listData, _ := json.MarshalIndent(items, "", "  ")
+	return mcplib.NewToolResultText(string(listData)), nil
+}

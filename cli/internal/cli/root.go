@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -58,7 +55,16 @@ func getFormat(cmd *cobra.Command) output.Format {
 	return output.FormatJSON // default to JSON for AI consumption
 }
 
-func exitWithCode(code int, msg string) {
-	fmt.Fprintln(os.Stderr, msg)
-	os.Exit(code)
+// ExitError is an error that carries an exit code for the CLI.
+type ExitError struct {
+	Code    int
+	Message string
+}
+
+func (e *ExitError) Error() string {
+	return e.Message
+}
+
+func exitWithError(code int, msg string) error {
+	return &ExitError{Code: code, Message: msg}
 }
