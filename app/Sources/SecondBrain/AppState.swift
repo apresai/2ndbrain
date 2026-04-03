@@ -16,6 +16,10 @@ final class AppState {
     var focusModeActive = false
     var showGraphView = false
     var spotlightIndexer: SpotlightIndexer?
+    var crashJournal: CrashJournal?
+    var errorLogger: ErrorLogger?
+    var recoveryEntries: [RecoveryEntry] = []
+    var showRecoveryDialog = false
     var files: [FileItem] = []
     var outline: [HeadingItem] = []
 
@@ -41,6 +45,18 @@ final class AppState {
         let indexer = SpotlightIndexer()
         self.spotlightIndexer = indexer
         indexer.indexAll(vault: vm)
+
+        // Initialize crash recovery and error logging
+        let journal = CrashJournal(vaultDotDir: vm.dotDirURL)
+        self.crashJournal = journal
+        self.errorLogger = ErrorLogger(vaultDotDir: vm.dotDirURL)
+
+        // Check for crash recovery entries
+        let entries = journal.recoverableDocuments()
+        if !entries.isEmpty {
+            self.recoveryEntries = entries
+            self.showRecoveryDialog = true
+        }
 
         // Refresh file list
         refreshFiles()
@@ -137,9 +153,43 @@ final class AppState {
         do {
             try openDocuments[idx].content.write(to: tab.url, atomically: true, encoding: .utf8)
             openDocuments[idx].isDirty = false
+            crashJournal?.clearSnapshot(documentID: tab.document.id)
         } catch {
-            print("Failed to save: \(error)")
+            errorLogger?.log("Failed to save document", error: error)
+            crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
         }
+    }
+
+    func saveSnapshotForCurrentDocument() {
+        guard let tab = currentDocument else { return }
+        crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
+    }
+
+    func recoverDocument(_ entry: RecoveryEntry) {
+        // Write recovered content to the vault
+        guard let vault else { return }
+        // Try to find the original file
+        let files = vault.listMarkdownFiles()
+        for file in files {
+            if let doc = try? FrontmatterParser.loadDocument(from: file), doc.id == entry.documentID {
+                try? entry.content.write(to: file, atomically: true, encoding: .utf8)
+                openDocument(at: file)
+                crashJournal?.clearSnapshot(documentID: entry.documentID)
+                return
+            }
+        }
+        // If original not found, create a new file
+        let recoveredPath = vault.rootURL.appendingPathComponent("recovered-\(entry.documentID.prefix(8)).md")
+        try? entry.content.write(to: recoveredPath, atomically: true, encoding: .utf8)
+        refreshFiles()
+        openDocument(at: recoveredPath)
+        crashJournal?.clearSnapshot(documentID: entry.documentID)
+    }
+
+    func dismissRecovery() {
+        crashJournal?.clearAll()
+        recoveryEntries = []
+        showRecoveryDialog = false
     }
 
     func updateOutline() {

@@ -38,6 +38,22 @@ struct ContentView: View {
             PropertiesView(isPresented: $showProperties)
                 .environment(appState)
         }
+        .alert("Crash Recovery", isPresented: Binding(
+            get: { appState.showRecoveryDialog },
+            set: { appState.showRecoveryDialog = $0 }
+        )) {
+            Button("Recover All") {
+                for entry in appState.recoveryEntries {
+                    appState.recoverDocument(entry)
+                }
+                appState.showRecoveryDialog = false
+            }
+            Button("Discard", role: .destructive) {
+                appState.dismissRecovery()
+            }
+        } message: {
+            Text("\(appState.recoveryEntries.count) document(s) have unsaved changes from a previous session.")
+        }
         .onKeyPress(keys: [.init("f")], phases: .down) { press in
             if press.modifiers.contains([.command, .shift]) {
                 showSearch.toggle()
