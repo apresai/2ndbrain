@@ -70,7 +70,7 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 		mode = search.ModeKeyword
 	}
 
-	// Return plain array for backward compatibility (C2 fix)
+	// Return array format (original MCP contract was an object wrapper; reverted to array per C2 fix)
 	// Add search_mode to each result as metadata
 	type resultWithMode struct {
 		search.Result

@@ -133,8 +133,16 @@ Test scripts live in `tests/`:
 | `import-obsidian` | `--target` | Import Obsidian vault (adds UUIDs, normalizes tags, builds index) |
 | `export-obsidian` | `--strip-ids` | Export vault to Obsidian format |
 | `mcp-server` | | Start MCP server on stdio transport |
+| `ask` | `<question>` | RAG Q&A — search vault, generate answer with sources |
+| `ai status` | | Show AI provider, models, readiness, embedding count |
+| `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
+| `models list` | `--type`, `--free` | List available AI models with pricing |
+| `config show` | | Dump full vault configuration |
+| `config get` | `<key>` | Read a config value |
+| `config set` | `<key> <value>` | Write a config value |
+| `config set-key` | `<provider>` | Store API key in macOS Keychain |
 
-**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`
+**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`
 
 ### MCP Server (9 tools)
 
@@ -148,6 +156,7 @@ Test scripts live in `tests/`:
 | `kb_structure` | Get document heading hierarchy |
 | `kb_delete` | Delete document from vault and index |
 | `kb_list` | List documents with filters |
+| `kb_ask` | RAG Q&A — answer questions with source citations |
 
 ### Testing
 
