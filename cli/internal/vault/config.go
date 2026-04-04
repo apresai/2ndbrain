@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -12,6 +13,7 @@ type VaultConfig struct {
 	Name    string          `yaml:"name" json:"name"`
 	Version string          `yaml:"version" json:"version"`
 	Embed   EmbeddingConfig `yaml:"embedding" json:"embedding"`
+	AI      ai.AIConfig     `yaml:"ai,omitempty" json:"ai,omitempty"`
 }
 
 type EmbeddingConfig struct {
@@ -29,6 +31,7 @@ func DefaultConfig(name string) *VaultConfig {
 			Dimensions: 768,
 			BatchSize:  100,
 		},
+		AI: ai.DefaultAIConfig(),
 	}
 }
 

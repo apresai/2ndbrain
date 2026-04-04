@@ -15,7 +15,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
 
 | Sprint | Name | Status | Completed |
 |--------|------|--------|-----------|
-| 1 | Foundation — Interfaces, Config, Keystore | Not Started | |
+| 1 | Foundation — Interfaces, Config, Keystore | **Done** | 2026-04-04 |
 | 2 | AWS Bedrock Provider | Not Started | |
 | 3 | Vector Storage + Hybrid Search | Not Started | |
 | 4 | CLI Commands — models, config, ai status | Not Started | |
@@ -32,40 +32,40 @@ Build the AI provider system that enables local and cloud semantic search + gene
 ## Sprint 1: Foundation — Interfaces, Config, Keystore
 **Goal**: Establish the provider system skeleton so all subsequent sprints plug into it.
 **Estimated effort**: 1 session
-**Status**: Not Started
+**Status**: Done (2026-04-04)
 
 ### Tasks
 
-- [ ] **Create `cli/internal/ai/provider.go`** — Core interfaces
+- [x] **Create `cli/internal/ai/provider.go`** — Core interfaces
   - `EmbeddingProvider` interface: `Name()`, `Embed(ctx, texts)`, `Dimensions()`, `Available(ctx)`
   - `GenerationProvider` interface: `Name()`, `Generate(ctx, prompt, opts)`, `Available(ctx)`
   - `ModelInfo` struct: ID, Name, Provider, Type, Dimensions, ContextLen, PriceIn, PriceOut, Local
   - `GenOpts` struct: Temperature, MaxTokens, SystemPrompt
 
-- [ ] **Create `cli/internal/ai/registry.go`** — Provider registry
+- [x] **Create `cli/internal/ai/registry.go`** — Provider registry
   - `Registry` struct holding registered providers
   - `Register(provider)`, `EmbeddingProvider(name)`, `GenerationProvider(name)`
   - `ListModels(ctx)` aggregates ModelInfo from all providers
   - Global default registry instance
 
-- [ ] **Create `cli/internal/ai/config.go`** — AI config section
+- [x] **Create `cli/internal/ai/config.go`** — AI config section
   - `AIConfig` struct: Provider, EmbeddingModel, GenerationModel, Dimensions
   - `OllamaConfig`: Endpoint (default localhost:11434)
   - `BedrockConfig`: Profile, Region
   - `OpenRouterConfig`: APIKeyEnv
   - Parse from vault `config.yaml` under `ai:` key
 
-- [ ] **Modify `cli/internal/vault/config.go`** — Add AI config to vault config
+- [x] **Modify `cli/internal/vault/config.go`** — Add AI config to vault config
   - Add `AI AIConfig` field to `VaultConfig` struct
   - Default values: provider=bedrock, embedding_model=amazon.nova-embed-multimodal-v2, generation_model=anthropic.claude-haiku-4-5, dimensions=1024
 
-- [ ] **Create `cli/internal/ai/keystore.go`** — Credential management
+- [x] **Create `cli/internal/ai/keystore.go`** — Credential management
   - `GetAPIKey(provider string) (string, error)` — checks env var, then macOS Keychain
   - `SetAPIKey(provider, key string) error` — stores in macOS Keychain via `security` CLI
   - `DeleteAPIKey(provider string) error`
   - `GetAWSProfile(config BedrockConfig) string` — returns profile name for AWS SDK
 
-- [ ] **Tests**: `cli/internal/ai/config_test.go`, `cli/internal/ai/registry_test.go`
+- [x] **Tests**: `cli/internal/ai/config_test.go`, `cli/internal/ai/registry_test.go`
 
 ### Definition of Done
 - `go build` succeeds with new package
@@ -89,7 +89,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
   - `go get github.com/aws/aws-sdk-go-v2/service/bedrockruntime`
   - `go get github.com/aws/aws-sdk-go-v2/service/bedrock`
 
-- [ ] **Create `cli/internal/ai/bedrock.go`** — Bedrock provider
+- [x] **Create `cli/internal/ai/bedrock.go`** — Bedrock provider
   - `BedrockEmbedder` implementing `EmbeddingProvider`
     - Model: `amazon.nova-embed-multimodal-v2:0`
     - `Embed(ctx, texts)`: call `InvokeModel` with JSON payload
@@ -99,7 +99,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
     - `Generate(ctx, prompt, opts)`: call `InvokeModel` with Messages API format
   - AWS config loading: `config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile(profile))`
 
-- [ ] **Create `cli/internal/ai/bedrock_models.go`** — Model discovery
+- [x] **Create `cli/internal/ai/bedrock_models.go`** — Model discovery
   - `ListBedrockModels(ctx) ([]ModelInfo, error)`
   - Call `bedrock.ListFoundationModels`, filter for embedding + text generation
   - Map to ModelInfo with pricing (hardcoded pricing table since Bedrock API doesn't return prices)
@@ -198,7 +198,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
   - `2nb config set-key <provider>` — prompts for API key, stores in Keychain
   - `2nb config show` — dump full config
 
-- [ ] **Create `cli/internal/ai/cache.go`** — Model list caching
+- [x] **Create `cli/internal/ai/cache.go`** — Model list caching
   - Cache ModelInfo list to `~/.2ndbrain/cache/models.json`
   - TTL: 24 hours
   - `RefreshIfStale(ctx) error`
@@ -270,7 +270,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
 
 ### Tasks
 
-- [ ] **Create `cli/internal/ai/openrouter.go`** — OpenRouter provider
+- [x] **Create `cli/internal/ai/openrouter.go`** — OpenRouter provider
   - `OpenRouterEmbedder` implementing `EmbeddingProvider`
     - Default model: `nvidia/llama-nemotron-embed-vl-1b-v2:free`
     - `Embed(ctx, texts)`: POST to `https://openrouter.ai/api/v1/embeddings`
@@ -279,7 +279,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
     - Default model: user-configured
     - `Generate(ctx, prompt, opts)`: POST to `https://openrouter.ai/api/v1/chat/completions`
 
-- [ ] **Create `cli/internal/ai/openrouter_models.go`** — Model discovery
+- [x] **Create `cli/internal/ai/openrouter_models.go`** — Model discovery
   - `ListOpenRouterModels(ctx) ([]ModelInfo, error)`
   - GET `https://openrouter.ai/api/v1/embeddings/models` for embedding models
   - GET `https://openrouter.ai/api/v1/models` for generation models
@@ -311,7 +311,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
   - `go get github.com/ollama/ollama`
   - Use the official `api` package for typed requests
 
-- [ ] **Create `cli/internal/ai/ollama.go`** — Ollama provider
+- [x] **Create `cli/internal/ai/ollama.go`** — Ollama provider
   - `OllamaEmbedder` implementing `EmbeddingProvider`
     - `Available(ctx)`: heartbeat to localhost:11434
     - `Embed(ctx, texts)`: call `client.Embed()` with model name + keep_alive=-1
@@ -320,14 +320,14 @@ Build the AI provider system that enables local and cloud semantic search + gene
     - `Generate(ctx, prompt, opts)`: call `client.Generate()` with temperature, max_tokens
   - Auto-detect installed models via `client.List()`
 
-- [ ] **Create `cli/internal/ai/llamacpp.go`** — Fallback embedder (no daemon)
+- [x] **Create `cli/internal/ai/llamacpp.go`** — Fallback embedder (no daemon)
   - `LlamaCppEmbedder` implementing `EmbeddingProvider`
   - Uses `github.com/amikos-tech/llamacpp-embedder/bindings/go`
   - Model path: `~/.2ndbrain/models/embeddinggemma-q4.gguf`
   - `Available(ctx)`: check if GGUF file exists
   - `EnsureModel()`: download from HuggingFace if not present (with progress bar)
 
-- [ ] **Create `cli/internal/ai/model_download.go`** — Model downloader
+- [x] **Create `cli/internal/ai/model_download.go`** — Model downloader
   - Download GGUF from HuggingFace Hub URL
   - Progress bar to stderr
   - Verify file size after download
