@@ -6,7 +6,7 @@ public final class SpotlightIndexer: @unchecked Sendable {
     private let searchableIndex: CSSearchableIndex
     private let bundleIdentifier: String
 
-    public init(bundleIdentifier: String = "com.apresai.secondbrain") {
+    public init(bundleIdentifier: String = "dev.apresai.2ndbrain") {
         self.searchableIndex = CSSearchableIndex(name: bundleIdentifier)
         self.bundleIdentifier = bundleIdentifier
     }

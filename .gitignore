@@ -3,6 +3,9 @@
 node_modules/
 .DS_Store
 
+# Claude Code
+.claude/
+
 # Go
 cli/bin/
 *.exe

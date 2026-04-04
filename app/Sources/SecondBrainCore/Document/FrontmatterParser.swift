@@ -77,8 +77,27 @@ public enum FrontmatterParser {
     }
 
     private static func fmToJSON(_ fm: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: fm, options: [.sortedKeys]),
+        let sanitized = sanitizeForJSON(fm)
+        guard JSONSerialization.isValidJSONObject(sanitized),
+              let data = try? JSONSerialization.data(withJSONObject: sanitized, options: [.sortedKeys]),
               let str = String(data: data, encoding: .utf8) else { return "{}" }
         return str
+    }
+
+    private static func sanitizeForJSON(_ value: Any) -> Any {
+        switch value {
+        case let dict as [String: Any]:
+            return dict.mapValues { sanitizeForJSON($0) }
+        case let arr as [Any]:
+            return arr.map { sanitizeForJSON($0) }
+        case let date as Date:
+            return ISO8601DateFormatter().string(from: date)
+        case is String, is Bool, is Int, is Double, is Float:
+            return value
+        case is NSNull:
+            return NSNull()
+        default:
+            return "\(value)"
+        }
     }
 }

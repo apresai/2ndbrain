@@ -4,7 +4,7 @@ public final class FSEventsWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let path: String
     private let callback: @Sendable ([String]) -> Void
-    private let queue = DispatchQueue(label: "com.apresai.secondbrain.fswatcher")
+    private let queue = DispatchQueue(label: "dev.apresai.2ndbrain.fswatcher")
 
     public init(path: String, callback: @escaping @Sendable ([String]) -> Void) {
         self.path = path

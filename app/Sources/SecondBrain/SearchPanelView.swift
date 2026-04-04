@@ -8,6 +8,7 @@ struct SearchPanelView: View {
     @State private var typeFilter = ""
     @State private var results: [SearchResultItem] = []
     @State private var selectedIndex = 0
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,6 +19,7 @@ struct SearchPanelView: View {
                 TextField("Search vault...", text: $query)
                     .textFieldStyle(.plain)
                     .font(.title3)
+                    .focused($searchFocused)
                     .onSubmit { openSelected() }
 
                 if !typeFilter.isEmpty {
@@ -89,6 +91,7 @@ struct SearchPanelView: View {
         .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
         .onKeyPress(.downArrow) { moveSelection(1); return .handled }
         .onKeyPress(.escape) { isPresented = false; return .handled }
+        .onAppear { searchFocused = true }
     }
 
     private func performSearch() {

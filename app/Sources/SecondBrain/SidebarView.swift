@@ -5,6 +5,8 @@ struct SidebarView: View {
     @Environment(AppState.self) var appState
     @State private var selectedPanel: SidebarPanel = .files
     @State private var searchText = ""
+    @State private var showDeleteConfirmation = false
+    @State private var fileToDelete: FileItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,8 +53,28 @@ struct SidebarView: View {
                 .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button("Open") {
+                    appState.openDocument(at: file.url)
+                }
+                Divider()
+                Button("Delete", role: .destructive) {
+                    fileToDelete = file
+                    showDeleteConfirmation = true
+                }
+            }
         }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Filter files...")
+        .alert("Delete Document", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let file = fileToDelete {
+                    appState.deleteDocument(at: file.url)
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete \"\(fileToDelete?.name ?? "")\"? This cannot be undone.")
+        }
     }
 
     private var outlineList: some View {

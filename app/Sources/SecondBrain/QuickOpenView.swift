@@ -5,6 +5,7 @@ struct QuickOpenView: View {
     @Binding var isPresented: Bool
     @State private var query = ""
     @State private var selectedIndex = 0
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,6 +15,7 @@ struct QuickOpenView: View {
                 TextField("Open file...", text: $query)
                     .textFieldStyle(.plain)
                     .font(.title3)
+                    .focused($searchFocused)
                     .onSubmit { openSelected() }
             }
             .padding(12)
@@ -46,6 +48,7 @@ struct QuickOpenView: View {
         .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
         .onKeyPress(.downArrow) { moveSelection(1); return .handled }
         .onKeyPress(.escape) { isPresented = false; return .handled }
+        .onAppear { searchFocused = true }
     }
 
     private var filteredFiles: [FileItem] {

@@ -139,6 +139,8 @@
 
 **FST-EV-004**: When the user creates a new vault, the editor shall initialize the `.2ndbrain/` directory with default configuration, schema definitions, and an empty index database.
 
+**FST-EV-005**: When the editor launches, the editor shall reopen the most recently opened vault automatically and restore the sidebar file list.
+
 **FST-ST-001**: While autosave is enabled, the editor shall write unsaved changes to disk every 30 seconds.
 
 **FST-ST-002**: While the vault index is rebuilding, the editor shall display a progress indicator and allow continued editing.
@@ -479,6 +481,44 @@
 
 ---
 
+## 15. Obsidian Vault Conversion
+
+**OBS-EV-001**: When the user selects "Import Obsidian Vault", the editor shall scan the selected directory for `.obsidian/` and all `.md` files, generate UUIDs for documents missing an `id` frontmatter field, set `type: note` for documents without a `type` field, normalize inline `#tag` syntax to frontmatter `tags` array, initialize a `.2ndbrain/` directory, and build the full search index.
+
+**OBS-EV-002**: When the user selects "Export to Obsidian", the editor shall copy all vault markdown files to the selected directory, create an `.obsidian/` directory with default configuration, convert UUID-based wikilink references to filename-based wikilinks, and optionally strip 2ndbrain-specific frontmatter fields (`id`, `type`).
+
+**OBS-EV-003**: When importing an Obsidian vault, the editor shall preserve all existing frontmatter fields not defined in the 2ndbrain schema as custom metadata.
+
+**OBS-EV-004**: When importing an Obsidian vault, the editor shall map Obsidian `aliases` frontmatter to wikilink alias resolution during index building.
+
+**OBS-EV-005**: When importing an Obsidian vault containing `.canvas` files, the editor shall preserve them as-is without modification.
+
+**OBS-EV-006**: When the user runs `2nb import-obsidian <path>`, the CLI shall perform the same import operation as the GUI, outputting progress to stderr and a summary to stdout.
+
+**OBS-EV-007**: When the user runs `2nb export-obsidian <path>`, the CLI shall perform the same export operation as the GUI with an optional `--strip-ids` flag to remove 2ndbrain-specific frontmatter fields.
+
+**OBS-ST-001**: While importing an Obsidian vault, the editor shall display a progress indicator showing the number of documents processed out of total.
+
+**OBS-UW-001**: If an Obsidian vault contains documents with conflicting filenames in different subdirectories, then the editor shall resolve wikilinks using the shortest unique path and log any ambiguous references.
+
+**OBS-UW-002**: If an Obsidian vault uses Obsidian-specific syntax (block references `^block-id`, embedded transclusions `![[note]]`), then the editor shall preserve the raw syntax and log unsupported features.
+
+**OBS-UW-003**: If an imported document's frontmatter contains YAML parsing errors, then the editor shall skip that document, log the error, and continue processing remaining files.
+
+---
+
+## 16. Testing & Quality
+
+**TST-UB-001**: All GUI features marked as "Manual" test type in the test plan shall be verified via Claude computer-use automation against the running macOS app.
+
+**TST-UB-002**: The `.app` bundle shall be ad-hoc codesigned on every build so that computer-use can control it for automated GUI testing.
+
+**TST-EV-001**: When a GUI feature is implemented or modified, the developer shall run the corresponding computer-use test to verify the feature works end-to-end.
+
+**TST-UW-001**: If a computer-use test fails, then the test output shall include a screenshot of the failure state for debugging.
+
+---
+
 ## Summary
 
 | Area | UB | EV | ST | UW | OF | CX | Total |
@@ -486,7 +526,7 @@
 | Document Management | 3 | 7 | 2 | 3 | 0 | 0 | **15** |
 | Editor Core | 2 | 9 | 2 | 0 | 0 | 2 | **15** |
 | Markdown Rendering | 4 | 4 | 0 | 2 | 2 | 0 | **12** |
-| File System & Storage | 3 | 4 | 2 | 3 | 0 | 0 | **12** |
+| File System & Storage | 3 | 5 | 2 | 3 | 0 | 0 | **13** |
 | Search & Discovery | 4 | 8 | 3 | 3 | 0 | 1 | **19** |
 | AI Integration | 5 | 11 | 3 | 3 | 2 | 1 | **25** |
 | CLI Interface | 3 | 13 | 1 | 3 | 0 | 0 | **20** |
@@ -497,4 +537,6 @@
 | Performance | 3 | 3 | 2 | 2 | 0 | 0 | **10** |
 | Security & Privacy | 2 | 3 | 1 | 2 | 0 | 0 | **8** |
 | Error Handling & Recovery | 2 | 3 | 1 | 4 | 0 | 0 | **10** |
-| **Total** | **46** | **87** | **24** | **31** | **6** | **6** | **200** |
+| Obsidian Vault Conversion | 0 | 7 | 1 | 3 | 0 | 0 | **11** |
+| Testing & Quality | 2 | 1 | 0 | 1 | 0 | 0 | **4** |
+| **Total** | **48** | **96** | **25** | **35** | **6** | **6** | **216** |

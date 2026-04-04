@@ -4,7 +4,7 @@ import Foundation
 /// Writes snapshots to `.2ndbrain/recovery/` that can be restored after abnormal termination.
 public final class CrashJournal: @unchecked Sendable {
     private let recoveryDir: URL
-    private let queue = DispatchQueue(label: "com.apresai.secondbrain.recovery")
+    private let queue = DispatchQueue(label: "dev.apresai.2ndbrain.recovery")
 
     public init(vaultDotDir: URL) {
         self.recoveryDir = vaultDotDir.appendingPathComponent("recovery")

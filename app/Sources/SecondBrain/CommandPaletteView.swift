@@ -5,6 +5,7 @@ struct CommandPaletteView: View {
     @Binding var isPresented: Bool
     @State private var query = ""
     @State private var selectedIndex = 0
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,6 +15,7 @@ struct CommandPaletteView: View {
                 TextField("Type a command...", text: $query)
                     .textFieldStyle(.plain)
                     .font(.title3)
+                    .focused($searchFocused)
                     .onSubmit { executeSelected() }
             }
             .padding(12)
@@ -51,6 +53,7 @@ struct CommandPaletteView: View {
         .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
         .onKeyPress(.downArrow) { moveSelection(1); return .handled }
         .onKeyPress(.escape) { isPresented = false; return .handled }
+        .onAppear { searchFocused = true }
     }
 
     private var filteredCommands: [PaletteCommand] {
@@ -77,8 +80,17 @@ struct CommandPaletteView: View {
 
     private var allCommands: [PaletteCommand] {
         [
-            PaletteCommand(title: "New Document", icon: "doc.badge.plus", shortcut: "Cmd+N") { state in
-                state.createNewDocument()
+            PaletteCommand(title: "New Note", icon: "doc.badge.plus", shortcut: "Cmd+N") { state in
+                state.createNewDocument(type: "note")
+            },
+            PaletteCommand(title: "New ADR", icon: "doc.badge.plus", shortcut: "") { state in
+                state.createNewDocument(type: "adr", title: "Untitled ADR")
+            },
+            PaletteCommand(title: "New Runbook", icon: "doc.badge.plus", shortcut: "") { state in
+                state.createNewDocument(type: "runbook", title: "Untitled Runbook")
+            },
+            PaletteCommand(title: "New Postmortem", icon: "doc.badge.plus", shortcut: "") { state in
+                state.createNewDocument(type: "postmortem", title: "Untitled Postmortem")
             },
             PaletteCommand(title: "Save", icon: "square.and.arrow.down", shortcut: "Cmd+S") { state in
                 state.saveCurrentDocument()
@@ -91,6 +103,9 @@ struct CommandPaletteView: View {
             },
             PaletteCommand(title: "Refresh File List", icon: "arrow.clockwise", shortcut: "") { state in
                 state.refreshFiles()
+            },
+            PaletteCommand(title: "Rebuild Index", icon: "arrow.triangle.2.circlepath", shortcut: "") { state in
+                state.rebuildIndex()
             },
             PaletteCommand(title: "Show Graph View", icon: "point.3.connected.trianglepath.dotted", shortcut: "") { state in
                 state.showGraphView = true

@@ -20,7 +20,8 @@ struct EditorArea: View {
                             state.openDocuments[tabIndex].isDirty = true
                             state.updateOutline()
                         }
-                    )
+                    ),
+                    databaseManager: state.database
                 )
                 .frame(minWidth: 300)
 
@@ -63,6 +64,7 @@ struct EditorArea: View {
 
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
+    var databaseManager: DatabaseManager?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -103,23 +105,104 @@ struct MarkdownEditorView: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, databaseManager: databaseManager)
     }
 
     @MainActor
     class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         var isEditing = false
+        let mentionController = MentionAutocompleteController()
         private var debounceTimer: Timer?
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, databaseManager: DatabaseManager?) {
             self.text = text
+            super.init()
+            mentionController.databaseManager = databaseManager
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            guard let replacement = replacementString else { return true }
+
+            if replacement == "@" && !mentionController.state.isActive {
+                // Trigger after the @ is inserted
+                let triggerLoc = affectedCharRange.location
+                DispatchQueue.main.async { [weak self] in
+                    self?.mentionController.activate(in: textView, at: triggerLoc, mode: .atMention)
+                }
+            } else if replacement == "[" && !mentionController.state.isActive {
+                // Check if previous character is also [
+                let loc = affectedCharRange.location
+                if loc > 0 {
+                    let prevRange = NSRange(location: loc - 1, length: 1)
+                    let prevChar = (textView.string as NSString).substring(with: prevRange)
+                    if prevChar == "[" {
+                        let triggerLoc = loc - 1 // start from first [
+                        DispatchQueue.main.async { [weak self] in
+                            self?.mentionController.activate(in: textView, at: triggerLoc, mode: .doubleBracket)
+                        }
+                    }
+                }
+            }
+
+            return true
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard mentionController.state.isActive else { return false }
+
+            switch commandSelector {
+            case #selector(NSResponder.moveDown(_:)):
+                mentionController.moveSelection(1)
+                return true
+            case #selector(NSResponder.moveUp(_:)):
+                mentionController.moveSelection(-1)
+                return true
+            case #selector(NSResponder.insertNewline(_:)):
+                mentionController.insertSelection(into: textView)
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                mentionController.dismiss()
+                return true
+            case #selector(NSResponder.insertTab(_:)):
+                mentionController.insertSelection(into: textView)
+                return true
+            default:
+                return false
+            }
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             isEditing = true
             let currentString = textView.string
+
+            // Update mention autocomplete query
+            if mentionController.state.isActive, let triggerLoc = mentionController.triggerLocation {
+                let cursorLoc = textView.selectedRange().location
+                let queryStart: Int
+                switch mentionController.triggerMode {
+                case .atMention:
+                    queryStart = triggerLoc + 1 // skip the @
+                case .doubleBracket:
+                    queryStart = triggerLoc + 2 // skip the [[
+                }
+
+                if cursorLoc < triggerLoc {
+                    // Cursor moved before trigger — dismiss
+                    mentionController.dismiss()
+                } else if queryStart <= cursorLoc {
+                    let query = (currentString as NSString).substring(with: NSRange(location: queryStart, length: cursorLoc - queryStart))
+                    if query.contains("\n") || query.contains(" " + " ") {
+                        mentionController.dismiss()
+                    } else {
+                        mentionController.updateQuery(query)
+                    }
+                } else {
+                    // Deleted back past trigger
+                    mentionController.dismiss()
+                }
+            }
 
             debounceTimer?.invalidate()
             debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in

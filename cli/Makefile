@@ -1,7 +1,7 @@
 .PHONY: build install clean test dev
 
 BINARY := 2nb
-VERSION := 0.1.0
+VERSION := $(shell cat ../VERSION | tr -d '\n')
 BUILD_DIR := bin
 MODULE := github.com/apresai/2ndbrain
 LDFLAGS := -ldflags "-s -w -X $(MODULE)/internal/cli.Version=$(VERSION)"

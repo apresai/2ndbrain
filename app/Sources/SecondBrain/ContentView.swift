@@ -3,27 +3,42 @@ import SecondBrainCore
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
-    @State private var showSearch = false
-    @State private var showQuickOpen = false
-    @State private var showCommandPalette = false
     @State private var showProperties = false
+
+    private var anyOverlayVisible: Bool {
+        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette
+    }
 
     var body: some View {
         ZStack {
             mainContent
 
             // Modal overlays
-            if showSearch {
-                overlayBackground { showSearch = false }
-                SearchPanelView(isPresented: $showSearch)
+            if appState.showSearch {
+                overlayBackground { appState.showSearch = false }
+                SearchPanelView(isPresented: Binding(
+                    get: { appState.showSearch },
+                    set: { appState.showSearch = $0 }
+                ))
             }
-            if showQuickOpen {
-                overlayBackground { showQuickOpen = false }
-                QuickOpenView(isPresented: $showQuickOpen)
+            if appState.showQuickOpen {
+                overlayBackground { appState.showQuickOpen = false }
+                QuickOpenView(isPresented: Binding(
+                    get: { appState.showQuickOpen },
+                    set: { appState.showQuickOpen = $0 }
+                ))
             }
-            if showCommandPalette {
-                overlayBackground { showCommandPalette = false }
-                CommandPaletteView(isPresented: $showCommandPalette)
+            if appState.showCommandPalette {
+                overlayBackground { appState.showCommandPalette = false }
+                CommandPaletteView(isPresented: Binding(
+                    get: { appState.showCommandPalette },
+                    set: { appState.showCommandPalette = $0 }
+                ))
+            }
+        }
+        .onChange(of: anyOverlayVisible) { _, visible in
+            if visible {
+                NSApp.keyWindow?.makeFirstResponder(nil)
             }
         }
         .sheet(isPresented: Binding(
@@ -53,38 +68,6 @@ struct ContentView: View {
             }
         } message: {
             Text("\(appState.recoveryEntries.count) document(s) have unsaved changes from a previous session.")
-        }
-        .onKeyPress(keys: [.init("f")], phases: .down) { press in
-            if press.modifiers.contains([.command, .shift]) {
-                showSearch.toggle()
-                return .handled
-            }
-            return .ignored
-        }
-        .onKeyPress(keys: [.init("p")], phases: .down) { press in
-            if press.modifiers.contains([.command, .shift]) {
-                showCommandPalette.toggle()
-                return .handled
-            }
-            if press.modifiers.contains(.command) {
-                showQuickOpen.toggle()
-                return .handled
-            }
-            return .ignored
-        }
-        .onKeyPress(keys: [.init("e")], phases: .down) { press in
-            if press.modifiers.contains([.command, .shift]) {
-                appState.focusModeActive.toggle()
-                return .handled
-            }
-            return .ignored
-        }
-        .onKeyPress(keys: [.init("i")], phases: .down) { press in
-            if press.modifiers.contains([.command, .option]) {
-                showProperties.toggle()
-                return .handled
-            }
-            return .ignored
         }
     }
 

@@ -3,7 +3,7 @@ import Foundation
 /// Logs errors to `.2ndbrain/logs/` with timestamps and context.
 public final class ErrorLogger: @unchecked Sendable {
     private let logsDir: URL
-    private let queue = DispatchQueue(label: "com.apresai.secondbrain.errorlog")
+    private let queue = DispatchQueue(label: "dev.apresai.2ndbrain.errorlog")
 
     public init(vaultDotDir: URL) {
         self.logsDir = vaultDotDir.appendingPathComponent("logs")

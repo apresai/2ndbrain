@@ -15,6 +15,11 @@ final class AppState {
     var sidebarVisible = true
     var focusModeActive = false
     var showGraphView = false
+
+    // Overlay panels
+    var showSearch = false
+    var showQuickOpen = false
+    var showCommandPalette = false
     var spotlightIndexer: SpotlightIndexer?
     var crashJournal: CrashJournal?
     var errorLogger: ErrorLogger?
@@ -115,27 +120,125 @@ final class AppState {
         updateOutline()
     }
 
-    func createNewDocument() {
+    func createNewDocument(type: String = "note", title: String = "Untitled") {
         guard let vault else { return }
-        let title = "Untitled"
         let id = UUID().uuidString
         let now = ISO8601DateFormatter().string(from: Date())
 
-        let content = """
+        let initialStatus: String
+        let extraFields: String
+        let bodyTemplate: String
+
+        switch type {
+        case "adr":
+            initialStatus = "proposed"
+            extraFields = ""
+            bodyTemplate = """
+            ## Status
+
+            proposed
+
+            ## Context
+
+            What is the issue that we're seeing that is motivating this decision or change?
+
+            ## Decision
+
+            What is the change that we're proposing and/or doing?
+
+            ## Consequences
+
+            What becomes easier or more difficult to do because of this change?
+            """
+        case "runbook":
+            initialStatus = "draft"
+            extraFields = "service: \nkeyword: "
+            bodyTemplate = """
+            ## Overview
+
+            Brief description of what this runbook addresses.
+
+            ## Prerequisites
+
+            - [ ] Access to relevant systems
+            - [ ] Required permissions
+
+            ## Steps
+
+            1. First step
+            2. Second step
+            3. Third step
+
+            ## Verification
+
+            How to verify the procedure was successful.
+
+            ## Rollback
+
+            Steps to undo if something goes wrong.
+            """
+        case "postmortem":
+            initialStatus = "draft"
+            extraFields = "incident-date: \(now.prefix(10))\nseverity: medium\nservices: []"
+            bodyTemplate = """
+            ## Summary
+
+            Brief summary of the incident.
+
+            ## Timeline
+
+            | Time | Event |
+            |------|-------|
+            | | Incident detected |
+            | | Investigation started |
+            | | Root cause identified |
+            | | Fix deployed |
+            | | Incident resolved |
+
+            ## Root Cause
+
+            What caused the incident?
+
+            ## Impact
+
+            Who/what was affected and for how long?
+
+            ## Action Items
+
+            - [ ] Action item 1
+            - [ ] Action item 2
+
+            ## Lessons Learned
+
+            What did we learn from this incident?
+            """
+        default: // note
+            initialStatus = "draft"
+            extraFields = ""
+            bodyTemplate = ""
+        }
+
+        var frontmatter = """
         ---
         id: \(id)
         title: \(title)
-        type: note
-        status: draft
+        type: \(type)
+        status: \(initialStatus)
         tags: []
         created: \(now)
         modified: \(now)
-        ---
-        # \(title)
-
         """
+        if !extraFields.isEmpty {
+            frontmatter += "\n\(extraFields)"
+        }
+        frontmatter += "\n---"
 
-        let filename = "untitled-\(id.prefix(8)).md"
+        let content = "\(frontmatter)\n# \(title)\n\n\(bodyTemplate)\n"
+
+        let slug = title.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        let filename = slug.isEmpty ? "\(type)-\(id.prefix(8)).md" : "\(slug).md"
         let url = vault.rootURL.appendingPathComponent(filename)
 
         do {
@@ -144,6 +247,42 @@ final class AppState {
             openDocument(at: url)
         } catch {
             print("Failed to create: \(error)")
+        }
+    }
+
+    func createVault(at url: URL) {
+        do {
+            try VaultManager.initializeVault(at: url)
+            openVault(at: url)
+            UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+        } catch {
+            print("Failed to create vault: \(error)")
+        }
+    }
+
+    func deleteDocument(at url: URL) {
+        // Close tab if open
+        if let idx = openDocuments.firstIndex(where: { $0.url == url }) {
+            closeTab(at: idx)
+        }
+
+        // Delete file from disk
+        do {
+            try FileManager.default.removeItem(at: url)
+            refreshFiles()
+        } catch {
+            print("Failed to delete: \(error)")
+        }
+    }
+
+    func rebuildIndex() {
+        guard let vault else { return }
+        do {
+            try vault.runIndex()
+            // Reopen database to pick up changes
+            self.database = try DatabaseManager(path: vault.indexDBPath)
+        } catch {
+            print("Failed to rebuild index: \(error)")
         }
     }
 
