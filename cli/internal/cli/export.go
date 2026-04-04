@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -30,7 +29,7 @@ func init() {
 }
 
 func runExport(cmd *cobra.Command, args []string) error {
-	v, err := vault.Open(".")
+	v, err := openVault()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
 	}

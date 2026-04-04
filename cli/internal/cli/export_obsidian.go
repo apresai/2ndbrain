@@ -38,7 +38,7 @@ const obsidianAppJSON = `{}`
 const obsidianCorePluginsJSON = `["file-explorer","global-search","tag-pane","backlink","page-preview","templates","daily-notes","outline"]`
 
 func runExportObsidian(cmd *cobra.Command, args []string) error {
-	v, err := vault.Open(".")
+	v, err := openVault()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
 	}

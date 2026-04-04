@@ -26,7 +26,7 @@ func init() {
 }
 
 func runMeta(cmd *cobra.Command, args []string) error {
-	v, err := vault.Open(".")
+	v, err := openVault()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/output"
-	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +32,7 @@ type StaleDoc struct {
 }
 
 func runStale(cmd *cobra.Command, args []string) error {
-	v, err := vault.Open(".")
+	v, err := openVault()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
 	}
