@@ -29,7 +29,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	relPath := args[0]
+	relPath := expandPath(args[0])
 	absPath := v.AbsPath(relPath)
 
 	doc, err := v.DB.GetDocumentByPath(relPath)

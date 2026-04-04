@@ -41,7 +41,7 @@ type importObsidianStats struct {
 }
 
 func runImportObsidian(cmd *cobra.Command, args []string) error {
-	srcPath, err := filepath.Abs(args[0])
+	srcPath, err := filepath.Abs(expandPath(args[0]))
 	if err != nil {
 		return fmt.Errorf("resolve source path: %w", err)
 	}

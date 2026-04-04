@@ -44,7 +44,7 @@ func runExportObsidian(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	targetPath, err := filepath.Abs(args[0])
+	targetPath, err := filepath.Abs(expandPath(args[0]))
 	if err != nil {
 		return fmt.Errorf("resolve target path: %w", err)
 	}

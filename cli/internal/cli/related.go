@@ -31,7 +31,7 @@ func runRelated(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 
 	// Resolve path to doc ID
-	relPath := args[0]
+	relPath := expandPath(args[0])
 	doc, err := v.DB.GetDocumentByPath(relPath)
 	if err != nil {
 		return exitWithError(ExitNotFound, fmt.Sprintf("document not found: %s", relPath))

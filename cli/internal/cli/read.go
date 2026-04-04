@@ -31,7 +31,7 @@ func runRead(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	path := v.AbsPath(args[0])
+	path := v.AbsPath(expandPath(args[0]))
 	doc, err := document.ParseFile(path)
 	if err != nil {
 		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))
