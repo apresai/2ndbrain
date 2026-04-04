@@ -197,7 +197,7 @@
 
 ## 6. AI Integration
 
-**AI-UB-001**: The editor shall generate vector embeddings using a configurable provider (local via Ollama or cloud via AWS Bedrock/OpenRouter), with graceful fallback to BM25-only search when no provider is available.
+**AI-UB-001**: The editor shall support fully local vector embeddings using GGUF-format models via Ollama without requiring external API calls or cloud credentials. Cloud providers (AWS Bedrock, OpenRouter) shall be available as optional alternatives.
 
 **AI-UB-002**: The editor shall chunk documents at heading boundaries for embedding, preserving the full frontmatter as metadata on each chunk.
 
@@ -308,6 +308,8 @@
 **CLI-UB-005**: All CLI commands shall default to human-readable output and only produce JSON when `--json` is explicitly passed.
 
 **CLI-UW-004**: If the user attempts to create a document with a title containing invalid filename characters or starting with a dash, then the editor shall reject the title with a descriptive error.
+
+**CLI-UB-006**: All CLI commands accepting file paths shall resolve `~` to the user's home directory, support relative paths from the current directory, and accept absolute paths — following standard POSIX path conventions.
 
 ---
 

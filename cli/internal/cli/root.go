@@ -46,15 +46,31 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+// expandPath resolves ~ to home directory and cleans the path.
+func expandPath(path string) string {
+	if path == "" {
+		return path
+	}
+	if path == "~" {
+		home, _ := os.UserHomeDir()
+		return home
+	}
+	if len(path) > 1 && path[:2] == "~/" {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
 // openVault resolves the vault path using this priority:
 // 1. --vault flag
 // 2. 2NB_VAULT env var
 // 3. ~/.2ndbrain-active-vault (shared with GUI)
 // 4. Current directory
 func openVault() (*vault.Vault, error) {
-	dir := flagVault
+	dir := expandPath(flagVault)
 	if dir == "" {
-		dir = os.Getenv("2NB_VAULT")
+		dir = expandPath(os.Getenv("2NB_VAULT"))
 	}
 	if dir == "" {
 		dir = getActiveVault()

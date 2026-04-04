@@ -298,12 +298,15 @@ Build the AI provider system that enables local and cloud semantic search + gene
 
 ---
 
-## Sprint 7: Ollama Provider — Local AI
-**Goal**: Working local AI via Ollama. Requires model downloads (~3 GB).
+## Sprint 7: Ollama Provider — Local-Only AI (delivers AI-UB-001)
+**Goal**: Fully local AI with zero cloud credentials. A user can `brew install ollama`, pull models, and have working semantic search + RAG without any API keys or internet after setup.
 **Estimated effort**: 1 session
 **Prerequisite**: Sprint 1
-**Status**: Not Started
-**Note**: Defer until on fast network — models are ~3 GB total download.
+**Status**: Phase 2
+**Note**: Requires ~3 GB model download (EmbeddingGemma 278 MB + Gemma 3 4B 2.5 GB).
+
+### User Story
+As an engineer who values privacy, I want to run `2nb config set ai.provider ollama` and have all AI features (embeddings, search, Q&A) work entirely on my machine with no cloud calls.
 
 ### Tasks
 
@@ -311,7 +314,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
   - `go get github.com/ollama/ollama`
   - Use the official `api` package for typed requests
 
-- [x] **Create `cli/internal/ai/ollama.go`** — Ollama provider
+- [ ] **Create `cli/internal/ai/ollama.go`** — Ollama provider
   - `OllamaEmbedder` implementing `EmbeddingProvider`
     - `Available(ctx)`: heartbeat to localhost:11434
     - `Embed(ctx, texts)`: call `client.Embed()` with model name + keep_alive=-1
@@ -319,28 +322,41 @@ Build the AI provider system that enables local and cloud semantic search + gene
   - `OllamaGenerator` implementing `GenerationProvider`
     - `Generate(ctx, prompt, opts)`: call `client.Generate()` with temperature, max_tokens
   - Auto-detect installed models via `client.List()`
+  - Default models: `embeddinggemma` (embed), `gemma3:4b` (generate)
 
-- [x] **Create `cli/internal/ai/llamacpp.go`** — Fallback embedder (no daemon)
+- [ ] **Create `cli/internal/ai/llamacpp.go`** — Fallback embedder (no daemon)
   - `LlamaCppEmbedder` implementing `EmbeddingProvider`
   - Uses `github.com/amikos-tech/llamacpp-embedder/bindings/go`
   - Model path: `~/.2ndbrain/models/embeddinggemma-q4.gguf`
   - `Available(ctx)`: check if GGUF file exists
   - `EnsureModel()`: download from HuggingFace if not present (with progress bar)
 
-- [x] **Create `cli/internal/ai/model_download.go`** — Model downloader
+- [ ] **Create `cli/internal/ai/model_download.go`** — Model downloader
   - Download GGUF from HuggingFace Hub URL
   - Progress bar to stderr
   - Verify file size after download
   - Store in `~/.2ndbrain/models/`
 
-- [ ] **Register Ollama + LlamaCpp providers in registry**
+- [ ] **Add `2nb ai setup` command** — Guided local setup
+  - Check if Ollama is installed (`which ollama`)
+  - If not: print `brew install ollama` instructions
+  - If yes: pull required models (`ollama pull embeddinggemma && ollama pull gemma3:4b`)
+  - Set `ai.provider = ollama` in vault config
+  - Run `2nb index` to generate local embeddings
+  - Verify with `2nb ai status`
+
+- [ ] **Register Ollama + LlamaCpp providers in `initAIProviders()`**
 
 - [ ] **Tests**: Mock Ollama server test, LlamaCpp embedder test with small fixture
 
 ### Definition of Done
-- `2nb ai status` shows Ollama provider status (if running)
-- Can call Ollama embed API from Go
-- LlamaCpp fallback downloads and loads EmbeddingGemma GGUF
+- `2nb ai setup` walks user through local AI installation
+- `2nb config set ai.provider ollama` switches to local mode
+- `2nb index` generates embeddings via Ollama (no cloud calls)
+- `2nb search` uses local embeddings for hybrid search
+- `2nb ask` generates answers via local Gemma 3 4B (no cloud calls)
+- `2nb ai status` shows Ollama provider status
+- Works fully offline after initial model download
 - `make test` passes
 
 ---
