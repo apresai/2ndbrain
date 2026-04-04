@@ -23,9 +23,9 @@ func init() {
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
-	v, err := vault.Open(".")
+	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 
@@ -43,6 +43,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	// Generate embeddings if a provider is available
+	initAIProviders(v)
 	ctx := context.Background()
 	cfg := v.Config.AI
 	if err := embedDocuments(ctx, v, cfg); err != nil {

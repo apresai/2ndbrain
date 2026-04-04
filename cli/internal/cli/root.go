@@ -1,7 +1,12 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -10,6 +15,7 @@ var Version = "dev"
 var (
 	flagFormat    string
 	flagPorcelain bool
+	flagVault     string
 )
 
 const (
@@ -31,12 +37,43 @@ func init() {
 	rootCmd.PersistentFlags().Bool("json", false, "Output as JSON (shorthand for --format json)")
 	rootCmd.PersistentFlags().Bool("csv", false, "Output as CSV (shorthand for --format csv)")
 	rootCmd.PersistentFlags().Bool("yaml", false, "Output as YAML (shorthand for --format yaml)")
+	rootCmd.PersistentFlags().StringVar(&flagVault, "vault", "", "Path to vault (default: current directory or 2NB_VAULT env var)")
 
 	rootCmd.Version = Version
 }
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// openVault resolves the vault path using this priority:
+// 1. --vault flag
+// 2. 2NB_VAULT env var
+// 3. ~/.2ndbrain-active-vault (shared with GUI)
+// 4. Current directory
+func openVault() (*vault.Vault, error) {
+	dir := flagVault
+	if dir == "" {
+		dir = os.Getenv("2NB_VAULT")
+	}
+	if dir == "" {
+		dir = getActiveVault()
+	}
+	if dir == "" {
+		dir = "."
+	}
+
+	v, err := vault.Open(dir)
+	if err != nil {
+		return nil, fmt.Errorf("%w\n\nSet --vault flag, 2NB_VAULT env var, or run `2nb init <path>`", err)
+	}
+
+	// Update active vault so future commands use this vault
+	if abs, err := filepath.Abs(v.Root); err == nil {
+		_ = setActiveVault(abs)
+	}
+
+	return v, nil
 }
 
 func getFormat(cmd *cobra.Command) output.Format {

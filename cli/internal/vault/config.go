@@ -46,6 +46,12 @@ func LoadConfig(dotDir string) (*VaultConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+
+	// Backfill AI config defaults for vaults created before AI support
+	if cfg.AI.Provider == "" {
+		cfg.AI = ai.DefaultAIConfig()
+	}
+
 	return &cfg, nil
 }
 

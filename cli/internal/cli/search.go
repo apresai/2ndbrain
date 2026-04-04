@@ -38,9 +38,9 @@ func init() {
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {
-	v, err := vault.Open(".")
+	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 
@@ -82,6 +82,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	// Try hybrid search if embeddings are available
+	initAIProviders(v)
 	var results []search.Result
 	var mode search.SearchMode
 	ctx := context.Background()
