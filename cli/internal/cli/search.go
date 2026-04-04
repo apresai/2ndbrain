@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -12,10 +14,11 @@ import (
 )
 
 var (
-	searchType   string
-	searchStatus string
-	searchTag    string
-	searchLimit  int
+	searchType    string
+	searchStatus  string
+	searchTag     string
+	searchLimit   int
+	searchBM25Only bool
 )
 
 var searchCmd = &cobra.Command{
@@ -30,6 +33,7 @@ func init() {
 	searchCmd.Flags().StringVar(&searchStatus, "status", "", "Filter by status")
 	searchCmd.Flags().StringVar(&searchTag, "tag", "", "Filter by tag")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "Maximum number of results")
+	searchCmd.Flags().BoolVar(&searchBM25Only, "bm25-only", false, "Use keyword search only (skip vector search)")
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -68,15 +72,50 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	engine := search.NewEngine(v.DB.Conn())
-	results, err := engine.Search(search.Options{
-		Query:  strings.TrimSpace(query),
-		Type:   searchType,
-		Status: searchStatus,
-		Tag:    searchTag,
-		Limit:  searchLimit,
-	})
-	if err != nil {
-		return fmt.Errorf("search: %w", err)
+	opts := search.Options{
+		Query:    strings.TrimSpace(query),
+		Type:     searchType,
+		Status:   searchStatus,
+		Tag:      searchTag,
+		Limit:    searchLimit,
+		BM25Only: searchBM25Only,
+	}
+
+	// Try hybrid search if embeddings are available
+	var results []search.Result
+	var mode search.SearchMode
+	ctx := context.Background()
+	cfg := v.Config.AI
+
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embCount, _ := v.DB.EmbeddingCount()
+
+	if !opts.BM25Only && embErr == nil && embedder.Available(ctx) && embCount > 0 && opts.Query != "" {
+		// Embed the query
+		queryVecs, err := embedder.Embed(ctx, []string{opts.Query})
+		if err == nil && len(queryVecs) > 0 {
+			docIDs, embeddings, err := v.DB.AllEmbeddings()
+			if err == nil {
+				results, mode, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
+				if err != nil {
+					return fmt.Errorf("hybrid search: %w", err)
+				}
+			}
+		}
+	}
+
+	// Fall back to BM25 if hybrid didn't run
+	if results == nil {
+		var err error
+		results, err = engine.Search(opts)
+		if err != nil {
+			return fmt.Errorf("search: %w", err)
+		}
+		mode = search.ModeKeyword
+	}
+
+	if !flagPorcelain {
+		fmt.Fprintf(os.Stderr, "search mode: %s\n", mode)
 	}
 
 	if len(results) == 0 {

@@ -47,6 +47,21 @@ func (db *DB) Conn() *sql.DB {
 }
 
 func (db *DB) migrate() error {
-	_, err := db.conn.Exec(schemaV1)
-	return err
+	if _, err := db.conn.Exec(schemaV1); err != nil {
+		return err
+	}
+
+	var version int
+	err := db.conn.QueryRow("SELECT version FROM schema_version").Scan(&version)
+	if err != nil {
+		return err
+	}
+
+	if version < 2 {
+		if _, err := db.conn.Exec(schemaV2); err != nil {
+			return fmt.Errorf("migrate v1→v2: %w", err)
+		}
+	}
+
+	return nil
 }
