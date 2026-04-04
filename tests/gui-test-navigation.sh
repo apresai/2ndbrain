@@ -80,6 +80,48 @@ sleep 1
 screenshot "nav-05-tabs"
 pass "DOC-UB-002: Opened multiple documents in tabs"
 
+# --- Test 6: 2nb models list (CLI-EV-016) ---
+echo ""
+echo "--- CLI-EV-016: models list ---"
+MODELS_OUT=$(2nb models list --json --porcelain 2>/dev/null)
+if echo "$MODELS_OUT" | grep -q "embedding"; then
+    pass "CLI-EV-016: models list shows embedding models"
+else
+    fail "CLI-EV-016: models list missing models" "$MODELS_OUT"
+fi
+
+# --- Test 7: 2nb ai status (CLI-EV-017) ---
+echo ""
+echo "--- CLI-EV-017: ai status ---"
+STATUS_OUT=$(2nb ai status --json --porcelain 2>/dev/null)
+if echo "$STATUS_OUT" | grep -q "embed_available"; then
+    pass "CLI-EV-017: ai status shows provider info"
+else
+    fail "CLI-EV-017: ai status failed" "$STATUS_OUT"
+fi
+
+# --- Test 8: 2nb search requires args ---
+echo ""
+echo "--- CLI: search requires query ---"
+SEARCH_EMPTY=$(2nb search 2>&1 || true)
+if echo "$SEARCH_EMPTY" | grep -q "requires at least 1 arg"; then
+    pass "Search requires query argument"
+else
+    fail "Search should require args" "$SEARCH_EMPTY"
+fi
+
+# --- Test 9: 2nb config round-trip (CLI-EV-018) ---
+echo ""
+echo "--- CLI-EV-018: config get/set ---"
+ORIG_PROVIDER=$(2nb config get ai.provider 2>/dev/null)
+2nb config set ai.provider bedrock 2>/dev/null
+GOT_PROVIDER=$(2nb config get ai.provider 2>/dev/null)
+if [ "$GOT_PROVIDER" = "bedrock" ]; then
+    pass "CLI-EV-018: config set/get round-trips"
+else
+    fail "CLI-EV-018: config round-trip failed" "got=$GOT_PROVIDER"
+fi
+
 # Cleanup
 echo ""
 echo "--- Cleanup ---"

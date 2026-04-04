@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var safeFilenameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9 _\-\.,'&:()]+$`)
+var safeFilenameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9 _\-\.,'&:()#+]*$`)
 
 func validateTitle(title string) error {
 	if title == "-" {

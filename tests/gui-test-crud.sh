@@ -126,7 +126,17 @@ else
     fail "Vault state" "expected 2, found $REMAINING"
 fi
 
-# --- Test 9: Quit + relaunch persistence (FST-EV-005) ---
+# --- Test 9: Create with invalid title ---
+echo ""
+echo "--- CLI-UW-004: Invalid title rejection ---"
+INVALID_RESULT=$(2nb create -- "-bad-title" 2>&1 || true)
+if echo "$INVALID_RESULT" | grep -q "cannot start with a dash"; then
+    pass "CLI-UW-004: Dash-prefixed title rejected"
+else
+    fail "CLI-UW-004: Should reject dash title" "$INVALID_RESULT"
+fi
+
+# --- Test 10: Quit + relaunch persistence (FST-EV-005) ---
 echo ""
 echo "--- FST-EV-005: Quit + relaunch ---"
 kill_app
