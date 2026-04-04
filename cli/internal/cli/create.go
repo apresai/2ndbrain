@@ -60,7 +60,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	v, err := openVault()
+	v, err := openVaultAndSetActive()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
 	}

@@ -13,10 +13,11 @@ import (
 
 // BedrockEmbedder implements EmbeddingProvider using Amazon Bedrock.
 type BedrockEmbedder struct {
-	client *bedrockruntime.Client
-	model  string
-	dims   int
-	region string
+	client    *bedrockruntime.Client
+	model     string
+	dims      int
+	region    string
+	available *bool // cached availability (H1 fix)
 }
 
 // NewBedrockEmbedder creates a Bedrock embedding provider.
@@ -45,11 +46,15 @@ func (b *BedrockEmbedder) Name() string      { return "bedrock" }
 func (b *BedrockEmbedder) Dimensions() int    { return b.dims }
 
 func (b *BedrockEmbedder) Available(ctx context.Context) bool {
+	if b.available != nil {
+		return *b.available
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	// Try a minimal embed to check connectivity
 	_, err := b.Embed(ctx, []string{"test"})
-	return err == nil
+	result := err == nil
+	b.available = &result
+	return result
 }
 
 // novaEmbedRequest is the request body for Nova Embeddings v2.
@@ -134,9 +139,10 @@ func (b *BedrockEmbedder) ListModels(_ context.Context) ([]ModelInfo, error) {
 
 // BedrockGenerator implements GenerationProvider using Amazon Bedrock.
 type BedrockGenerator struct {
-	client *bedrockruntime.Client
-	model  string
-	region string
+	client    *bedrockruntime.Client
+	model     string
+	region    string
+	available *bool // cached availability (H1 fix)
 }
 
 // NewBedrockGenerator creates a Bedrock generation provider.
@@ -163,10 +169,15 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 func (b *BedrockGenerator) Name() string { return "bedrock" }
 
 func (b *BedrockGenerator) Available(ctx context.Context) bool {
+	if b.available != nil {
+		return *b.available
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err := b.Generate(ctx, "hi", GenOpts{MaxTokens: 1, Temperature: 0})
-	return err == nil
+	result := err == nil
+	b.available = &result
+	return result
 }
 
 // claudeRequest is the Anthropic Messages API format for Bedrock.

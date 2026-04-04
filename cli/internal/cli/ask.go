@@ -25,11 +25,6 @@ func init() {
 	rootCmd.AddCommand(askCmd)
 }
 
-type AskResponse struct {
-	Answer  string   `json:"answer"`
-	Sources []string `json:"sources"`
-}
-
 func runAsk(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
@@ -78,60 +73,47 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no relevant documents found for: %s", question)
 	}
 
-	// Build context from search results — read full content from disk
-	var contextParts []string
-	var sources []string
+	// Build RAG context from search results
+	var chunks []ai.RAGChunk
 	seen := make(map[string]bool)
 	for _, r := range results {
 		if r.Path == "" || seen[r.Path] {
 			continue
 		}
 		seen[r.Path] = true
-		// Read the actual file for full context
 		content, err := os.ReadFile(filepath.Join(v.Root, r.Path))
 		if err != nil {
 			continue
 		}
-		// Truncate to first 2000 chars to fit in context
-		text := string(content)
-		if len(text) > 2000 {
-			text = text[:2000] + "..."
+		// Truncate to first 2000 runes (M3: rune-safe)
+		runes := []rune(string(content))
+		if len(runes) > 2000 {
+			runes = runes[:2000]
 		}
-		contextParts = append(contextParts, fmt.Sprintf("--- %s (%s) ---\n%s", r.Title, r.Path, text))
-		sources = append(sources, r.Path)
+		text := string(runes)
+		if len(runes) == 2000 {
+			text += "..."
+		}
+		chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: text})
 	}
 
 	if !flagPorcelain {
-		fmt.Fprintf(os.Stderr, "Found %d relevant chunks. Generating answer...\n", len(contextParts))
+		fmt.Fprintf(os.Stderr, "Found %d relevant chunks. Generating answer...\n", len(chunks))
 	}
 
-	prompt := fmt.Sprintf(`Based on the following documents from the knowledge base, answer this question: %s
-
-%s
-
-Answer concisely based only on the provided documents. If the documents don't contain the answer, say so.`, question, strings.Join(contextParts, "\n\n"))
-
-	answer, err := generator.Generate(ctx, prompt, ai.GenOpts{
-		MaxTokens:    512,
-		Temperature:  0.1,
-		SystemPrompt: "You are a helpful assistant answering questions about a knowledge base. Use only the provided context to answer.",
-	})
+	result, err := ai.RAG(ctx, generator, question, chunks)
 	if err != nil {
-		return fmt.Errorf("generation failed: %w", err)
+		return fmt.Errorf("RAG failed: %w", err)
 	}
 
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, AskResponse{
-			Answer:  answer,
-			Sources: sources,
-		})
+		return output.Write(os.Stdout, format, result)
 	}
 
-	// Pretty output
-	fmt.Println(answer)
-	if len(sources) > 0 && !flagPorcelain {
-		fmt.Fprintf(os.Stderr, "\nSources: %s\n", strings.Join(sources, ", "))
+	fmt.Println(result.Answer)
+	if len(result.Sources) > 0 && !flagPorcelain {
+		fmt.Fprintf(os.Stderr, "\nSources: %s\n", strings.Join(result.Sources, ", "))
 	}
 	return nil
 }

@@ -23,7 +23,7 @@ func init() {
 }
 
 func runDelete(cmd *cobra.Command, args []string) error {
-	v, err := openVault()
+	v, err := openVaultAndSetActive()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
 	}

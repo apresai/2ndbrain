@@ -24,7 +24,7 @@ func init() {
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
-	v, err := openVault()
+	v, err := openVaultAndSetActive()
 	if err != nil {
 		return err
 	}

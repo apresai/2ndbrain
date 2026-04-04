@@ -70,11 +70,17 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 		mode = search.ModeKeyword
 	}
 
-	response := map[string]any{
-		"search_mode": string(mode),
-		"results":     results,
+	// Return plain array for backward compatibility (C2 fix)
+	// Add search_mode to each result as metadata
+	type resultWithMode struct {
+		search.Result
+		SearchMode string `json:"search_mode"`
 	}
-	data, _ := json.MarshalIndent(response, "", "  ")
+	enriched := make([]resultWithMode, len(results))
+	for i, r := range results {
+		enriched[i] = resultWithMode{Result: r, SearchMode: string(mode)}
+	}
+	data, _ := json.MarshalIndent(enriched, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil
 }
 
@@ -114,36 +120,30 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		results, _ = engine.Search(opts)
 	}
 
-	// Build context from search results
-	var contextParts []string
-	var sources []string
+	// Build RAG context from search results
+	var chunks []ai.RAGChunk
 	for _, r := range results {
 		if r.Content != "" {
-			contextParts = append(contextParts, fmt.Sprintf("--- %s (%s) ---\n%s", r.Title, r.Path, r.Content))
-			sources = append(sources, r.Path)
+			chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: r.Content})
+		} else if r.Path != "" {
+			// Read from disk for vector-only results
+			content, err := os.ReadFile(filepath.Join(h.vault.Root, r.Path))
+			if err == nil {
+				runes := []rune(string(content))
+				if len(runes) > 2000 {
+					runes = runes[:2000]
+				}
+				chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: string(runes)})
+			}
 		}
 	}
 
-	prompt := fmt.Sprintf(`Based on the following documents from the knowledge base, answer this question: %s
-
-%s
-
-Answer concisely based only on the provided documents. If the documents don't contain the answer, say so.`, question, strings.Join(contextParts, "\n\n"))
-
-	answer, err := generator.Generate(ctx, prompt, ai.GenOpts{
-		MaxTokens:   512,
-		Temperature: 0.1,
-		SystemPrompt: "You are a helpful assistant answering questions about a knowledge base. Use only the provided context to answer.",
-	})
+	result, err := ai.RAG(ctx, generator, question, chunks)
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("generation failed: %v", err)), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("RAG failed: %v", err)), nil
 	}
 
-	response := map[string]any{
-		"answer":  answer,
-		"sources": sources,
-	}
-	data, _ := json.MarshalIndent(response, "", "  ")
+	data, _ := json.MarshalIndent(result, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil
 }
 

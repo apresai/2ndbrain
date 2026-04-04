@@ -101,7 +101,7 @@ Test scripts live in `tests/`:
 | `internal/store` | SQLite database CRUD, migrations, link resolution |
 | `internal/search` | BM25 search engine with structured filters |
 | `internal/graph` | Link graph BFS traversal |
-| `internal/mcp` | MCP server with 8 tools |
+| `internal/mcp` | MCP server with 9 tools |
 | `internal/output` | JSON/CSV/YAML formatters |
 | `internal/testutil` | Test helpers (NewTestVault, CreateAndIndex) |
 
@@ -113,7 +113,7 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (16)
+### CLI Commands (22)
 
 | Command | Flags | Purpose |
 |---------|-------|---------|
@@ -136,7 +136,7 @@ Test scripts live in `tests/`:
 
 **Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`
 
-### MCP Server (8 tools)
+### MCP Server (9 tools)
 
 | Tool | Purpose |
 |------|---------|

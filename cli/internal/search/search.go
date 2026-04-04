@@ -207,26 +207,37 @@ func (e *Engine) GetDocumentByID(id string) (Result, bool) {
 	return r, true
 }
 
-// ftsQuery converts a natural language query to FTS5 syntax.
-// Strips question words and uses OR between terms for broader matching.
+// questionWords are words that indicate natural language input vs keyword search.
+var questionWords = map[string]bool{
+	"what": true, "how": true, "why": true, "when": true, "where": true,
+	"who": true, "which": true, "does": true, "do": true, "did": true,
+	"can": true, "could": true, "should": true, "would": true,
+}
+
+// stopWords are filtered from FTS queries to improve matching.
+var stopWords = map[string]bool{
+	"is": true, "are": true, "was": true, "were": true, "the": true,
+	"a": true, "an": true, "in": true, "on": true, "at": true,
+	"to": true, "for": true, "of": true, "with": true, "and": true,
+	"or": true, "not": true, "this": true, "that": true, "it": true,
+	"its": true, "be": true, "been": true, "being": true, "have": true,
+	"has": true, "had": true, "my": true, "your": true, "our": true,
+	"their": true, "about": true, "between": true, "from": true,
+}
+
+// ftsQuery converts a query to FTS5 syntax.
+// Natural language questions use OR; keyword queries use AND (H2 fix).
 func ftsQuery(q string) string {
 	words := strings.Fields(q)
 	if len(words) == 0 {
 		return q
 	}
 
-	// Stop words common in questions that hurt FTS matching
-	stopWords := map[string]bool{
-		"what": true, "how": true, "why": true, "when": true, "where": true,
-		"who": true, "which": true, "is": true, "are": true, "was": true,
-		"were": true, "do": true, "does": true, "did": true, "can": true,
-		"could": true, "should": true, "would": true, "the": true, "a": true,
-		"an": true, "in": true, "on": true, "at": true, "to": true,
-		"for": true, "of": true, "with": true, "and": true, "or": true,
-		"not": true, "this": true, "that": true, "it": true, "its": true,
-		"be": true, "been": true, "being": true, "have": true, "has": true,
-		"had": true, "my": true, "your": true, "our": true, "their": true,
-		"about": true, "between": true, "from": true,
+	// Detect if this looks like a natural language question
+	isQuestion := false
+	firstWord := strings.ToLower(strings.TrimRight(words[0], "?"))
+	if questionWords[firstWord] || strings.HasSuffix(q, "?") {
+		isQuestion = true
 	}
 
 	var parts []string
@@ -235,14 +246,17 @@ func ftsQuery(q string) string {
 		w = strings.ReplaceAll(w, "*", "")
 		w = strings.TrimRight(w, "?!.,;:")
 		w = strings.ToLower(w)
-		if w != "" && !stopWords[w] {
+		if w != "" && !stopWords[w] && !questionWords[w] {
 			parts = append(parts, w)
 		}
 	}
 	if len(parts) == 0 {
-		// All words were stop words — use original terms
 		return strings.Join(strings.Fields(q), " ")
 	}
-	// Use OR for broader matching (AND is too strict for natural questions)
-	return strings.Join(parts, " OR ")
+
+	if isQuestion {
+		return strings.Join(parts, " OR ")
+	}
+	// Keyword queries use implicit AND (space-separated = AND in FTS5)
+	return strings.Join(parts, " ")
 }

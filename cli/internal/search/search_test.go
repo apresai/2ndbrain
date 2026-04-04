@@ -106,15 +106,25 @@ func TestListByFilters_EmptyQuery(t *testing.T) {
 }
 
 func TestFtsQuery_StripsSpecialChars(t *testing.T) {
+	// Keyword query (no question word) → AND (space-separated)
 	got := ftsQuery(`hello "world" foo*bar`)
-	if got != "hello OR world OR foobar" {
+	if got != "hello world foobar" {
+		t.Errorf("ftsQuery = %q, want AND-joined", got)
+	}
+}
+
+func TestFtsQuery_QuestionUsesOR(t *testing.T) {
+	// Question (starts with "What") → OR
+	got := ftsQuery("What are the differences between Gemma 3 and Gemma 4?")
+	if got != "differences OR gemma OR 3 OR gemma OR 4" {
 		t.Errorf("ftsQuery = %q", got)
 	}
 }
 
-func TestFtsQuery_StripsQuestionWords(t *testing.T) {
-	got := ftsQuery("What are the differences between Gemma 3 and Gemma 4?")
-	if got != "differences OR gemma OR 3 OR gemma OR 4" {
-		t.Errorf("ftsQuery = %q", got)
+func TestFtsQuery_KeywordUsesAND(t *testing.T) {
+	// Keyword query → AND (implicit, space-separated)
+	got := ftsQuery("jwt authentication")
+	if got != "jwt authentication" {
+		t.Errorf("ftsQuery = %q, want space-joined AND", got)
 	}
 }

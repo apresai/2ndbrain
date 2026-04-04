@@ -75,12 +75,12 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 		if m.Dimensions > 0 {
 			dims = fmt.Sprintf("%d", m.Dimensions)
 		}
-		ctx := "-"
+		ctxLen := "-"
 		if m.ContextLen > 0 {
-			ctx = formatContext(m.ContextLen)
+			ctxLen = formatContext(m.ContextLen)
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, dims, ctx)
+			m.Provider, m.Type, m.ID, price, dims, ctxLen)
 	}
 	return w.Flush()
 }

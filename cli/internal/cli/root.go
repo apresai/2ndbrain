@@ -84,11 +84,19 @@ func openVault() (*vault.Vault, error) {
 		return nil, fmt.Errorf("%w\n\nSet --vault flag, 2NB_VAULT env var, or run `2nb init <path>`", err)
 	}
 
-	// Update active vault so future commands use this vault
+	return v, nil
+}
+
+// openVaultAndSetActive opens the vault and updates the active vault file.
+// Use for write commands (init, create, index, delete). Read commands use openVault().
+func openVaultAndSetActive() (*vault.Vault, error) {
+	v, err := openVault()
+	if err != nil {
+		return nil, err
+	}
 	if abs, err := filepath.Abs(v.Root); err == nil {
 		_ = setActiveVault(abs)
 	}
-
 	return v, nil
 }
 

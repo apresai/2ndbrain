@@ -80,7 +80,7 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) error {
-	v, err := openVault()
+	v, err := openVaultAndSetActive()
 	if err != nil {
 		return err
 	}
