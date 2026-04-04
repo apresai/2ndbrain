@@ -197,7 +197,7 @@
 
 ## 6. AI Integration
 
-**AI-UB-001**: The editor shall generate vector embeddings locally using GGUF-format models without requiring external API calls.
+**AI-UB-001**: The editor shall generate vector embeddings using a configurable provider (local via Ollama or cloud via AWS Bedrock/OpenRouter), with graceful fallback to BM25-only search when no provider is available.
 
 **AI-UB-002**: The editor shall chunk documents at heading boundaries for embedding, preserving the full frontmatter as metadata on each chunk.
 
@@ -228,6 +228,8 @@
 **AI-EV-010**: When an MCP client invokes the `kb_structure` tool, the editor shall return the document's heading hierarchy as a JSON tree with chunk IDs.
 
 **AI-EV-011**: When the user selects "Suggest Links", the editor shall analyze the current document and suggest wikilinks to semantically related documents in the vault.
+
+**AI-EV-012**: When an MCP client invokes the `kb_ask` tool with a question, the editor shall retrieve relevant documents via hybrid search, pass them as context to the configured generation provider, and return the answer with source document paths.
 
 **AI-ST-001**: While the MCP server is running, the editor shall display a connected indicator in the status bar showing the number of active MCP clients.
 
@@ -290,6 +292,22 @@
 **CLI-UW-002**: If `2nb meta --set` receives a value that violates the frontmatter schema, then the editor shall print a validation error to stderr and exit with code 2.
 
 **CLI-UW-003**: If the vault index does not exist when a search command is invoked, then the editor shall build the index before executing the search and print a notice to stderr.
+
+**CLI-EV-015**: When the user runs `2nb ask <question>`, the editor shall search the vault using hybrid search, pass the top results as context to the generation provider, and return an answer with source document paths.
+
+**CLI-EV-016**: When the user runs `2nb models list`, the editor shall display all available AI models from configured providers with pricing, dimensions, and context length.
+
+**CLI-EV-017**: When the user runs `2nb ai status`, the editor shall display the current provider, model names, readiness, document count, and embedding count.
+
+**CLI-EV-018**: When the user runs `2nb config set <key> <value>`, the editor shall update the vault configuration file and persist the change.
+
+**CLI-EV-019**: When the user runs `2nb config set-key <provider>`, the editor shall prompt for an API key and store it securely in the macOS Keychain.
+
+**CLI-UB-004**: All CLI commands shall resolve the active vault from `--vault` flag, `2NB_VAULT` environment variable, `~/.2ndbrain-active-vault` file, or current directory — in that priority order.
+
+**CLI-UB-005**: All CLI commands shall default to human-readable output and only produce JSON when `--json` is explicitly passed.
+
+**CLI-UW-004**: If the user attempts to create a document with a title containing invalid filename characters or starting with a dash, then the editor shall reject the title with a descriptive error.
 
 ---
 
