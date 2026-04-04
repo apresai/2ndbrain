@@ -23,6 +23,7 @@ func Start(v *vault.Vault, version string) error {
 	s.AddTool(kbStructureTool(), h.handleKBStructure)
 	s.AddTool(kbDeleteTool(), h.handleKBDelete)
 	s.AddTool(kbListTool(), h.handleKBList)
+	s.AddTool(kbAskTool(), h.handleKBAsk)
 
 	return server.ServeStdio(s)
 }
@@ -145,6 +146,20 @@ func kbListTool() mcplib.Tool {
 				"tag":    map[string]any{"type": "string", "description": "Filter by tag"},
 				"limit":  map[string]any{"type": "integer", "description": "Maximum results (default 100)"},
 			},
+		},
+	}
+}
+
+func kbAskTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name:        "kb_ask",
+		Description: "Ask a question about the knowledge base. Uses RAG: retrieves relevant documents via hybrid search, then generates an answer using the configured AI provider. Returns the answer and source documents used.",
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"question": map[string]any{"type": "string", "description": "The question to answer based on knowledge base content"},
+			},
+			Required: []string{"question"},
 		},
 	}
 }

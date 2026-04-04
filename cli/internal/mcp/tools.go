@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
 	"github.com/apresai/2ndbrain/internal/search"
@@ -30,18 +31,119 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 	}
 
 	engine := search.NewEngine(h.vault.DB.Conn())
-	results, err := engine.Search(search.Options{
+	opts := search.Options{
 		Query:  query,
 		Type:   docType,
 		Status: status,
 		Tag:    tag,
 		Limit:  limit,
-	})
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
 
-	data, _ := json.MarshalIndent(results, "", "  ")
+	// Try hybrid search if provider is available
+	cfg := h.vault.Config.AI
+	var results []search.Result
+	var mode search.SearchMode
+
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embCount, _ := h.vault.DB.EmbeddingCount()
+
+	if embErr == nil && embedder.Available(ctx) && embCount > 0 && query != "" {
+		queryVecs, err := embedder.Embed(ctx, []string{query})
+		if err == nil && len(queryVecs) > 0 {
+			docIDs, embeddings, err := h.vault.DB.AllEmbeddings()
+			if err == nil {
+				results, mode, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
+				if err != nil {
+					return mcplib.NewToolResultError(fmt.Sprintf("hybrid search failed: %v", err)), nil
+				}
+			}
+		}
+	}
+
+	// Fall back to BM25
+	if results == nil {
+		var err error
+		results, err = engine.Search(opts)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
+		}
+		mode = search.ModeKeyword
+	}
+
+	response := map[string]any{
+		"search_mode": string(mode),
+		"results":     results,
+	}
+	data, _ := json.MarshalIndent(response, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	question, _ := request.GetArguments()["question"].(string)
+	if question == "" {
+		return mcplib.NewToolResultError("question is required"), nil
+	}
+
+	cfg := h.vault.Config.AI
+
+	// Get generator
+	generator, err := ai.DefaultRegistry.Generator(cfg.Provider)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("no generation provider: %v", err)), nil
+	}
+	if !generator.Available(ctx) {
+		return mcplib.NewToolResultError("generation provider not available"), nil
+	}
+
+	// Search for relevant context
+	engine := search.NewEngine(h.vault.DB.Conn())
+	opts := search.Options{Query: question, Limit: 5}
+
+	var results []search.Result
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embCount, _ := h.vault.DB.EmbeddingCount()
+
+	if embErr == nil && embedder.Available(ctx) && embCount > 0 {
+		queryVecs, err := embedder.Embed(ctx, []string{question})
+		if err == nil && len(queryVecs) > 0 {
+			docIDs, embeddings, _ := h.vault.DB.AllEmbeddings()
+			results, _, _ = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
+		}
+	}
+	if results == nil {
+		results, _ = engine.Search(opts)
+	}
+
+	// Build context from search results
+	var contextParts []string
+	var sources []string
+	for _, r := range results {
+		if r.Content != "" {
+			contextParts = append(contextParts, fmt.Sprintf("--- %s (%s) ---\n%s", r.Title, r.Path, r.Content))
+			sources = append(sources, r.Path)
+		}
+	}
+
+	prompt := fmt.Sprintf(`Based on the following documents from the knowledge base, answer this question: %s
+
+%s
+
+Answer concisely based only on the provided documents. If the documents don't contain the answer, say so.`, question, strings.Join(contextParts, "\n\n"))
+
+	answer, err := generator.Generate(ctx, prompt, ai.GenOpts{
+		MaxTokens:   512,
+		Temperature: 0.1,
+		SystemPrompt: "You are a helpful assistant answering questions about a knowledge base. Use only the provided context to answer.",
+	})
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("generation failed: %v", err)), nil
+	}
+
+	response := map[string]any{
+		"answer":  answer,
+		"sources": sources,
+	}
+	data, _ := json.MarshalIndent(response, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil
 }
 

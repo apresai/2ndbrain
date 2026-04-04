@@ -208,21 +208,41 @@ func (e *Engine) GetDocumentByID(id string) (Result, bool) {
 }
 
 // ftsQuery converts a natural language query to FTS5 syntax.
-// Wraps each word in quotes for phrase-like matching with implicit AND.
+// Strips question words and uses OR between terms for broader matching.
 func ftsQuery(q string) string {
 	words := strings.Fields(q)
 	if len(words) == 0 {
 		return q
 	}
-	// Use implicit AND between terms
+
+	// Stop words common in questions that hurt FTS matching
+	stopWords := map[string]bool{
+		"what": true, "how": true, "why": true, "when": true, "where": true,
+		"who": true, "which": true, "is": true, "are": true, "was": true,
+		"were": true, "do": true, "does": true, "did": true, "can": true,
+		"could": true, "should": true, "would": true, "the": true, "a": true,
+		"an": true, "in": true, "on": true, "at": true, "to": true,
+		"for": true, "of": true, "with": true, "and": true, "or": true,
+		"not": true, "this": true, "that": true, "it": true, "its": true,
+		"be": true, "been": true, "being": true, "have": true, "has": true,
+		"had": true, "my": true, "your": true, "our": true, "their": true,
+		"about": true, "between": true, "from": true,
+	}
+
 	var parts []string
 	for _, w := range words {
-		// Escape any FTS5 special characters
 		w = strings.ReplaceAll(w, "\"", "")
 		w = strings.ReplaceAll(w, "*", "")
-		if w != "" {
+		w = strings.TrimRight(w, "?!.,;:")
+		w = strings.ToLower(w)
+		if w != "" && !stopWords[w] {
 			parts = append(parts, w)
 		}
 	}
-	return strings.Join(parts, " ")
+	if len(parts) == 0 {
+		// All words were stop words — use original terms
+		return strings.Join(strings.Fields(q), " ")
+	}
+	// Use OR for broader matching (AND is too strict for natural questions)
+	return strings.Join(parts, " OR ")
 }
