@@ -17,6 +17,9 @@ app/*.xcworkspace/xcuserdata/
 .build/
 .swiftpm/
 
+# Test vault
+vault/
+
 # 2ndbrain vault data (generated)
 .2ndbrain/index.db
 .2ndbrain/index.db-wal
