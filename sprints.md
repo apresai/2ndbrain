@@ -16,7 +16,7 @@ Build the AI provider system that enables local and cloud semantic search + gene
 | Sprint | Name | Status | Completed |
 |--------|------|--------|-----------|
 | 1 | Foundation — Interfaces, Config, Keystore | **Done** | 2026-04-04 |
-| 2 | AWS Bedrock Provider | Not Started | |
+| 2 | AWS Bedrock Provider | **Done** | 2026-04-04 |
 | 3 | Vector Storage + Hybrid Search | Not Started | |
 | 4 | CLI Commands — models, config, ai status | Not Started | |
 | 5 | MCP Integration + kb_ask | Not Started | |

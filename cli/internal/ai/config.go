@@ -31,8 +31,8 @@ type OpenRouterConfig struct {
 func DefaultAIConfig() AIConfig {
 	return AIConfig{
 		Provider:        "bedrock",
-		EmbeddingModel:  "amazon.nova-embed-multimodal-v2:0",
-		GenerationModel: "anthropic.claude-haiku-4-5-20251001-v1:0",
+		EmbeddingModel:  "amazon.nova-2-multimodal-embeddings-v1:0",
+		GenerationModel: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 		Dimensions:      1024,
 		Ollama: OllamaConfig{
 			Endpoint: "http://localhost:11434",
