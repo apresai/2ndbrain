@@ -22,6 +22,9 @@ type IndexStats struct {
 func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 	stats := &IndexStats{}
 
+	// Purge documents whose files no longer exist on disk
+	purgeStale(v)
+
 	err := filepath.Walk(v.Root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip inaccessible paths
@@ -116,6 +119,32 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 	}
 
 	return nil
+}
+
+// purgeStale removes index entries for files that no longer exist on disk.
+func purgeStale(v *Vault) {
+	rows, err := v.DB.Conn().Query("SELECT id, path FROM documents")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var stale []string
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			continue
+		}
+		absPath := filepath.Join(v.Root, path)
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			stale = append(stale, id)
+		}
+	}
+
+	for _, id := range stale {
+		v.DB.DeleteDocument(id)
+		fmt.Fprintf(os.Stderr, "  purged stale: %s\n", id)
+	}
 }
 
 func countRows(db *store.DB, table string) int {

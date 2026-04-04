@@ -53,9 +53,15 @@ func VectorSearch(query []float32, docIDs []string, embeddings [][]float32, limi
 	return scored[:limit]
 }
 
+// DocLookup provides document metadata for vector-only results.
+type DocLookup interface {
+	GetDocumentByID(id string) (Result, bool)
+}
+
 // ReciprocalRankFusion combines BM25 and vector search results using RRF.
 // score = Σ 1/(k + rank_i) where k=60.
-func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit int) []Result {
+// If lookup is provided, vector-only results get populated with full metadata.
+func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit int, lookup DocLookup) []Result {
 	const k = 60.0
 
 	scores := make(map[string]float64)
@@ -70,11 +76,16 @@ func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit
 	// Score vector results by rank
 	for rank, v := range vectorResults {
 		scores[v.DocID] += 1.0 / (k + float64(rank+1))
-		// If not already in resultMap, create a placeholder
 		if _, exists := resultMap[v.DocID]; !exists {
-			resultMap[v.DocID] = Result{
-				DocID: v.DocID,
-				Score: v.Score,
+			// Try to look up full metadata for vector-only results
+			if lookup != nil {
+				if doc, ok := lookup.GetDocumentByID(v.DocID); ok {
+					resultMap[v.DocID] = doc
+				} else {
+					resultMap[v.DocID] = Result{DocID: v.DocID}
+				}
+			} else {
+				resultMap[v.DocID] = Result{DocID: v.DocID}
 			}
 		}
 	}

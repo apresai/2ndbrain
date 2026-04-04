@@ -85,8 +85,8 @@ func (e *Engine) HybridSearch(opts Options, queryEmbedding []float32, docIDs []s
 	// Vector search
 	vectorResults := VectorSearch(queryEmbedding, docIDs, embeddings, opts.Limit*2)
 
-	// Combine with RRF
-	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit)
+	// Combine with RRF (engine implements DocLookup for vector-only results)
+	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e)
 	return combined, ModeHybrid, nil
 }
 
@@ -191,6 +191,20 @@ func (e *Engine) executeSearch(query string, args []any) ([]Result, error) {
 	}
 
 	return results, rows.Err()
+}
+
+// GetDocumentByID looks up a document's metadata for RRF vector-only results.
+func (e *Engine) GetDocumentByID(id string) (Result, bool) {
+	var r Result
+	var fmJSON string
+	err := e.db.QueryRow(`
+		SELECT d.id, d.path, d.title, d.doc_type, d.status, d.frontmatter
+		FROM documents d WHERE d.id = ?`, id).Scan(
+		&r.DocID, &r.Path, &r.Title, &r.DocType, &r.Status, &fmJSON)
+	if err != nil {
+		return Result{}, false
+	}
+	return r, true
 }
 
 // ftsQuery converts a natural language query to FTS5 syntax.

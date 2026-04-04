@@ -87,7 +87,7 @@ func TestReciprocalRankFusion(t *testing.T) {
 		{DocID: "a", Score: 0.70},
 	}
 
-	results := ReciprocalRankFusion(bm25, vector, 4)
+	results := ReciprocalRankFusion(bm25, vector, 4, nil)
 
 	if len(results) != 4 {
 		t.Fatalf("got %d results, want 4", len(results))
@@ -103,7 +103,7 @@ func TestReciprocalRankFusion(t *testing.T) {
 }
 
 func TestRRFEmptyInputs(t *testing.T) {
-	results := ReciprocalRankFusion(nil, nil, 10)
+	results := ReciprocalRankFusion(nil, nil, 10, nil)
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for empty inputs, got %d", len(results))
 	}
