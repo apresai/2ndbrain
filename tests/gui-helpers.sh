@@ -10,6 +10,17 @@ TESTS=()
 
 mkdir -p "$SCREENSHOTS"
 
+# --- Pre-flight check ---
+check_screen_unlocked() {
+    # Check if screen is locked by testing if we can interact with System Events
+    if ! osascript -e 'tell application "System Events" to return name of first process whose frontmost is true' >/dev/null 2>&1; then
+        echo "ERROR: Screen appears to be locked. GUI tests require an unlocked display."
+        echo "Unlock your Mac and try again."
+        exit 1
+    fi
+}
+check_screen_unlocked
+
 # --- Result tracking ---
 pass() { PASS=$((PASS+1)); TESTS+=("PASS: $1"); echo "✓ $1"; }
 fail() { FAIL=$((FAIL+1)); TESTS+=("FAIL: $1 — $2"); echo "✗ $1 — $2"; }
