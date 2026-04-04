@@ -22,9 +22,10 @@ var (
 )
 
 var searchCmd = &cobra.Command{
-	Use:   "search [query]",
+	Use:   "search <query>",
 	Short: "Search the vault with hybrid BM25 + semantic search",
-	Args:  cobra.ArbitraryArgs,
+	Long:  "Search your knowledge base using keywords and semantic similarity.\nExamples:\n  2nb search \"authentication\"\n  2nb search \"how does auth work\" --type adr",
+	Args:  cobra.MinimumNArgs(1),
 	RunE:  runSearch,
 }
 
@@ -121,11 +122,39 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	if len(results) == 0 {
 		fmt.Fprintln(os.Stderr, "No results found.")
-		return output.Write(os.Stdout, getFormat(cmd), []search.Result{})
+		return nil
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, results)
+	if format != "" {
+		return output.Write(os.Stdout, format, results)
+	}
+
+	// Pretty output
+	for i, r := range results {
+		title := r.Title
+		if title == "" {
+			title = r.Path
+		}
+		fmt.Printf("%d. %s", i+1, title)
+		if r.DocType != "" {
+			fmt.Printf(" [%s]", r.DocType)
+		}
+		fmt.Printf(" (%.3f)\n", r.Score)
+		if r.Content != "" {
+			// Show first 120 chars of content
+			snippet := r.Content
+			if len(snippet) > 120 {
+				snippet = snippet[:120] + "..."
+			}
+			fmt.Printf("   %s\n", snippet)
+		}
+		if r.Path != "" {
+			fmt.Printf("   %s\n", r.Path)
+		}
+		fmt.Println()
+	}
+	return nil
 }
 
 // extractPrefix extracts a "prefix:value" from the query string.

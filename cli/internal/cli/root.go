@@ -89,7 +89,7 @@ func getFormat(cmd *cobra.Command) output.Format {
 	if v, _ := cmd.Flags().GetBool("yaml"); v {
 		return output.FormatYAML
 	}
-	return output.FormatJSON // default to JSON for AI consumption
+	return "" // default: pretty output; use --json for machine-readable
 }
 
 // ExitError is an error that carries an exit code for the CLI.

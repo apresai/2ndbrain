@@ -370,15 +370,19 @@ Build the AI provider system that enables local and cloud semantic search + gene
 
 | Sprint | Focus | Effort | Dependencies | Status |
 |--------|-------|--------|-------------|--------|
-| 1 | Interfaces + Config + Keystore | 1 session | None | Not Started |
-| 2 | AWS Bedrock Provider | 1 session | Sprint 1 | Not Started |
-| 3 | Vector Storage + Hybrid Search | 1 session | Sprint 2 | Not Started |
-| 4 | CLI Commands (models, config, ai) | 1 session | Sprint 1 | Not Started |
-| 5 | MCP Integration + kb_ask | 1 session | Sprint 3 | Not Started |
-| 6 | OpenRouter Provider | 1 session | Sprint 1, 4 | Not Started |
-| 7 | Ollama Provider (local AI) | 1 session | Sprint 1 | Not Started |
-| 8 | GUI Integration (stretch) | 1-2 sessions | Sprint 5 | Not Started |
+| 1 | Interfaces + Config + Keystore | 1 session | None | **Done** (2026-04-04) |
+| 2 | AWS Bedrock Provider | 1 session | Sprint 1 | **Done** (2026-04-04) |
+| 3 | Vector Storage + Hybrid Search | 1 session | Sprint 2 | **Done** (2026-04-04) |
+| 4 | CLI Commands (models, config, ai) | 1 session | Sprint 1 | **Done** (2026-04-04) |
+| 5 | MCP Integration + kb_ask | 1 session | Sprint 3 | **Done** (2026-04-04) |
 
-**Critical path**: 1 → 2 → 3 → 5 (AWS cloud AI end-to-end)
-**MVP = Sprints 1-4**: AWS Bedrock + vector search + CLI commands
-**Deferred**: Sprint 7 (Ollama/local) requires ~3 GB model downloads
+### Phase 2 (deferred)
+
+| Sprint | Focus | Effort | Dependencies | Status |
+|--------|-------|--------|-------------|--------|
+| 6 | OpenRouter Provider | 1 session | Sprint 4 | Phase 2 |
+| 7 | Ollama Provider (local AI) | 1 session | Sprint 1 | Phase 2 |
+| 8 | GUI AI Integration | 1-2 sessions | Sprint 5 | Phase 2 |
+
+**Phase 1 complete**: AWS Bedrock cloud AI + vector search + hybrid search + RAG Q&A + CLI commands
+**Phase 2**: OpenRouter, Ollama local AI, GUI integration

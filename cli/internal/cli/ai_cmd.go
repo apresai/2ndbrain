@@ -84,14 +84,14 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Pretty output
-	fmt.Printf("Provider:        %s\n", status.Provider)
-	fmt.Printf("Embedding model: %s\n", status.EmbeddingModel)
-	fmt.Printf("Generation model:%s\n", status.GenModel)
-	fmt.Printf("Dimensions:      %d\n", status.Dimensions)
-	fmt.Printf("Embed available: %v\n", status.EmbedAvailable)
-	fmt.Printf("Gen available:   %v\n", status.GenAvailable)
-	fmt.Printf("Documents:       %d\n", status.DocumentCount)
-	fmt.Printf("Embeddings:      %d/%d\n", status.EmbeddingCount, status.DocumentCount)
+	fmt.Printf("Provider:         %s\n", status.Provider)
+	fmt.Printf("Embedding model:  %s\n", status.EmbeddingModel)
+	fmt.Printf("Generation model: %s\n", status.GenModel)
+	fmt.Printf("Dimensions:       %d\n", status.Dimensions)
+	fmt.Printf("Embed ready:      %v\n", status.EmbedAvailable)
+	fmt.Printf("Generation ready: %v\n", status.GenAvailable)
+	fmt.Printf("Documents:        %d\n", status.DocumentCount)
+	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.DocumentCount)
 
 	if status.EmbeddingCount < status.DocumentCount {
 		fmt.Fprintf(os.Stderr, "\nRun `2nb index` to generate missing embeddings.\n")

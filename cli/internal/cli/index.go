@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
@@ -53,7 +54,14 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, stats)
+	if format != "" {
+		return output.Write(os.Stdout, format, stats)
+	}
+
+	if !flagPorcelain {
+		fmt.Printf("Indexed %d files, %d chunks, %d links\n", stats.DocsIndexed, stats.ChunksCreated, stats.LinksFound)
+	}
+	return nil
 }
 
 func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error {
@@ -85,7 +93,8 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 
 	for i, doc := range docs {
 		// Read document content for embedding
-		content, err := os.ReadFile(doc.Path)
+		absPath := filepath.Join(v.Root, doc.Path)
+		content, err := os.ReadFile(absPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  skip %s: %v\n", doc.Path, err)
 			continue

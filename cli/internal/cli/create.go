@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/document"
@@ -11,25 +12,54 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var safeFilenameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9 _\-\.,'&:()]+$`)
+
+func validateTitle(title string) error {
+	if title == "-" {
+		return fmt.Errorf("title cannot be a single dash")
+	}
+	if strings.HasPrefix(title, "-") {
+		return fmt.Errorf("title cannot start with a dash")
+	}
+	if !safeFilenameRe.MatchString(title) {
+		return fmt.Errorf("title contains invalid characters — use letters, numbers, spaces, and basic punctuation only")
+	}
+	return nil
+}
+
 var (
 	createType  string
 	createTitle string
 )
 
 var createCmd = &cobra.Command{
-	Use:   "create",
+	Use:   "create [title]",
 	Short: "Create a new document from a template",
+	Long:  "Create a new document. Title can be a positional argument or --title flag.\nExamples:\n  2nb create \"My New Note\"\n  2nb create --type adr \"Use JWT for Auth\"",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runCreate,
 }
 
 func init() {
 	createCmd.Flags().StringVar(&createType, "type", "note", "Document type (adr, runbook, note, postmortem)")
 	createCmd.Flags().StringVar(&createTitle, "title", "", "Document title")
-	createCmd.MarkFlagRequired("title")
 	rootCmd.AddCommand(createCmd)
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
+	// Accept title as positional arg or --title flag
+	if len(args) > 0 && createTitle == "" {
+		createTitle = args[0]
+	}
+	if createTitle == "" {
+		return fmt.Errorf("title is required: 2nb create \"My Note\" or 2nb create --title \"My Note\"")
+	}
+
+	// Validate title for safe filenames
+	if err := validateTitle(createTitle); err != nil {
+		return err
+	}
+
 	v, err := openVault()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
@@ -84,5 +114,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		"type":  doc.Type,
 	}
 
-	return output.Write(os.Stdout, format, result)
+	if format != "" {
+		return output.Write(os.Stdout, format, result)
+	}
+
+	fmt.Printf("Created %s: %s\n", doc.Type, doc.Path)
+	return nil
 }

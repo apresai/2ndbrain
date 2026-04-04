@@ -57,13 +57,17 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("delete from index: %w", err)
 	}
 
-	result := map[string]any{
-		"deleted": true,
-		"id":      doc.ID,
-		"path":    relPath,
-		"title":   doc.Title,
+	format := getFormat(cmd)
+	if format != "" {
+		result := map[string]any{
+			"deleted": true,
+			"id":      doc.ID,
+			"path":    relPath,
+			"title":   doc.Title,
+		}
+		return output.Write(os.Stdout, format, result)
 	}
 
-	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, result)
+	fmt.Printf("Deleted: %s\n", relPath)
+	return nil
 }

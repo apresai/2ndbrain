@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
@@ -100,8 +101,19 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	if len(items) == 0 {
 		fmt.Fprintln(os.Stderr, "No documents found.")
+		return nil
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, items)
+	if format != "" {
+		return output.Write(os.Stdout, format, items)
+	}
+
+	// Pretty table output by default
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TITLE\tTYPE\tSTATUS\tPATH")
+	for _, item := range items {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item.Title, item.Type, item.Status, item.Path)
+	}
+	return w.Flush()
 }
