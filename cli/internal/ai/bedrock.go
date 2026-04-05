@@ -49,7 +49,7 @@ func (b *BedrockEmbedder) Available(ctx context.Context) bool {
 	if b.available != nil {
 		return *b.available
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	_, err := b.Embed(ctx, []string{"test"})
 	result := err == nil
@@ -172,7 +172,7 @@ func (b *BedrockGenerator) Available(ctx context.Context) bool {
 	if b.available != nil {
 		return *b.available
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	_, err := b.Generate(ctx, "hi", GenOpts{MaxTokens: 1, Temperature: 0})
 	result := err == nil

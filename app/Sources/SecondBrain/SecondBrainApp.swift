@@ -70,6 +70,11 @@ struct SecondBrainApp: App {
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
 
+                Button("Ask AI") {
+                    appState.showAskAI.toggle()
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+
                 Divider()
 
                 Button("Focus Mode") {

@@ -34,6 +34,32 @@ struct StatusBarView: View {
                 Spacer()
             }
 
+            if appState.isIndexing {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    if let progress = appState.embeddingProgress {
+                        Text("Embedding \(progress.current)/\(progress.total)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Indexing...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else if let status = appState.aiStatus {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(status.embedAvailable && status.genAvailable ? .green :
+                              status.embedAvailable || status.genAvailable ? .yellow : .gray)
+                        .frame(width: 6, height: 6)
+                    Text("AI")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if let vault = appState.vault {
                 Text(vault.rootURL.lastPathComponent)
                     .font(.caption)

@@ -6,7 +6,7 @@ struct ContentView: View {
     @State private var showProperties = false
 
     private var anyOverlayVisible: Bool {
-        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette
+        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI
     }
 
     var body: some View {
@@ -33,6 +33,13 @@ struct ContentView: View {
                 CommandPaletteView(isPresented: Binding(
                     get: { appState.showCommandPalette },
                     set: { appState.showCommandPalette = $0 }
+                ))
+            }
+            if appState.showAskAI {
+                overlayBackground { appState.showAskAI = false }
+                AskAIView(isPresented: Binding(
+                    get: { appState.showAskAI },
+                    set: { appState.showAskAI = $0 }
                 ))
             }
         }

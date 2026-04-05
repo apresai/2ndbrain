@@ -20,6 +20,13 @@ final class AppState {
     var showSearch = false
     var showQuickOpen = false
     var showCommandPalette = false
+    var showAskAI = false
+
+    // AI state
+    var aiStatus: AIStatusInfo?
+    var isIndexing = false
+    var embeddingProgress: EmbeddingProgress?
+    var pendingFindSimilarQuery: String?
     var spotlightIndexer: SpotlightIndexer?
     var crashJournal: CrashJournal?
     var errorLogger: ErrorLogger?
@@ -65,6 +72,9 @@ final class AppState {
 
         // Refresh file list
         refreshFiles()
+
+        // Refresh AI status
+        Task { await refreshAIStatus() }
 
         // Start watching for changes
         fileWatcher?.stop()
@@ -277,12 +287,48 @@ final class AppState {
 
     func rebuildIndex() {
         guard let vault else { return }
-        do {
-            try vault.runIndex()
-            // Reopen database to pick up changes
-            self.database = try DatabaseManager(path: vault.indexDBPath)
-        } catch {
-            print("Failed to rebuild index: \(error)")
+        isIndexing = true
+        embeddingProgress = nil
+
+        Task {
+            do {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+                process.arguments = ["index"]
+                process.currentDirectoryURL = vault.rootURL
+                let stderrPipe = Pipe()
+                process.standardError = stderrPipe
+
+                // Parse embedding progress from stderr
+                stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+                    // Match "embedded N/M: path" or "Embedding N/M documents..."
+                    let pattern = /[Ee]mbed\w*\s+(\d+)\/(\d+)/
+                    for l in line.split(separator: "\n") {
+                        if let match = String(l).firstMatch(of: pattern) {
+                            let current = Int(match.1) ?? 0
+                            let total = Int(match.2) ?? 0
+                            Task { @MainActor [weak self] in
+                                self?.embeddingProgress = EmbeddingProgress(current: current, total: total)
+                            }
+                        }
+                    }
+                }
+
+                try process.run()
+                process.waitUntilExit()
+                stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+                // Reopen database to pick up changes
+                self.database = try DatabaseManager(path: vault.indexDBPath)
+            } catch {
+                print("Failed to rebuild index: \(error)")
+            }
+
+            isIndexing = false
+            embeddingProgress = nil
+            await refreshAIStatus()
         }
     }
 
@@ -353,6 +399,136 @@ final class AppState {
             if !openDocuments[idx].isDirty {
                 openDocuments[idx].content = content
             }
+        }
+    }
+
+    // MARK: - AI Integration
+
+    func refreshAIStatus() async {
+        guard let vault else {
+            aiStatus = nil
+            return
+        }
+        do {
+            let data = try await runCLI(["ai", "status", "--json", "--porcelain"], cwd: vault.rootURL)
+            let status = try JSONDecoder().decode(AIStatusInfo.self, from: data)
+            self.aiStatus = status
+        } catch {
+            self.aiStatus = nil
+        }
+    }
+
+    func askAI(question: String) async throws -> AIAskResult {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)
+        return try JSONDecoder().decode(AIAskResult.self, from: data)
+    }
+
+    func searchSemantic(query: String) async throws -> [SearchResultItem] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["search", "--json", "--porcelain", query], cwd: vault.rootURL)
+        let results = try JSONDecoder().decode([CLISearchResult].self, from: data)
+        return results.map { r in
+            SearchResultItem(
+                id: r.docID,
+                path: r.path,
+                title: r.title,
+                docType: r.docType ?? "",
+                headingPath: r.headingPath ?? "",
+                score: r.score,
+                status: r.status ?? ""
+            )
+        }
+    }
+
+    private func runCLI(_ args: [String], cwd: URL) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+            process.arguments = args
+            process.currentDirectoryURL = cwd
+            let stdout = Pipe()
+            process.standardOutput = stdout
+            process.standardError = FileHandle.nullDevice
+
+            process.terminationHandler = { proc in
+                if proc.terminationStatus == 0 {
+                    let data = stdout.fileHandleForReading.readDataToEndOfFile()
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+}
+
+// MARK: - AI Types
+
+struct AIStatusInfo: Codable {
+    let provider: String
+    let embeddingModel: String
+    let genModel: String
+    let dimensions: Int
+    let embedAvailable: Bool
+    let genAvailable: Bool
+    let embeddingCount: Int
+    let documentCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case provider
+        case embeddingModel = "embedding_model"
+        case genModel = "generation_model"
+        case dimensions
+        case embedAvailable = "embed_available"
+        case genAvailable = "gen_available"
+        case embeddingCount = "embedding_count"
+        case documentCount = "document_count"
+    }
+}
+
+struct AIAskResult: Codable {
+    let answer: String
+    let sources: [String]
+}
+
+struct CLISearchResult: Codable {
+    let docID: String
+    let path: String
+    let title: String
+    let docType: String?
+    let headingPath: String?
+    let score: Double
+    let status: String?
+
+    enum CodingKeys: String, CodingKey {
+        case docID = "doc_id"
+        case path, title
+        case docType = "type"
+        case headingPath = "heading_path"
+        case score, status
+    }
+}
+
+struct EmbeddingProgress {
+    var current: Int
+    var total: Int
+}
+
+enum CLIError: LocalizedError {
+    case noVault
+    case nonZeroExit(Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .noVault: return "No vault is open"
+        case .nonZeroExit(let code): return "CLI exited with code \(code)"
         }
     }
 }

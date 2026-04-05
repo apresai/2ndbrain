@@ -1,0 +1,168 @@
+package ai
+
+import (
+	"context"
+	"os"
+	"testing"
+)
+
+func requireOpenRouterKey(t *testing.T) string {
+	t.Helper()
+	key := os.Getenv("OPENROUTER_API_KEY")
+	if key == "" {
+		t.Skip("OPENROUTER_API_KEY not set")
+	}
+	return key
+}
+
+func TestOpenRouterEmbed(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	emb := NewOpenRouterEmbedder(key, openrouterDefaultEmbedModel, 1024)
+	vecs, err := emb.Embed(context.Background(), []string{"hello world", "semantic search test"})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(vecs) != 2 {
+		t.Fatalf("vecs count = %d, want 2", len(vecs))
+	}
+	if len(vecs[0]) == 0 {
+		t.Fatal("empty embedding vector")
+	}
+	t.Logf("embedding dims: %d", len(vecs[0]))
+}
+
+func TestOpenRouterEmbedSingle(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	emb := NewOpenRouterEmbedder(key, openrouterDefaultEmbedModel, 1024)
+	vecs, err := emb.Embed(context.Background(), []string{"single text embedding"})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(vecs) != 1 {
+		t.Fatalf("vecs count = %d, want 1", len(vecs))
+	}
+	// Verify non-zero values
+	allZero := true
+	for _, v := range vecs[0] {
+		if v != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Error("embedding is all zeros")
+	}
+}
+
+func TestOpenRouterGenerate(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	gen := NewOpenRouterGenerator(key, "qwen/qwen3.6-plus:free")
+	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10, Temperature: 0})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if result == "" {
+		t.Fatal("empty response")
+	}
+	t.Logf("response: %s", result)
+}
+
+func TestOpenRouterGenerateWithSystemPrompt(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	// Use qwen model which supports system prompts (Gemma 3 on Google AI Studio does not)
+	gen := NewOpenRouterGenerator(key, "qwen/qwen3.6-plus:free")
+	result, err := gen.Generate(context.Background(), "What color is the sky?", GenOpts{
+		SystemPrompt: "Reply with exactly one word.",
+		MaxTokens:    10,
+		Temperature:  0,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if result == "" {
+		t.Fatal("empty response")
+	}
+	t.Logf("response: %s", result)
+}
+
+func TestOpenRouterAvailable(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	emb := NewOpenRouterEmbedder(key, openrouterDefaultEmbedModel, 1024)
+	if !emb.Available(context.Background()) {
+		t.Error("expected available")
+	}
+	// Second call should be cached
+	if !emb.Available(context.Background()) {
+		t.Error("expected cached available")
+	}
+}
+
+func TestOpenRouterGeneratorAvailable(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	gen := NewOpenRouterGenerator(key, "qwen/qwen3.6-plus:free")
+	if !gen.Available(context.Background()) {
+		t.Error("expected available")
+	}
+}
+
+func TestOpenRouterListModels(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	models, err := ListOpenRouterModels(context.Background(), key, "")
+	if err != nil {
+		t.Fatalf("ListOpenRouterModels: %v", err)
+	}
+	if len(models) == 0 {
+		t.Fatal("no models returned")
+	}
+
+	// Verify we get both embedding and generation models
+	hasEmbed := false
+	hasGen := false
+	for _, m := range models {
+		if m.Type == "embedding" {
+			hasEmbed = true
+		}
+		if m.Type == "generation" {
+			hasGen = true
+		}
+		if m.Provider != "openrouter" {
+			t.Errorf("model %s has provider %q, want openrouter", m.ID, m.Provider)
+		}
+	}
+	if !hasGen {
+		t.Error("no generation models found")
+	}
+	t.Logf("found %d models (%v embedding)", len(models), hasEmbed)
+}
+
+func TestOpenRouterDefaultEmbedModel(t *testing.T) {
+	emb := NewOpenRouterEmbedder("key", "", 768)
+	if emb.model != openrouterDefaultEmbedModel {
+		t.Errorf("default model = %q, want %q", emb.model, openrouterDefaultEmbedModel)
+	}
+}
+
+func TestParsePerMillionPrice(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"0.000005", 5.0},
+		{"0", 0},
+		{"0.000001", 1.0},
+		{"invalid", 0},
+	}
+	for _, tt := range tests {
+		got := parsePerMillionPrice(tt.input)
+		if got != tt.want {
+			t.Errorf("parsePerMillionPrice(%q) = %f, want %f", tt.input, got, tt.want)
+		}
+	}
+}

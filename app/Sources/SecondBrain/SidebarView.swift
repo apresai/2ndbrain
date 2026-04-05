@@ -57,6 +57,11 @@ struct SidebarView: View {
                 Button("Open") {
                     appState.openDocument(at: file.url)
                 }
+                Button("Find Similar") {
+                    appState.pendingFindSimilarQuery = file.name
+                    appState.showSearch = true
+                }
+                .disabled(appState.aiStatus?.embedAvailable != true)
                 Divider()
                 Button("Delete", role: .destructive) {
                     fileToDelete = file

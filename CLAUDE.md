@@ -59,6 +59,15 @@ make test-all           # Everything: Go + GUI
 make install            # Build + install CLI to /usr/local/bin + app to /Applications
 ```
 
+### No Mock Tests Policy
+
+**All tests MUST use real API endpoints — local or paid. Mock tests (httptest.NewServer, fake responses, stub implementations) are NOT allowed.** Tests that need a provider should call the real API and skip if credentials or services are unavailable. This applies to AI provider tests (Bedrock, OpenRouter, Ollama), MCP tests, and any future integration tests. The test suite must verify actual behavior against real services, not simulated responses.
+
+- **Bedrock tests**: Use real AWS credentials; skip if not configured
+- **OpenRouter tests**: Use real OPENROUTER_API_KEY; skip if not set
+- **Ollama tests**: Use real Ollama server at localhost:11434; skip if not running or model not pulled
+- Pure logic tests (e.g., string classification, price parsing) that don't call any API are fine
+
 ### GUI Test Automation
 
 GUI tests use **AppleScript** for app interaction and **screencapture** for verification. Run `make install` first to install to `/Applications` — computer-use MCP requires apps in `/Applications` to grant access.
@@ -77,6 +86,7 @@ Test scripts live in `tests/`:
 | `gui-test-editor.sh` | Undo/redo, bold/italic, save, preview |
 | `gui-test-ui.sh` | Sidebar, focus mode, tabs, graph view |
 | `gui-test-vault.sh` | FSEvents, Obsidian import/export |
+| `gui-test-ai.sh` | Ask AI panel, status bar indicator, semantic search |
 
 ### Key patterns for GUI tests
 
@@ -95,6 +105,7 @@ Test scripts live in `tests/`:
 
 | Package | Purpose |
 |---------|---------|
+| `internal/ai` | AI provider interfaces, registry, Bedrock/OpenRouter/Ollama implementations |
 | `internal/cli` | Cobra command definitions (one file per command) |
 | `internal/vault` | Vault init/open, config, schemas, templates, indexer |
 | `internal/document` | Markdown parsing, frontmatter, chunking, wikilinks |
@@ -113,7 +124,7 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (22)
+### CLI Commands (24)
 
 | Command | Flags | Purpose |
 |---------|-------|---------|
@@ -136,6 +147,8 @@ Test scripts live in `tests/`:
 | `ask` | `<question>` | RAG Q&A — search vault, generate answer with sources |
 | `ai status` | | Show AI provider, models, readiness, embedding count |
 | `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
+| `ai setup` | | Guided local AI setup with Ollama (install, pull models, configure) |
+| `ai local` | | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
 | `models list` | `--type`, `--free` | List available AI models with pricing |
 | `config show` | | Dump full vault configuration |
 | `config get` | `<key>` | Read a config value |
@@ -218,6 +231,10 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Spotlight indexing | SpotlightIndexer | CoreSpotlight integration |
 | Crash recovery | CrashJournal | Recovery dialog on launch |
 | File watching | FSEventsWatcher | Auto-reload on external changes |
+| Ask AI panel | AskAIView.swift | RAG Q&A overlay via `2nb ask` (Cmd+Shift+A) |
+| AI status indicator | StatusBarView.swift | Provider readiness + embedding progress in status bar |
+| Semantic search | SearchPanelView.swift | Toggle for AI-powered hybrid search |
+| Find Similar | SidebarView.swift | Context menu → semantic search for similar docs |
 
 ### Keyboard Shortcuts
 
@@ -228,6 +245,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Cmd+Shift+O | Open Vault |
 | Cmd+P | Quick Open |
 | Cmd+Shift+P | Command Palette |
+| Cmd+Shift+A | Ask AI |
 | Cmd+Shift+F | Search Panel |
 | Cmd+Shift+E | Focus Mode |
 | Cmd+Option+I | Properties Panel |

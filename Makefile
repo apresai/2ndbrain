@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app install clean test test-gui test-all version-swift bump-major bump-minor bump-build
+.PHONY: build build-cli build-app install clean test test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -46,6 +46,7 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-navigation.sh
 	SKIP_BUILD=1 ./tests/gui-test-editor.sh
 	SKIP_BUILD=1 ./tests/gui-test-ui.sh
+	SKIP_BUILD=1 ./tests/gui-test-ai.sh
 
 test-all: test test-gui
 
@@ -63,3 +64,57 @@ bump-major:
 	@echo "$(shell echo $$(($(MAJOR)+1))).0.0" > VERSION
 	@echo "Version: $$(cat VERSION)"
 	@$(MAKE) version-swift
+
+update-changelog:
+	@echo "Updating CHANGELOG.md with version $(VERSION)..."
+	@bash scripts/update-changelog.sh $(VERSION)
+
+release:
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Creating Release v$(VERSION)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "Step 1: Updating CHANGELOG.md..."
+	@$(MAKE) update-changelog
+	@echo ""
+	@echo "Step 2: Checking for uncommitted changes..."
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Found changes, committing..."; \
+		git add CHANGELOG.md; \
+		git commit -m "Release v$(VERSION)"; \
+		git push origin main; \
+		echo "Changes committed and pushed"; \
+	else \
+		echo "No changes to commit"; \
+	fi
+	@echo ""
+	@echo "Step 3: Creating git tag v$(VERSION)..."
+	@git tag -a v$(VERSION) -m "Release v$(VERSION)" || (echo "Tag already exists" && exit 1)
+	@git push origin v$(VERSION)
+	@echo "Tag v$(VERSION) created and pushed"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Tag v$(VERSION) pushed — GitHub Actions will handle the rest!"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "GitHub Actions will:"
+	@echo "  1. Build macOS binaries (arm64 + x86_64)"
+	@echo "  2. Create GitHub release"
+	@echo "  3. Update Homebrew tap (brew install apresai/tap/2nb)"
+	@echo ""
+	@echo "Monitor: https://github.com/apresai/2ndbrain/actions"
+
+release-local:
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Creating Local Release v$(VERSION)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@$(MAKE) update-changelog
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		git add CHANGELOG.md; \
+		git commit -m "Release v$(VERSION)"; \
+		git push origin main; \
+	fi
+	@git tag -a v$(VERSION) -m "Release v$(VERSION)" || true
+	@git push origin v$(VERSION) || true
+	goreleaser release --clean
+	@echo "Local release v$(VERSION) complete"

@@ -23,14 +23,16 @@ func initAIProviders(v *vault.Vault) {
 			}
 		}
 	case "ollama":
-		// Will be added in Sprint 7
-		if !flagPorcelain {
-			fmt.Fprintln(os.Stderr, "warning: ollama provider not yet implemented")
+		if err := ai.InitOllama(ctx, ai.DefaultRegistry, cfg.Ollama, cfg); err != nil {
+			if !flagPorcelain {
+				fmt.Fprintf(os.Stderr, "warning: ollama init: %v\n", err)
+			}
 		}
 	case "openrouter":
-		// Will be added in Sprint 6
-		if !flagPorcelain {
-			fmt.Fprintln(os.Stderr, "warning: openrouter provider not yet implemented")
+		if err := ai.InitOpenRouter(ctx, ai.DefaultRegistry, cfg.OpenRouter, cfg); err != nil {
+			if !flagPorcelain {
+				fmt.Fprintf(os.Stderr, "warning: openrouter init: %v\n", err)
+			}
 		}
 	}
 }

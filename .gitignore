@@ -9,6 +9,7 @@ node_modules/
 # Go
 cli/bin/
 *.exe
+dist/
 
 # Swift / Xcode
 app/DerivedData/

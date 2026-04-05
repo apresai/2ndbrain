@@ -20,9 +20,9 @@ Build the AI provider system that enables local and cloud semantic search + gene
 | 3 | Vector Storage + Hybrid Search | **Done** | 2026-04-04 |
 | 4 | CLI Commands — models, config, ai status | **Done** | 2026-04-04 |
 | 5 | MCP Integration + kb_ask | **Done** | 2026-04-04 |
-| 6 | OpenRouter Provider | Not Started | |
-| 7 | Ollama Provider — Local AI | Not Started | |
-| 8 | GUI Integration (stretch) | Not Started | |
+| 6 | OpenRouter Provider | **Done** | 2026-04-04 |
+| 7 | Ollama Provider — Local AI | **Done** | 2026-04-04 |
+| 8 | GUI Integration (stretch) | **Done** | 2026-04-04 |
 
 **MVP = Sprints 1-4**: AWS Bedrock cloud AI + vector search + CLI commands
 **Critical path**: 1 → 2 → 3 → 5
@@ -396,9 +396,9 @@ As an engineer who values privacy, I want to run `2nb config set ai.provider oll
 
 | Sprint | Focus | Effort | Dependencies | Status |
 |--------|-------|--------|-------------|--------|
-| 6 | OpenRouter Provider | 1 session | Sprint 4 | Phase 2 |
-| 7 | Ollama Provider (local AI) | 1 session | Sprint 1 | Phase 2 |
-| 8 | GUI AI Integration | 1-2 sessions | Sprint 5 | Phase 2 |
+| 6 | OpenRouter Provider | 1 session | Sprint 4 | **Done** (2026-04-04) |
+| 7 | Ollama Provider (local AI) | 1 session | Sprint 1 | **Done** (2026-04-04) |
+| 8 | GUI AI Integration | 1-2 sessions | Sprint 5 | **Done** (2026-04-04) |
 
 **Phase 1 complete**: AWS Bedrock cloud AI + vector search + hybrid search + RAG Q&A + CLI commands
-**Phase 2**: OpenRouter, Ollama local AI, GUI integration
+**Phase 2 complete**: OpenRouter, Ollama local AI, GUI integration

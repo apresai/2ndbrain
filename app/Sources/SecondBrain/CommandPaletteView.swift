@@ -113,6 +113,12 @@ struct CommandPaletteView: View {
             PaletteCommand(title: "Reindex Spotlight", icon: "magnifyingglass", shortcut: "") { state in
                 state.reindexSpotlight()
             },
+            PaletteCommand(title: "Ask AI", icon: "brain.head.profile", shortcut: "Cmd+Shift+A") { state in
+                state.showAskAI = true
+            },
+            PaletteCommand(title: "Refresh AI Status", icon: "arrow.triangle.2.circlepath", shortcut: "") { state in
+                Task { await state.refreshAIStatus() }
+            },
         ]
     }
 }

@@ -8,6 +8,7 @@ struct SearchPanelView: View {
     @State private var typeFilter = ""
     @State private var results: [SearchResultItem] = []
     @State private var selectedIndex = 0
+    @State private var useSemanticSearch = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -38,6 +39,17 @@ struct SearchPanelView: View {
                     }
                     .buttonStyle(.plain)
                 }
+
+                Button {
+                    useSemanticSearch.toggle()
+                    performSearch()
+                } label: {
+                    Image(systemName: useSemanticSearch ? "brain.head.profile.fill" : "brain.head.profile")
+                        .foregroundStyle(useSemanticSearch ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(useSemanticSearch ? "Semantic search (AI)" : "Keyword search")
+                .disabled(appState.aiStatus?.embedAvailable != true)
             }
             .padding(12)
 
@@ -91,10 +103,31 @@ struct SearchPanelView: View {
         .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
         .onKeyPress(.downArrow) { moveSelection(1); return .handled }
         .onKeyPress(.escape) { isPresented = false; return .handled }
-        .onAppear { searchFocused = true }
+        .onAppear {
+            searchFocused = true
+            if let pending = appState.pendingFindSimilarQuery {
+                query = pending
+                useSemanticSearch = true
+                appState.pendingFindSimilarQuery = nil
+                performSearch()
+            }
+        }
     }
 
     private func performSearch() {
+        // Semantic search via CLI
+        if useSemanticSearch && !query.isEmpty {
+            Task {
+                do {
+                    results = try await appState.searchSemantic(query: query)
+                    selectedIndex = 0
+                } catch {
+                    results = []
+                }
+            }
+            return
+        }
+
         guard let db = appState.database else { return }
 
         // Parse inline filters

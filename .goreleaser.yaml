@@ -1,0 +1,163 @@
+# GoReleaser configuration for 2ndbrain
+# Documentation: https://goreleaser.com
+
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+
+project_name: 2nb
+
+before:
+  hooks:
+    - cd cli && go mod tidy
+    - cd cli && go test -short -tags fts5 ./...
+
+builds:
+  - id: 2nb
+    dir: ./cli
+    main: ./cmd/2nb
+    binary: 2nb
+
+    ldflags:
+      - -s -w
+      - -X github.com/apresai/2ndbrain/internal/cli.Version={{.Version}}
+
+    tags:
+      - fts5
+
+    # macOS only — CGO (SQLite) requires native toolchain
+    goos:
+      - darwin
+
+    goarch:
+      - amd64
+      - arm64
+
+    env:
+      - CGO_ENABLED=1
+
+archives:
+  - id: 2nb
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+
+    files:
+      - README.md
+      - LICENSE*
+      - CHANGELOG.md
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: apresai
+    name: 2ndbrain
+
+  header: |
+    ## 2nb {{ .Version }}
+
+    AI-native markdown knowledge base with semantic search and RAG.
+
+    ### Installation
+
+    **macOS (Homebrew):**
+    ```bash
+    brew install apresai/tap/2nb
+    ```
+
+    **macOS (Direct Download):**
+    ```bash
+    tar -xzf 2nb_{{ .Version }}_Darwin_arm64.tar.gz
+    sudo mv 2nb /usr/local/bin/
+    ```
+
+  footer: |
+    ### Getting Started
+
+    ```bash
+    # Initialize a vault
+    2nb init --path ~/my-vault
+
+    # Index documents for search
+    2nb index
+
+    # Search your knowledge base
+    2nb search "authentication patterns"
+
+    # Set up local AI (optional)
+    2nb ai setup
+    ```
+
+    For documentation: https://github.com/apresai/2ndbrain
+
+    **Full Changelog**: https://github.com/apresai/2ndbrain/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+  prerelease: auto
+  name_template: "v{{.Version}}"
+
+brews:
+  - ids:
+      - 2nb
+
+    name: 2nb
+
+    repository:
+      owner: apresai
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Version }}"
+
+    homepage: "https://github.com/apresai/2ndbrain"
+    description: "AI-native markdown knowledge base with semantic search, RAG, and MCP server"
+    license: "MIT"
+
+    install: |
+      bin.install "2nb"
+
+    test: |
+      system "#{bin}/2nb", "--help"
+
+    caveats: |
+      To get started:
+
+        # Initialize a new vault
+        2nb init --path ~/my-vault
+
+        # Or open an existing Obsidian vault
+        2nb import-obsidian ~/my-obsidian-vault
+
+        # Set up local AI with Ollama
+        2nb ai setup
+
+      For full documentation:
+      https://github.com/apresai/2ndbrain
