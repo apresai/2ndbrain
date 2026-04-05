@@ -1,9 +1,11 @@
 package document
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +22,46 @@ type Document struct {
 	ModifiedAt  string         `json:"modified_at"`
 	Frontmatter map[string]any `json:"frontmatter"`
 	Body        string         `json:"body,omitempty"`
+	ContentHash string         `json:"content_hash,omitempty"`
+}
+
+// ComputeContentHash sets ContentHash to the SHA-256 of the normalized body.
+// Excludes frontmatter so metadata-only changes (tags, status) don't trigger re-embedding.
+// Normalizes whitespace/line endings to prevent editor artifacts from causing false changes.
+func (d *Document) ComputeContentHash() {
+	d.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(normalizeBody(d.Body))))
+}
+
+// normalizeBody produces a canonical form for hashing:
+// - CRLF → LF
+// - strip trailing whitespace per line
+// - strip leading/trailing blank lines
+// - collapse 3+ consecutive blank lines to 2
+func normalizeBody(body string) string {
+	// CRLF → LF
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "\r", "\n")
+
+	// Strip trailing whitespace per line and collapse excessive blank lines
+	lines := strings.Split(body, "\n")
+	var out []string
+	blankRun := 0
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, " \t")
+		if trimmed == "" {
+			blankRun++
+			if blankRun <= 2 {
+				out = append(out, "")
+			}
+		} else {
+			blankRun = 0
+			out = append(out, trimmed)
+		}
+	}
+
+	result := strings.Join(out, "\n")
+	result = strings.TrimSpace(result)
+	return result
 }
 
 func Parse(path string, content []byte) (*Document, error) {

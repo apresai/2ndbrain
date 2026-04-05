@@ -157,19 +157,21 @@ Test scripts live in `tests/`:
 
 **Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`
 
-### MCP Server (9 tools)
+### MCP Server (11 tools)
 
 | Tool | Purpose |
 |------|---------|
+| `kb_info` | Vault overview: name, doc types, schemas, counts, AI status |
 | `kb_search` | Hybrid search with type/status/tag filters |
+| `kb_ask` | RAG Q&A — answer questions with source citations |
 | `kb_read` | Read document or specific chunk by heading path |
-| `kb_related` | Traverse link graph to depth N |
+| `kb_list` | List documents with filters |
 | `kb_create` | Create document from template type |
 | `kb_update_meta` | Update frontmatter fields with validation |
+| `kb_related` | Traverse link graph to depth N |
 | `kb_structure` | Get document heading hierarchy |
 | `kb_delete` | Delete document from vault and index |
-| `kb_list` | List documents with filters |
-| `kb_ask` | RAG Q&A — answer questions with source citations |
+| `kb_index` | Rebuild search index and generate embeddings |
 
 ### Testing
 
@@ -303,6 +305,8 @@ Defined in `.2ndbrain/schemas.yaml`. Four built-in types:
 |------|----------------|---------------|----------------|
 | **adr** | title, status | proposed, accepted, deprecated, superseded | proposed → accepted/deprecated; accepted → deprecated/superseded |
 | **runbook** | title, status | draft, active, archived | — |
+| **prd** | title, status | draft, review, approved, shipped, archived | draft → review → approved → shipped → archived; review/approved can return to draft |
+| **prfaq** | title, status | draft, review, final | draft → review → final; review can return to draft |
 | **note** | title | draft, complete | — |
 | **postmortem** | title, status, incident-date | draft, reviewed, published | — |
 

@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -28,8 +30,9 @@ func validateTitle(title string) error {
 }
 
 var (
-	createType  string
-	createTitle string
+	createType           string
+	createTitle          string
+	createAllowDuplicate bool
 )
 
 var createCmd = &cobra.Command{
@@ -41,8 +44,9 @@ var createCmd = &cobra.Command{
 }
 
 func init() {
-	createCmd.Flags().StringVar(&createType, "type", "note", "Document type (adr, runbook, note, postmortem)")
+	createCmd.Flags().StringVar(&createType, "type", "note", "Document type (adr, runbook, note, postmortem, prd, prfaq)")
 	createCmd.Flags().StringVar(&createTitle, "title", "", "Document title")
+	createCmd.Flags().BoolVar(&createAllowDuplicate, "allow-duplicate", false, "Allow creating a document with duplicate content")
 	rootCmd.AddCommand(createCmd)
 }
 
@@ -79,6 +83,18 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	doc := document.NewDocument(createTitle, createType, tmplBody)
 	doc.SetMeta("status", initialStatus)
+	doc.ComputeContentHash()
+
+	// Check for duplicate content
+	if !createAllowDuplicate {
+		dupPath, err := v.DB.FindByContentHash(doc.ContentHash, "")
+		if err != nil {
+			return fmt.Errorf("check duplicates: %w", err)
+		}
+		if dupPath != "" {
+			return fmt.Errorf("duplicate content: matches existing document %q\nUse --allow-duplicate to create anyway", dupPath)
+		}
+	}
 
 	path, err := doc.WriteFile(v.Root)
 	if err != nil {
@@ -106,6 +122,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: failed to index links: %v\n", err)
 	}
 
+	// Embed the new document if an AI provider is available
+	embedNewDocument(v, doc)
+
 	format := getFormat(cmd)
 	result := map[string]any{
 		"id":    doc.ID,
@@ -120,4 +139,30 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Created %s: %s\n", doc.Type, doc.Path)
 	return nil
+}
+
+// embedNewDocument tries to embed a single document inline using its in-memory body.
+// Silently skips if no AI provider is configured or available.
+func embedNewDocument(v *vault.Vault, doc *document.Document) {
+	cfg := v.Config.AI
+	initAIProviders(v)
+
+	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	if err != nil {
+		return
+	}
+
+	ctx := context.Background()
+	if !embedder.Available(ctx) {
+		return
+	}
+
+	vecs, err := embedder.Embed(ctx, []string{doc.Body})
+	if err != nil {
+		return
+	}
+
+	if err := v.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to store embedding: %v\n", err)
+	}
 }

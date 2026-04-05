@@ -10,9 +10,15 @@ import (
 )
 
 // initAIProviders registers AI providers based on vault config.
-// Called by commands that need embedding or generation.
+// Idempotent — skips if the provider is already registered.
 func initAIProviders(v *vault.Vault) {
 	cfg := v.Config.AI
+
+	// Skip if already registered (safe for repeated calls in MCP server)
+	if _, err := ai.DefaultRegistry.Embedder(cfg.Provider); err == nil {
+		return
+	}
+
 	ctx := context.Background()
 
 	switch cfg.Provider {

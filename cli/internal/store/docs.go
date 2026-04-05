@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -29,7 +31,7 @@ func (db *DB) UpsertDocument(doc *document.Document) error {
 			content_hash = excluded.content_hash,
 			frontmatter = excluded.frontmatter
 	`, doc.ID, doc.Path, doc.Title, doc.Type, doc.Status,
-		doc.CreatedAt, doc.ModifiedAt, now, "", string(fm))
+		doc.CreatedAt, doc.ModifiedAt, now, doc.ContentHash, string(fm))
 
 	return err
 }
@@ -149,6 +151,26 @@ func (db *DB) ResolveLinks() error {
 		AND links.resolved = 0
 	`)
 	return err
+}
+
+// FindByContentHash returns the path of an existing document with the same content hash,
+// excluding the document with excludeID. Returns empty string if no duplicate found.
+func (db *DB) FindByContentHash(hash string, excludeID string) (string, error) {
+	if hash == "" {
+		return "", nil
+	}
+	var path string
+	err := db.conn.QueryRow(
+		`SELECT path FROM documents WHERE content_hash = ? AND id != ? LIMIT 1`,
+		hash, excludeID,
+	).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("check content hash: %w", err)
+	}
+	return path, nil
 }
 
 func (db *DB) DeleteDocument(docID string) error {

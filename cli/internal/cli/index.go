@@ -2,12 +2,12 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -92,22 +92,21 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 	}
 
 	for i, doc := range docs {
-		// Read document content for embedding
 		absPath := filepath.Join(v.Root, doc.Path)
-		content, err := os.ReadFile(absPath)
+		parsed, err := document.ParseFile(absPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  skip %s: %v\n", doc.Path, err)
 			continue
 		}
 
-		vecs, err := embedder.Embed(ctx, []string{string(content)})
+		vecs, err := embedder.Embed(ctx, []string{parsed.Body})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
 			continue
 		}
 
-		hash := fmt.Sprintf("%x", sha256.Sum256(content))
-		if err := v.DB.SetEmbedding(doc.ID, vecs[0], model, hash); err != nil {
+		parsed.ComputeContentHash()
+		if err := v.DB.SetEmbedding(doc.ID, vecs[0], model, parsed.ContentHash); err != nil {
 			fmt.Fprintf(os.Stderr, "  store error %s: %v\n", doc.Path, err)
 			continue
 		}

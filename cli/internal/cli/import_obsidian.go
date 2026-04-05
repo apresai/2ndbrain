@@ -30,6 +30,12 @@ func init() {
 	rootCmd.AddCommand(importObsidianCmd)
 }
 
+// isObsidianSkipDir returns true for directories that should not be imported.
+func isObsidianSkipDir(base string) bool {
+	return base == ".obsidian" || base == "templates" ||
+		strings.HasPrefix(base, ".") || base == "node_modules"
+}
+
 // inlineTagRe matches #tag patterns that are NOT headings.
 // We apply this per-line, skipping headings and code blocks.
 var inlineTagRe = regexp.MustCompile(`(?:^|\s)#([a-zA-Z][a-zA-Z0-9_-]*)`)
@@ -86,8 +92,7 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 		}
 		if info.IsDir() {
 			base := filepath.Base(path)
-			// Skip .obsidian, hidden dirs, and node_modules.
-			if base == ".obsidian" || strings.HasPrefix(base, ".") || base == "node_modules" {
+			if isObsidianSkipDir(base) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -155,7 +160,7 @@ func copyMarkdownFiles(src, dst string) error {
 		}
 		if info.IsDir() {
 			base := filepath.Base(path)
-			if base == ".obsidian" || strings.HasPrefix(base, ".") || base == "node_modules" {
+			if isObsidianSkipDir(base) {
 				return filepath.SkipDir
 			}
 			return nil

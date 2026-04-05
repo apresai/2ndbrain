@@ -20,6 +20,118 @@ type handlers struct {
 	vault *vault.Vault
 }
 
+func (h *handlers) handleKBInfo(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	v := h.vault
+	cfg := v.Config
+
+	// Count documents by type
+	typeCounts := make(map[string]int)
+	rows, err := v.DB.Conn().Query("SELECT doc_type, COUNT(*) FROM documents GROUP BY doc_type")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var t string
+			var c int
+			if rows.Scan(&t, &c) == nil {
+				typeCounts[t] = c
+			}
+		}
+	}
+
+	var totalDocs int
+	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents").Scan(&totalDocs)
+	embCount, _ := v.DB.EmbeddingCount()
+
+	// Build schema info
+	type schemaInfo struct {
+		Type          string   `json:"type"`
+		StatusValues  []string `json:"status_values,omitempty"`
+		InitialStatus string   `json:"initial_status,omitempty"`
+		Count         int      `json:"document_count"`
+	}
+	var schemas []schemaInfo
+	for typeName, schema := range v.Schemas.Types {
+		si := schemaInfo{Type: typeName, Count: typeCounts[typeName]}
+		if schema.Status != nil {
+			si.InitialStatus = schema.Status.Initial
+			for state := range schema.Status.Transitions {
+				si.StatusValues = append(si.StatusValues, state)
+			}
+		}
+		schemas = append(schemas, si)
+	}
+
+	// AI status
+	aiStatus := map[string]any{
+		"provider":         cfg.AI.Provider,
+		"embedding_model":  cfg.AI.EmbeddingModel,
+		"generation_model": cfg.AI.GenerationModel,
+		"embeddings":       embCount,
+	}
+
+	info := map[string]any{
+		"vault_name":     cfg.Name,
+		"total_documents": totalDocs,
+		"document_types": schemas,
+		"ai":             aiStatus,
+		"usage_tips": []string{
+			"Use kb_search to find documents by topic",
+			"Use kb_ask to get AI-synthesized answers with source citations",
+			"Use kb_list to browse documents by type or status",
+			"Use kb_create to add new ADRs, runbooks, postmortems, or notes",
+			"Use kb_read with the chunk parameter to read specific sections",
+		},
+	}
+
+	data, _ := json.MarshalIndent(info, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	stats, err := vault.IndexVault(h.vault, func(path string) {})
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("index failed: %v", err)), nil
+	}
+
+	// Generate embeddings if a provider is available
+	embedded := 0
+	cfg := h.vault.Config.AI
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	if embErr == nil && embedder.Available(ctx) {
+		model := cfg.EmbeddingModel
+		docs, _ := h.vault.DB.DocumentsNeedingEmbedding(model)
+		for _, doc := range docs {
+			absPath := h.vault.AbsPath(doc.Path)
+			content, err := os.ReadFile(absPath)
+			if err != nil {
+				continue
+			}
+			parsed, err := document.Parse(doc.Path, content)
+			if err != nil {
+				continue
+			}
+			vecs, err := embedder.Embed(ctx, []string{parsed.Body})
+			if err != nil {
+				continue
+			}
+			parsed.ComputeContentHash()
+			if h.vault.DB.SetEmbedding(doc.ID, vecs[0], model, parsed.ContentHash) == nil {
+				embedded++
+			}
+		}
+	}
+
+	result := map[string]any{
+		"documents_indexed": stats.DocsIndexed,
+		"chunks_created":    stats.ChunksCreated,
+		"links_found":       stats.LinksFound,
+		"embeddings_updated": embedded,
+	}
+
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
 func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	query, _ := request.GetArguments()["query"].(string)
 	docType, _ := request.GetArguments()["type"].(string)
@@ -234,6 +346,7 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 
 	doc := document.NewDocument(title, docType, tmplBody)
 	doc.SetMeta("status", initialStatus)
+	doc.ComputeContentHash()
 
 	writePath, err := doc.WriteFile(h.vault.Root)
 	if err != nil {
@@ -247,6 +360,15 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 	chunks := document.ChunkDocument(doc)
 	h.vault.DB.UpsertChunks(chunks)
 	h.vault.DB.UpsertTags(doc.ID, doc.Tags)
+
+	// Embed inline if provider available
+	cfg := h.vault.Config.AI
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	if embErr == nil && embedder.Available(ctx) {
+		if vecs, err := embedder.Embed(ctx, []string{doc.Body}); err == nil {
+			h.vault.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash)
+		}
+	}
 
 	result := map[string]any{
 		"id":    doc.ID,

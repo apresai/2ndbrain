@@ -151,19 +151,21 @@ All commands support `--json`, `--yaml`, `--csv` for machine-readable output.
 
 ## MCP Server
 
-The MCP server exposes 9 tools for AI coding assistants:
+The MCP server exposes 11 tools for AI coding assistants:
 
 | Tool | Description |
 |------|-------------|
+| `kb_info` | Vault overview — doc types, schemas, counts, AI status |
 | `kb_search` | Hybrid BM25 + semantic search with filters |
 | `kb_ask` | RAG Q&A — answer questions with source citations |
 | `kb_read` | Read full document or specific heading chunk |
 | `kb_list` | List documents with metadata filters |
-| `kb_related` | Graph traversal to find connected documents |
 | `kb_create` | Create document from template |
 | `kb_update_meta` | Update frontmatter with schema validation |
+| `kb_related` | Graph traversal to find connected documents |
 | `kb_structure` | Get document heading tree as JSON |
 | `kb_delete` | Delete document from vault and index |
+| `kb_index` | Rebuild search index and generate embeddings |
 
 ### Claude Code
 
@@ -239,6 +241,8 @@ make install    # Installs to ~/Applications
 |------|--------------|---------|
 | `adr` | proposed -> accepted -> deprecated/superseded | Architecture decisions |
 | `runbook` | draft -> active -> archived | Operational procedures |
+| `prd` | draft -> review -> approved -> shipped -> archived | Product requirements |
+| `prfaq` | draft -> review -> final | Amazon-style press release / FAQ |
 | `postmortem` | draft -> reviewed -> published | Incident analysis |
 | `note` | draft -> complete | General knowledge |
 

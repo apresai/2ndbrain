@@ -71,6 +71,43 @@ func DefaultSchemas() *SchemaSet {
 				},
 				Required: []string{"title"},
 			},
+			"prd": {
+				Name:        "Product Requirements Document",
+				Description: "Product requirements with problem statement, user stories, and functional specs",
+				Fields: map[string]FieldDef{
+					"status":   {Type: "text", Enum: []string{"draft", "review", "approved", "shipped", "archived"}},
+					"owner":    {Type: "text"},
+					"priority": {Type: "text", Enum: []string{"p0", "p1", "p2", "p3"}},
+				},
+				Required: []string{"title", "status"},
+				Status: &StatusMachine{
+					Initial: "draft",
+					Transitions: map[string][]string{
+						"draft":    {"review"},
+						"review":   {"draft", "approved"},
+						"approved": {"shipped", "draft"},
+						"shipped":  {"archived"},
+						"archived": {},
+					},
+				},
+			},
+			"prfaq": {
+				Name:        "Press Release / FAQ",
+				Description: "Amazon-style PR/FAQ for working backwards from the customer experience",
+				Fields: map[string]FieldDef{
+					"status": {Type: "text", Enum: []string{"draft", "review", "final"}},
+					"owner":  {Type: "text"},
+				},
+				Required: []string{"title", "status"},
+				Status: &StatusMachine{
+					Initial: "draft",
+					Transitions: map[string][]string{
+						"draft":  {"review"},
+						"review": {"draft", "final"},
+						"final":  {},
+					},
+				},
+			},
 			"postmortem": {
 				Name:        "Postmortem",
 				Description: "Incident postmortem analysis",

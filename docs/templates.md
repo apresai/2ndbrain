@@ -1,6 +1,6 @@
 # Document Templates
 
-2ndbrain ships with four built-in document types, each with a template and schema.
+2ndbrain ships with six built-in document types, each with a template and schema.
 
 ## ADR (Architecture Decision Record)
 
@@ -74,6 +74,61 @@ What becomes easier or more difficult to do because of this change?
 ## Impact
 ## Action Items
 ## Lessons Learned
+```
+
+## PRD (Product Requirements Document)
+
+**Schema fields:**
+- `status`: draft, review, approved, shipped, archived
+- `owner`: text
+- `priority`: p0, p1, p2, p3
+
+**Status state machine:**
+```
+draft -> review
+review -> draft | approved
+approved -> shipped | draft
+shipped -> archived
+archived -> (terminal)
+```
+
+**Template:**
+```markdown
+# {Title}
+
+## Problem Statement
+## Target Users
+## Goals
+## Non-Goals
+## User Stories
+## Functional Requirements (P0 / P1)
+## Non-Functional Requirements
+## Success Metrics
+## Risks
+```
+
+## PR/FAQ (Press Release / FAQ)
+
+**Schema fields:**
+- `status`: draft, review, final
+- `owner`: text
+
+**Status state machine:**
+```
+draft -> review
+review -> draft | final
+final -> (terminal)
+```
+
+**Template:**
+```markdown
+# {Title}
+
+## Press Release
+  - Headline, subheadline, body, how it works, call to action
+## Frequently Asked Questions
+  ### External FAQ (Customer Questions)
+  ### Internal FAQ (Engineering / Business Questions)
 ```
 
 ## Note

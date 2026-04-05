@@ -86,6 +86,7 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 		return err
 	}
 	doc.Path = relPath
+	doc.ComputeContentHash()
 
 	// Ensure document has an ID
 	if doc.ID == "" {
