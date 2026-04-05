@@ -134,7 +134,7 @@ export OPENROUTER_API_KEY=sk-or-...
 | Command | Description |
 |---------|-------------|
 | `related <path> --depth <n>` | Find related docs via link graph |
-| `graph` | Output link graph as JSON |
+| `graph <path>` | Output link graph as JSON |
 | `lint [glob]` | Validate schemas, check broken wikilinks |
 | `stale --since <days>` | Find stale documents |
 | `export-context --types <types>` | Generate CLAUDE.md context bundle |

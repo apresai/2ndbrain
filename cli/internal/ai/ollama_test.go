@@ -124,6 +124,49 @@ func TestOllamaListModels(t *testing.T) {
 	}
 }
 
+func TestOllamaRegistryNoDuplicates(t *testing.T) {
+	requireOllama(t)
+
+	reg := NewRegistry()
+	emb := NewOllamaEmbedder(ollamaTestEndpoint, "embeddinggemma", 768)
+	gen := NewOllamaGenerator(ollamaTestEndpoint, "qwen2.5:0.5b")
+	reg.RegisterEmbedder("ollama", emb)
+	reg.RegisterGenerator("ollama", gen)
+
+	models := reg.ListModels(context.Background())
+
+	// Count occurrences of each model ID
+	counts := make(map[string]int)
+	for _, m := range models {
+		counts[m.ID]++
+	}
+	for id, count := range counts {
+		if count > 1 {
+			t.Errorf("model %q appeared %d times, want 1", id, count)
+		}
+	}
+	t.Logf("registry returned %d unique models", len(models))
+}
+
+func TestOllamaGeneratorListModels(t *testing.T) {
+	requireOllama(t)
+
+	gen := NewOllamaGenerator(ollamaTestEndpoint, "qwen2.5:0.5b")
+	models, err := gen.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) == 0 {
+		t.Skip("no models installed")
+	}
+	// Generator's ListModels should return ALL installed models (not filtered by type)
+	// so that the registry can deduplicate properly
+	t.Logf("generator ListModels returned %d models", len(models))
+	for _, m := range models {
+		t.Logf("  %s (type=%s)", m.ID, m.Type)
+	}
+}
+
 func TestOllamaGeneratorAvailable(t *testing.T) {
 	requireOllama(t)
 

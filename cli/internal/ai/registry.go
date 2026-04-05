@@ -79,20 +79,30 @@ func (r *Registry) GeneratorNames() []string {
 	return names
 }
 
-// ListModels aggregates ModelInfo from all registered providers.
+// ListModels aggregates ModelInfo from all registered providers, deduplicating by (provider, id).
 func (r *Registry) ListModels(ctx context.Context) []ModelInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	seen := make(map[string]bool)
 	var models []ModelInfo
+	add := func(ms []ModelInfo) {
+		for _, m := range ms {
+			key := m.Provider + "\x00" + m.ID
+			if !seen[key] {
+				seen[key] = true
+				models = append(models, m)
+			}
+		}
+	}
 	for _, p := range r.embedders {
 		if ms, err := p.ListModels(ctx); err == nil {
-			models = append(models, ms...)
+			add(ms)
 		}
 	}
 	for _, p := range r.generators {
 		if ms, err := p.ListModels(ctx); err == nil {
-			models = append(models, ms...)
+			add(ms)
 		}
 	}
 	return models
