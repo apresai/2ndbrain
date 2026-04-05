@@ -52,18 +52,35 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 	}
 
 	// Determine the target root where .2ndbrain/ will live.
-	targetRoot := srcPath
+	// Priority: --target flag > --vault flag > error (never modify source)
+	var targetRoot string
 	if importObsidianTarget != "" {
 		targetRoot, err = filepath.Abs(importObsidianTarget)
 		if err != nil {
 			return fmt.Errorf("resolve target path: %w", err)
 		}
+	} else if flagVault != "" {
+		targetRoot, err = filepath.Abs(expandPath(flagVault))
+		if err != nil {
+			return fmt.Errorf("resolve vault path: %w", err)
+		}
+	} else {
+		return fmt.Errorf("target vault required: use --vault <path> or --target <path>")
 	}
 
-	// Walk and rewrite markdown files before initializing the vault so
-	// every file already has a UUID when IndexVault runs.
+	if targetRoot == srcPath {
+		return fmt.Errorf("target vault cannot be the same as source Obsidian vault — the source is never modified")
+	}
+
+	// Copy markdown files from source to target (source is never modified).
+	if err := copyMarkdownFiles(srcPath, targetRoot); err != nil {
+		return fmt.Errorf("copy files: %w", err)
+	}
+
+	// Walk and rewrite the COPIES in the target directory so
+	// every file has a UUID when IndexVault runs.
 	stats := &importObsidianStats{}
-	if err := filepath.Walk(srcPath, func(path string, info os.FileInfo, walkErr error) error {
+	if err := filepath.Walk(targetRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip inaccessible paths
 		}
@@ -127,6 +144,47 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	return output.Write(os.Stdout, format, stats)
+}
+
+// copyMarkdownFiles copies .md files from src to dst, preserving directory structure.
+// Skips .obsidian/, hidden directories, and non-markdown files.
+func copyMarkdownFiles(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if base == ".obsidian" || strings.HasPrefix(base, ".") || base == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(path), ".md") {
+			return nil
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return nil
+		}
+		dstPath := filepath.Join(dst, rel)
+
+		// Create parent directories
+		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(dstPath), err)
+		}
+
+		// Copy file
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", dstPath, err)
+		}
+		return nil
+	})
 }
 
 // validateObsidianSource checks that srcPath has .obsidian/ or at least one .md file.
