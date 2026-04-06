@@ -128,7 +128,7 @@ brews:
   - ids:
       - 2nb
 
-    name: 2nb
+    name: twonb
 
     repository:
       owner: apresai

@@ -32,3 +32,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Add Homebrew tap alias
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          # GoReleaser writes twonb.rb (valid Ruby class Twonb). Add an alias
+          # so "brew install apresai/tap/2nb" also works.
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/apresai/homebrew-tap.git /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+          if [ -f twonb.rb ] && [ ! -L Aliases/2nb ]; then
+            mkdir -p Aliases
+            ln -s ../twonb.rb Aliases/2nb
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Aliases/2nb
+            git commit -m "Add 2nb alias for twonb formula"
+            git push
+          fi
