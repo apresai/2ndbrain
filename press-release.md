@@ -12,7 +12,9 @@ Developers maintain critical knowledge in markdown — architecture decision rec
 
 When Claude Code needs to understand your project, it reads files with `grep`. It searches by keyword, not meaning. It can't ask "what decisions did we make about authentication?" and get a ranked answer — it can only match the exact string "authentication" across thousands of files, consuming tokens on irrelevant matches. A benchmark on a 155,000-line codebase showed vanilla grep-based search spawned 5 subagents and burned massive token budgets. A semantic search layer reduced input tokens by 97% — same results, fraction of the cost.
 
-Meanwhile, Obsidian — the most popular markdown knowledge base — runs on Electron, consuming 500MB of RAM. Its search is keyword-only. Its metadata index exists only while the app is running. It has no native CLI, no MCP server, and no structured output format for AI tools. The 20+ community-built Obsidian MCP servers are all workarounds for an integration layer that should be built in.
+We love Obsidian. It proved that a local-first, plain-markdown knowledge base could replace heavyweight wikis and note-taking apps for millions of users. 2ndbrain wouldn't exist without that foundation — we use Obsidian ourselves and designed full import/export compatibility so you can move between the two freely.
+
+But Obsidian was built before the AI coding assistant era. Its search is keyword-only. Its metadata index exists only while the app is running. It has no native CLI, no MCP server, and no structured output format for AI tools. The 20+ community-built Obsidian MCP servers are workarounds for an integration layer that should be built in. We wanted to take the philosophy Obsidian pioneered — plain files, local-first, your data is yours — and rebuild it from scratch around RAG architectures, semantic search, and native AI tool integration.
 
 The gap is clear: developers need a markdown editor where the human writing experience and the AI retrieval experience are designed together, not stitched together.
 

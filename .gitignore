@@ -18,13 +18,6 @@ app/*.xcworkspace/xcuserdata/
 .build/
 .swiftpm/
 
-# Test vault
+# Vault content — never commit personal knowledge base data
 vault/
-
-# 2ndbrain vault data (generated)
-.2ndbrain/index.db
-.2ndbrain/index.db-wal
-.2ndbrain/index.db-shm
-.2ndbrain/models/
-.2ndbrain/recovery/
-.2ndbrain/logs/
+.2ndbrain/
