@@ -113,6 +113,9 @@ struct CommandPaletteView: View {
             PaletteCommand(title: "Reindex Spotlight", icon: "magnifyingglass", shortcut: "") { state in
                 state.reindexSpotlight()
             },
+            PaletteCommand(title: "Toggle Typewriter Mode", icon: "text.cursor", shortcut: "Cmd+Shift+T") { state in
+                state.typewriterModeActive.toggle()
+            },
             PaletteCommand(title: "Ask AI", icon: "brain.head.profile", shortcut: "Cmd+Shift+A") { state in
                 state.showAskAI = true
             },

@@ -6,7 +6,7 @@ struct ContentView: View {
     @State private var showProperties = false
 
     private var anyOverlayVisible: Bool {
-        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI
+        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI || appState.showTemplatePicker
     }
 
     var body: some View {
@@ -40,6 +40,13 @@ struct ContentView: View {
                 AskAIView(isPresented: Binding(
                     get: { appState.showAskAI },
                     set: { appState.showAskAI = $0 }
+                ))
+            }
+            if appState.showTemplatePicker {
+                overlayBackground { appState.showTemplatePicker = false }
+                TemplatePicker(isPresented: Binding(
+                    get: { appState.showTemplatePicker },
+                    set: { appState.showTemplatePicker = $0 }
                 ))
             }
         }

@@ -1,0 +1,146 @@
+import AppKit
+
+/// Applies syntax highlighting to fenced code blocks in an NSTextView.
+/// Detects ```language blocks and colors keywords, strings, comments, and numbers.
+class SyntaxHighlighter {
+    // Semantic colors that adapt to light/dark mode
+    private static let keywordColor = NSColor.systemPurple
+    private static let stringColor = NSColor.systemGreen
+    private static let commentColor = NSColor.systemGray
+    private static let numberColor = NSColor.systemOrange
+    private static let typeColor = NSColor.systemBlue
+    private static let fenceColor = NSColor.tertiaryLabelColor
+
+    // Cached regex patterns (compiled once)
+    private static let fencePattern = try! NSRegularExpression(
+        pattern: "^(`{3,})(\\w*)\\s*$", options: .anchorsMatchLines)
+    private static let stringPattern = try! NSRegularExpression(
+        pattern: "\"[^\"\\\\]*(\\\\.[^\"\\\\]*)*\"|'[^'\\\\]*(\\\\.[^'\\\\]*)*'")
+    private static let numberPattern = try! NSRegularExpression(
+        pattern: "\\b\\d+(\\.\\d+)?\\b")
+    private static let slashCommentPattern = try! NSRegularExpression(
+        pattern: "//.*$", options: .anchorsMatchLines)
+    private static let hashCommentPattern = try! NSRegularExpression(
+        pattern: "#.*$", options: .anchorsMatchLines)
+
+    // Common keywords by language family
+    private static let cLikeKeywords: Set<String> = [
+        "if", "else", "for", "while", "return", "break", "continue", "switch", "case",
+        "default", "var", "let", "const", "func", "function", "class", "struct", "enum",
+        "interface", "type", "import", "package", "defer", "go", "chan", "select",
+        "async", "await", "try", "catch", "throw", "new", "delete", "nil", "null",
+        "true", "false", "self", "this", "super", "public", "private", "static",
+        "final", "override", "protocol", "extension", "guard", "where", "in", "range",
+        "map", "filter", "reduce", "def", "elif", "except", "finally", "from", "as",
+        "with", "yield", "lambda", "pass", "raise", "not", "and", "or", "is", "None",
+        "True", "False", "export", "module", "require", "extends", "implements",
+    ]
+
+    private static let shellKeywords: Set<String> = [
+        "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
+        "function", "return", "exit", "echo", "export", "source", "local", "readonly",
+        "set", "unset", "shift", "cd", "pwd", "test", "true", "false",
+    ]
+
+    // Cached keyword regex patterns (deterministic sort for stable regex)
+    private static let cLikeKeywordPattern: NSRegularExpression = {
+        try! NSRegularExpression(pattern: "\\b(" + cLikeKeywords.sorted().joined(separator: "|") + ")\\b")
+    }()
+    private static let shellKeywordPattern: NSRegularExpression = {
+        try! NSRegularExpression(pattern: "\\b(" + shellKeywords.sorted().joined(separator: "|") + ")\\b")
+    }()
+
+    /// Apply syntax highlighting to all fenced code blocks in the text storage.
+    static func highlight(_ textStorage: NSTextStorage, baseFont: NSFont) {
+        let text = textStorage.string as NSString
+        let fullRange = NSRange(location: 0, length: text.length)
+
+        // Reset foreground color only for non-code-block text (preserve InlineMarkdownRenderer colors)
+        // Code block colors will be set below; non-code text is handled by InlineMarkdownRenderer
+        if fullRange.length > 0 {
+            textStorage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+        }
+
+        let matches = fencePattern.matches(in: text as String, range: fullRange)
+        var i = 0
+        while i < matches.count {
+            let openMatch = matches[i]
+            let openRange = openMatch.range
+            let langRange = openMatch.range(at: 2)
+            let language = langRange.length > 0 ? (text.substring(with: langRange) as String).lowercased() : ""
+
+            // Find closing fence
+            var closeRange: NSRange?
+            for j in (i + 1)..<matches.count {
+                let candidate = matches[j]
+                if candidate.range.location > NSMaxRange(openRange) {
+                    closeRange = candidate.range
+                    i = j + 1
+                    break
+                }
+            }
+
+            guard let close = closeRange else {
+                i += 1
+                continue
+            }
+
+            // Color the fence markers
+            textStorage.addAttribute(.foregroundColor, value: fenceColor, range: openRange)
+            textStorage.addAttribute(.foregroundColor, value: fenceColor, range: close)
+
+            // Get the code block content range
+            let codeStart = NSMaxRange(openRange)
+            let codeEnd = close.location
+            guard codeEnd > codeStart else { continue }
+            let codeRange = NSRange(location: codeStart, length: codeEnd - codeStart)
+            let codeStr = text.substring(with: codeRange)
+
+            highlightCode(codeStr, in: textStorage, offset: codeStart, language: language)
+        }
+
+        // If we didn't advance via close matching, move forward
+        if i < matches.count {
+            // Remaining unmatched fences — just color them
+            for j in i..<matches.count {
+                textStorage.addAttribute(.foregroundColor, value: fenceColor, range: matches[j].range)
+            }
+        }
+    }
+
+    private static func highlightCode(_ code: String, in storage: NSTextStorage, offset: Int, language: String) {
+        let nsCode = code as NSString
+        let codeRange = NSRange(location: 0, length: nsCode.length)
+
+        // Comments (single-line)
+        let commentPattern: NSRegularExpression
+        switch language {
+        case "bash", "sh", "zsh", "python", "py", "yaml", "yml", "toml":
+            commentPattern = hashCommentPattern
+        default:
+            commentPattern = slashCommentPattern
+        }
+
+        for match in commentPattern.matches(in: code, range: codeRange) {
+            storage.addAttribute(.foregroundColor, value: commentColor,
+                range: NSRange(location: match.range.location + offset, length: match.range.length))
+        }
+
+        for match in stringPattern.matches(in: code, range: codeRange) {
+            storage.addAttribute(.foregroundColor, value: stringColor,
+                range: NSRange(location: match.range.location + offset, length: match.range.length))
+        }
+
+        for match in numberPattern.matches(in: code, range: codeRange) {
+            storage.addAttribute(.foregroundColor, value: numberColor,
+                range: NSRange(location: match.range.location + offset, length: match.range.length))
+        }
+
+        let keywordPat = (language == "bash" || language == "sh" || language == "zsh")
+            ? shellKeywordPattern : cLikeKeywordPattern
+        for match in keywordPat.matches(in: code, range: codeRange) {
+            storage.addAttribute(.foregroundColor, value: keywordColor,
+                range: NSRange(location: match.range.location + offset, length: match.range.length))
+        }
+    }
+}

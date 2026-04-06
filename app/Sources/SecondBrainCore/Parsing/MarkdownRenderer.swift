@@ -75,6 +75,19 @@ private struct HTMLVisitor: MarkupVisitor {
         ul.task-list li { position: relative; padding-left: 1.5em; }
         ul.task-list li input[type="checkbox"] { position: absolute; left: 0; top: 0.3em; }
         </style>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+          onload="renderMathInElement(document.body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}]});"></script>
+        <script type="module">
+          import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+          mermaid.initialize({ startOnLoad: false, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });
+          document.querySelectorAll('pre code.language-mermaid').forEach(async (el) => {
+            const pre = el.parentElement;
+            const { svg } = await mermaid.render('mermaid-' + Math.random().toString(36).substr(2, 9), el.textContent);
+            pre.outerHTML = '<div class="mermaid-diagram">' + svg + '</div>';
+          });
+        </script>
         </head>
         <body>\(body)</body>
         </html>

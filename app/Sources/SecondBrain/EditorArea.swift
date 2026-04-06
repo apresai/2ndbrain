@@ -21,7 +21,9 @@ struct EditorArea: View {
                             state.updateOutline()
                         }
                     ),
-                    databaseManager: state.database
+                    databaseManager: state.database,
+                    typewriterMode: state.typewriterModeActive,
+                    inlineRendering: state.inlineRenderingEnabled
                 )
                 .frame(minWidth: 300)
 
@@ -65,6 +67,8 @@ struct EditorArea: View {
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
     var databaseManager: DatabaseManager?
+    var typewriterMode: Bool = false
+    var inlineRendering: Bool = false
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -92,11 +96,19 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.string = text
 
+        // Line number gutter
+        let rulerView = LineNumberRulerView(textView: textView)
+        scrollView.verticalRulerView = rulerView
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
+
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        context.coordinator.typewriterMode = typewriterMode
+        context.coordinator.inlineRendering = inlineRendering
         if textView.string != text && !context.coordinator.isEditing {
             let selectedRanges = textView.selectedRanges
             textView.string = text
@@ -112,7 +124,10 @@ struct MarkdownEditorView: NSViewRepresentable {
     class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         var isEditing = false
+        var typewriterMode = false
+        var inlineRendering = false
         let mentionController = MentionAutocompleteController()
+        let slashController = SlashCommandController()
         private var debounceTimer: Timer?
 
         init(text: Binding<String>, databaseManager: DatabaseManager?) {
@@ -145,10 +160,44 @@ struct MarkdownEditorView: NSViewRepresentable {
                 }
             }
 
+            // Slash command trigger: "/" at start of a line
+            if replacement == "/" && !slashController.state.isActive && !mentionController.state.isActive {
+                let loc = affectedCharRange.location
+                let text = textView.string as NSString
+                // Check if at start of line
+                let lineStart = (loc == 0) || (loc > 0 && text.substring(with: NSRange(location: loc - 1, length: 1)) == "\n")
+                if lineStart {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.slashController.activate(in: textView, at: loc)
+                    }
+                }
+            }
+
             return true
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // Handle slash commands
+            if slashController.state.isActive {
+                switch commandSelector {
+                case #selector(NSResponder.moveDown(_:)):
+                    slashController.moveSelection(1)
+                    return true
+                case #selector(NSResponder.moveUp(_:)):
+                    slashController.moveSelection(-1)
+                    return true
+                case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+                    slashController.insertSelection(into: textView)
+                    return true
+                case #selector(NSResponder.cancelOperation(_:)):
+                    slashController.dismiss()
+                    return true
+                default:
+                    return false
+                }
+            }
+
+            // Handle mention autocomplete
             guard mentionController.state.isActive else { return false }
 
             switch commandSelector {
@@ -177,6 +226,22 @@ struct MarkdownEditorView: NSViewRepresentable {
             isEditing = true
             let currentString = textView.string
 
+            // Update slash command query
+            if slashController.state.isActive, let triggerLoc = slashController.triggerLocation {
+                let cursorLoc = textView.selectedRange().location
+                let queryStart = triggerLoc + 1 // skip the /
+                if cursorLoc < triggerLoc {
+                    slashController.dismiss()
+                } else if queryStart <= cursorLoc {
+                    let query = (currentString as NSString).substring(with: NSRange(location: queryStart, length: cursorLoc - queryStart))
+                    if query.contains("\n") {
+                        slashController.dismiss()
+                    } else {
+                        slashController.updateQuery(query)
+                    }
+                }
+            }
+
             // Update mention autocomplete query
             if mentionController.state.isActive, let triggerLoc = mentionController.triggerLocation {
                 let cursorLoc = textView.selectedRange().location
@@ -204,6 +269,30 @@ struct MarkdownEditorView: NSViewRepresentable {
                 }
             }
 
+            // Typewriter mode: center cursor vertically
+            if typewriterMode, let scrollView = textView.enclosingScrollView {
+                let cursorRange = textView.selectedRange()
+                if let layoutManager = textView.layoutManager, let textContainer = textView.textContainer {
+                    let glyphIndex = layoutManager.glyphIndexForCharacter(at: cursorRange.location)
+                    let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+                    let cursorY = lineRect.origin.y + textView.textContainerInset.height
+                    let visibleHeight = scrollView.contentView.bounds.height
+                    let scrollY = max(0, cursorY - visibleHeight / 2)
+                    scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollY))
+                    scrollView.reflectScrolledClipView(scrollView.contentView)
+                }
+            }
+
+            // Apply text rendering (syntax first, then inline — inline overrides non-code lines)
+            if let ts = textView.textStorage {
+                ts.beginEditing()
+                SyntaxHighlighter.highlight(ts, baseFont: textView.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular))
+                if inlineRendering {
+                    InlineMarkdownRenderer.render(ts, cursorLocation: textView.selectedRange().location)
+                }
+                ts.endEditing()
+            }
+
             debounceTimer?.invalidate()
             debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -211,6 +300,87 @@ struct MarkdownEditorView: NSViewRepresentable {
                     self?.isEditing = false
                 }
             }
+        }
+    }
+}
+
+// MARK: - Line Number Ruler
+
+class LineNumberRulerView: NSRulerView {
+    private weak var textView: NSTextView?
+    private let lineNumberFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    private let lineNumberColor = NSColor.tertiaryLabelColor
+
+    init(textView: NSTextView) {
+        self.textView = textView
+        super.init(scrollView: textView.enclosingScrollView!, orientation: .verticalRuler)
+        self.ruleThickness = 40
+        self.clientView = textView
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(textDidChange),
+            name: NSText.didChangeNotification, object: textView
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(boundsDidChange),
+            name: NSView.boundsDidChangeNotification,
+            object: textView.enclosingScrollView?.contentView
+        )
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) not implemented")
+    }
+
+    @objc private func textDidChange(_ notification: Notification) {
+        needsDisplay = true
+    }
+
+    @objc private func boundsDidChange(_ notification: Notification) {
+        needsDisplay = true
+    }
+
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        guard let textView = textView,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
+
+        let visibleRect = textView.visibleRect
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+        let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+
+        let text = textView.string as NSString
+        let inset = textView.textContainerInset
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: lineNumberFont,
+            .foregroundColor: lineNumberColor,
+        ]
+
+        // Count line number at the start of visible range
+        var lineNumber = 1
+        text.substring(to: charRange.location).enumerateLines { _, _ in
+            lineNumber += 1
+        }
+
+        var index = charRange.location
+        while index < NSMaxRange(charRange) {
+            let lineRange = text.lineRange(for: NSRange(location: index, length: 0))
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: lineRange.location)
+
+            var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            lineRect.origin.y += inset.height - visibleRect.origin.y
+
+            let numStr = "\(lineNumber)" as NSString
+            let strSize = numStr.size(withAttributes: attrs)
+            let drawPoint = NSPoint(
+                x: ruleThickness - strSize.width - 6,
+                y: lineRect.origin.y + (lineRect.height - strSize.height) / 2
+            )
+            numStr.draw(at: drawPoint, withAttributes: attrs)
+
+            lineNumber += 1
+            index = NSMaxRange(lineRange)
         }
     }
 }

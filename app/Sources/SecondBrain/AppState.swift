@@ -21,6 +21,10 @@ final class AppState {
     var showQuickOpen = false
     var showCommandPalette = false
     var showAskAI = false
+    var typewriterModeActive = false
+    var showTemplatePicker = false
+    var selectedTagFilter: String?
+    var inlineRenderingEnabled = false
 
     // AI state
     var aiStatus: AIStatusInfo?
@@ -93,13 +97,23 @@ final class AppState {
     func refreshFiles() {
         guard let vault else { return }
         let mdFiles = vault.listMarkdownFiles()
-        self.files = mdFiles.map { url in
+        var items = mdFiles.map { url in
             FileItem(
                 url: url,
                 name: url.deletingPathExtension().lastPathComponent,
                 relativePath: vault.relativePath(for: url)
             )
         }
+
+        // Apply tag filter if set
+        if let tagFilter = selectedTagFilter, let db = database {
+            if let taggedDocs = try? db.documentsWithTag(tagFilter) {
+                let taggedPaths = Set(taggedDocs.map { $0.path })
+                items = items.filter { taggedPaths.contains($0.relativePath) }
+            }
+        }
+
+        self.files = items
     }
 
     func openDocument(at url: URL) {
@@ -221,6 +235,108 @@ final class AppState {
             ## Lessons Learned
 
             What did we learn from this incident?
+            """
+        case "prd":
+            initialStatus = "draft"
+            extraFields = "owner: \npriority: p0"
+            bodyTemplate = """
+            ## Problem Statement
+
+            What problem are we solving? Who has this problem? Why does it matter?
+
+            ## Target Users
+
+            Who are the primary, secondary, and tertiary users?
+
+            ## Goals
+
+            | # | Goal | Rationale |
+            |---|------|-----------|
+            | 1 | | |
+
+            ## Non-Goals
+
+            - What are we explicitly not doing?
+
+            ## User Stories
+
+            - **As a** [user type], **I want** [action] **so that** [benefit]
+
+            ## Functional Requirements
+
+            ### P0 — MVP
+
+            | ID | Requirement |
+            |----|-------------|
+            | FR-1 | |
+
+            ## Non-Functional Requirements
+
+            | ID | Requirement | Target |
+            |----|-------------|--------|
+            | NFR-1 | | |
+
+            ## Success Metrics
+
+            | # | Metric | How to verify |
+            |---|--------|---------------|
+            | 1 | | |
+
+            ## Risks
+
+            | Risk | Likelihood | Impact | Mitigation |
+            |------|-----------|--------|------------|
+            | | | | |
+            """
+        case "prfaq":
+            initialStatus = "draft"
+            extraFields = "owner: "
+            bodyTemplate = """
+            ## Press Release
+
+            **FOR IMMEDIATE RELEASE**
+
+            ### [Headline: one sentence describing the product and its key benefit]
+
+            *[Subheadline: expand on the value proposition]*
+
+            **[City, State]** — Today, [company] announced [product], a [brief description]. [Product] enables [target user] to [key benefit] by [how it works at a high level].
+
+            [Problem paragraph: describe the pain point this solves]
+
+            [Quote from a leader or stakeholder about why this matters]
+
+            **How it works:**
+
+            1. [Step 1]
+            2. [Step 2]
+            3. [Step 3]
+
+            ---
+
+            ## Frequently Asked Questions
+
+            ### External FAQ (Customer Questions)
+
+            **Q: Who is this for?**
+            A:
+
+            **Q: How does it work?**
+            A:
+
+            **Q: How much does it cost?**
+            A:
+
+            ### Internal FAQ (Engineering / Business Questions)
+
+            **Q: Why now?**
+            A:
+
+            **Q: What's the technical approach?**
+            A:
+
+            **Q: What are the main risks?**
+            A:
             """
         default: // note
             initialStatus = "draft"

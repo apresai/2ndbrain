@@ -29,7 +29,7 @@ struct SecondBrainApp: App {
                 Divider()
 
                 Button("New Document...") {
-                    newDocumentPanel()
+                    appState.showTemplatePicker = true
                 }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(appState.vault == nil)
@@ -44,6 +44,24 @@ struct SecondBrainApp: App {
                     exportObsidianPanel()
                 }
                 .disabled(appState.vault == nil)
+            }
+
+            CommandMenu("Export") {
+                Button("Export as PDF...") {
+                    exportCurrentDocument(format: .pdf)
+                }
+                .keyboardShortcut("x", modifiers: [.command, .shift])
+                .disabled(appState.currentDocument == nil)
+
+                Button("Export as HTML...") {
+                    exportCurrentDocument(format: .html)
+                }
+                .disabled(appState.currentDocument == nil)
+
+                Button("Export as Markdown...") {
+                    exportCurrentDocument(format: .markdown)
+                }
+                .disabled(appState.currentDocument == nil)
             }
 
             CommandGroup(replacing: .saveItem) {
@@ -82,41 +100,22 @@ struct SecondBrainApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
 
+                Button("Typewriter Mode") {
+                    appState.typewriterModeActive.toggle()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Button("Inline Preview") {
+                    appState.inlineRenderingEnabled.toggle()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+
                 Button("Toggle Sidebar") {
                     appState.sidebarVisible.toggle()
                 }
                 .keyboardShortcut("\\", modifiers: .command)
             }
         }
-    }
-
-    private func newDocumentPanel() {
-        let alert = NSAlert()
-        alert.messageText = "New Document"
-        alert.informativeText = "Enter a title and select a type."
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 54))
-
-        let titleField = NSTextField(frame: NSRect(x: 0, y: 30, width: 300, height: 24))
-        titleField.placeholderString = "Title"
-        titleField.stringValue = ""
-        container.addSubview(titleField)
-
-        let typePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        typePopup.addItems(withTitles: ["Note", "Architecture Decision Record", "Runbook", "Postmortem"])
-        container.addSubview(typePopup)
-
-        alert.accessoryView = container
-        alert.window.initialFirstResponder = titleField
-
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return }
-        let types = ["note", "adr", "runbook", "postmortem"]
-        let selectedType = types[typePopup.indexOfSelectedItem]
-        let title = titleField.stringValue.isEmpty ? "Untitled" : titleField.stringValue
-        appState.createNewDocument(type: selectedType, title: title)
     }
 
     private func newVaultPanel() {
@@ -177,6 +176,24 @@ struct SecondBrainApp: App {
         if panel.runModal() == .OK, let url = panel.url {
             guard let vault = appState.vault else { return }
             runCLICommand(["export-obsidian", url.path], cwd: vault.rootURL) { _ in }
+        }
+    }
+
+    private enum ExportFormat { case pdf, html, markdown }
+
+    private func exportCurrentDocument(format: ExportFormat) {
+        guard let tab = appState.currentDocument else { return }
+        let name = tab.url.lastPathComponent
+        let (_, body) = FrontmatterParser.parse(tab.content)
+        let html = MarkdownRenderer.renderHTML(body)
+
+        switch format {
+        case .pdf:
+            ExportController.exportPDF(html: html, suggestedName: name)
+        case .html:
+            ExportController.exportHTML(html: html, suggestedName: name)
+        case .markdown:
+            ExportController.exportMarkdown(content: tab.content, suggestedName: name)
         }
     }
 

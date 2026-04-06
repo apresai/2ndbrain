@@ -131,6 +131,29 @@ public final class DatabaseManager: Sendable {
         }
     }
 
+    /// Fetch all tags with their document counts.
+    public func allTags() throws -> [(tag: String, count: Int)] {
+        try dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT tag, COUNT(*) as cnt FROM tags GROUP BY tag ORDER BY cnt DESC
+            """)
+            return rows.map { row in
+                (tag: row["tag"] as String? ?? "", count: row["cnt"] as Int? ?? 0)
+            }
+        }
+    }
+
+    /// Fetch documents that have a specific tag.
+    public func documentsWithTag(_ tag: String) throws -> [DocumentRecord] {
+        try dbPool.read { db in
+            try DocumentRecord.fetchAll(db, sql: """
+                SELECT d.* FROM documents d
+                JOIN tags t ON t.doc_id = d.id
+                WHERE t.tag = ?
+            """, arguments: [tag])
+        }
+    }
+
     /// Find documents that link to the given target name.
     public func backlinks(for targetName: String) throws -> [(path: String, title: String, linkText: String)] {
         try dbPool.read { db in
