@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.1] - 2026-04-06
+
+## [0.2.0] - 2026-04-06
+
+### Added
+- **Editor**: Syntax highlighting, typewriter mode, inline Markdown preview, Mermaid diagrams, and KaTeX math rendering
+- **Editor**: Slash command menu (`/`) for quick block insertion
+- **Editor**: Template picker for structured document creation
+- **Editor**: Tag browser panel
+- **Editor**: Document export (PDF and other formats)
+- **CLI**: `2nb vault` command for vault management operations
+- **CLI**: `mcp-setup` command for guided MCP configuration
+- **Document types**: PRD and PRFAQ with status machines and templates
+- **AI**: Inline embeddings generated at index time using content hashing to skip unchanged documents
+- **MCP**: Additional tools (`kb_structure`, `kb_delete`, `kb_index`)
+- MIT license and contributor guide
+
+### Fixed
+- Inline rendering toggle now correctly persists state
+- PDF export reliability on documents with complex content
+- Offline resilience when AI provider is unreachable
+- `import-obsidian` no longer modifies source vault files
+- Model registry deduplication by `(provider, id)` eliminates duplicate entries in `models list`
+
+
 ## [0.1.0] - 2026-04-04
 
 ### Added
