@@ -107,8 +107,27 @@ struct MarkdownEditorView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        let renderingChanged = context.coordinator.inlineRendering != inlineRendering
         context.coordinator.typewriterMode = typewriterMode
         context.coordinator.inlineRendering = inlineRendering
+
+        // Re-apply rendering when toggle changes (without waiting for a keystroke)
+        if renderingChanged, let ts = textView.textStorage {
+            ts.beginEditing()
+            // Reset all attributes to base state first
+            let fullRange = NSRange(location: 0, length: ts.length)
+            ts.addAttribute(.font, value: textView.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular), range: fullRange)
+            ts.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+            ts.removeAttribute(.strikethroughStyle, range: fullRange)
+            ts.removeAttribute(.backgroundColor, range: fullRange)
+            // Re-apply active renderers
+            SyntaxHighlighter.highlight(ts, baseFont: textView.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular))
+            if inlineRendering {
+                InlineMarkdownRenderer.render(ts, cursorLocation: textView.selectedRange().location)
+            }
+            ts.endEditing()
+        }
+
         if textView.string != text && !context.coordinator.isEditing {
             let selectedRanges = textView.selectedRanges
             textView.string = text
