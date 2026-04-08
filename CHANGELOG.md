@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.2] - 2026-04-07
+
+## [0.1.2] - 2026-04-07
+
+### Added
+- OpenRouter retry logic with exponential backoff and request throttling
+- Cost awareness for OpenRouter API usage (`ai status` and `ai cost` tracking)
+- GitHub Actions release workflow improvements
+- `index` command now reports embedding generation progress
+
+### Fixed
+- 7 GUI crash bugs across editor, properties, tabs, status bar, autocomplete, crash recovery, and app state
+- Homebrew formula renamed to `twonb` (Ruby class names cannot start with a digit)
+
+### Changed
+- `.gitignore` simplified
+- Press release updated to acknowledge Obsidian inspiration
+
+
 ## [0.1.1] - 2026-04-06
 
 ## [0.2.0] - 2026-04-06
