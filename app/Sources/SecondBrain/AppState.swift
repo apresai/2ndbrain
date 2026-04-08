@@ -29,6 +29,7 @@ final class AppState {
     // AI state
     var aiStatus: AIStatusInfo?
     var isIndexing = false
+    var indexError: String?
     var embeddingProgress: EmbeddingProgress?
     var pendingFindSimilarQuery: String?
     var spotlightIndexer: SpotlightIndexer?
@@ -39,9 +40,15 @@ final class AppState {
     var files: [FileItem] = []
     var outline: [HeadingItem] = []
 
+    var validTabIndex: Int? {
+        let idx = activeTabIndex
+        guard idx >= 0, idx < openDocuments.count else { return nil }
+        return idx
+    }
+
     var currentDocument: DocumentTab? {
-        guard activeTabIndex >= 0, activeTabIndex < openDocuments.count else { return nil }
-        return openDocuments[activeTabIndex]
+        guard let idx = validTabIndex else { return nil }
+        return openDocuments[idx]
     }
 
     func openVault(at url: URL) {
@@ -63,9 +70,12 @@ final class AppState {
         indexer.indexAll(vault: vm)
 
         // Initialize crash recovery and error logging
-        let journal = CrashJournal(vaultDotDir: vm.dotDirURL)
+        let logger = ErrorLogger(vaultDotDir: vm.dotDirURL)
+        let journal = CrashJournal(vaultDotDir: vm.dotDirURL) { msg in
+            logger.log(msg, error: nil)
+        }
         self.crashJournal = journal
-        self.errorLogger = ErrorLogger(vaultDotDir: vm.dotDirURL)
+        self.errorLogger = logger
 
         // Check for crash recovery entries
         let entries = journal.recoverableDocuments()
@@ -142,6 +152,11 @@ final class AppState {
             activeTabIndex = max(0, openDocuments.count - 1)
         }
         updateOutline()
+    }
+
+    func closeTab(id: UUID) {
+        guard let index = openDocuments.firstIndex(where: { $0.id == id }) else { return }
+        closeTab(at: index)
     }
 
     func createNewDocument(type: String = "note", title: String = "Untitled") {
@@ -404,6 +419,7 @@ final class AppState {
     func rebuildIndex() {
         guard let vault else { return }
         isIndexing = true
+        indexError = nil
         embeddingProgress = nil
 
         Task {
@@ -439,7 +455,8 @@ final class AppState {
                 // Reopen database to pick up changes
                 self.database = try DatabaseManager(path: vault.indexDBPath)
             } catch {
-                print("Failed to rebuild index: \(error)")
+                errorLogger?.log("Failed to rebuild index", error: error)
+                indexError = error.localizedDescription
             }
 
             isIndexing = false
@@ -449,10 +466,11 @@ final class AppState {
     }
 
     func saveCurrentDocument() {
-        guard let tab = currentDocument else { return }
         let idx = activeTabIndex
+        guard idx >= 0, idx < openDocuments.count else { return }
+        let tab = openDocuments[idx]
         do {
-            try openDocuments[idx].content.write(to: tab.url, atomically: true, encoding: .utf8)
+            try tab.content.write(to: tab.url, atomically: true, encoding: .utf8)
             openDocuments[idx].isDirty = false
             crashJournal?.clearSnapshot(documentID: tab.document.id)
         } catch {

@@ -143,6 +143,8 @@ struct PropertiesView: View {
         let now = ISO8601DateFormatter().string(from: Date())
         content = replaceFrontmatterField(content, field: "modified", value: now)
 
+        // Re-validate bounds before mutating (tab may have closed during field edits)
+        guard idx < appState.openDocuments.count else { return }
         appState.openDocuments[idx].content = content
         appState.openDocuments[idx].isDirty = true
 
@@ -182,10 +184,7 @@ struct PropertiesView: View {
         return result.joined(separator: "\n")
     }
 
-    private var validTabIndex: Int? {
-        let idx = appState.activeTabIndex
-        guard idx >= 0, idx < appState.openDocuments.count else { return nil }
-        return idx
+    private var validTabIndex: Int? { appState.validTabIndex
     }
 
     private func formatDate(_ date: Date) -> String {

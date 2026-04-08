@@ -5,17 +5,23 @@ import Foundation
 public final class CrashJournal: @unchecked Sendable {
     private let recoveryDir: URL
     private let queue = DispatchQueue(label: "dev.apresai.2ndbrain.recovery")
+    private let logError: (@Sendable (String) -> Void)?
 
-    public init(vaultDotDir: URL) {
+    public init(vaultDotDir: URL, logError: (@Sendable (String) -> Void)? = nil) {
+        self.logError = logError
         self.recoveryDir = vaultDotDir.appendingPathComponent("recovery")
         try? FileManager.default.createDirectory(at: recoveryDir, withIntermediateDirectories: true)
     }
 
     /// Save an unsaved document state to the recovery journal.
     public func saveSnapshot(documentID: String, content: String) {
-        queue.async { [recoveryDir] in
+        queue.async { [recoveryDir, logError] in
             let snapshotURL = recoveryDir.appendingPathComponent("\(documentID).recovery.md")
-            try? content.write(to: snapshotURL, atomically: true, encoding: .utf8)
+            do {
+                try content.write(to: snapshotURL, atomically: true, encoding: .utf8)
+            } catch {
+                logError?("Crash recovery save failed for \(documentID): \(error.localizedDescription)")
+            }
         }
     }
 

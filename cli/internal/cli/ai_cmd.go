@@ -83,10 +83,35 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		return output.Write(os.Stdout, format, status)
 	}
 
+	// Fetch model info once per provider type (avoids redundant ListModels calls)
+	var embedPrice float64
+	if emb, err := ai.DefaultRegistry.Embedder(cfg.Provider); err == nil {
+		if models, err := emb.ListModels(ctx); err == nil && len(models) > 0 {
+			embedPrice = models[0].PriceIn
+		}
+	}
+	var genPriceIn, genPriceOut float64
+	if gen, err := ai.DefaultRegistry.Generator(cfg.Provider); err == nil {
+		if models, err := gen.ListModels(ctx); err == nil && len(models) > 0 {
+			genPriceIn = models[0].PriceIn
+			genPriceOut = models[0].PriceOut
+		}
+	}
+
 	// Pretty output
 	fmt.Printf("Provider:         %s\n", status.Provider)
 	fmt.Printf("Embedding model:  %s\n", status.EmbeddingModel)
+	if embedPrice == 0 {
+		fmt.Printf("  pricing:        free\n")
+	} else {
+		fmt.Printf("  pricing:        $%.2f per 1M tokens\n", embedPrice)
+	}
 	fmt.Printf("Generation model: %s\n", status.GenModel)
+	if genPriceIn == 0 && genPriceOut == 0 {
+		fmt.Printf("  pricing:        free\n")
+	} else {
+		fmt.Printf("  pricing:        $%.2f in / $%.2f out per 1M tokens\n", genPriceIn, genPriceOut)
+	}
 	fmt.Printf("Dimensions:       %d\n", status.Dimensions)
 	fmt.Printf("Embed ready:      %v\n", status.EmbedAvailable)
 	fmt.Printf("Generation ready: %v\n", status.GenAvailable)
@@ -95,6 +120,11 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 
 	if status.EmbeddingCount < status.DocumentCount {
 		fmt.Fprintf(os.Stderr, "\nRun `2nb index` to generate missing embeddings.\n")
+	}
+
+	// Suggest local alternative for paid providers
+	if cfg.Provider != "ollama" && embedPrice > 0 {
+		fmt.Fprintf(os.Stderr, "\nTip: run `2nb ai setup` for free local AI with Ollama\n")
 	}
 
 	return nil

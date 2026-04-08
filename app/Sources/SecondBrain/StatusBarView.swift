@@ -34,7 +34,23 @@ struct StatusBarView: View {
                 Spacer()
             }
 
-            if appState.isIndexing {
+            if let indexError = appState.indexError {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                    Text("Index failed: \(indexError)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                    Button { appState.indexError = nil } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else if appState.isIndexing {
                 HStack(spacing: 4) {
                     ProgressView()
                         .controlSize(.mini)

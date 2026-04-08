@@ -132,8 +132,10 @@ class MentionAutocompleteController: NSObject {
         pop.animates = true
 
         // Position at the character location
-        let glyphRange = textView.layoutManager?.glyphRange(forCharacterRange: NSRange(location: charIndex, length: 1), actualCharacterRange: nil) ?? NSRange(location: charIndex, length: 1)
-        let rect = textView.layoutManager?.boundingRect(forGlyphRange: glyphRange, in: textView.textContainer!) ?? .zero
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: NSRange(location: charIndex, length: 1), actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         let positionRect = NSRect(
             x: rect.origin.x + textView.textContainerInset.width,
             y: rect.origin.y + textView.textContainerInset.height,

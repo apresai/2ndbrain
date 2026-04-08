@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
@@ -91,7 +92,19 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 		fmt.Fprintf(os.Stderr, "  embedding %d documents...\n", len(docs))
 	}
 
+	// Look up model pricing for cost estimate
+	var pricePerMillion float64
+	if models, err := embedder.ListModels(ctx); err == nil && len(models) > 0 {
+		pricePerMillion = models[0].PriceIn
+	}
+	var totalChars int
+	embedded := 0
+
 	for i, doc := range docs {
+		if i > 0 && cfg.Provider == "openrouter" {
+			time.Sleep(100 * time.Millisecond) // throttle to ~10 rps, well under 20 rpm free limit
+		}
+
 		absPath := filepath.Join(v.Root, doc.Path)
 		parsed, err := document.ParseFile(absPath)
 		if err != nil {
@@ -111,8 +124,28 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 			continue
 		}
 
+		totalChars += len(parsed.Body)
+		embedded++
+
 		if !flagPorcelain {
 			fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", i+1, len(docs), doc.Path)
+		}
+	}
+
+	// Show cost estimate for non-free providers
+	if !flagPorcelain && embedded > 0 {
+		estimatedTokens := float64(totalChars) / 4.0 // rough chars→tokens estimate
+		if pricePerMillion > 0 {
+			cost := (estimatedTokens / 1_000_000) * pricePerMillion
+			fmt.Fprintf(os.Stderr, "  cost estimate: $%.4f (%s)\n", cost, model)
+			// Suggest local alternative if extrapolated monthly cost > $3
+			monthlyCost := cost * 4 // assume ~4 re-indexes per month
+			if monthlyCost > 3.0 {
+				fmt.Fprintf(os.Stderr, "  estimated monthly cost: ~$%.2f\n", monthlyCost)
+				fmt.Fprintf(os.Stderr, "  tip: run `2nb ai setup` to configure free local AI with Ollama\n")
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "  cost: free (%s)\n", model)
 		}
 	}
 

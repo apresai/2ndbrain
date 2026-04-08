@@ -12,7 +12,7 @@ struct TabBarView: View {
                         isDirty: tab.isDirty,
                         isActive: index == appState.activeTabIndex,
                         onSelect: { appState.activeTabIndex = index },
-                        onClose: { appState.closeTab(at: index) }
+                        onClose: { appState.closeTab(id: tab.id) }
                     )
                 }
             }

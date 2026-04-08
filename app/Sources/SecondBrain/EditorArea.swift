@@ -14,8 +14,12 @@ struct EditorArea: View {
                 // Source editor
                 MarkdownEditorView(
                     text: Binding(
-                        get: { state.openDocuments[tabIndex].content },
+                        get: {
+                            guard tabIndex < state.openDocuments.count else { return "" }
+                            return state.openDocuments[tabIndex].content
+                        },
                         set: { newValue in
+                            guard tabIndex < state.openDocuments.count else { return }
                             state.openDocuments[tabIndex].content = newValue
                             state.openDocuments[tabIndex].isDirty = true
                             state.updateOutline()
@@ -48,11 +52,7 @@ struct EditorArea: View {
         }
     }
 
-    private var validTabIndex: Int? {
-        let idx = appState.activeTabIndex
-        guard idx >= 0, idx < appState.openDocuments.count else { return nil }
-        return idx
-    }
+    private var validTabIndex: Int? { appState.validTabIndex }
 
     private var previewHTML: String {
         guard let idx = validTabIndex else { return "" }
@@ -351,6 +351,10 @@ class LineNumberRulerView: NSRulerView {
         fatalError("init(coder:) not implemented")
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     @objc private func textDidChange(_ notification: Notification) {
         needsDisplay = true
     }
@@ -415,11 +419,19 @@ struct MarkdownPreviewView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.loadHTMLString(html, baseURL: nil)
+        context.coordinator.lastHTML = html
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        // Full reload on each update - simple and safe for local content
+        guard context.coordinator.lastHTML != html else { return }
+        context.coordinator.lastHTML = html
         webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    func makeCoordinator() -> PreviewCoordinator { PreviewCoordinator() }
+
+    class PreviewCoordinator {
+        var lastHTML = ""
     }
 }

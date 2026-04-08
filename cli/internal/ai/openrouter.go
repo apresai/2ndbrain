@@ -221,31 +221,46 @@ func (g *OpenRouterGenerator) ListModels(_ context.Context) ([]ModelInfo, error)
 }
 
 // doOpenRouterRequest sends an HTTP POST to OpenRouter and returns the response body.
+// Retries up to 3 times with exponential backoff on HTTP 429 (rate limit).
 func doOpenRouterRequest(ctx context.Context, client *http.Client, url, apiKey string, body []byte) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", "https://github.com/apresai/2ndbrain")
-	req.Header.Set("X-Title", "2ndbrain")
+	const maxRetries = 3
+	for attempt := range maxRetries {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("HTTP-Referer", "https://github.com/apresai/2ndbrain")
+		req.Header.Set("X-Title", "2ndbrain")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("openrouter POST %s: %w", url, err)
-	}
-	defer resp.Body.Close()
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("openrouter POST %s: %w", url, err)
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openrouter %s: status %d: %s", url, resp.StatusCode, string(respBody))
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries-1 {
+			delay := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s
+			select {
+			case <-time.After(delay):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("openrouter %s: status %d: %s", url, resp.StatusCode, string(respBody))
+		}
+		return respBody, nil
 	}
-	return respBody, nil
+	return nil, fmt.Errorf("openrouter %s: exhausted retries", url)
 }
 
 // InitOpenRouter creates and registers OpenRouter providers with the given registry.
