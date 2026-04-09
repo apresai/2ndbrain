@@ -23,8 +23,7 @@ func BuiltinCatalog() []ModelInfo {
 		ConfigHint: configHint("bedrock", "embedding", "amazon.nova-2-multimodal-embeddings-v1:0"),
 	})
 
-	// --- Bedrock Generation (Anthropic Messages API format) ---
-	// Only Claude models work with the current BedrockGenerator harness.
+	// --- Bedrock Generation (Converse API — works across all Bedrock models) ---
 	for _, m := range []struct {
 		id, name   string
 		ctxLen     int
@@ -37,6 +36,9 @@ func BuiltinCatalog() []ModelInfo {
 		{"us.anthropic.claude-opus-4-20250514-v1:0", "Claude Opus 4", 200000, 15.00, 75.00, ""},
 		{"us.anthropic.claude-3-5-haiku-20241022-v1:0", "Claude 3.5 Haiku", 200000, 0.80, 4.00, ""},
 		{"us.anthropic.claude-3-5-sonnet-20241022-v2:0", "Claude 3.5 Sonnet v2", 200000, 3.00, 15.00, ""},
+		{"amazon.nova-micro-v1:0", "Amazon Nova Micro", 128000, 0.035, 0.14, "text-only, fastest"},
+		{"amazon.nova-lite-v1:0", "Amazon Nova Lite", 300000, 0.06, 0.24, ""},
+		{"amazon.nova-pro-v1:0", "Amazon Nova Pro", 300000, 0.80, 3.20, ""},
 	} {
 		models = append(models, ModelInfo{
 			ID:         m.id,
@@ -77,8 +79,9 @@ func BuiltinCatalog() []ModelInfo {
 		priceOut float64
 	}{
 		{"google/gemma-3-4b-it:free", "Gemma 3 4B (free)", 131072, 0, 0},
+		{"google/gemma-4-31b-it:free", "Gemma 4 31B (free)", 262144, 0, 0},
 		{"meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B (free)", 131072, 0, 0},
-		{"qwen/qwen3-235b-a22b:free", "Qwen3 235B MoE (free)", 40960, 0, 0},
+		{"qwen/qwen3.6-plus", "Qwen 3.6 Plus", 1000000, 0.33, 1.95},
 		{"anthropic/claude-haiku-4-5", "Claude Haiku 4.5", 200000, 0.80, 4.00},
 		{"anthropic/claude-sonnet-4", "Claude Sonnet 4", 200000, 3.00, 15.00},
 		{"anthropic/claude-opus-4", "Claude Opus 4", 200000, 15.00, 75.00},

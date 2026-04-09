@@ -20,6 +20,11 @@ var (
 	modelsProvider    string
 )
 
+var (
+	testProvider  string
+	testModelType string
+)
+
 var modelsCmd = &cobra.Command{
 	Use:   "models",
 	Short: "Manage AI models",
@@ -31,13 +36,26 @@ var modelsListCmd = &cobra.Command{
 	RunE:  runModelsList,
 }
 
+var modelsTestCmd = &cobra.Command{
+	Use:   "test <model-id>",
+	Short: "Test if a model works with 2nb",
+	Long:  "Sends a quick probe (embed or generate) to verify a model is callable. Useful for testing unverified models before switching.",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runModelsTest,
+}
+
 func init() {
 	modelsListCmd.Flags().StringVar(&modelsTypeFilt, "type", "", "Filter by type: embed or generation")
 	modelsListCmd.Flags().BoolVar(&modelsFreeOnly, "free", false, "Show only free models")
 	modelsListCmd.Flags().BoolVar(&modelsDiscover, "discover", false, "Query vendor APIs for full model catalogs")
 	modelsListCmd.Flags().BoolVar(&modelsCheckStatus, "status", false, "Probe provider reachability and credentials")
 	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama")
+
+	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama (auto-detected if omitted)")
+	modelsTestCmd.Flags().StringVar(&testModelType, "type", "", "Model type: embedding or generation (auto-detected if omitted)")
+
 	modelsCmd.AddCommand(modelsListCmd)
+	modelsCmd.AddCommand(modelsTestCmd)
 	rootCmd.AddCommand(modelsCmd)
 }
 
@@ -173,6 +191,45 @@ func statusLabel(m ai.ModelInfo) string {
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+func runModelsTest(cmd *cobra.Command, args []string) error {
+	v, err := openVault()
+	if err != nil {
+		return err
+	}
+	defer v.Close()
+
+	modelID := args[0]
+	ctx := context.Background()
+
+	fmt.Printf("Testing %s...\n", modelID)
+
+	result, err := ai.TestProbeModel(ctx, v.Config.AI, modelID, testProvider, testModelType)
+	if err != nil {
+		return err
+	}
+
+	format := getFormat(cmd)
+	if format != "" {
+		return output.Write(os.Stdout, format, result)
+	}
+
+	if result.OK {
+		fmt.Printf("PASS  %s/%s  (%s, %s)\n", result.Provider, result.Type, result.Latency, result.ModelID)
+		if result.Detail != "" {
+			// Truncate long responses.
+			detail := result.Detail
+			if len(detail) > 100 {
+				detail = detail[:100] + "..."
+			}
+			fmt.Printf("  response: %s\n", detail)
+		}
+	} else {
+		fmt.Printf("FAIL  %s/%s  (%s, %s)\n", result.Provider, result.Type, result.Latency, result.ModelID)
+		fmt.Printf("  error: %s\n", result.Detail)
+	}
+	return nil
 }
 
 func formatContext(tokens int) string {

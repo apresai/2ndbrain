@@ -11,6 +11,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
 // loadBedrockAWSConfig builds an AWS config from BedrockConfig settings.
@@ -179,87 +180,58 @@ func (b *BedrockGenerator) Available(ctx context.Context) bool {
 	return result
 }
 
-// claudeRequest is the Anthropic Messages API format for Bedrock.
-type claudeRequest struct {
-	AnthropicVersion string          `json:"anthropic_version"`
-	MaxTokens        int             `json:"max_tokens"`
-	Temperature      float64         `json:"temperature,omitempty"`
-	System           string          `json:"system,omitempty"`
-	Messages         []claudeMessage `json:"messages"`
-}
-
-type claudeMessage struct {
-	Role    string         `json:"role"`
-	Content []claudeBlock  `json:"content"`
-}
-
-type claudeBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type claudeResponse struct {
-	Content []struct {
-		Text string `json:"text"`
-	} `json:"content"`
-}
-
 func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts GenOpts) (string, error) {
-	maxTokens := opts.MaxTokens
+	maxTokens := int32(opts.MaxTokens)
 	if maxTokens == 0 {
 		maxTokens = 512
 	}
+	temp := float32(opts.Temperature)
 
-	req := claudeRequest{
-		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        maxTokens,
-		Temperature:      opts.Temperature,
-		System:           opts.SystemPrompt,
-		Messages: []claudeMessage{{
-			Role: "user",
-			Content: []claudeBlock{{
-				Type: "text",
-				Text: prompt,
-			}},
+	input := &bedrockruntime.ConverseInput{
+		ModelId: aws.String(b.model),
+		Messages: []types.Message{{
+			Role: types.ConversationRoleUser,
+			Content: []types.ContentBlock{
+				&types.ContentBlockMemberText{Value: prompt},
+			},
 		}},
+		InferenceConfig: &types.InferenceConfiguration{
+			MaxTokens:   aws.Int32(maxTokens),
+			Temperature: aws.Float32(temp),
+		},
 	}
 
-	reqBody, err := json.Marshal(req)
+	if opts.SystemPrompt != "" {
+		input.System = []types.SystemContentBlock{
+			&types.SystemContentBlockMemberText{Value: opts.SystemPrompt},
+		}
+	}
+
+	resp, err := b.client.Converse(ctx, input)
 	if err != nil {
-		return "", fmt.Errorf("marshal generate request: %w", err)
+		return "", fmt.Errorf("converse %s: %w", b.model, err)
 	}
 
-	resp, err := b.client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(b.model),
-		ContentType: aws.String("application/json"),
-		Accept:      aws.String("application/json"),
-		Body:        reqBody,
-	})
-	if err != nil {
-		return "", fmt.Errorf("invoke %s: %w", b.model, err)
-	}
-
-	var claudeResp claudeResponse
-	if err := json.Unmarshal(resp.Body, &claudeResp); err != nil {
-		return "", fmt.Errorf("unmarshal generate response: %w", err)
-	}
-
-	if len(claudeResp.Content) == 0 {
+	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)
+	if !ok || len(msg.Value.Content) == 0 {
 		return "", fmt.Errorf("empty response from %s", b.model)
 	}
-	return claudeResp.Content[0].Text, nil
+
+	text, ok := msg.Value.Content[0].(*types.ContentBlockMemberText)
+	if !ok {
+		return "", fmt.Errorf("unexpected content type from %s", b.model)
+	}
+
+	return text.Value, nil
 }
 
 func (b *BedrockGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
 	return []ModelInfo{{
-		ID:         b.model,
-		Name:       "Claude Haiku 4.5",
-		Provider:   "bedrock",
-		Type:       "generation",
-		ContextLen: 200000,
-		PriceIn:    0.80,
-		PriceOut:   4.00,
-		Local:      false,
+		ID:       b.model,
+		Name:     b.model,
+		Provider: "bedrock",
+		Type:     "generation",
+		Local:    false,
 	}}, nil
 }
 
@@ -308,7 +280,7 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 			Type:     modelType,
 			Local:    false,
 			Tier:     TierUnverified,
-			Notes:    "not tested with 2nb — may require different invoke format",
+			Notes:    "use 2nb models test to verify",
 		})
 	}
 	return models, nil

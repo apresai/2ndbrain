@@ -20,4 +20,4 @@ app/*.xcworkspace/xcuserdata/
 
 # Vault content — never commit personal knowledge base data
 vault/
-.2ndbrain/
+.2ndbrain/          # includes index.db, bench.db, models/, recovery/

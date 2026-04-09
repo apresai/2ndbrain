@@ -76,7 +76,7 @@ func TestOpenRouterEmbedSingle(t *testing.T) {
 func TestOpenRouterGenerate(t *testing.T) {
 	key := requireOpenRouterKey(t)
 
-	gen := NewOpenRouterGenerator(key, "qwen/qwen3.6-plus:free")
+	gen := NewOpenRouterGenerator(key, "google/gemma-3-4b-it:free")
 	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10, Temperature: 0})
 	skipOnTransient(t, err)
 	if err != nil {
@@ -91,8 +91,7 @@ func TestOpenRouterGenerate(t *testing.T) {
 func TestOpenRouterGenerateWithSystemPrompt(t *testing.T) {
 	key := requireOpenRouterKey(t)
 
-	// Use qwen model which supports system prompts (Gemma 3 on Google AI Studio does not)
-	gen := NewOpenRouterGenerator(key, "qwen/qwen3.6-plus:free")
+	gen := NewOpenRouterGenerator(key, "anthropic/claude-haiku-4-5")
 	result, err := gen.Generate(context.Background(), "What color is the sky?", GenOpts{
 		SystemPrompt: "Reply with exactly one word.",
 		MaxTokens:    10,

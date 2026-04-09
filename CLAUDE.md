@@ -124,7 +124,7 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (24)
+### CLI Commands (33)
 
 | Command | Flags | Purpose |
 |---------|-------|---------|
@@ -149,7 +149,14 @@ Test scripts live in `tests/`:
 | `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
 | `ai setup` | | Guided local AI setup with Ollama (install, pull models, configure) |
 | `ai local` | | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
-| `models list` | `--type`, `--free` | List available AI models with pricing |
+| `models list` | `--type`, `--free`, `--discover`, `--status`, `--provider` | List verified model catalog, optionally discover vendor models |
+| `models test` | `<model-id>`, `--provider`, `--type` | Smoke-test a model (embed or generate probe) |
+| `models bench` | `--model`, `--probe`, `--provider` | Benchmark models against vault with persistent history |
+| `models bench fav` | `<model-id>` | Add model to benchmark favorites |
+| `models bench unfav` | `<model-id>` | Remove model from benchmark favorites |
+| `models bench favs` | | List benchmark favorites |
+| `models bench history` | `--limit` | Show past benchmark runs |
+| `models bench compare` | | Side-by-side latency comparison of favorited models |
 | `config show` | | Dump full vault configuration |
 | `config get` | `<key>` | Read a config value |
 | `config set` | `<key> <value>` | Write a config value |
@@ -263,6 +270,7 @@ vault-root/
 │   ├── config.yaml      # Vault name, embedding settings
 │   ├── schemas.yaml     # Document type schemas
 │   ├── index.db         # SQLite index (shared between CLI and editor)
+│   ├── bench.db         # Benchmark history and favorites (created on first bench)
 │   ├── models/          # Embedding model files
 │   ├── recovery/        # Crash recovery snapshots
 │   └── logs/            # Error logs
@@ -313,6 +321,14 @@ Defined in `.2ndbrain/schemas.yaml`. Four built-in types:
 ### SQLite Schema (index.db)
 
 Tables: `documents`, `chunks`, `chunks_fts` (FTS5), `links`, `tags`, `schema_version`
+
+### SQLite Schema (bench.db)
+
+Created on first `2nb models bench` invocation. Stores benchmark run history and model favorites.
+
+Tables: `favorites` (provider, model_id, model_type, added_at), `runs` (timestamp, provider, model_id, probe, latency_ms, ok, detail, vault_doc_count), `schema_version`
+
+Favorites track which models the user wants to benchmark regularly. Runs capture individual probe results with vault context (doc count at time of run) for historical comparison.
 
 ## Obsidian Conversion
 
