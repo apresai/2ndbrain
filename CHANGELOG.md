@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.5] - 2026-04-09
+
+## [0.1.5] - 2026-04-09
+
+### Changed
+- `ai setup` rewritten as an interactive multi-provider wizard supporting Bedrock, OpenRouter, and Ollama with guided configuration and validation
+- README updated with model catalog reference, benchmarking workflows, and Converse API documentation
+
+
 ## [0.1.4] - 2026-04-09
 
 ### Added
