@@ -81,20 +81,48 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Step 3: Pick models.
-	embedID, dims := setupEmbeddingModel, 0
-	if embedID == "" {
-		embedID, dims = pickModel(scanner, provider, "embedding")
-	} else {
-		dims = lookupCatalogDims(provider, embedID)
-		fmt.Printf("\nEmbedding model: %s\n", embedID)
+	// Step 3: Pick models — easy mode or custom.
+	var embedID, genID string
+	var dims int
+
+	flagsProvided := setupEmbeddingModel != "" || setupGenerationModel != ""
+
+	if !flagsProvided {
+		defEmbed, defGen, defDims := easyModeDefaults(provider)
+		fmt.Println("\nSetup mode:")
+		fmt.Printf("  1) Easy   — use recommended defaults (%s + %s)\n", defEmbed, defGen)
+		fmt.Println("  2) Custom — pick your own models from the catalog")
+		choice := promptChoice(scanner, "Choice", 2)
+
+		if choice == 1 {
+			embedID, genID, dims = defEmbed, defGen, defDims
+			fmt.Printf("\n  Embedding:  %s (%dd)\n", embedID, dims)
+			fmt.Printf("  Generation: %s\n", genID)
+
+			if provider == "ollama" {
+				ollamaPullIfNeeded(scanner, embedID)
+				ollamaPullIfNeeded(scanner, genID)
+			}
+		}
 	}
 
-	genID := setupGenerationModel
+	// Custom mode or flag overrides.
+	if embedID == "" {
+		if setupEmbeddingModel != "" {
+			embedID = setupEmbeddingModel
+			dims = lookupCatalogDims(provider, embedID)
+			fmt.Printf("\nEmbedding model: %s\n", embedID)
+		} else {
+			embedID, dims = pickModel(scanner, provider, "embedding")
+		}
+	}
 	if genID == "" {
-		genID, _ = pickModel(scanner, provider, "generation")
-	} else {
-		fmt.Printf("Generation model: %s\n", genID)
+		if setupGenerationModel != "" {
+			genID = setupGenerationModel
+			fmt.Printf("Generation model: %s\n", genID)
+		} else {
+			genID, _ = pickModel(scanner, provider, "generation")
+		}
 	}
 
 	cfg.EmbeddingModel = embedID
@@ -255,6 +283,11 @@ func pickModel(scanner *bufio.Scanner, provider, modelType string) (string, int)
 		return id, 0
 	}
 
+	if len(models) == 1 {
+		fmt.Printf("\nUsing %s model: %s\n", modelType, models[0].ID)
+		return models[0].ID, models[0].Dimensions
+	}
+
 	fmt.Printf("\nSelect %s model:\n", modelType)
 	for i, m := range models {
 		price := "free"
@@ -370,6 +403,19 @@ func promptYN(scanner *bufio.Scanner, prompt string, defaultYes bool) bool {
 		return defaultYes
 	}
 	return text == "y" || text == "yes"
+}
+
+func easyModeDefaults(provider string) (embedID, genID string, dims int) {
+	switch provider {
+	case "bedrock":
+		return "amazon.nova-2-multimodal-embeddings-v1:0", "amazon.nova-micro-v1:0", 1024
+	case "openrouter":
+		return "nvidia/llama-nemotron-embed-vl-1b-v2:free", "google/gemma-3-4b-it:free", 1024
+	case "ollama":
+		return "nomic-embed-text", "qwen2.5:0.5b", 768
+	default:
+		return "", "", 0
+	}
 }
 
 func runOllamaPull(model string) error {
