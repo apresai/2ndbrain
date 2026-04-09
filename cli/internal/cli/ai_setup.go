@@ -1,106 +1,375 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
-	"time"
+	"strconv"
+	"strings"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/spf13/cobra"
+)
+
+var (
+	setupProvider        string
+	setupEmbeddingModel  string
+	setupGenerationModel string
 )
 
 var aiSetupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Guided local AI setup with Ollama",
-	Long:  "Checks for Ollama, pulls required models, configures the vault for local AI, and generates embeddings.",
+	Short: "Guided AI provider setup wizard",
+	Long:  "Interactive wizard to configure Bedrock, OpenRouter, or Ollama. Validates credentials, helps pick models, and tests connectivity. Use flags to skip prompts.",
 	RunE:  runAISetup,
 }
 
 func init() {
+	aiSetupCmd.Flags().StringVar(&setupProvider, "provider", "", "AI provider: bedrock, openrouter, ollama")
+	aiSetupCmd.Flags().StringVar(&setupEmbeddingModel, "embedding-model", "", "Embedding model ID")
+	aiSetupCmd.Flags().StringVar(&setupGenerationModel, "generation-model", "", "Generation model ID")
 	aiCmd.AddCommand(aiSetupCmd)
 }
 
 func runAISetup(cmd *cobra.Command, args []string) error {
-	// Step 1: Check if Ollama is installed
-	fmt.Println("Checking for Ollama...")
-	ollamaPath, err := exec.LookPath("ollama")
-	if err != nil {
-		fmt.Println("\nOllama is not installed. Install it with:")
-		fmt.Println("  brew install ollama")
-		fmt.Println("\nThen start the server:")
-		fmt.Println("  ollama serve")
-		fmt.Println("\nRe-run this command after installation.")
-		return fmt.Errorf("ollama not found")
-	}
-	fmt.Printf("  Found: %s\n", ollamaPath)
+	scanner := bufio.NewScanner(os.Stdin)
 
-	// Step 2: Check if Ollama is running
-	fmt.Println("\nChecking Ollama server...")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:11434/", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		fmt.Println("\nOllama is not running. Start it with:")
-		fmt.Println("  ollama serve")
-		fmt.Println("\nRe-run this command after starting the server.")
-		return fmt.Errorf("ollama not running")
-	}
-	resp.Body.Close()
-	fmt.Println("  Server is running.")
-
-	// Step 3: Pull required models
-	embedModel := "embeddinggemma"
-	genModel := "gemma3:4b"
-
-	fmt.Printf("\nPulling embedding model: %s\n", embedModel)
-	if err := runOllamaPull(embedModel); err != nil {
-		return fmt.Errorf("pull %s: %w", embedModel, err)
-	}
-
-	fmt.Printf("\nPulling generation model: %s\n", genModel)
-	if err := runOllamaPull(genModel); err != nil {
-		return fmt.Errorf("pull %s: %w", genModel, err)
-	}
-
-	// Step 4: Configure vault
-	fmt.Println("\nConfiguring vault for local AI...")
 	v, err := openVault()
 	if err != nil {
 		return err
 	}
+	defer v.Close()
 
-	v.Config.AI.Provider = "ollama"
-	v.Config.AI.EmbeddingModel = embedModel
-	v.Config.AI.GenerationModel = genModel
-	v.Config.AI.Dimensions = 768
+	cfg := v.Config.AI
+	ctx := context.Background()
+
+	// Step 1: Pick provider.
+	provider := setupProvider
+	if provider == "" {
+		fmt.Println("Select AI provider:")
+		fmt.Println("  1) bedrock     — AWS Bedrock (Claude, Nova, Llama — uses AWS credentials)")
+		fmt.Println("  2) openrouter  — OpenRouter API (many models, pay-per-token)")
+		fmt.Println("  3) ollama      — Local models via Ollama (free, private)")
+		choice := promptChoice(scanner, "Choice", 3)
+		provider = []string{"bedrock", "openrouter", "ollama"}[choice-1]
+	}
+
+	switch provider {
+	case "bedrock", "openrouter", "ollama":
+	default:
+		return fmt.Errorf("invalid provider %q (use: bedrock, openrouter, ollama)", provider)
+	}
+	cfg.Provider = provider
+	fmt.Printf("\nProvider: %s\n", provider)
+
+	// Step 2: Validate credentials.
+	switch provider {
+	case "bedrock":
+		if err := setupBedrock(ctx, scanner, &cfg); err != nil {
+			return err
+		}
+	case "openrouter":
+		if err := setupOpenRouter(scanner); err != nil {
+			return err
+		}
+	case "ollama":
+		if err := setupOllama(ctx, &cfg); err != nil {
+			return err
+		}
+	}
+
+	// Step 3: Pick models.
+	embedID, dims := setupEmbeddingModel, 0
+	if embedID == "" {
+		embedID, dims = pickModel(scanner, provider, "embedding")
+	} else {
+		dims = lookupCatalogDims(provider, embedID)
+		fmt.Printf("\nEmbedding model: %s\n", embedID)
+	}
+
+	genID := setupGenerationModel
+	if genID == "" {
+		genID, _ = pickModel(scanner, provider, "generation")
+	} else {
+		fmt.Printf("Generation model: %s\n", genID)
+	}
+
+	cfg.EmbeddingModel = embedID
+	cfg.GenerationModel = genID
+	if dims > 0 {
+		// Warn if dimensions are changing with existing embeddings.
+		if cfg.Dimensions > 0 && cfg.Dimensions != dims {
+			embCount, _ := v.DB.EmbeddingCount()
+			if embCount > 0 {
+				fmt.Printf("\nWarning: changing dimensions from %d to %d will require re-indexing %d documents.\n",
+					cfg.Dimensions, dims, embCount)
+			}
+		}
+		cfg.Dimensions = dims
+	}
+
+	// For Ollama, offer to pull models if not already pulled.
+	if provider == "ollama" {
+		ollamaPullIfNeeded(scanner, embedID)
+		ollamaPullIfNeeded(scanner, genID)
+	}
+
+	// Step 4: Probe models.
+	fmt.Printf("\nTesting embedding model %s...\n", embedID)
+	probeWithRetry(ctx, scanner, &cfg, provider, "embedding", &embedID, &dims)
+	cfg.EmbeddingModel = embedID
+	if dims > 0 {
+		cfg.Dimensions = dims
+	}
+
+	fmt.Printf("Testing generation model %s...\n", genID)
+	probeWithRetry(ctx, scanner, &cfg, provider, "generation", &genID, &dims)
+	cfg.GenerationModel = genID
+
+	// Step 5: Save config.
+	v.Config.AI = cfg
 	if err := v.Config.Save(v.DotDir); err != nil {
-		v.Close()
 		return fmt.Errorf("save config: %w", err)
 	}
-	v.Close()
-	fmt.Println("  Provider: ollama")
-	fmt.Println("  Embedding model: " + embedModel)
-	fmt.Println("  Generation model: " + genModel)
-	fmt.Println("  Dimensions: 768")
 
-	// Step 5: Generate embeddings
-	fmt.Println("\nGenerating embeddings (this may take a moment)...")
-	indexCmd := exec.Command(os.Args[0], "index")
-	indexCmd.Stdout = os.Stdout
-	indexCmd.Stderr = os.Stderr
-	if err := indexCmd.Run(); err != nil {
-		return fmt.Errorf("index: %w", err)
+	fmt.Println("\nConfiguration saved:")
+	fmt.Printf("  Provider:         %s\n", cfg.Provider)
+	fmt.Printf("  Embedding model:  %s\n", cfg.EmbeddingModel)
+	fmt.Printf("  Generation model: %s\n", cfg.GenerationModel)
+	fmt.Printf("  Dimensions:       %d\n", cfg.Dimensions)
+
+	// Step 6: Offer to run index.
+	if promptYN(scanner, "\nRun 2nb index to generate embeddings now?", true) {
+		fmt.Println()
+		indexCmd := exec.Command(os.Args[0], "index")
+		indexCmd.Stdout = os.Stdout
+		indexCmd.Stderr = os.Stderr
+		if err := indexCmd.Run(); err != nil {
+			return fmt.Errorf("index: %w", err)
+		}
 	}
 
-	// Step 6: Summary
-	fmt.Println("\nLocal AI setup complete!")
+	fmt.Println("\nSetup complete!")
 	fmt.Println("  Run `2nb ai status` to verify")
 	fmt.Println("  Run `2nb ask \"your question\"` to query your vault")
-
 	return nil
+}
+
+// --- Provider-specific credential setup ---
+
+func setupBedrock(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig) error {
+	fmt.Println("\nChecking AWS credentials...")
+
+	if ai.CheckBedrockCredentials(ctx, cfg.Bedrock) {
+		fmt.Printf("  Found credentials (profile: %s, region: %s)\n", cfg.Bedrock.Profile, cfg.Bedrock.Region)
+		if promptYN(scanner, "Use these?", true) {
+			return nil
+		}
+	}
+
+	// Prompt for profile and region.
+	profile := promptLine(scanner, fmt.Sprintf("AWS profile [%s]: ", cfg.Bedrock.Profile))
+	if profile != "" {
+		cfg.Bedrock.Profile = profile
+	}
+	region := promptLine(scanner, fmt.Sprintf("AWS region [%s]: ", cfg.Bedrock.Region))
+	if region != "" {
+		cfg.Bedrock.Region = region
+	}
+
+	fmt.Println("  Validating credentials...")
+	if !ai.CheckBedrockCredentials(ctx, cfg.Bedrock) {
+		return fmt.Errorf("AWS credentials not valid for profile=%s region=%s\n  Run `aws configure` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY",
+			cfg.Bedrock.Profile, cfg.Bedrock.Region)
+	}
+	fmt.Println("  AWS credentials validated.")
+	return nil
+}
+
+func setupOpenRouter(scanner *bufio.Scanner) error {
+	fmt.Println("\nChecking OpenRouter API key...")
+
+	if ai.HasAPIKey("openrouter") {
+		fmt.Println("  API key found.")
+		if promptYN(scanner, "Use existing key?", true) {
+			return nil
+		}
+	}
+
+	fmt.Println("  Get your key from https://openrouter.ai/keys")
+	key := promptLine(scanner, "Enter OpenRouter API key: ")
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("no API key provided")
+	}
+	if err := ai.SetAPIKey("openrouter", key); err != nil {
+		return fmt.Errorf("store API key: %w", err)
+	}
+	fmt.Println("  API key stored in macOS Keychain.")
+	return nil
+}
+
+func setupOllama(ctx context.Context, cfg *ai.AIConfig) error {
+	fmt.Println("\nChecking Ollama...")
+
+	endpoint := cfg.Ollama.Endpoint
+	if endpoint == "" {
+		endpoint = "http://localhost:11434"
+	}
+
+	status := ai.CheckOllamaStatus(ctx, endpoint)
+
+	if !status.Installed {
+		fmt.Println("  Ollama is not installed.")
+		fmt.Println("  Install with: brew install ollama")
+		return fmt.Errorf("ollama not installed")
+	}
+	fmt.Printf("  Installed: %s\n", status.BinaryPath)
+
+	if !status.Running {
+		fmt.Println("  Ollama is not running.")
+		fmt.Println("  Start with: ollama serve")
+		return fmt.Errorf("ollama not running")
+	}
+	fmt.Printf("  Running at %s\n", endpoint)
+	return nil
+}
+
+// --- Model selection ---
+
+func pickModel(scanner *bufio.Scanner, provider, modelType string) (string, int) {
+	catalog := ai.BuiltinCatalog()
+	var models []ai.ModelInfo
+	for _, m := range catalog {
+		if m.Provider == provider && m.Type == modelType {
+			models = append(models, m)
+		}
+	}
+
+	if len(models) == 0 {
+		fmt.Printf("  No verified %s models for %s. Enter model ID manually.\n", modelType, provider)
+		id := promptLine(scanner, "Model ID: ")
+		return id, 0
+	}
+
+	fmt.Printf("\nSelect %s model:\n", modelType)
+	for i, m := range models {
+		price := "free"
+		if m.PriceIn > 0 || m.PriceOut > 0 {
+			price = fmt.Sprintf("$%.2f/$%.2f", m.PriceIn, m.PriceOut)
+		}
+		extra := ""
+		if m.Dimensions > 0 {
+			extra = fmt.Sprintf("  %dd", m.Dimensions)
+		}
+		if m.ContextLen > 0 {
+			extra += fmt.Sprintf("  %s", formatContext(m.ContextLen))
+		}
+		if m.Notes != "" {
+			extra += fmt.Sprintf("  (%s)", m.Notes)
+		}
+		fmt.Printf("  %d) %-45s %-8s%s\n", i+1, m.ID, price, extra)
+	}
+
+	choice := promptChoice(scanner, "Choice", len(models))
+	selected := models[choice-1]
+	return selected.ID, selected.Dimensions
+}
+
+func lookupCatalogDims(provider, modelID string) int {
+	for _, m := range ai.BuiltinCatalog() {
+		if m.Provider == provider && m.ID == modelID {
+			return m.Dimensions
+		}
+	}
+	return 0
+}
+
+func ollamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
+	ctx := context.Background()
+	models, err := ai.ListOllamaModels(ctx, http.DefaultClient, "http://localhost:11434")
+	if err != nil {
+		// Can't check — skip.
+		return
+	}
+	for _, m := range models {
+		if m.ID == modelID || strings.HasPrefix(m.ID, modelID+":") {
+			return // already pulled
+		}
+	}
+
+	fmt.Printf("\nModel %s is not pulled.\n", modelID)
+	if promptYN(scanner, "Pull now?", true) {
+		runOllamaPull(modelID)
+	}
+}
+
+// --- Probe with retry ---
+
+func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig, provider, modelType string, modelID *string, dims *int) {
+	for {
+		result, err := ai.TestProbeModel(ctx, *cfg, *modelID, provider, modelType)
+		if err == nil && result.OK {
+			fmt.Printf("  OK (%s)\n", result.Latency)
+			return
+		}
+		detail := ""
+		if result != nil {
+			detail = result.Detail
+		} else if err != nil {
+			detail = err.Error()
+		}
+		fmt.Printf("  Failed: %s\n", detail)
+		if !promptYN(scanner, "Try a different model?", true) {
+			fmt.Println("  Continuing without validation.")
+			return
+		}
+		*modelID, *dims = pickModel(scanner, provider, modelType)
+	}
+}
+
+// --- Input helpers ---
+
+func promptLine(scanner *bufio.Scanner, prompt string) string {
+	fmt.Print(prompt)
+	if scanner.Scan() {
+		return strings.TrimSpace(scanner.Text())
+	}
+	return ""
+}
+
+func promptChoice(scanner *bufio.Scanner, prompt string, n int) int {
+	for {
+		fmt.Printf("%s [1-%d]: ", prompt, n)
+		if !scanner.Scan() {
+			return 1
+		}
+		text := strings.TrimSpace(scanner.Text())
+		choice, err := strconv.Atoi(text)
+		if err == nil && choice >= 1 && choice <= n {
+			return choice
+		}
+		fmt.Printf("  Please enter a number between 1 and %d.\n", n)
+	}
+}
+
+func promptYN(scanner *bufio.Scanner, prompt string, defaultYes bool) bool {
+	suffix := " [Y/n]: "
+	if !defaultYes {
+		suffix = " [y/N]: "
+	}
+	fmt.Print(prompt + suffix)
+	if !scanner.Scan() {
+		return defaultYes
+	}
+	text := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if text == "" {
+		return defaultYes
+	}
+	return text == "y" || text == "yes"
 }
 
 func runOllamaPull(model string) error {
