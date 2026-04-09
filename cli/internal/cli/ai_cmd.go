@@ -83,18 +83,15 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		return output.Write(os.Stdout, format, status)
 	}
 
-	// Fetch model info once per provider type (avoids redundant ListModels calls)
-	var embedPrice float64
-	if emb, err := ai.DefaultRegistry.Embedder(cfg.Provider); err == nil {
-		if models, err := emb.ListModels(ctx); err == nil && len(models) > 0 {
-			embedPrice = models[0].PriceIn
+	// Look up pricing from the catalog (source of truth for metadata).
+	var embedPrice, genPriceIn, genPriceOut float64
+	for _, m := range ai.BuiltinCatalog() {
+		if m.Provider == cfg.Provider && m.ID == cfg.EmbeddingModel {
+			embedPrice = m.PriceIn
 		}
-	}
-	var genPriceIn, genPriceOut float64
-	if gen, err := ai.DefaultRegistry.Generator(cfg.Provider); err == nil {
-		if models, err := gen.ListModels(ctx); err == nil && len(models) > 0 {
-			genPriceIn = models[0].PriceIn
-			genPriceOut = models[0].PriceOut
+		if m.Provider == cfg.Provider && m.ID == cfg.GenerationModel {
+			genPriceIn = m.PriceIn
+			genPriceOut = m.PriceOut
 		}
 	}
 
