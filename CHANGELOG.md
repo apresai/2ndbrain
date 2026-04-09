@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.4] - 2026-04-09
+
+### Added
+- `models test <model-id>` command to smoke-test any model with an embed or generate probe
+- `models bench` command suite for benchmarking models against your vault with persistent history
+- `models bench fav` / `models bench unfav` / `models bench favs` to manage benchmark favorites
+- `models bench history` to review past benchmark runs
+- `models bench compare` for side-by-side latency comparison of favorited models
+- Benchmark history and favorites persisted in `.2ndbrain/bench.db`
+
+### Changed
+- Bedrock provider migrated from InvokeModel API to Converse API
+
+
 ## [0.1.3] - 2026-04-09
 
 ### Added
