@@ -50,13 +50,13 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 
 ## AI Providers
 
-2ndbrain supports three AI providers for embeddings and generation:
+2ndbrain supports three AI providers for embeddings and generation. Bedrock uses the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html), so any Bedrock model works — Claude, Nova, Llama, Mistral, and more.
 
 | Provider | Embeddings | Generation | Setup |
 |----------|-----------|------------|-------|
-| **AWS Bedrock** | Nova Embeddings v2 | Claude Haiku 4.5 | Uses existing AWS SSO — zero new keys |
-| **OpenRouter** | Nemotron Embed (free) | Qwen, Gemma, etc. | `OPENROUTER_API_KEY` env var |
-| **Ollama** | embeddinggemma | qwen2.5:0.5b | `brew install ollama` — fully local |
+| **AWS Bedrock** | Nova Embeddings v2 | Nova Micro, Claude, Llama, any model | Uses existing AWS SSO — zero new keys |
+| **OpenRouter** | Nemotron Embed (free) | Gemma 4, GPT-4o, Claude, etc. | `OPENROUTER_API_KEY` env var |
+| **Ollama** | nomic-embed-text | qwen2.5, gemma3, llama3 | `brew install ollama` — fully local |
 
 ### Local AI with Ollama
 
@@ -94,6 +94,34 @@ export OPENROUTER_API_KEY=sk-or-...
 2nb index
 ```
 
+## Model Catalog & Benchmarking
+
+Browse verified models across all providers, test any model, and benchmark your favorites:
+
+```bash
+# See all verified models with pricing
+2nb models list
+
+# Discover vendor catalogs (Bedrock, OpenRouter, Ollama)
+2nb models list --discover
+
+# Check credentials and reachability
+2nb models list --status
+
+# Test if a model works before switching
+2nb models test amazon.nova-micro-v1:0
+2nb models test google/gemma-4-31b-it:free
+
+# Benchmark your favorites
+2nb models bench fav amazon.nova-micro-v1:0
+2nb models bench fav us.anthropic.claude-haiku-4-5-20251001-v1:0
+2nb models bench                  # runs embed/generate/search/rag probes
+2nb models bench compare          # side-by-side latency leaderboard
+2nb models bench history          # view past runs
+```
+
+Models are tiered as **verified** (tested with 2nb) or **unverified** (available from vendor, use `models test` to check). The benchmark suite stores results in `.2ndbrain/bench.db` for tracking performance over time.
+
 ## CLI Commands
 
 ### Core
@@ -118,7 +146,11 @@ export OPENROUTER_API_KEY=sk-or-...
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
 | `ai setup` | Guided local AI setup with Ollama |
 | `ai embed <text>` | Generate embedding vector (debug) |
-| `models list [--type embed] [--free]` | List available AI models with pricing |
+| `models list [--discover] [--status] [--provider]` | Verified model catalog + vendor discovery |
+| `models test <model-id>` | Smoke-test any model (embed or generate probe) |
+| `models bench` | Benchmark favorites with persistent history |
+| `models bench fav <model-id>` | Add model to benchmark favorites |
+| `models bench compare` | Side-by-side latency leaderboard |
 
 ### Configuration
 
