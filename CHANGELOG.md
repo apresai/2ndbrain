@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.3] - 2026-04-09
+
+### Added
+- `models list` now shows a rich, status-aware model catalog indicating which models are configured, available, and ready to use
+- Model catalog with merge logic to combine built-in and runtime-discovered models across providers (Bedrock, OpenRouter, Ollama)
+
+
 ## [0.1.2] - 2026-04-07
 
 ## [0.1.2] - 2026-04-07
