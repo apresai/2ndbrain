@@ -4,12 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrock"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 )
+
+// loadBedrockAWSConfig builds an AWS config from BedrockConfig settings.
+func loadBedrockAWSConfig(ctx context.Context, cfg BedrockConfig) (aws.Config, error) {
+	opts := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(cfg.Region),
+	}
+	if cfg.Profile != "" && cfg.Profile != "default" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(cfg.Profile))
+	}
+	return awsconfig.LoadDefaultConfig(ctx, opts...)
+}
 
 // BedrockEmbedder implements EmbeddingProvider using Amazon Bedrock.
 type BedrockEmbedder struct {
@@ -22,14 +35,7 @@ type BedrockEmbedder struct {
 
 // NewBedrockEmbedder creates a Bedrock embedding provider.
 func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, dims int) (*BedrockEmbedder, error) {
-	opts := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(cfg.Region),
-	}
-	if cfg.Profile != "" && cfg.Profile != "default" {
-		opts = append(opts, awsconfig.WithSharedConfigProfile(cfg.Profile))
-	}
-
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
@@ -147,14 +153,7 @@ type BedrockGenerator struct {
 
 // NewBedrockGenerator creates a Bedrock generation provider.
 func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (*BedrockGenerator, error) {
-	opts := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(cfg.Region),
-	}
-	if cfg.Profile != "" && cfg.Profile != "default" {
-		opts = append(opts, awsconfig.WithSharedConfigProfile(cfg.Profile))
-	}
-
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
@@ -262,6 +261,68 @@ func (b *BedrockGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
 		PriceOut:   4.00,
 		Local:      false,
 	}}, nil
+}
+
+// ListBedrockVendorModels calls the Bedrock ListFoundationModels API to discover
+// all models available in the configured region. Results are returned with
+// Tier=TierUnverified since 2nb may not have a harness for their invoke format.
+func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInfo, error) {
+	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
+	}
+
+	client := bedrock.NewFromConfig(awsCfg)
+	resp, err := client.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{})
+	if err != nil {
+		return nil, fmt.Errorf("list foundation models: %w", err)
+	}
+
+	var models []ModelInfo
+	for _, fm := range resp.ModelSummaries {
+		// Skip models without text input capability.
+		hasText := false
+		for _, m := range fm.InputModalities {
+			if strings.EqualFold(string(m), "TEXT") {
+				hasText = true
+				break
+			}
+		}
+		if !hasText {
+			continue
+		}
+
+		modelType := "generation"
+		for _, m := range fm.OutputModalities {
+			if strings.EqualFold(string(m), "EMBEDDING") {
+				modelType = "embedding"
+				break
+			}
+		}
+
+		id := aws.ToString(fm.ModelId)
+		models = append(models, ModelInfo{
+			ID:       id,
+			Name:     aws.ToString(fm.ModelName),
+			Provider: "bedrock",
+			Type:     modelType,
+			Local:    false,
+			Tier:     TierUnverified,
+			Notes:    "not tested with 2nb — may require different invoke format",
+		})
+	}
+	return models, nil
+}
+
+// CheckBedrockCredentials resolves AWS credentials from the SDK credential chain.
+// This may make network calls (STS, IMDS) if env vars and config files are absent.
+func CheckBedrockCredentials(ctx context.Context, cfg BedrockConfig) bool {
+	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
+	if err != nil {
+		return false
+	}
+	creds, err := awsCfg.Credentials.Retrieve(ctx)
+	return err == nil && creds.HasKeys()
 }
 
 // InitBedrock creates and registers Bedrock providers with the given registry.

@@ -46,6 +46,16 @@ func GetAPIKey(provider string) (string, error) {
 		provider, envName, provider)
 }
 
+// HasAPIKey checks whether an API key is available for a provider
+// without exposing the key value.
+func HasAPIKey(provider string) bool {
+	if provider == "bedrock" || provider == "ollama" {
+		return true // these don't use API keys
+	}
+	key, err := GetAPIKey(provider)
+	return err == nil && key != ""
+}
+
 // SetAPIKey stores an API key in the macOS Keychain.
 func SetAPIKey(provider, key string) error {
 	if runtime.GOOS != "darwin" {

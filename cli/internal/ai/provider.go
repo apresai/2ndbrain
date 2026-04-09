@@ -26,6 +26,16 @@ type GenOpts struct {
 	SystemPrompt string
 }
 
+// ModelTier indicates whether a model has a verified API harness in 2nb.
+type ModelTier string
+
+const (
+	// TierVerified means 2nb has tested this model's invoke format and it works.
+	TierVerified ModelTier = "verified"
+	// TierUnverified means the vendor API lists this model but 2nb hasn't built/tested a harness for it.
+	TierUnverified ModelTier = "unverified"
+)
+
 // ModelInfo describes an available model.
 type ModelInfo struct {
 	ID         string  `json:"id"`
@@ -37,6 +47,23 @@ type ModelInfo struct {
 	PriceIn    float64 `json:"price_input_per_million"` // per 1M tokens, 0 = free
 	PriceOut   float64 `json:"price_output_per_million"`
 	Local      bool    `json:"local"`
+
+	// Tier indicates whether 2nb has a verified harness for this model.
+	Tier ModelTier `json:"tier,omitempty"`
+	// Active is true when this model is currently configured.
+	Active bool `json:"active,omitempty"`
+	// Reachable indicates provider connectivity: nil=unchecked, true/false=probed.
+	Reachable *bool `json:"reachable,omitempty"`
+	// CredsOK indicates credential availability: nil=N/A or unchecked.
+	CredsOK *bool `json:"credentials,omitempty"`
+	// ConfigHint shows how to switch to this model.
+	ConfigHint string `json:"config_hint,omitempty"`
+	// RateLimitRPS is the known rate limit in requests per second (0=unknown).
+	RateLimitRPS float64 `json:"rate_limit_rps,omitempty"`
+	// RateLimitTPM is the known rate limit in tokens per minute (0=unknown).
+	RateLimitTPM int `json:"rate_limit_tpm,omitempty"`
+	// Notes contains caveats like "different invoke format — not yet supported".
+	Notes string `json:"notes,omitempty"`
 }
 
 // DefaultGenOpts returns sensible defaults for generation.
