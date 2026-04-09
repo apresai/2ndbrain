@@ -410,7 +410,7 @@ func easyModeDefaults(provider string) (embedID, genID string, dims int) {
 	case "bedrock":
 		return "amazon.nova-2-multimodal-embeddings-v1:0", "amazon.nova-micro-v1:0", 1024
 	case "openrouter":
-		return "nvidia/llama-nemotron-embed-vl-1b-v2:free", "google/gemma-3-4b-it:free", 1024
+		return "nvidia/llama-nemotron-embed-vl-1b-v2:free", "google/gemma-4-31b-it:free", 1024
 	case "ollama":
 		return "nomic-embed-text", "qwen2.5:0.5b", 768
 	default:
