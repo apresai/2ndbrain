@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.6] - 2026-04-10
+
+## [0.1.6] - 2026-04-10
+
+### Added
+- `skills` command — discover and display vault-specific Claude skill instructions
+- Easy mode option to `ai setup` wizard for simplified provider configuration
+- Command grouping in CLI help output for better discoverability
+- Real-API integration tests for Bedrock, OpenRouter, graph traversal, MCP tools, and output formatters
+
+### Changed
+- OpenRouter easy mode default model updated to Gemma 4 31B
+- Model test and bench probes now include a system prompt for more realistic evaluation
+
+### Fixed
+- `ai status` pricing now reads from the model catalog instead of calling provider `ListModels`, correcting displayed costs
+
+
 ## [0.1.5] - 2026-04-09
 
 ## [0.1.5] - 2026-04-09
