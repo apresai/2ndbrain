@@ -119,7 +119,7 @@ func RunEmbed(opts ProbeOpts) ProbeResult {
 // RunGenerate benchmarks generation latency.
 func RunGenerate(opts ProbeOpts) ProbeResult {
 	start := time.Now()
-	genOpts := ai.GenOpts{MaxTokens: 128, Temperature: 0}
+	genOpts := ai.GenOpts{MaxTokens: 128, Temperature: 0, SystemPrompt: "You are a helpful assistant. Be concise."}
 
 	resp, err := func() (string, error) {
 		switch opts.Provider {

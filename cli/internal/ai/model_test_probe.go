@@ -119,7 +119,7 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID string)
 
 func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID string) (string, error) {
 	prompt := "What is 2+2? Reply with just the number."
-	opts := GenOpts{MaxTokens: 32, Temperature: 0}
+	opts := GenOpts{MaxTokens: 32, Temperature: 0, SystemPrompt: "You are a helpful assistant. Be concise."}
 
 	switch provider {
 	case "bedrock":
