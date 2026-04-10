@@ -307,9 +307,13 @@ A native SwiftUI + AppKit editor with:
 - Quick Open (Cmd+P), Command Palette (Cmd+Shift+P)
 - Search panel with semantic search toggle (Cmd+Shift+F)
 - Ask AI panel for RAG Q&A (Cmd+Shift+A)
+- AI setup wizard — guided provider/credentials/model configuration (Tools menu)
+- Interactive AI status popover with staleness indicator and index rebuild
+- Tools menu: Install AI Agent Skills, Connect AI Tools (MCP), Validate Knowledge Base, Rebuild Index
 - Interactive link graph visualization
 - Wikilink autocomplete, backlinks panel, outline view
 - Tabs with dirty indicators, focus mode
+- 6 document templates: Note, ADR, Runbook, Postmortem, PRD, PR/FAQ
 - Obsidian import/export
 - Spotlight indexing, crash recovery, file watching
 
@@ -369,8 +373,9 @@ Export back to Obsidian anytime:
 make build          # CLI + macOS app
 make install        # CLI to /usr/local/bin, app to ~/Applications
 make test           # Go unit tests
+make test-swift     # Swift unit tests (JSON decoding, parsing, wizard logic)
 make test-gui       # GUI tests (AppleScript automation)
-make test-all       # Everything
+make test-all       # Go + Swift + GUI
 make release        # Tag + push (GitHub Actions builds + publishes)
 ```
 
