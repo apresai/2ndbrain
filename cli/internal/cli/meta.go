@@ -22,13 +22,14 @@ var metaCmd = &cobra.Command{
 
 func init() {
 	metaCmd.Flags().StringArrayVar(&metaSet, "set", nil, "Set a frontmatter field (key=value)")
+	metaCmd.GroupID = "docs"
 	rootCmd.AddCommand(metaCmd)
 }
 
 func runMeta(cmd *cobra.Command, args []string) error {
 	v, err := openVaultAndSetActive()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 

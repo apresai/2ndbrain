@@ -22,6 +22,7 @@ var askCmd = &cobra.Command{
 }
 
 func init() {
+	askCmd.GroupID = "ai"
 	rootCmd.AddCommand(askCmd)
 }
 
@@ -70,7 +71,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(results) == 0 {
-		return fmt.Errorf("no relevant documents found for: %s", question)
+		return fmt.Errorf("no relevant documents found for %q\n\nTo fix:\n  • Add documents to your vault: 2nb create \"My Note\"\n  • Rebuild the search index: 2nb index\n  • Check what's indexed: 2nb list", question)
 	}
 
 	// Build RAG context from search results

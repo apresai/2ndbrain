@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -47,6 +48,7 @@ func init() {
 	createCmd.Flags().StringVar(&createType, "type", "note", "Document type (adr, runbook, note, postmortem, prd, prfaq)")
 	createCmd.Flags().StringVar(&createTitle, "title", "", "Document title")
 	createCmd.Flags().BoolVar(&createAllowDuplicate, "allow-duplicate", false, "Allow creating a document with duplicate content")
+	createCmd.GroupID = "docs"
 	rootCmd.AddCommand(createCmd)
 }
 
@@ -66,7 +68,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	v, err := openVaultAndSetActive()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 
@@ -138,6 +140,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Created %s: %s\n", doc.Type, doc.Path)
+	if !flagPorcelain {
+		fmt.Fprintf(os.Stderr, "  Edit: open %s\n", filepath.Join(v.Root, doc.Path))
+		fmt.Fprintf(os.Stderr, "  Read: 2nb read %s\n", doc.Path)
+	}
 	return nil
 }
 

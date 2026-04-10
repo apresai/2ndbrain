@@ -48,6 +48,7 @@ func init() {
 	configCmd.AddCommand(configGetCmd)
 	configCmd.AddCommand(configSetCmd)
 	configCmd.AddCommand(configSetKeyCmd)
+	configCmd.GroupID = "config"
 	rootCmd.AddCommand(configCmd)
 }
 
@@ -143,7 +144,7 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 	case "ai.ollama.endpoint":
 		return cfg.Ollama.Endpoint, nil
 	default:
-		return "", fmt.Errorf("unknown config key: %s", key)
+		return "", fmt.Errorf("unknown config key: %q\n\nValid keys:\n  ai.provider, ai.embedding_model, ai.generation_model,\n  ai.dimensions, ai.bedrock.profile, ai.bedrock.region,\n  ai.openrouter.api_key_env, ai.ollama.endpoint", key)
 	}
 }
 
@@ -170,7 +171,7 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 	case "ai.ollama.endpoint":
 		cfg.Ollama.Endpoint = value
 	default:
-		return fmt.Errorf("unknown config key: %s", key)
+		return fmt.Errorf("unknown config key: %q\n\nValid keys:\n  ai.provider, ai.embedding_model, ai.generation_model,\n  ai.dimensions, ai.bedrock.profile, ai.bedrock.region,\n  ai.openrouter.api_key_env, ai.ollama.endpoint", key)
 	}
 	return nil
 }

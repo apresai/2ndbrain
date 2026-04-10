@@ -32,6 +32,7 @@ var aiEmbedCmd = &cobra.Command{
 func init() {
 	aiCmd.AddCommand(aiStatusCmd)
 	aiCmd.AddCommand(aiEmbedCmd)
+	aiCmd.GroupID = "ai"
 	rootCmd.AddCommand(aiCmd)
 }
 

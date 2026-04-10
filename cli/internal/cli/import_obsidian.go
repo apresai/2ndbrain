@@ -27,6 +27,7 @@ var importObsidianCmd = &cobra.Command{
 
 func init() {
 	importObsidianCmd.Flags().StringVar(&importObsidianTarget, "target", "", "Target directory for the 2ndbrain vault (default: import in-place)")
+	importObsidianCmd.GroupID = "io"
 	rootCmd.AddCommand(importObsidianCmd)
 }
 

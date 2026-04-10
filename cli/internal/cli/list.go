@@ -30,6 +30,7 @@ func init() {
 	listCmd.Flags().StringVar(&listTag, "tag", "", "Filter by tag")
 	listCmd.Flags().IntVar(&listLimit, "limit", 100, "Maximum results")
 	listCmd.Flags().StringVar(&listSort, "sort", "modified", "Sort by: modified, created, title, path")
+	listCmd.GroupID = "docs"
 	rootCmd.AddCommand(listCmd)
 }
 
@@ -45,7 +46,7 @@ type ListItem struct {
 func runList(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 
@@ -100,7 +101,11 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(items) == 0 {
-		fmt.Fprintln(os.Stderr, "No documents found.")
+		if !flagPorcelain {
+			fmt.Fprintln(os.Stderr, "No documents yet. Create one with: 2nb create \"My Note\"")
+		} else {
+			fmt.Fprintln(os.Stderr, "No documents found.")
+		}
 		return nil
 	}
 
@@ -115,5 +120,12 @@ func runList(cmd *cobra.Command, args []string) error {
 	for _, item := range items {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item.Title, item.Type, item.Status, item.Path)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	if !flagPorcelain && v.Config.AI.Provider == "" {
+		fmt.Fprintln(os.Stderr, "\nTip: run `2nb ai setup` to enable semantic search and Q&A")
+	}
+	return nil
 }

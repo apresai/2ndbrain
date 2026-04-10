@@ -19,6 +19,7 @@ var staleCmd = &cobra.Command{
 
 func init() {
 	staleCmd.Flags().IntVar(&staleSince, "since", 90, "Number of days to consider stale")
+	staleCmd.GroupID = "quality"
 	rootCmd.AddCommand(staleCmd)
 }
 
@@ -34,7 +35,7 @@ type StaleDoc struct {
 func runStale(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 

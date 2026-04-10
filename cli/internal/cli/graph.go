@@ -17,13 +17,14 @@ var graphCmd = &cobra.Command{
 }
 
 func init() {
+	graphCmd.GroupID = "quality"
 	rootCmd.AddCommand(graphCmd)
 }
 
 func runGraph(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 

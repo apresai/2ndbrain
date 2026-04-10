@@ -56,6 +56,7 @@ func init() {
 
 	modelsCmd.AddCommand(modelsListCmd)
 	modelsCmd.AddCommand(modelsTestCmd)
+	modelsCmd.GroupID = "ai"
 	rootCmd.AddCommand(modelsCmd)
 }
 

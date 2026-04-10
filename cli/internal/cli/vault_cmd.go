@@ -19,6 +19,7 @@ var vaultCmd = &cobra.Command{
 }
 
 func init() {
+	vaultCmd.GroupID = "start"
 	rootCmd.AddCommand(vaultCmd)
 }
 

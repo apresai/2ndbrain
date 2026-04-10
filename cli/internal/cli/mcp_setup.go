@@ -14,6 +14,7 @@ var mcpSetupCmd = &cobra.Command{
 }
 
 func init() {
+	mcpSetupCmd.GroupID = "integr"
 	rootCmd.AddCommand(mcpSetupCmd)
 }
 

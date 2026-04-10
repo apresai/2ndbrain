@@ -21,6 +21,7 @@ var indexCmd = &cobra.Command{
 }
 
 func init() {
+	indexCmd.GroupID = "ai"
 	rootCmd.AddCommand(indexCmd)
 }
 
@@ -61,6 +62,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	if !flagPorcelain {
 		fmt.Printf("Indexed %d files, %d chunks, %d links\n", stats.DocsIndexed, stats.ChunksCreated, stats.LinksFound)
+		if stats.DocsIndexed > 0 {
+			fmt.Fprintln(os.Stderr, "\nReady to search:")
+			fmt.Fprintln(os.Stderr, "  2nb search \"your query\"")
+			fmt.Fprintln(os.Stderr, "  2nb ask \"your question\"")
+		}
 	}
 	return nil
 }

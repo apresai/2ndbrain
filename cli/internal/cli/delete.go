@@ -19,13 +19,14 @@ var deleteCmd = &cobra.Command{
 
 func init() {
 	deleteCmd.Flags().BoolVar(&deleteForce, "force", false, "Skip confirmation")
+	deleteCmd.GroupID = "docs"
 	rootCmd.AddCommand(deleteCmd)
 }
 
 func runDelete(cmd *cobra.Command, args []string) error {
 	v, err := openVaultAndSetActive()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 
@@ -34,7 +35,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 
 	doc, err := v.DB.GetDocumentByPath(relPath)
 	if err != nil {
-		return exitWithError(ExitNotFound, fmt.Sprintf("document not found in index: %s", relPath))
+		return exitWithError(ExitNotFound, fmt.Sprintf("document not found: %s\n\nRun `2nb list` to see available documents", relPath))
 	}
 
 	if !deleteForce && !flagPorcelain {

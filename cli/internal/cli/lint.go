@@ -20,6 +20,7 @@ var lintCmd = &cobra.Command{
 }
 
 func init() {
+	lintCmd.GroupID = "quality"
 	rootCmd.AddCommand(lintCmd)
 }
 
@@ -40,7 +41,7 @@ type LintReport struct {
 func runLint(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 

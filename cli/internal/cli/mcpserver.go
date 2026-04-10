@@ -20,6 +20,7 @@ Available tools: kb_search, kb_read, kb_related, kb_create, kb_update_meta, kb_s
 }
 
 func init() {
+	mcpServerCmd.GroupID = "integr"
 	rootCmd.AddCommand(mcpServerCmd)
 }
 

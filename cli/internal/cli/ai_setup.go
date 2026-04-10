@@ -37,7 +37,7 @@ func init() {
 func runAISetup(cmd *cobra.Command, args []string) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	v, err := openVault()
+	v, err := openVaultAndSetActive()
 	if err != nil {
 		return err
 	}

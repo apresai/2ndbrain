@@ -22,6 +22,7 @@ var exportCmd = &cobra.Command{
 }
 
 func init() {
+	exportCmd.GroupID = "integr"
 	exportCmd.Flags().StringVar(&exportTypes, "types", "", "Comma-separated document types to include (e.g., adr,runbook)")
 	exportCmd.Flags().StringVar(&exportStatus, "status", "", "Filter by status")
 	exportCmd.Flags().IntVar(&exportLimit, "limit", 50, "Maximum documents to include")

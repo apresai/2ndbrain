@@ -32,7 +32,11 @@ func getActiveVault() string {
 }
 
 // setActiveVault writes the active vault path to the config file.
+// Skips writing when running under go test to avoid polluting the user's config.
 func setActiveVault(vaultPath string) error {
+	if os.Getenv("2NB_TEST") != "" {
+		return nil
+	}
 	path := activeVaultPath()
 	if path == "" {
 		return nil

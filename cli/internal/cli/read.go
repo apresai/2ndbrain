@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -21,20 +22,24 @@ var readCmd = &cobra.Command{
 
 func init() {
 	readCmd.Flags().StringVar(&readChunk, "chunk", "", "Heading path to read a specific section")
+	readCmd.GroupID = "docs"
 	rootCmd.AddCommand(readCmd)
 }
 
 func runRead(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 
 	path := v.AbsPath(expandPath(args[0]))
 	doc, err := document.ParseFile(path)
 	if err != nil {
-		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))
+		if errors.Is(err, os.ErrNotExist) {
+			return exitWithError(ExitNotFound, fmt.Sprintf("file not found: %s\n\nRun `2nb list` to see available documents", args[0]))
+		}
+		return exitWithError(ExitNotFound, fmt.Sprintf("cannot read %s: %v", args[0], err))
 	}
 
 	doc.Path = v.RelPath(path)

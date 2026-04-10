@@ -24,6 +24,7 @@ var exportObsidianCmd = &cobra.Command{
 
 func init() {
 	exportObsidianCmd.Flags().BoolVar(&exportObsidianStripIDs, "strip-ids", false, "Remove id and type fields from frontmatter")
+	exportObsidianCmd.GroupID = "io"
 	rootCmd.AddCommand(exportObsidianCmd)
 }
 
@@ -40,7 +41,7 @@ const obsidianCorePluginsJSON = `["file-explorer","global-search","tag-pane","ba
 func runExportObsidian(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 

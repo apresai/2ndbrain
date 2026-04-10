@@ -107,6 +107,27 @@ func TestOpenRouterGenerateWithSystemPrompt(t *testing.T) {
 	t.Logf("response: %s", result)
 }
 
+func TestOpenRouterGenerate_Gemma3SystemPrompt(t *testing.T) {
+	key := requireOpenRouterKey(t)
+
+	// Gemma 3 on Google AI Studio does not support system prompts (developer instructions).
+	// This is a regression test — if this model starts working with system prompts, great.
+	// If it fails with a 400 error about "Developer instruction is not enabled", that confirms
+	// the model is incompatible and should not be used as the easy mode default.
+	gen := NewOpenRouterGenerator(key, "google/gemma-3-4b-it:free")
+	_, err := gen.Generate(context.Background(), "What is 2+2?", GenOpts{
+		SystemPrompt: "Reply with just the number.",
+		MaxTokens:    10,
+		Temperature:  0,
+	})
+	skipOnTransient(t, err)
+	if err != nil {
+		t.Logf("Gemma 3 system prompt: %v (expected — model does not support system prompts)", err)
+	} else {
+		t.Log("Gemma 3 accepted system prompt — model may now support it")
+	}
+}
+
 func TestOpenRouterAvailable(t *testing.T) {
 	key := requireOpenRouterKey(t)
 

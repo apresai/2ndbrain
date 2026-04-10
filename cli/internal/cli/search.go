@@ -35,6 +35,7 @@ func init() {
 	searchCmd.Flags().StringVar(&searchTag, "tag", "", "Filter by tag")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "Maximum number of results")
 	searchCmd.Flags().BoolVar(&searchBM25Only, "bm25-only", false, "Use keyword search only (skip vector search)")
+	searchCmd.GroupID = "ai"
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -49,7 +50,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	var count int
 	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents").Scan(&count)
 	if count == 0 {
-		fmt.Fprintln(os.Stderr, "notice: index empty, building now...")
+		fmt.Fprintln(os.Stderr, "Vault hasn't been indexed yet — building index now...")
 		if _, err := vault.IndexVault(v, nil); err != nil {
 			return fmt.Errorf("build index: %w", err)
 		}
@@ -121,7 +122,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(results) == 0 {
-		fmt.Fprintln(os.Stderr, "No results found.")
+		if !flagPorcelain {
+			fmt.Fprintln(os.Stderr, "No results found. Try broader terms, remove filters, or run `2nb list` to see all documents.")
+		} else {
+			fmt.Fprintln(os.Stderr, "No results found.")
+		}
 		return nil
 	}
 

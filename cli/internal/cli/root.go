@@ -29,6 +29,7 @@ var rootCmd = &cobra.Command{
 	Use:   "2nb",
 	Short: "2ndbrain — AI-native markdown knowledge base",
 	Long:  "A CLI for managing markdown knowledge bases with hybrid search, MCP server, and structured metadata.",
+	RunE:  runRoot,
 }
 
 func init() {
@@ -40,6 +41,19 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagVault, "vault", "", "Path to vault (default: current directory or 2NB_VAULT env var)")
 
 	rootCmd.Version = Version
+
+	// Command groups — registered before any AddCommand calls.
+	rootCmd.AddGroup(
+		&cobra.Group{ID: "start", Title: "Getting Started:"},
+		&cobra.Group{ID: "docs", Title: "Documents:"},
+		&cobra.Group{ID: "ai", Title: "Search & AI:"},
+		&cobra.Group{ID: "quality", Title: "Quality:"},
+		&cobra.Group{ID: "integr", Title: "Integration:"},
+		&cobra.Group{ID: "io", Title: "Import / Export:"},
+		&cobra.Group{ID: "config", Title: "Configuration:"},
+	)
+	rootCmd.SetHelpCommandGroupID("start")
+	rootCmd.SetCompletionCommandGroupID("config")
 }
 
 func Execute() error {
@@ -62,6 +76,43 @@ func expandPath(path string) string {
 	return path
 }
 
+func runRoot(cmd *cobra.Command, args []string) error {
+	if flagPorcelain {
+		return cmd.Help()
+	}
+
+	v, err := openVault()
+	if err != nil {
+		// No vault reachable — show welcome message.
+		fmt.Fprintln(cmd.ErrOrStderr(), "2ndbrain — AI-native markdown knowledge base.")
+		fmt.Fprintln(cmd.ErrOrStderr())
+		fmt.Fprintln(cmd.ErrOrStderr(), "Get started:")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  1. Create a vault:  2nb init ~/my-vault")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  2. Add a note:      2nb create \"My First Note\"")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  3. Set up AI:       2nb ai setup")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  4. Search & ask:    2nb search \"query\" / 2nb ask \"question\"")
+		fmt.Fprintln(cmd.ErrOrStderr())
+		fmt.Fprintln(cmd.ErrOrStderr(), "Run `2nb --help` for the full command list.")
+		return nil
+	}
+	defer v.Close()
+
+	// Vault exists — show brief status, then grouped help.
+	var count int
+	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents").Scan(&count)
+
+	aiStatus := "not configured"
+	if p := v.Config.AI.Provider; p != "" {
+		aiStatus = p
+		if m := v.Config.AI.EmbeddingModel; m != "" {
+			aiStatus += " (" + m + ")"
+		}
+	}
+
+	fmt.Fprintf(cmd.ErrOrStderr(), "Vault: %s (%d docs, AI: %s)\n\n", v.Root, count, aiStatus)
+	return cmd.Help()
+}
+
 // openVault resolves the vault path using this priority:
 // 1. --vault flag
 // 2. 2NB_VAULT env var
@@ -69,19 +120,30 @@ func expandPath(path string) string {
 // 4. Current directory
 func openVault() (*vault.Vault, error) {
 	dir := expandPath(flagVault)
+	source := "--vault flag"
 	if dir == "" {
 		dir = expandPath(os.Getenv("2NB_VAULT"))
+		source = "2NB_VAULT env var"
 	}
 	if dir == "" {
 		dir = getActiveVault()
+		source = "active vault (~/.2ndbrain-active-vault)"
+		// Validate the active vault path still exists on disk.
+		if dir != "" {
+			if _, err := os.Stat(filepath.Join(dir, vault.DotDirName)); err != nil {
+				dir = ""
+			}
+		}
 	}
 	if dir == "" {
 		dir = "."
+		source = "current directory"
 	}
 
+	absDir, _ := filepath.Abs(dir)
 	v, err := vault.Open(dir)
 	if err != nil {
-		return nil, fmt.Errorf("%w\n\nSet --vault flag, 2NB_VAULT env var, or run `2nb init <path>`", err)
+		return nil, fmt.Errorf("no vault found at %s (resolved from %s)\n\nTo fix:\n  • Run from inside your vault directory\n  • Use --vault /path/to/vault\n  • Set 2NB_VAULT=/path/to/vault\n  • Create a new vault with `2nb init /path/to/vault`", absDir, source)
 	}
 
 	return v, nil

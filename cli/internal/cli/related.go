@@ -20,13 +20,14 @@ var relatedCmd = &cobra.Command{
 
 func init() {
 	relatedCmd.Flags().IntVar(&relatedDepth, "depth", 2, "Maximum traversal depth")
+	relatedCmd.GroupID = "quality"
 	rootCmd.AddCommand(relatedCmd)
 }
 
 func runRelated(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
-		return fmt.Errorf("open vault: %w", err)
+		return err
 	}
 	defer v.Close()
 
