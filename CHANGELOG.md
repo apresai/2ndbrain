@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.7] - 2026-04-10
+
+## [0.1.7] - 2026-04-10
+
+### Added
+- **AI Setup Wizard** — 4-step guided wizard for configuring AI providers, credentials, models, and running a connectivity test
+- **Skills Install panel** — Tools menu panel for installing SKILL.md files for 8 AI coding agents
+- **MCP Setup panel** — Tools menu panel showing MCP config snippets for 6 AI tools
+- **Lint Results view** — Clickable lint issue list shelled out from `2nb lint --json`
+- **App icon** — Custom app icon (1024px PNG + ICNS)
+- **Swift test suite** — Unit tests covering JSON decoding, frontmatter parsing, markdown rendering, and wizard logic (636 lines across 4 test files)
+
+
 ## [0.1.6] - 2026-04-10
 
 ## [0.1.6] - 2026-04-10
