@@ -54,8 +54,9 @@ open app/.build/arm64-apple-macosx/debug/SecondBrain.app
 
 ```bash
 make test               # Go unit tests (cli/)
+make test-swift         # Swift unit tests (app/) — JSON decoding, parsing, wizard logic
 make test-gui           # GUI tests via AppleScript + screencapture
-make test-all           # Everything: Go + GUI
+make test-all           # Everything: Go + Swift + GUI
 make install            # Build + install CLI to /usr/local/bin + app to /Applications
 ```
 
@@ -228,7 +229,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Vault opening | SecondBrainApp.swift | Open existing vault via folder picker (Cmd+Shift+O) |
 | Document editing | EditorArea.swift | NSTextView with monospace font, debounced sync |
 | Live preview | EditorArea.swift | Side-by-side HTML preview via WKWebView |
-| Document templates | AppState.swift | Create from ADR, Runbook, Note, Postmortem templates |
+| Document templates | AppState.swift | Create from ADR, Runbook, Note, Postmortem, PRD, PR/FAQ templates |
 | Document deletion | SidebarView.swift | Context menu delete with confirmation |
 | Frontmatter editing | PropertiesView.swift | Editable properties with type-appropriate controls |
 | Wikilink autocomplete | MentionAutocompleteController.swift | `@` and `[[` triggered popover with document search |
@@ -241,9 +242,13 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Properties panel | PropertiesView.swift | Editable frontmatter fields (Cmd+Option+I) |
 | Tab system | TabBarView.swift | Multiple documents with dirty indicators |
 | Focus mode | ContentView.swift | Distraction-free editing (Cmd+Shift+E) |
-| Status bar | StatusBarView.swift | Doc type, status, word count |
-| Index rebuild | AppState.swift | Shell out to `2nb index` |
-| Lint validation | LintResultsView.swift | Shell out to `2nb lint --json` |
+| Status bar | StatusBarView.swift | Doc type, status, word count, interactive AI dot |
+| AI status popover | StatusBarView.swift | Clickable AI dot → provider/models/staleness/rebuild |
+| Index rebuild | AppState.swift | Shell out to `2nb index` with progress tracking |
+| Lint validation | LintResultsView.swift | Shell out to `2nb lint --json`, clickable issues |
+| Skills install | SkillsInstallView.swift | Install SKILL.md for 8 AI agents (Tools menu) |
+| MCP setup | MCPSetupView.swift | Show MCP config snippets for 6 AI tools (Tools menu) |
+| AI setup wizard | AISetupWizardView.swift | 4-step provider/credentials/models/test wizard |
 | Obsidian import | SecondBrainApp.swift | Import via CLI with folder picker |
 | Obsidian export | SecondBrainApp.swift | Export via CLI with folder picker |
 | Spotlight indexing | SpotlightIndexer | CoreSpotlight integration |

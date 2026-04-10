@@ -92,6 +92,12 @@ struct CommandPaletteView: View {
             PaletteCommand(title: "New Postmortem", icon: "doc.badge.plus", shortcut: "") { state in
                 state.createNewDocument(type: "postmortem", title: "Untitled Postmortem")
             },
+            PaletteCommand(title: "New PRD", icon: "doc.richtext", shortcut: "") { state in
+                state.createNewDocument(type: "prd", title: "Untitled PRD")
+            },
+            PaletteCommand(title: "New PR/FAQ", icon: "newspaper", shortcut: "") { state in
+                state.createNewDocument(type: "prfaq", title: "Untitled PR/FAQ")
+            },
             PaletteCommand(title: "Save", icon: "square.and.arrow.down", shortcut: "Cmd+S") { state in
                 state.saveCurrentDocument()
             },
@@ -121,6 +127,18 @@ struct CommandPaletteView: View {
             },
             PaletteCommand(title: "Refresh AI Status", icon: "arrow.triangle.2.circlepath", shortcut: "") { state in
                 Task { await state.refreshAIStatus() }
+            },
+            PaletteCommand(title: "Install AI Agent Skills", icon: "sparkles", shortcut: "") { state in
+                state.showSkillsInstall = true
+            },
+            PaletteCommand(title: "Connect AI Tools (MCP)", icon: "network", shortcut: "") { state in
+                state.showMCPSetup = true
+            },
+            PaletteCommand(title: "Validate Knowledge Base", icon: "checkmark.seal", shortcut: "") { state in
+                state.showLintResults = true
+            },
+            PaletteCommand(title: "Set Up AI", icon: "wand.and.sparkles", shortcut: "") { state in
+                state.showAISetupWizard = true
             },
         ]
     }

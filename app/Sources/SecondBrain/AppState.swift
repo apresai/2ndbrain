@@ -23,6 +23,7 @@ final class AppState {
     var showAskAI = false
     var typewriterModeActive = false
     var showTemplatePicker = false
+    var showAISetupWizard = false
     var selectedTagFilter: String?
     var inlineRenderingEnabled = false
 
@@ -32,6 +33,16 @@ final class AppState {
     var indexError: String?
     var embeddingProgress: EmbeddingProgress?
     var pendingFindSimilarQuery: String?
+
+    // Tools panels
+    var showLintResults = false
+    var isLinting = false
+    var lintReport: LintReport?
+    var showSkillsInstall = false
+    var isInstallingSkills = false
+    var skillsInstallResult: String?
+    var showMCPSetup = false
+    var mcpSetupText: String?
     var spotlightIndexer: SpotlightIndexer?
     var crashJournal: CrashJournal?
     var errorLogger: ErrorLogger?
@@ -575,6 +586,115 @@ final class AppState {
         }
     }
 
+    // MARK: - Tools Integration
+
+    func runLint() async {
+        guard let vault else { return }
+        isLinting = true
+        lintReport = nil
+        do {
+            let data = try await runCLIAllowingNonZero(["lint", "--json", "--porcelain"], cwd: vault.rootURL)
+            lintReport = try JSONDecoder().decode(LintReport.self, from: data)
+        } catch {
+            lintReport = LintReport(issues: [], filesChecked: 0, errors: 0, warnings: 0)
+        }
+        isLinting = false
+    }
+
+    func installSkills() async {
+        guard let vault else { return }
+        isInstallingSkills = true
+        skillsInstallResult = nil
+        do {
+            let data = try await runCLI(["skills", "install", "--all", "--force"], cwd: vault.rootURL)
+            let output = String(data: data, encoding: .utf8) ?? ""
+            skillsInstallResult = output.isEmpty ? "Skills installed for all supported agents." : output
+        } catch {
+            skillsInstallResult = "Installation failed: \(error.localizedDescription)"
+        }
+        isInstallingSkills = false
+    }
+
+    func loadMCPSetup() async {
+        guard let vault else { return }
+        do {
+            let data = try await runCLI(["mcp-setup"], cwd: vault.rootURL)
+            mcpSetupText = String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            mcpSetupText = "Failed to load MCP setup: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - AI Setup Wizard
+
+    func saveAIConfig(provider: String, embedModel: String, genModel: String,
+                      dims: Int, bedrockProfile: String, bedrockRegion: String,
+                      openrouterKey: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        let cwd = vault.rootURL
+
+        // For OpenRouter, store API key in Keychain first
+        if provider == "openrouter" && !openrouterKey.isEmpty {
+            let sec = Process()
+            sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain",
+                             "-a", "openrouter", "-w", openrouterKey, "-U"]
+            sec.standardOutput = FileHandle.nullDevice
+            sec.standardError = FileHandle.nullDevice
+            try sec.run()
+            sec.waitUntilExit()
+        }
+
+        // Write config values sequentially
+        _ = try await runCLI(["config", "set", "ai.provider", provider], cwd: cwd)
+        _ = try await runCLI(["config", "set", "ai.embedding_model", embedModel], cwd: cwd)
+        _ = try await runCLI(["config", "set", "ai.generation_model", genModel], cwd: cwd)
+        _ = try await runCLI(["config", "set", "ai.dimensions", String(dims)], cwd: cwd)
+
+        if provider == "bedrock" {
+            if !bedrockProfile.isEmpty {
+                _ = try await runCLI(["config", "set", "ai.bedrock.profile", bedrockProfile], cwd: cwd)
+            }
+            if !bedrockRegion.isEmpty {
+                _ = try await runCLI(["config", "set", "ai.bedrock.region", bedrockRegion], cwd: cwd)
+            }
+        }
+    }
+
+    func testModel(provider: String, modelID: String, modelType: String) async throws -> AIProbeResult {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLIAllowingNonZero(
+            ["models", "test", modelID, "--provider", provider, "--type", modelType, "--json", "--porcelain"],
+            cwd: vault.rootURL
+        )
+        return try JSONDecoder().decode(AIProbeResult.self, from: data)
+    }
+
+    func fetchModels(provider: String) async throws -> [CatalogModelInfo] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(
+            ["models", "list", "--json", "--porcelain", "--provider", provider],
+            cwd: vault.rootURL
+        )
+        return try JSONDecoder().decode([CatalogModelInfo].self, from: data)
+    }
+
+    func checkOllamaStatus() async -> OllamaReadiness {
+        guard let vault else { return OllamaReadiness(installed: false, running: false) }
+        do {
+            let data = try await runCLIAllowingNonZero(
+                ["ai", "local", "--json", "--porcelain"],
+                cwd: vault.rootURL
+            )
+            let report = try JSONDecoder().decode(OllamaReport.self, from: data)
+            return report.ollama
+        } catch {
+            return OllamaReadiness(installed: false, running: false)
+        }
+    }
+
+    // MARK: - CLI Execution
+
     private func runCLI(_ args: [String], cwd: URL) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
@@ -594,6 +714,28 @@ final class AppState {
                 }
             }
 
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    /// Like runCLI but returns stdout regardless of exit code.
+    /// Needed for `2nb lint` which exits 2 on validation errors but still emits valid JSON.
+    private func runCLIAllowingNonZero(_ args: [String], cwd: URL) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+            process.arguments = args
+            process.currentDirectoryURL = cwd
+            let stdout = Pipe()
+            process.standardOutput = stdout
+            process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { _ in
+                continuation.resume(returning: stdout.fileHandleForReading.readDataToEndOfFile())
+            }
             do {
                 try process.run()
             } catch {
@@ -653,6 +795,77 @@ struct CLISearchResult: Codable {
 struct EmbeddingProgress {
     var current: Int
     var total: Int
+}
+
+// MARK: - Lint Types
+
+struct LintIssue: Codable, Identifiable {
+    var id: String { "\(path):\(line ?? 0):\(message)" }
+    let path: String
+    let line: Int?
+    let level: String
+    let message: String
+}
+
+struct LintReport: Codable {
+    let issues: [LintIssue]
+    let filesChecked: Int
+    let errors: Int
+    let warnings: Int
+
+    enum CodingKeys: String, CodingKey {
+        case issues, errors, warnings
+        case filesChecked = "files_checked"
+    }
+}
+
+// MARK: - AI Setup Wizard Types
+
+struct AIProbeResult: Codable {
+    let modelID: String
+    let provider: String
+    let modelType: String
+    let ok: Bool
+    let detail: String
+    let latency: String
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+        case provider
+        case modelType = "type"
+        case ok, detail, latency
+    }
+}
+
+struct CatalogModelInfo: Codable, Identifiable {
+    var id: String { modelID }
+    let modelID: String
+    let name: String
+    let provider: String
+    let modelType: String
+    let dimensions: Int?
+    let priceIn: Double?
+    let priceOut: Double?
+    let contextLen: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "id"
+        case name, provider
+        case modelType = "type"
+        case dimensions
+        case priceIn = "price_input_per_million"
+        case priceOut = "price_output_per_million"
+        case contextLen = "context_length"
+    }
+}
+
+struct OllamaReadiness: Codable {
+    let installed: Bool
+    let running: Bool
+}
+
+struct OllamaReport: Codable {
+    let ollama: OllamaReadiness
 }
 
 enum CLIError: LocalizedError {

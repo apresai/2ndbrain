@@ -17,8 +17,10 @@ APP_BUNDLE := app/.build/arm64-apple-macosx/debug/SecondBrain.app
 build-app: version-swift
 	cd app && swift build
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
+	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp -f app/.build/arm64-apple-macosx/debug/SecondBrain $(APP_BUNDLE)/Contents/MacOS/SecondBrain
-	@sed 's/VERSIONPLACEHOLDER/$(VERSION)/g' <<< '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>SecondBrain</string><key>CFBundleIdentifier</key><string>dev.apresai.2ndbrain</string><key>CFBundleName</key><string>SecondBrain</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>VERSIONPLACEHOLDER</string><key>CFBundleVersion</key><string>VERSIONPLACEHOLDER</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/></dict></plist>' > $(APP_BUNDLE)/Contents/Info.plist
+	@cp -f app/Resources/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
+	@sed 's/VERSIONPLACEHOLDER/$(VERSION)/g' <<< '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>SecondBrain</string><key>CFBundleIdentifier</key><string>dev.apresai.2ndbrain</string><key>CFBundleName</key><string>SecondBrain</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>VERSIONPLACEHOLDER</string><key>CFBundleVersion</key><string>VERSIONPLACEHOLDER</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/><key>CFBundleIconFile</key><string>AppIcon</string></dict></plist>' > $(APP_BUNDLE)/Contents/Info.plist
 	@codesign -s - --deep --force $(APP_BUNDLE) 2>/dev/null || true
 
 build: build-cli build-app
@@ -41,6 +43,9 @@ clean:
 test:
 	$(MAKE) -C cli test
 
+test-swift:
+	cd app && swift test
+
 test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-crud.sh
 	SKIP_BUILD=1 ./tests/gui-test-navigation.sh
@@ -48,7 +53,7 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-ui.sh
 	SKIP_BUILD=1 ./tests/gui-test-ai.sh
 
-test-all: test test-gui
+test-all: test test-swift test-gui
 
 bump-build:
 	@echo "$(MAJOR).$(MINOR).$(shell echo $$(($(BUILD)+1)))" > VERSION

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StatusBarView: View {
     @Environment(AppState.self) var appState
+    @State private var showAIPopover = false
 
     var body: some View {
         HStack(spacing: 16) {
@@ -64,15 +65,25 @@ struct StatusBarView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-            } else if let status = appState.aiStatus {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(status.embedAvailable && status.genAvailable ? .green :
-                              status.embedAvailable || status.genAvailable ? .yellow : .gray)
-                        .frame(width: 6, height: 6)
-                    Text("AI")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            } else {
+                Button {
+                    showAIPopover = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(aiDotColor)
+                            .frame(width: 6, height: 6)
+                        Text("AI")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(appState.vault == nil)
+                .popover(isPresented: $showAIPopover, arrowEdge: .top) {
+                    aiPopoverContent
+                        .frame(width: 280)
+                        .padding(12)
                 }
             }
 
@@ -93,5 +104,99 @@ struct StatusBarView: View {
         guard let tab = appState.currentDocument else { return "" }
         let words = tab.content.split { $0.isWhitespace || $0.isNewline }.count
         return "\(words) words"
+    }
+
+    private var aiDotColor: Color {
+        guard let status = appState.aiStatus else { return .gray }
+        if status.embedAvailable && status.genAvailable {
+            if status.embeddingCount < status.documentCount { return .yellow }
+            return .green
+        }
+        if status.embedAvailable || status.genAvailable { return .yellow }
+        return .gray
+    }
+
+    @ViewBuilder
+    private var aiPopoverContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let status = appState.aiStatus {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(aiDotColor)
+                        .frame(width: 8, height: 8)
+                    Text("AI Status")
+                        .font(.headline)
+                }
+
+                Divider()
+
+                LabeledContent("Provider") {
+                    Text(status.provider)
+                        .font(.callout)
+                }
+                LabeledContent("Embedding") {
+                    Text(status.embeddingModel)
+                        .font(.callout)
+                        .lineLimit(1)
+                }
+                LabeledContent("Generation") {
+                    Text(status.genModel)
+                        .font(.callout)
+                        .lineLimit(1)
+                }
+                if status.embeddingCount < status.documentCount {
+                    let stale = status.documentCount - status.embeddingCount
+                    LabeledContent("Embeddings") {
+                        Text("\(status.embeddingCount)/\(status.documentCount) — \(stale) need indexing")
+                            .font(.callout)
+                            .foregroundStyle(.yellow)
+                    }
+                } else {
+                    LabeledContent("Embeddings") {
+                        Text("\(status.embeddingCount)/\(status.documentCount) docs")
+                            .font(.callout)
+                    }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(.gray)
+                        .frame(width: 8, height: 8)
+                    Text("AI Not Configured")
+                        .font(.headline)
+                }
+
+                Divider()
+
+                Text("Set up an AI provider to enable semantic search, RAG Q&A, and embeddings.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Button("Set Up AI...") {
+                    showAIPopover = false
+                    appState.showAISetupWizard = true
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity)
+            }
+
+            Divider()
+
+            HStack {
+                if let status = appState.aiStatus,
+                   status.embeddingCount < status.documentCount,
+                   !appState.isIndexing {
+                    Button("Rebuild Index") {
+                        showAIPopover = false
+                        appState.rebuildIndex()
+                    }
+                }
+                Spacer()
+                Button("Refresh") {
+                    showAIPopover = false
+                    Task { await appState.refreshAIStatus() }
+                }
+            }
+        }
     }
 }

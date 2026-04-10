@@ -72,6 +72,37 @@ struct SecondBrainApp: App {
                 .disabled(appState.currentDocument == nil)
             }
 
+            CommandMenu("Tools") {
+                Button("Set Up AI...") {
+                    appState.showAISetupWizard = true
+                }
+                .disabled(appState.vault == nil)
+
+                Button("Rebuild Index") {
+                    appState.rebuildIndex()
+                }
+                .disabled(appState.vault == nil || appState.isIndexing)
+
+                Divider()
+
+                Button("Install AI Agent Skills...") {
+                    appState.showSkillsInstall = true
+                }
+                .disabled(appState.vault == nil)
+
+                Button("Connect AI Tools (MCP)...") {
+                    appState.showMCPSetup = true
+                }
+                .disabled(appState.vault == nil)
+
+                Divider()
+
+                Button("Validate Knowledge Base...") {
+                    appState.showLintResults = true
+                }
+                .disabled(appState.vault == nil)
+            }
+
             CommandMenu("View") {
                 Button("Search Vault") {
                     appState.showSearch.toggle()

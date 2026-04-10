@@ -6,7 +6,7 @@ struct ContentView: View {
     @State private var showProperties = false
 
     private var anyOverlayVisible: Bool {
-        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI || appState.showTemplatePicker
+        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI || appState.showTemplatePicker || appState.showAISetupWizard
     }
 
     var body: some View {
@@ -49,6 +49,13 @@ struct ContentView: View {
                     set: { appState.showTemplatePicker = $0 }
                 ))
             }
+            if appState.showAISetupWizard {
+                overlayBackground { appState.showAISetupWizard = false }
+                AISetupWizardView(isPresented: Binding(
+                    get: { appState.showAISetupWizard },
+                    set: { appState.showAISetupWizard = $0 }
+                ))
+            }
         }
         .onChange(of: anyOverlayVisible) { _, visible in
             if visible {
@@ -66,6 +73,37 @@ struct ContentView: View {
         .sheet(isPresented: $showProperties) {
             PropertiesView(isPresented: $showProperties)
                 .environment(appState)
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.showLintResults },
+            set: { appState.showLintResults = $0 }
+        )) {
+            LintResultsView(isPresented: Binding(
+                get: { appState.showLintResults },
+                set: { appState.showLintResults = $0 }
+            ))
+            .environment(appState)
+            .onAppear { Task { await appState.runLint() } }
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.showSkillsInstall },
+            set: { appState.showSkillsInstall = $0 }
+        )) {
+            SkillsInstallView(isPresented: Binding(
+                get: { appState.showSkillsInstall },
+                set: { appState.showSkillsInstall = $0 }
+            ))
+            .environment(appState)
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.showMCPSetup },
+            set: { appState.showMCPSetup = $0 }
+        )) {
+            MCPSetupView(isPresented: Binding(
+                get: { appState.showMCPSetup },
+                set: { appState.showMCPSetup = $0 }
+            ))
+            .environment(appState)
         }
         .alert("Crash Recovery", isPresented: Binding(
             get: { appState.showRecoveryDialog },
