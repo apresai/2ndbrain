@@ -40,7 +40,8 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 
 - **Hybrid search** — BM25 keyword + vector semantic search with Reciprocal Rank Fusion
 - **RAG Q&A** — Ask questions, get answers with source citations
-- **MCP server** — 9 tools for Claude Code, Cursor, and any MCP client
+- **MCP server** — 11 tools for Claude Code, Cursor, and any MCP client
+- **Skill files** — One command to teach 8 AI coding agents about your vault
 - **Three AI providers** — AWS Bedrock, OpenRouter, Ollama (fully local)
 - **Schema validation** — Typed frontmatter, enum constraints, status state machines
 - **Wikilinks** — `[[target#heading|alias]]` with link resolution and graph traversal
@@ -55,8 +56,19 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 | Provider | Embeddings | Generation | Setup |
 |----------|-----------|------------|-------|
 | **AWS Bedrock** | Nova Embeddings v2 | Nova Micro, Claude, Llama, any model | Uses existing AWS SSO — zero new keys |
-| **OpenRouter** | Nemotron Embed (free) | Gemma 4, GPT-4o, Claude, etc. | `OPENROUTER_API_KEY` env var |
+| **OpenRouter** | Nemotron Embed (free) | Gemma 4 31B (free), GPT-4o, Claude, etc. | `OPENROUTER_API_KEY` env var |
 | **Ollama** | nomic-embed-text | qwen2.5, gemma3, llama3 | `brew install ollama` — fully local |
+
+### Quick Setup (Any Provider)
+
+The setup wizard detects credentials and offers recommended defaults:
+
+```bash
+2nb ai setup
+# → Pick provider (Bedrock / OpenRouter / Ollama)
+# → Easy mode: recommended models, or Custom: pick from catalog
+# → Tests connectivity, saves config, offers to index
+```
 
 ### Local AI with Ollama
 
@@ -124,11 +136,19 @@ Models are tiered as **verified** (tested with 2nb) or **unverified** (available
 
 ## CLI Commands
 
-### Core
+Commands are organized into groups (`2nb --help` shows the full list):
+
+### Getting Started
 
 | Command | Description |
 |---------|-------------|
 | `init --path <dir>` | Initialize a new vault |
+| `vault` | Show or set the active vault |
+
+### Documents
+
+| Command | Description |
+|---------|-------------|
 | `create <title> [--type adr\|runbook\|note\|postmortem]` | Create document from template |
 | `read <path> [--chunk <heading>]` | Read document or specific section |
 | `meta <path> [--set key=value]` | View or update frontmatter |
@@ -143,14 +163,42 @@ Models are tiered as **verified** (tested with 2nb) or **unverified** (available
 | `ask <question>` | RAG Q&A with source citations |
 | `index` | Build search index + generate embeddings |
 | `ai status` | Show AI provider, models, embedding count |
+| `ai setup` | Multi-provider setup wizard (easy mode or custom) |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
-| `ai setup` | Guided local AI setup with Ollama |
 | `ai embed <text>` | Generate embedding vector (debug) |
 | `models list [--discover] [--status] [--provider]` | Verified model catalog + vendor discovery |
 | `models test <model-id>` | Smoke-test any model (embed or generate probe) |
 | `models bench` | Benchmark favorites with persistent history |
 | `models bench fav <model-id>` | Add model to benchmark favorites |
 | `models bench compare` | Side-by-side latency leaderboard |
+
+### Quality
+
+| Command | Description |
+|---------|-------------|
+| `related <path> --depth <n>` | Find related docs via link graph |
+| `graph <path>` | Output link graph as JSON |
+| `lint [glob]` | Validate schemas, check broken wikilinks |
+| `stale --since <days>` | Find stale documents |
+
+### Integration
+
+| Command | Description |
+|---------|-------------|
+| `mcp-server` | Start MCP server on stdio |
+| `mcp-setup` | Show MCP setup instructions for all AI tools |
+| `export-context --types <types>` | Generate CLAUDE.md context bundle |
+| `skills list` | List supported AI agents and install status |
+| `skills install <agent> [--all] [--user]` | Install skill file for an AI coding agent |
+| `skills uninstall <agent> [--all] [--user]` | Remove skill file for an AI coding agent |
+| `skills show <agent>` | Preview skill content for an agent |
+
+### Import / Export
+
+| Command | Description |
+|---------|-------------|
+| `import-obsidian <path>` | Import Obsidian vault |
+| `export-obsidian <path> [--strip-ids]` | Export to Obsidian format |
 
 ### Configuration
 
@@ -160,24 +208,6 @@ Models are tiered as **verified** (tested with 2nb) or **unverified** (available
 | `config get <key>` | Get a config value (e.g., `ai.provider`) |
 | `config set <key> <value>` | Set a config value |
 | `config set-key <provider>` | Store API key in macOS Keychain |
-
-### Knowledge Graph
-
-| Command | Description |
-|---------|-------------|
-| `related <path> --depth <n>` | Find related docs via link graph |
-| `graph <path>` | Output link graph as JSON |
-| `lint [glob]` | Validate schemas, check broken wikilinks |
-| `stale --since <days>` | Find stale documents |
-| `export-context --types <types>` | Generate CLAUDE.md context bundle |
-
-### Import/Export
-
-| Command | Description |
-|---------|-------------|
-| `mcp-server` | Start MCP server on stdio |
-| `import-obsidian <path>` | Import Obsidian vault |
-| `export-obsidian <path> [--strip-ids]` | Export to Obsidian format |
 
 All commands support `--json`, `--yaml`, `--csv` for machine-readable output.
 
@@ -246,6 +276,28 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
+
+Run `2nb mcp-setup` for config snippets for additional tools (Gemini CLI, Amazon Q, Kiro).
+
+## Skill Files
+
+Install a skill file to teach AI coding agents about your vault's CLI, MCP tools, and document format:
+
+```bash
+# See supported agents and status
+2nb skills list
+
+# Install for one agent
+2nb skills install claude-code
+
+# Install for all supported agents
+2nb skills install --all
+
+# Install globally (all projects, not just this vault)
+2nb skills install claude-code --user
+```
+
+Supported agents: Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, JetBrains Junie.
 
 ## macOS Editor
 

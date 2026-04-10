@@ -75,6 +75,7 @@ cli/               Go CLI + MCP server
   internal/store/  SQLite database layer
   internal/search/ BM25 + vector search engine
   internal/mcp/    MCP server tools
+  internal/skills/ Skill file generation for AI coding agents
 app/               Swift macOS editor
 docs/              Additional documentation
 tests/             GUI test scripts

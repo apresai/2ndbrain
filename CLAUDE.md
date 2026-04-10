@@ -112,7 +112,8 @@ Test scripts live in `tests/`:
 | `internal/store` | SQLite database CRUD, migrations, link resolution |
 | `internal/search` | BM25 search engine with structured filters |
 | `internal/graph` | Link graph BFS traversal |
-| `internal/mcp` | MCP server with 9 tools |
+| `internal/mcp` | MCP server with 11 tools |
+| `internal/skills` | Skill file generation and agent registry |
 | `internal/output` | JSON/CSV/YAML formatters |
 | `internal/testutil` | Test helpers (NewTestVault, CreateAndIndex) |
 
@@ -124,11 +125,14 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (33)
+### CLI Commands (39)
+
+Commands are organized into groups (Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration).
 
 | Command | Flags | Purpose |
 |---------|-------|---------|
 | `init` | `--path` | Initialize a new vault |
+| `vault` | | Show or set the active vault |
 | `create` | `--type`, `--title` | Create document from template (adr/runbook/note/postmortem) |
 | `read` | `--chunk` | Read full document or specific section |
 | `meta` | `--set key=value` | View or update frontmatter with schema validation |
@@ -144,10 +148,11 @@ Test scripts live in `tests/`:
 | `import-obsidian` | `--target` | Import Obsidian vault (adds UUIDs, normalizes tags, builds index) |
 | `export-obsidian` | `--strip-ids` | Export vault to Obsidian format |
 | `mcp-server` | | Start MCP server on stdio transport |
+| `mcp-setup` | | Show MCP setup instructions for all AI tools |
 | `ask` | `<question>` | RAG Q&A — search vault, generate answer with sources |
 | `ai status` | | Show AI provider, models, readiness, embedding count |
 | `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
-| `ai setup` | | Guided local AI setup with Ollama (install, pull models, configure) |
+| `ai setup` | `--provider`, `--embedding-model`, `--generation-model` | Multi-provider setup wizard with easy mode |
 | `ai local` | | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
 | `models list` | `--type`, `--free`, `--discover`, `--status`, `--provider` | List verified model catalog, optionally discover vendor models |
 | `models test` | `<model-id>`, `--provider`, `--type` | Smoke-test a model (embed or generate probe) |
@@ -157,6 +162,10 @@ Test scripts live in `tests/`:
 | `models bench favs` | | List benchmark favorites |
 | `models bench history` | `--limit` | Show past benchmark runs |
 | `models bench compare` | | Side-by-side latency comparison of favorited models |
+| `skills list` | `--user` | List supported AI agents and install status |
+| `skills install` | `<agent>`, `--all`, `--force`, `--user` | Install skill file for an AI coding agent |
+| `skills uninstall` | `<agent>`, `--all`, `--user` | Remove skill file for an AI coding agent |
+| `skills show` | `<agent>` | Preview skill content for an agent |
 | `config show` | | Dump full vault configuration |
 | `config get` | `<key>` | Read a config value |
 | `config set` | `<key> <value>` | Write a config value |
