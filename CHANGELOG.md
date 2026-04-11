@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.8] - 2026-04-11
+
+### Added
+- **Editor Preferences** (Cmd+,): font family and size picker with live preview
+- **Tag drill-down**: click any tag in the sidebar to browse a filtered document list with back navigation
+- **Index rebuild dialog**: confirmation step, dual progress bars (indexing + embeddings), and post-rebuild stats summary
+- **Structured CLI logging**: slog-based log output to `.2ndbrain/logs/cli.log`; `--verbose` additionally routes to stderr
+- **GUI test suite for index operations** (`tests/gui-test-index.sh`)
+
+### Changed
+- Export controller expanded with additional format and output path handling
+- Editor area layout and rendering improvements
+
+
 ## [0.1.7] - 2026-04-10
 
 ## [0.1.7] - 2026-04-10
