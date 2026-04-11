@@ -105,6 +105,16 @@ struct ContentView: View {
             ))
             .environment(appState)
         }
+        .sheet(isPresented: Binding(
+            get: { appState.showIndexProgress },
+            set: { appState.showIndexProgress = $0 }
+        )) {
+            IndexProgressView(isPresented: Binding(
+                get: { appState.showIndexProgress },
+                set: { appState.showIndexProgress = $0 }
+            ))
+            .environment(appState)
+        }
         .alert("Crash Recovery", isPresented: Binding(
             get: { appState.showRecoveryDialog },
             set: { appState.showRecoveryDialog = $0 }

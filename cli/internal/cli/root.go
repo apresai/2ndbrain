@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -16,6 +18,7 @@ var (
 	flagFormat    string
 	flagPorcelain bool
 	flagVault     string
+	flagVerbose   bool
 )
 
 const (
@@ -39,6 +42,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("csv", false, "Output as CSV (shorthand for --format csv)")
 	rootCmd.PersistentFlags().Bool("yaml", false, "Output as YAML (shorthand for --format yaml)")
 	rootCmd.PersistentFlags().StringVar(&flagVault, "vault", "", "Path to vault (default: current directory or 2NB_VAULT env var)")
+	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose logging (debug level)")
 
 	rootCmd.Version = Version
 
@@ -57,7 +61,57 @@ func init() {
 }
 
 func Execute() error {
+	// Set up slog before any command runs
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		setupLogging()
+	}
 	return rootCmd.Execute()
+}
+
+// setupLogging configures slog for the CLI. Debug level with --verbose,
+// info level otherwise. Logs go to stderr when verbose, otherwise discarded
+// from the terminal (file logging is set up separately after vault opens).
+func setupLogging() {
+	level := slog.LevelInfo
+	if flagVerbose {
+		level = slog.LevelDebug
+	}
+
+	var w io.Writer = io.Discard
+	if flagVerbose {
+		w = os.Stderr
+	}
+
+	handler := slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
+}
+
+// setupFileLogging adds a log file handler after the vault is opened.
+// Writes structured logs to .2ndbrain/logs/cli.log.
+func setupFileLogging(v *vault.Vault) {
+	logsDir := filepath.Join(v.Root, vault.DotDirName, "logs")
+	os.MkdirAll(logsDir, 0o755)
+	logFile := filepath.Join(logsDir, "cli.log")
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+
+	level := slog.LevelInfo
+	if flagVerbose {
+		level = slog.LevelDebug
+	}
+
+	// Multi-writer: file always, stderr only if verbose
+	var writers []io.Writer
+	writers = append(writers, f)
+	if flagVerbose {
+		writers = append(writers, os.Stderr)
+	}
+	w := io.MultiWriter(writers...)
+
+	handler := slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
 }
 
 // expandPath resolves ~ to home directory and cleans the path.

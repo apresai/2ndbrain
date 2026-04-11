@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
@@ -45,6 +47,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
 	// Ensure index exists
 	var count int
@@ -57,6 +60,8 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	query := strings.Join(args, " ")
+	startTime := time.Now()
+	slog.Info("search", "query", query)
 
 	// Parse inline filters from query: tag:foo type:adr status:accepted
 	query, inlineType := extractPrefix(query, "type:")
@@ -117,6 +122,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		mode = search.ModeKeyword
 	}
 
+	slog.Info("search complete", "query", query, "results", len(results), "elapsed", time.Since(startTime))
 	if !flagPorcelain {
 		fmt.Fprintf(os.Stderr, "search mode: %s\n", mode)
 	}

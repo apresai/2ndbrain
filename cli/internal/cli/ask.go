@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,11 +33,13 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
 	initAIProviders(v)
 	ctx := context.Background()
 	cfg := v.Config.AI
 	question := strings.Join(args, " ")
+	slog.Info("ask", "question", question)
 
 	// Check generator availability
 	generator, err := ai.DefaultRegistry.Generator(cfg.Provider)
@@ -104,8 +107,11 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	result, err := ai.RAG(ctx, generator, question, chunks)
 	if err != nil {
+		slog.Error("RAG failed", "question", question, "err", err)
 		return fmt.Errorf("RAG failed: %w", err)
 	}
+
+	slog.Info("ask complete", "question", question, "sources", len(result.Sources))
 
 	format := getFormat(cmd)
 	if format != "" {

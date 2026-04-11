@@ -1,5 +1,8 @@
 import SwiftUI
 import SecondBrainCore
+import os
+
+private let log = Logger(subsystem: "dev.apresai.2ndbrain", category: "app")
 
 @Observable @MainActor
 final class AppState {
@@ -24,14 +27,17 @@ final class AppState {
     var typewriterModeActive = false
     var showTemplatePicker = false
     var showAISetupWizard = false
-    var selectedTagFilter: String?
     var inlineRenderingEnabled = false
+    var editorFontSize: CGFloat = UserDefaults.standard.object(forKey: "editorFontSize") as? CGFloat ?? 14
+    var editorFontFamily: String = UserDefaults.standard.string(forKey: "editorFontFamily") ?? "System Mono"
 
     // AI state
     var aiStatus: AIStatusInfo?
     var isIndexing = false
     var indexError: String?
     var embeddingProgress: EmbeddingProgress?
+    var indexProgress: IndexProgress?
+    var showIndexProgress = false
     var pendingFindSimilarQuery: String?
 
     // Tools panels
@@ -63,6 +69,7 @@ final class AppState {
     }
 
     func openVault(at url: URL) {
+        log.info("Opening vault at \(url.path)")
         let vm = VaultManager(rootURL: url)
         self.vault = vm
 
@@ -70,9 +77,13 @@ final class AppState {
         if vm.isInitialized {
             do {
                 self.database = try DatabaseManager(path: vm.indexDBPath)
+                log.info("Database opened: \(vm.indexDBPath)")
             } catch {
-                print("Failed to open index: \(error)")
+                log.error("Failed to open index: \(error.localizedDescription)")
+                errorLogger?.log("Failed to open index", error: error)
             }
+        } else {
+            log.notice("Vault not initialized (no .2ndbrain dir): \(url.path)")
         }
 
         // Initialize Spotlight indexer and index vault
@@ -97,6 +108,7 @@ final class AppState {
 
         // Refresh file list
         refreshFiles()
+        log.info("Vault loaded: \(self.files.count) files")
 
         // Refresh AI status
         Task { await refreshAIStatus() }
@@ -126,15 +138,41 @@ final class AppState {
             )
         }
 
-        // Apply tag filter if set
-        if let tagFilter = selectedTagFilter, let db = database {
-            if let taggedDocs = try? db.documentsWithTag(tagFilter) {
-                let taggedPaths = Set(taggedDocs.map { $0.path })
-                items = items.filter { taggedPaths.contains($0.relativePath) }
-            }
-        }
-
         self.files = items
+    }
+
+    // MARK: - Font Size
+
+    func increaseFontSize() {
+        editorFontSize = min(editorFontSize + 1, 32)
+        UserDefaults.standard.set(editorFontSize, forKey: "editorFontSize")
+    }
+
+    func decreaseFontSize() {
+        editorFontSize = max(editorFontSize - 1, 10)
+        UserDefaults.standard.set(editorFontSize, forKey: "editorFontSize")
+    }
+
+    func resetFontSize() {
+        editorFontSize = 14
+        UserDefaults.standard.set(editorFontSize, forKey: "editorFontSize")
+    }
+
+    func setFontFamily(_ family: String) {
+        editorFontFamily = family
+        UserDefaults.standard.set(family, forKey: "editorFontFamily")
+    }
+
+    /// Resolve the stored font family name to an NSFont for the editor.
+    func resolvedEditorFont(size: CGFloat? = nil) -> NSFont {
+        let sz = size ?? editorFontSize
+        switch editorFontFamily {
+        case "System Mono":
+            return NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
+        default:
+            return NSFont(name: editorFontFamily, size: sz)
+                ?? NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
+        }
     }
 
     func openDocument(at url: URL) {
@@ -151,8 +189,10 @@ final class AppState {
             openDocuments.append(tab)
             activeTabIndex = openDocuments.count - 1
             updateOutline()
+            log.info("Opened document: \(url.lastPathComponent) (type=\(doc.docType), id=\(doc.id.prefix(8)))")
         } catch {
-            print("Failed to open: \(error)")
+            log.error("Failed to open document \(url.lastPathComponent): \(error.localizedDescription)")
+            errorLogger?.log("Failed to open document", error: error)
         }
     }
 
@@ -397,8 +437,10 @@ final class AppState {
             try content.write(to: url, atomically: true, encoding: .utf8)
             refreshFiles()
             openDocument(at: url)
+            log.info("Created document: \(filename) (type=\(type))")
         } catch {
-            print("Failed to create: \(error)")
+            log.error("Failed to create document \(filename): \(error.localizedDescription)")
+            errorLogger?.log("Failed to create document", error: error)
         }
     }
 
@@ -407,12 +449,15 @@ final class AppState {
             try VaultManager.initializeVault(at: url)
             openVault(at: url)
             UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+            log.info("Created new vault at \(url.path)")
         } catch {
-            print("Failed to create vault: \(error)")
+            log.error("Failed to create vault at \(url.path): \(error.localizedDescription)")
+            errorLogger?.log("Failed to create vault", error: error)
         }
     }
 
     func deleteDocument(at url: URL) {
+        let name = url.lastPathComponent
         // Close tab if open
         if let idx = openDocuments.firstIndex(where: { $0.url == url }) {
             closeTab(at: idx)
@@ -422,16 +467,27 @@ final class AppState {
         do {
             try FileManager.default.removeItem(at: url)
             refreshFiles()
+            log.info("Deleted document: \(name)")
         } catch {
-            print("Failed to delete: \(error)")
+            log.error("Failed to delete \(name): \(error.localizedDescription)")
+            errorLogger?.log("Failed to delete document", error: error)
         }
     }
 
     func rebuildIndex() {
+        guard vault != nil else { return }
+        indexProgress = IndexProgress(phase: .ready)
+        showIndexProgress = true
+    }
+
+    func startIndex() {
         guard let vault else { return }
         isIndexing = true
         indexError = nil
         embeddingProgress = nil
+        indexProgress = IndexProgress(phase: .indexingFiles)
+        log.info("Index rebuild started for vault: \(vault.rootURL.lastPathComponent)")
+        let startTime = CFAbsoluteTimeGetCurrent()
 
         Task {
             do {
@@ -440,20 +496,49 @@ final class AppState {
                 process.arguments = ["index"]
                 process.currentDirectoryURL = vault.rootURL
                 let stderrPipe = Pipe()
+                let stdoutPipe = Pipe()
                 process.standardError = stderrPipe
+                process.standardOutput = stdoutPipe
 
-                // Parse embedding progress from stderr
+                // Parse progress from stderr
                 stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                     let data = handle.availableData
-                    guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
-                    // Match "embedded N/M: path" or "Embedding N/M documents..."
-                    let pattern = /[Ee]mbed\w*\s+(\d+)\/(\d+)/
-                    for l in line.split(separator: "\n") {
-                        if let match = String(l).firstMatch(of: pattern) {
+                    guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+
+                    for line in text.split(separator: "\n") {
+                        let l = String(line).trimmingCharacters(in: .whitespaces)
+
+                        // Embedding progress: "embedded N/M: path" or "embedding N documents..."
+                        let embedPattern = /[Ee]mbed\w*\s+(\d+)\/(\d+)/
+                        if let match = l.firstMatch(of: embedPattern) {
                             let current = Int(match.1) ?? 0
                             let total = Int(match.2) ?? 0
                             Task { @MainActor [weak self] in
                                 self?.embeddingProgress = EmbeddingProgress(current: current, total: total)
+                                self?.indexProgress?.phase = .embedding
+                                self?.indexProgress?.embeddingCurrent = current
+                                self?.indexProgress?.embeddingTotal = total
+                            }
+                            continue
+                        }
+
+                        // Embedding count: "embedding N documents..."
+                        let embedCountPattern = /embedding\s+(\d+)\s+documents/
+                        if let match = l.firstMatch(of: embedCountPattern) {
+                            let total = Int(match.1) ?? 0
+                            Task { @MainActor [weak self] in
+                                self?.indexProgress?.phase = .embedding
+                                self?.indexProgress?.embeddingTotal = total
+                            }
+                            continue
+                        }
+
+                        // File indexed: "  path/to/file.md" (indented path)
+                        if l.hasSuffix(".md") && !l.contains(":") {
+                            let fileName = l
+                            Task { @MainActor [weak self] in
+                                self?.indexProgress?.currentFile = fileName
+                                self?.indexProgress?.filesIndexed += 1
                             }
                         }
                     }
@@ -463,11 +548,40 @@ final class AppState {
                 process.waitUntilExit()
                 stderrPipe.fileHandleForReading.readabilityHandler = nil
 
+                let exitCode = process.terminationStatus
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+
+                // Parse stdout summary: "Indexed N files, N chunks, N links"
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                if let summary = String(data: stdoutData, encoding: .utf8) {
+                    let statsPattern = /Indexed\s+(\d+)\s+files?,\s+(\d+)\s+chunks?,\s+(\d+)\s+links?/
+                    if let match = summary.firstMatch(of: statsPattern) {
+                        indexProgress?.docsIndexed = Int(match.1) ?? 0
+                        indexProgress?.chunksCreated = Int(match.2) ?? 0
+                        indexProgress?.linksFound = Int(match.3) ?? 0
+                    }
+                }
+
+                indexProgress?.elapsed = elapsed
+                if exitCode == 0 {
+                    indexProgress?.phase = .complete
+                    log.info("Index rebuild completed in \(String(format: "%.1f", elapsed))s (exit 0)")
+                } else {
+                    indexProgress?.phase = .failed
+                    indexProgress?.error = "CLI exited with code \(exitCode)"
+                    log.warning("Index rebuild finished with exit code \(exitCode) in \(String(format: "%.1f", elapsed))s")
+                }
+
                 // Reopen database to pick up changes
                 self.database = try DatabaseManager(path: vault.indexDBPath)
             } catch {
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                log.error("Index rebuild failed after \(String(format: "%.1f", elapsed))s: \(error.localizedDescription)")
                 errorLogger?.log("Failed to rebuild index", error: error)
                 indexError = error.localizedDescription
+                indexProgress?.phase = .failed
+                indexProgress?.error = error.localizedDescription
+                indexProgress?.elapsed = elapsed
             }
 
             isIndexing = false
@@ -484,7 +598,9 @@ final class AppState {
             try tab.content.write(to: tab.url, atomically: true, encoding: .utf8)
             openDocuments[idx].isDirty = false
             crashJournal?.clearSnapshot(documentID: tab.document.id)
+            log.debug("Saved: \(tab.url.lastPathComponent)")
         } catch {
+            log.error("Failed to save \(tab.url.lastPathComponent): \(error.localizedDescription)")
             errorLogger?.log("Failed to save document", error: error)
             crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
         }
@@ -505,6 +621,7 @@ final class AppState {
                 try? entry.content.write(to: file, atomically: true, encoding: .utf8)
                 openDocument(at: file)
                 crashJournal?.clearSnapshot(documentID: entry.documentID)
+                log.info("Recovered document \(entry.documentID.prefix(8)) to \(file.lastPathComponent)")
                 return
             }
         }
@@ -514,6 +631,7 @@ final class AppState {
         refreshFiles()
         openDocument(at: recoveredPath)
         crashJournal?.clearSnapshot(documentID: entry.documentID)
+        log.notice("Recovered document \(entry.documentID.prefix(8)) to new file (original not found)")
     }
 
     func dismissRecovery() {
@@ -558,7 +676,9 @@ final class AppState {
             let data = try await runCLI(["ai", "status", "--json", "--porcelain"], cwd: vault.rootURL)
             let status = try JSONDecoder().decode(AIStatusInfo.self, from: data)
             self.aiStatus = status
+            log.info("AI status: provider=\(status.provider) embed=\(status.embedAvailable) gen=\(status.genAvailable) docs=\(status.documentCount) embeddings=\(status.embeddingCount)")
         } catch {
+            log.debug("AI status unavailable: \(error.localizedDescription)")
             self.aiStatus = nil
         }
     }
@@ -592,10 +712,18 @@ final class AppState {
         guard let vault else { return }
         isLinting = true
         lintReport = nil
+        log.info("Lint validation started for vault: \(vault.rootURL.lastPathComponent)")
+        let startTime = CFAbsoluteTimeGetCurrent()
         do {
             let data = try await runCLIAllowingNonZero(["lint", "--json", "--porcelain"], cwd: vault.rootURL)
-            lintReport = try JSONDecoder().decode(LintReport.self, from: data)
+            let report = try JSONDecoder().decode(LintReport.self, from: data)
+            lintReport = report
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            log.info("Lint completed in \(String(format: "%.1f", elapsed))s: \(report.filesChecked) files, \(report.errors) errors, \(report.warnings) warnings")
         } catch {
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            log.error("Lint failed after \(String(format: "%.1f", elapsed))s: \(error.localizedDescription)")
+            errorLogger?.log("Lint validation failed", error: error)
             lintReport = LintReport(issues: [], filesChecked: 0, errors: 0, warnings: 0)
         }
         isLinting = false
@@ -605,11 +733,15 @@ final class AppState {
         guard let vault else { return }
         isInstallingSkills = true
         skillsInstallResult = nil
+        log.info("Installing AI agent skills")
         do {
             let data = try await runCLI(["skills", "install", "--all", "--force"], cwd: vault.rootURL)
             let output = String(data: data, encoding: .utf8) ?? ""
             skillsInstallResult = output.isEmpty ? "Skills installed for all supported agents." : output
+            log.info("Skills installed successfully")
         } catch {
+            log.error("Skills installation failed: \(error.localizedDescription)")
+            errorLogger?.log("Skills installation failed", error: error)
             skillsInstallResult = "Installation failed: \(error.localizedDescription)"
         }
         isInstallingSkills = false
@@ -631,6 +763,7 @@ final class AppState {
                       dims: Int, bedrockProfile: String, bedrockRegion: String,
                       openrouterKey: String) async throws {
         guard let vault else { throw CLIError.noVault }
+        log.info("Saving AI config: provider=\(provider) embed=\(embedModel) gen=\(genModel)")
         let cwd = vault.rootURL
 
         // For OpenRouter, store API key in Keychain first
@@ -696,20 +829,28 @@ final class AppState {
     // MARK: - CLI Execution
 
     private func runCLI(_ args: [String], cwd: URL) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
+        let cmd = "2nb " + args.joined(separator: " ")
+        log.debug("CLI exec: \(cmd)")
+        return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
             process.arguments = args
             process.currentDirectoryURL = cwd
             let stdout = Pipe()
+            let stderr = Pipe()
             process.standardOutput = stdout
-            process.standardError = FileHandle.nullDevice
+            process.standardError = stderr
 
             process.terminationHandler = { proc in
+                let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
                 if proc.terminationStatus == 0 {
                     let data = stdout.fileHandleForReading.readDataToEndOfFile()
                     continuation.resume(returning: data)
                 } else {
+                    let errMsg = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !errMsg.isEmpty {
+                        log.error("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
+                    }
                     continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus))
                 }
             }
@@ -717,6 +858,7 @@ final class AppState {
             do {
                 try process.run()
             } catch {
+                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 continuation.resume(throwing: error)
             }
         }
@@ -725,7 +867,9 @@ final class AppState {
     /// Like runCLI but returns stdout regardless of exit code.
     /// Needed for `2nb lint` which exits 2 on validation errors but still emits valid JSON.
     private func runCLIAllowingNonZero(_ args: [String], cwd: URL) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
+        let cmd = "2nb " + args.joined(separator: " ")
+        log.debug("CLI exec (non-zero ok): \(cmd)")
+        return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
             process.arguments = args
@@ -733,12 +877,16 @@ final class AppState {
             let stdout = Pipe()
             process.standardOutput = stdout
             process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { _ in
+            process.terminationHandler = { proc in
+                if proc.terminationStatus != 0 {
+                    log.debug("CLI \(cmd) exited \(proc.terminationStatus) (allowed)")
+                }
                 continuation.resume(returning: stdout.fileHandleForReading.readDataToEndOfFile())
             }
             do {
                 try process.run()
             } catch {
+                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 continuation.resume(throwing: error)
             }
         }
@@ -797,6 +945,27 @@ struct EmbeddingProgress {
     var total: Int
 }
 
+enum IndexPhase: String {
+    case ready = "Ready"
+    case indexingFiles = "Indexing files"
+    case embedding = "Generating embeddings"
+    case complete = "Complete"
+    case failed = "Failed"
+}
+
+struct IndexProgress {
+    var phase: IndexPhase = .indexingFiles
+    var currentFile: String = ""
+    var filesIndexed: Int = 0
+    var embeddingCurrent: Int = 0
+    var embeddingTotal: Int = 0
+    var docsIndexed: Int = 0
+    var chunksCreated: Int = 0
+    var linksFound: Int = 0
+    var error: String?
+    var elapsed: TimeInterval = 0
+}
+
 // MARK: - Lint Types
 
 struct LintIssue: Codable, Identifiable {
@@ -826,7 +995,7 @@ struct AIProbeResult: Codable {
     let provider: String
     let modelType: String
     let ok: Bool
-    let detail: String
+    let detail: String?
     let latency: String
 
     enum CodingKeys: String, CodingKey {

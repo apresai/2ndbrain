@@ -5,14 +5,7 @@ import AppKit
 /// This creates a hybrid "live preview" similar to Obsidian's reading view.
 class InlineMarkdownRenderer {
 
-    // nonisolated(unsafe) needed for static let NSFont in Swift 6 strict concurrency
-    nonisolated(unsafe) private static let baseFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-    nonisolated(unsafe) private static let boldFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .bold)
-    nonisolated(unsafe) private static let h1Font = NSFont.monospacedSystemFont(ofSize: 24, weight: .bold)
-    nonisolated(unsafe) private static let h2Font = NSFont.monospacedSystemFont(ofSize: 20, weight: .bold)
-    nonisolated(unsafe) private static let h3Font = NSFont.monospacedSystemFont(ofSize: 17, weight: .semibold)
     nonisolated(unsafe) private static let syntaxColor = NSColor.tertiaryLabelColor
-    nonisolated(unsafe) private static let italicFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular).withTraits(.italic)
 
     // Cached regex patterns
     private static let boldPattern = try! NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*")
@@ -22,9 +15,11 @@ class InlineMarkdownRenderer {
 
     /// Apply inline rendering to all lines except the active (cursor) line.
     /// The active line shows raw markdown for editing.
-    static func render(_ textStorage: NSTextStorage, cursorLocation: Int) {
+    static func render(_ textStorage: NSTextStorage, cursorLocation: Int, baseFontSize: CGFloat = 14) {
         let text = textStorage.string as NSString
         let fullRange = NSRange(location: 0, length: text.length)
+
+        let baseFont = NSFont.monospacedSystemFont(ofSize: baseFontSize, weight: .regular)
 
         // Reset all text to base style
         textStorage.addAttribute(.font, value: baseFont, range: fullRange)
@@ -32,6 +27,13 @@ class InlineMarkdownRenderer {
 
         // Find the active line range (don't render inline on this line)
         let activeLine = text.lineRange(for: NSRange(location: cursorLocation, length: 0))
+
+        // Scaled heading fonts
+        let h1Font = NSFont.monospacedSystemFont(ofSize: round(baseFontSize * 24 / 14), weight: .bold)
+        let h2Font = NSFont.monospacedSystemFont(ofSize: round(baseFontSize * 20 / 14), weight: .bold)
+        let h3Font = NSFont.monospacedSystemFont(ofSize: round(baseFontSize * 17 / 14), weight: .semibold)
+        let boldFont = NSFont.monospacedSystemFont(ofSize: baseFontSize, weight: .bold)
+        let italicFont = baseFont.withTraits(.italic)
 
         // Process each line
         var lineStart = 0
@@ -45,12 +47,16 @@ class InlineMarkdownRenderer {
                 continue
             }
 
-            renderLine(line, in: textStorage, range: lineRange)
+            renderLine(line, in: textStorage, range: lineRange,
+                       h1Font: h1Font, h2Font: h2Font, h3Font: h3Font,
+                       boldFont: boldFont, italicFont: italicFont)
             lineStart = NSMaxRange(lineRange)
         }
     }
 
-    private static func renderLine(_ line: String, in storage: NSTextStorage, range: NSRange) {
+    private static func renderLine(_ line: String, in storage: NSTextStorage, range: NSRange,
+                                   h1Font: NSFont, h2Font: NSFont, h3Font: NSFont,
+                                   boldFont: NSFont, italicFont: NSFont?) {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
         // Headings: render at larger font, dim the # markers

@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/output"
@@ -44,11 +46,14 @@ func runLint(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
+	startTime := time.Now()
 	pattern := "*.md"
 	if len(args) > 0 {
 		pattern = args[0]
 	}
+	slog.Info("lint started", "vault", v.Root, "pattern", pattern)
 
 	matches, err := filepath.Glob(filepath.Join(v.Root, pattern))
 	if err != nil {
@@ -156,6 +161,13 @@ func runLint(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+
+	slog.Info("lint complete",
+		"files", report.Files,
+		"errors", report.Errors,
+		"warnings", report.Warns,
+		"elapsed", time.Since(startTime),
+	)
 
 	if !flagPorcelain && report.Errors+report.Warns > 0 {
 		fmt.Fprintf(os.Stderr, "%d files checked, %d errors, %d warnings\n",

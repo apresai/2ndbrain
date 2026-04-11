@@ -12,12 +12,13 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             // Panel picker
             Picker("Panel", selection: $selectedPanel) {
-                Image(systemName: "doc.text").tag(SidebarPanel.files)
-                Image(systemName: "list.bullet.indent").tag(SidebarPanel.outline)
-                Image(systemName: "link").tag(SidebarPanel.backlinks)
-                Image(systemName: "tag").tag(SidebarPanel.tags)
+                Label("Files", systemImage: "doc.text").tag(SidebarPanel.files)
+                Label("Outline", systemImage: "list.bullet.indent").tag(SidebarPanel.outline)
+                Label("Links", systemImage: "link").tag(SidebarPanel.backlinks)
+                Label("Tags", systemImage: "tag").tag(SidebarPanel.tags)
             }
             .pickerStyle(.segmented)
+            .labelStyle(.titleAndIcon)
             .padding(8)
 
             Divider()

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,6 +72,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
+	slog.Info("create", "type", createType, "title", createTitle)
 
 	// Determine initial status from schema
 	initialStatus := "draft"
@@ -108,20 +111,24 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	// Index the new document
 	if err := v.DB.UpsertDocument(doc); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to index document: %v\n", err)
+		slog.Warn("failed to index document", "err", err)
 	}
 
 	chunks := document.ChunkDocument(doc)
 	if err := v.DB.UpsertChunks(chunks); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to index chunks: %v\n", err)
+		slog.Warn("failed to index chunks", "err", err)
 	}
 
 	if err := v.DB.UpsertTags(doc.ID, doc.Tags); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to index tags: %v\n", err)
+		slog.Warn("failed to index tags", "err", err)
 	}
 
 	links := document.ExtractWikiLinks(doc.Body)
 	if err := v.DB.UpsertLinks(doc.ID, links); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to index links: %v\n", err)
+		slog.Warn("failed to index links", "err", err)
 	}
 
 	// Embed the new document if an AI provider is available
@@ -139,6 +146,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return output.Write(os.Stdout, format, result)
 	}
 
+	slog.Info("document created", "type", doc.Type, "path", doc.Path, "title", doc.Title)
 	fmt.Printf("Created %s: %s\n", doc.Type, doc.Path)
 	if !flagPorcelain {
 		fmt.Fprintf(os.Stderr, "  Edit: open %s\n", filepath.Join(v.Root, doc.Path))
@@ -170,5 +178,6 @@ func embedNewDocument(v *vault.Vault, doc *document.Document) {
 
 	if err := v.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to store embedding: %v\n", err)
+		slog.Warn("failed to store embedding", "err", err)
 	}
 }

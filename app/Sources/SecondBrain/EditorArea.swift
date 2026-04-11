@@ -4,52 +4,66 @@ import SecondBrainCore
 
 struct EditorArea: View {
     @Environment(AppState.self) var appState
-    @State private var showPreview = true
+    @State private var editorMode: EditorMode = .source
 
     var body: some View {
         @Bindable var state = appState
 
         if let tabIndex = validTabIndex {
-            HSplitView {
-                // Source editor
-                MarkdownEditorView(
-                    text: Binding(
-                        get: {
-                            guard tabIndex < state.openDocuments.count else { return "" }
-                            return state.openDocuments[tabIndex].content
-                        },
-                        set: { newValue in
-                            guard tabIndex < state.openDocuments.count else { return }
-                            state.openDocuments[tabIndex].content = newValue
-                            state.openDocuments[tabIndex].isDirty = true
-                            state.updateOutline()
-                        }
-                    ),
-                    databaseManager: state.database,
-                    typewriterMode: state.typewriterModeActive,
-                    inlineRendering: state.inlineRenderingEnabled
-                )
-                .frame(minWidth: 300)
-
-                if showPreview {
-                    // Live HTML preview
-                    MarkdownPreviewView(
-                        html: previewHTML
-                    )
-                    .frame(minWidth: 300)
+            Group {
+                switch editorMode {
+                case .source:
+                    sourceEditor(tabIndex: tabIndex, state: state)
+                case .split:
+                    HSplitView {
+                        sourceEditor(tabIndex: tabIndex, state: state)
+                            .frame(minWidth: 300)
+                        MarkdownPreviewView(html: previewHTML)
+                            .frame(minWidth: 300)
+                    }
+                case .preview:
+                    MarkdownPreviewView(html: previewHTML)
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .automatic) {
-                    Button {
-                        showPreview.toggle()
-                    } label: {
-                        Image(systemName: showPreview ? "rectangle.split.2x1" : "rectangle")
+                    Picker("Mode", selection: $editorMode) {
+                        Label("Source", systemImage: "pencil.line")
+                            .tag(EditorMode.source)
+                        Label("Split", systemImage: "rectangle.split.2x1")
+                            .tag(EditorMode.split)
+                        Label("Preview", systemImage: "eye")
+                            .tag(EditorMode.preview)
                     }
-                    .help(showPreview ? "Hide Preview" : "Show Preview")
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
+                    .help("Editor mode: Source, Split, or Preview")
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func sourceEditor(tabIndex: Int, state: AppState) -> some View {
+        MarkdownEditorView(
+            text: Binding(
+                get: {
+                    guard tabIndex < state.openDocuments.count else { return "" }
+                    return state.openDocuments[tabIndex].content
+                },
+                set: { newValue in
+                    guard tabIndex < state.openDocuments.count else { return }
+                    state.openDocuments[tabIndex].content = newValue
+                    state.openDocuments[tabIndex].isDirty = true
+                    state.updateOutline()
+                }
+            ),
+            databaseManager: state.database,
+            typewriterMode: state.typewriterModeActive,
+            inlineRendering: state.inlineRenderingEnabled,
+            fontSize: state.editorFontSize,
+            fontFamily: state.editorFontFamily
+        )
     }
 
     private var validTabIndex: Int? { appState.validTabIndex }
@@ -58,7 +72,13 @@ struct EditorArea: View {
         guard let idx = validTabIndex else { return "" }
         let content = appState.openDocuments[idx].content
         let (_, body) = FrontmatterParser.parse(content)
-        return MarkdownRenderer.renderHTML(body)
+        let html = MarkdownRenderer.renderHTML(body)
+        // Inject font overrides so preview scales with editor
+        let cssFontFamily = appState.editorFontFamily == "System Mono"
+            ? "-apple-system, BlinkMacSystemFont, sans-serif"
+            : "\"\(appState.editorFontFamily)\", -apple-system, sans-serif"
+        let fontOverride = "<style>body { font-size: \(Int(appState.editorFontSize))px !important; font-family: \(cssFontFamily) !important; }</style>"
+        return html.replacingOccurrences(of: "</head>", with: "\(fontOverride)</head>")
     }
 }
 
@@ -69,6 +89,17 @@ struct MarkdownEditorView: NSViewRepresentable {
     var databaseManager: DatabaseManager?
     var typewriterMode: Bool = false
     var inlineRendering: Bool = false
+    var fontSize: CGFloat = 14
+    var fontFamily: String = "System Mono"
+
+    private func resolveFont(size: CGFloat? = nil) -> NSFont {
+        let sz = size ?? fontSize
+        if fontFamily == "System Mono" {
+            return NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
+        }
+        return NSFont(name: fontFamily, size: sz)
+            ?? NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -78,7 +109,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.isRichText = false
-        textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.font = resolveFont()
         textView.textColor = NSColor.textColor
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -94,10 +125,12 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
 
         textView.delegate = context.coordinator
+        context.coordinator.fontSize = fontSize
+        context.coordinator.fontFamily = fontFamily
         textView.string = text
 
         // Line number gutter
-        let rulerView = LineNumberRulerView(textView: textView)
+        let rulerView = LineNumberRulerView(textView: textView, fontSize: fontSize)
         scrollView.verticalRulerView = rulerView
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
@@ -108,22 +141,33 @@ struct MarkdownEditorView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         let renderingChanged = context.coordinator.inlineRendering != inlineRendering
+        let fontChanged = context.coordinator.fontSize != fontSize || context.coordinator.fontFamily != fontFamily
         context.coordinator.typewriterMode = typewriterMode
         context.coordinator.inlineRendering = inlineRendering
+        context.coordinator.fontSize = fontSize
+        context.coordinator.fontFamily = fontFamily
 
-        // Re-apply rendering when toggle changes (without waiting for a keystroke)
-        if renderingChanged, let ts = textView.textStorage {
+        // Update font when size or family changed
+        if fontChanged {
+            let newFont = resolveFont()
+            textView.font = newFont
+            if let rulerView = scrollView.verticalRulerView as? LineNumberRulerView {
+                rulerView.updateFontSize(fontSize)
+            }
+        }
+
+        // Re-apply rendering when toggle or font changes
+        if renderingChanged || fontChanged, let ts = textView.textStorage {
+            let baseFont = resolveFont()
             ts.beginEditing()
-            // Reset all attributes to base state first
             let fullRange = NSRange(location: 0, length: ts.length)
-            ts.addAttribute(.font, value: textView.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular), range: fullRange)
+            ts.addAttribute(.font, value: baseFont, range: fullRange)
             ts.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
             ts.removeAttribute(.strikethroughStyle, range: fullRange)
             ts.removeAttribute(.backgroundColor, range: fullRange)
-            // Re-apply active renderers
-            SyntaxHighlighter.highlight(ts, baseFont: textView.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular))
+            SyntaxHighlighter.highlight(ts, baseFont: baseFont)
             if inlineRendering {
-                InlineMarkdownRenderer.render(ts, cursorLocation: textView.selectedRange().location)
+                InlineMarkdownRenderer.render(ts, cursorLocation: textView.selectedRange().location, baseFontSize: fontSize)
             }
             ts.endEditing()
         }
@@ -145,6 +189,8 @@ struct MarkdownEditorView: NSViewRepresentable {
         var isEditing = false
         var typewriterMode = false
         var inlineRendering = false
+        var fontSize: CGFloat = 14
+        var fontFamily: String = "System Mono"
         let mentionController = MentionAutocompleteController()
         let slashController = SlashCommandController()
         private var debounceTimer: Timer?
@@ -153,6 +199,14 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.text = text
             super.init()
             mentionController.databaseManager = databaseManager
+        }
+
+        func resolvedFont() -> NSFont {
+            if fontFamily == "System Mono" {
+                return NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            }
+            return NSFont(name: fontFamily, size: fontSize)
+                ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
@@ -304,10 +358,11 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             // Apply text rendering (syntax first, then inline — inline overrides non-code lines)
             if let ts = textView.textStorage {
+                let baseFont = resolvedFont()
                 ts.beginEditing()
-                SyntaxHighlighter.highlight(ts, baseFont: textView.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular))
+                SyntaxHighlighter.highlight(ts, baseFont: baseFont)
                 if inlineRendering {
-                    InlineMarkdownRenderer.render(ts, cursorLocation: textView.selectedRange().location)
+                    InlineMarkdownRenderer.render(ts, cursorLocation: textView.selectedRange().location, baseFontSize: fontSize)
                 }
                 ts.endEditing()
             }
@@ -327,11 +382,12 @@ struct MarkdownEditorView: NSViewRepresentable {
 
 class LineNumberRulerView: NSRulerView {
     private weak var textView: NSTextView?
-    private let lineNumberFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    private var lineNumberFont: NSFont
     private let lineNumberColor = NSColor.tertiaryLabelColor
 
-    init(textView: NSTextView) {
+    init(textView: NSTextView, fontSize: CGFloat = 14) {
         self.textView = textView
+        self.lineNumberFont = NSFont.monospacedSystemFont(ofSize: max(fontSize - 3, 9), weight: .regular)
         super.init(scrollView: textView.enclosingScrollView!, orientation: .verticalRuler)
         self.ruleThickness = 40
         self.clientView = textView
@@ -353,6 +409,11 @@ class LineNumberRulerView: NSRulerView {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    func updateFontSize(_ size: CGFloat) {
+        lineNumberFont = NSFont.monospacedSystemFont(ofSize: max(size - 3, 9), weight: .regular)
+        needsDisplay = true
     }
 
     @objc private func textDidChange(_ notification: Notification) {
@@ -434,4 +495,10 @@ struct MarkdownPreviewView: NSViewRepresentable {
     class PreviewCoordinator {
         var lastHTML = ""
     }
+}
+
+// MARK: - Editor Mode
+
+enum EditorMode: String, CaseIterable {
+    case source, split, preview
 }

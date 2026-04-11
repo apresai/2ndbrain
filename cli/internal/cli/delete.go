@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/apresai/2ndbrain/internal/output"
@@ -29,6 +30,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
 	relPath := expandPath(args[0])
 	absPath := v.AbsPath(relPath)
@@ -69,6 +71,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		return output.Write(os.Stdout, format, result)
 	}
 
+	slog.Info("document deleted", "path", relPath)
 	fmt.Printf("Deleted: %s\n", relPath)
 	return nil
 }

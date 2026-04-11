@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,25 +32,39 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
+
+	startTime := time.Now()
+	slog.Info("index started", "vault", v.Root)
 
 	if !flagPorcelain {
 		fmt.Fprintln(os.Stderr, "Indexing vault...")
 	}
 
 	stats, err := vault.IndexVault(v, func(path string) {
+		slog.Debug("indexed file", "path", path)
 		if !flagPorcelain {
 			fmt.Fprintf(os.Stderr, "  %s\n", path)
 		}
 	})
 	if err != nil {
+		slog.Error("index failed", "error", err, "elapsed", time.Since(startTime))
 		return fmt.Errorf("index vault: %w", err)
 	}
+
+	slog.Info("index complete",
+		"docs", stats.DocsIndexed,
+		"chunks", stats.ChunksCreated,
+		"links", stats.LinksFound,
+		"elapsed", time.Since(startTime),
+	)
 
 	// Generate embeddings if a provider is available
 	initAIProviders(v)
 	ctx := context.Background()
 	cfg := v.Config.AI
 	if err := embedDocuments(ctx, v, cfg); err != nil {
+		slog.Debug("embedding skipped", "reason", err.Error())
 		if !flagPorcelain {
 			fmt.Fprintf(os.Stderr, "  embedding skipped: %v\n", err)
 		}
@@ -88,15 +103,18 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 	}
 
 	if len(docs) == 0 {
+		slog.Debug("all embeddings up to date", "model", model)
 		if !flagPorcelain {
 			fmt.Fprintln(os.Stderr, "  all embeddings up to date")
 		}
 		return nil
 	}
 
+	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider)
 	if !flagPorcelain {
 		fmt.Fprintf(os.Stderr, "  embedding %d documents...\n", len(docs))
 	}
+	embedStart := time.Now()
 
 	// Look up model pricing for cost estimate
 	var pricePerMillion float64
@@ -155,5 +173,6 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 		}
 	}
 
+	slog.Info("embedding complete", "embedded", embedded, "total", len(docs), "elapsed", time.Since(embedStart))
 	return nil
 }

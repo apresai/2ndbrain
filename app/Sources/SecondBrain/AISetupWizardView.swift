@@ -418,7 +418,7 @@ struct AISetupWizardView: View {
                                 Text(result.modelID)
                                     .font(.callout)
                                     .lineLimit(1)
-                                Text("\(result.modelType) — \(result.ok ? result.latency : result.detail)")
+                                Text("\(result.modelType) — \(result.ok ? result.latency : (result.detail ?? "failed"))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

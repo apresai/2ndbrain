@@ -172,7 +172,9 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `config set` | `<key> <value>` | Write a config value |
 | `config set-key` | `<provider>` | Store API key in macOS Keychain |
 
-**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`
+**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`
+
+**Logging:** When `--verbose` is used, structured logs (via `log/slog`) are written to stderr and to `.2ndbrain/logs/cli.log`. Without `--verbose`, only the log file is written.
 
 ### MCP Server (11 tools)
 
@@ -227,8 +229,9 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 |---------|------|-------------|
 | Vault creation | VaultManager.swift | Create new vault with .2ndbrain directory |
 | Vault opening | SecondBrainApp.swift | Open existing vault via folder picker (Cmd+Shift+O) |
-| Document editing | EditorArea.swift | NSTextView with monospace font, debounced sync |
-| Live preview | EditorArea.swift | Side-by-side HTML preview via WKWebView |
+| Document editing | EditorArea.swift | NSTextView with configurable font, debounced sync |
+| Editor mode toggle | EditorArea.swift | Source / Split / Preview segmented control in toolbar |
+| Live preview | EditorArea.swift | HTML preview via WKWebView (split or full-width) |
 | Document templates | AppState.swift | Create from ADR, Runbook, Note, Postmortem, PRD, PR/FAQ templates |
 | Document deletion | SidebarView.swift | Context menu delete with confirmation |
 | Frontmatter editing | PropertiesView.swift | Editable properties with type-appropriate controls |
@@ -244,7 +247,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Focus mode | ContentView.swift | Distraction-free editing (Cmd+Shift+E) |
 | Status bar | StatusBarView.swift | Doc type, status, word count, interactive AI dot |
 | AI status popover | StatusBarView.swift | Clickable AI dot → provider/models/staleness/rebuild |
-| Index rebuild | AppState.swift | Shell out to `2nb index` with progress tracking |
+| Index rebuild | IndexProgressView.swift | Confirmation dialog → progress bars → stats summary |
 | Lint validation | LintResultsView.swift | Shell out to `2nb lint --json`, clickable issues |
 | Skills install | SkillsInstallView.swift | Install SKILL.md for 8 AI agents (Tools menu) |
 | MCP setup | MCPSetupView.swift | Show MCP config snippets for 6 AI tools (Tools menu) |
@@ -258,6 +261,9 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | AI status indicator | StatusBarView.swift | Provider readiness + embedding progress in status bar |
 | Semantic search | SearchPanelView.swift | Toggle for AI-powered hybrid search |
 | Find Similar | SidebarView.swift | Context menu → semantic search for similar docs |
+| Tag drill-down | TagBrowserView.swift | Click tag → filtered file list → back button |
+| Preferences | PreferencesView.swift | Font family/size picker (Cmd+,) |
+| PDF/HTML/MD export | ExportController.swift | Export menu with PDF (WKWebView), HTML, Markdown |
 
 ### Keyboard Shortcuts
 
@@ -273,6 +279,11 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Cmd+Shift+E | Focus Mode |
 | Cmd+Option+I | Properties Panel |
 | Cmd+\\ | Toggle Sidebar |
+| Cmd+, | Preferences |
+| Cmd+= | Increase Font Size |
+| Cmd+- | Decrease Font Size |
+| Cmd+0 | Reset Font Size |
+| Cmd+Shift+X | Export as PDF |
 
 ## Vault Format
 

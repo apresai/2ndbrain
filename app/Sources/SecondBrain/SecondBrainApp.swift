@@ -1,5 +1,6 @@
 import SwiftUI
 import SecondBrainCore
+import os
 
 @main
 struct SecondBrainApp: App {
@@ -15,6 +16,12 @@ struct SecondBrainApp: App {
                     }
                 }
         }
+
+        Settings {
+            PreferencesView()
+                .environment(appState)
+        }
+
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Vault...") {
@@ -145,6 +152,23 @@ struct SecondBrainApp: App {
                     appState.sidebarVisible.toggle()
                 }
                 .keyboardShortcut("\\", modifiers: .command)
+
+                Divider()
+
+                Button("Increase Font Size") {
+                    appState.increaseFontSize()
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("Decrease Font Size") {
+                    appState.decreaseFontSize()
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Reset Font Size") {
+                    appState.resetFontSize()
+                }
+                .keyboardShortcut("0", modifiers: .command)
             }
         }
     }
@@ -245,7 +269,7 @@ struct SecondBrainApp: App {
         do {
             try process.run()
         } catch {
-            print("CLI command failed: \(error)")
+            Logger(subsystem: "dev.apresai.2ndbrain", category: "app").error("CLI command failed: \(error.localizedDescription)")
             completion(false)
         }
     }

@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -32,10 +33,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("init vault: %w", err)
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
-	if abs, err := filepath.Abs(v.Root); err == nil {
-		_ = setActiveVault(abs)
+	absPath, _ := filepath.Abs(v.Root)
+	if absPath != "" {
+		_ = setActiveVault(absPath)
 	}
+	slog.Info("vault initialized", "path", absPath)
 
 	fmt.Fprintf(cmd.ErrOrStderr(), "Initialized 2ndbrain vault at %s\n", v.Root)
 	if !flagPorcelain {

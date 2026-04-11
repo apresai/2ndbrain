@@ -52,6 +52,7 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-editor.sh
 	SKIP_BUILD=1 ./tests/gui-test-ui.sh
 	SKIP_BUILD=1 ./tests/gui-test-ai.sh
+	SKIP_BUILD=1 ./tests/gui-test-index.sh
 
 test-all: test test-swift test-gui
 

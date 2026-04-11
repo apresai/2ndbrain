@@ -136,7 +136,9 @@ Models are tiered as **verified** (tested with 2nb) or **unverified** (available
 
 ## CLI Commands
 
-Commands are organized into groups (`2nb --help` shows the full list):
+Commands are organized into groups (`2nb --help` shows the full list).
+
+**Global flags:** `--json`, `--csv`, `--yaml`, `--format`, `--porcelain`, `--vault`, `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
 
 ### Getting Started
 
@@ -303,12 +305,16 @@ Supported agents: Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Ro
 
 A native SwiftUI + AppKit editor with:
 
-- Markdown editing with live preview
+- Markdown editing with Source / Split / Preview mode toggle
+- Configurable editor font family and size (Preferences via Cmd+,, zoom with Cmd+=/Cmd+-/Cmd+0)
 - Quick Open (Cmd+P), Command Palette (Cmd+Shift+P)
 - Search panel with semantic search toggle (Cmd+Shift+F)
 - Ask AI panel for RAG Q&A (Cmd+Shift+A)
 - AI setup wizard — guided provider/credentials/model configuration (Tools menu)
 - Interactive AI status popover with staleness indicator and index rebuild
+- Index rebuild dialog with confirmation, progress bars, and stats summary
+- Tag drill-down navigation — click a tag to see filtered files, back button to return
+- Export as PDF, HTML, or Markdown (Export menu, Cmd+Shift+X for PDF)
 - Tools menu: Install AI Agent Skills, Connect AI Tools (MCP), Validate Knowledge Base, Rebuild Index
 - Interactive link graph visualization
 - Wikilink autocomplete, backlinks panel, outline view

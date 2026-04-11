@@ -204,7 +204,9 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	modelID := args[0]
 	ctx := context.Background()
 
-	fmt.Printf("Testing %s...\n", modelID)
+	if !flagPorcelain && getFormat(cmd) == "" {
+		fmt.Printf("Testing %s...\n", modelID)
+	}
 
 	result, err := ai.TestProbeModel(ctx, v.Config.AI, modelID, testProvider, testModelType)
 	if err != nil {

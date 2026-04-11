@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 
 	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
 	"github.com/spf13/cobra"
@@ -30,6 +31,8 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open vault: %w", err)
 	}
 	defer v.Close()
+	setupFileLogging(v)
+	slog.Info("MCP server started", "transport", "stdio")
 
 	return mcppkg.Start(v, Version)
 }
