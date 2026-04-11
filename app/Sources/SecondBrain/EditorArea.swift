@@ -26,6 +26,36 @@ struct EditorArea: View {
                 }
             }
             .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        appState.showTemplatePicker = true
+                    } label: {
+                        Label("New", systemImage: "doc.badge.plus")
+                    }
+                    .disabled(appState.vault == nil)
+                    .help("New Document")
+
+                    Button {
+                        appState.saveCurrentDocument()
+                    } label: {
+                        Label("Save", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(appState.currentDocument?.isDirty != true)
+                    .help("Save Document")
+
+                    Button {
+                        guard let url = appState.currentDocument?.url,
+                              let contentView = NSApp.keyWindow?.contentView else { return }
+                        let picker = NSSharingServicePicker(items: [url])
+                        let anchor = NSRect(x: contentView.bounds.maxX - 160, y: contentView.bounds.maxY, width: 1, height: 1)
+                        picker.show(relativeTo: anchor, of: contentView, preferredEdge: .minY)
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(appState.currentDocument == nil)
+                    .help("Share")
+                }
+
                 ToolbarItem(placement: .automatic) {
                     Picker("Mode", selection: $editorMode) {
                         Label("Source", systemImage: "pencil.line")
