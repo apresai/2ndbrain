@@ -150,7 +150,24 @@ public final class DatabaseManager: Sendable {
                 SELECT d.* FROM documents d
                 JOIN tags t ON t.doc_id = d.id
                 WHERE t.tag = ?
+                ORDER BY d.modified_at DESC
             """, arguments: [tag])
+        }
+    }
+
+    /// Fetch documents that have ALL of the specified tags (intersection).
+    public func documentsWithAllTags(_ tags: [String]) throws -> [DocumentRecord] {
+        guard !tags.isEmpty else { return [] }
+        let placeholders = tags.map { _ in "?" }.joined(separator: ", ")
+        return try dbPool.read { db in
+            try DocumentRecord.fetchAll(db, sql: """
+                SELECT d.* FROM documents d
+                JOIN tags t ON t.doc_id = d.id
+                WHERE t.tag IN (\(placeholders))
+                GROUP BY d.id
+                HAVING COUNT(DISTINCT t.tag) = ?
+                ORDER BY d.modified_at DESC
+            """, arguments: StatementArguments(tags + [tags.count]))
         }
     }
 

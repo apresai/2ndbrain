@@ -151,6 +151,7 @@ struct ContentView: View {
                 } else {
                     VStack(spacing: 0) {
                         TabBarView()
+                        BreadcrumbBar()
                         EditorArea()
                         StatusBarView()
                     }

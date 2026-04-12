@@ -1056,6 +1056,84 @@ struct FileItem: Identifiable {
     let relativePath: String
 }
 
+enum FileTreeNode: Identifiable {
+    case directory(id: String, name: String, path: String, children: [FileTreeNode])
+    case file(FileItem)
+
+    var id: String {
+        switch self {
+        case .directory(let id, _, _, _): return id
+        case .file(let item): return item.id.uuidString
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .directory(_, let name, _, _): return name
+        case .file(let item): return item.name
+        }
+    }
+
+    var fileCount: Int {
+        switch self {
+        case .directory(_, _, _, let children):
+            return children.reduce(0) { $0 + ($1.isFile ? 1 : $1.fileCount) }
+        case .file: return 1
+        }
+    }
+
+    var isFile: Bool {
+        if case .file = self { return true }
+        return false
+    }
+}
+
+func buildFileTree(from files: [FileItem]) -> [FileTreeNode] {
+    // Group files by their top-level directory
+    var dirFiles: [String: [FileItem]] = [:]
+    var rootFiles: [FileItem] = []
+
+    for file in files {
+        let parts = file.relativePath.split(separator: "/").map(String.init)
+        if parts.count > 1 {
+            dirFiles[parts[0], default: []].append(file)
+        } else {
+            rootFiles.append(file)
+        }
+    }
+
+    // Recursively build subtrees
+    func subtree(files: [FileItem], prefix: String) -> [FileTreeNode] {
+        var subdirs: [String: [FileItem]] = [:]
+        var leaves: [FileItem] = []
+
+        for file in files {
+            let remainder = String(file.relativePath.dropFirst(prefix.count))
+            let parts = remainder.split(separator: "/").map(String.init)
+            if parts.count > 1 {
+                subdirs[parts[0], default: []].append(file)
+            } else {
+                leaves.append(file)
+            }
+        }
+
+        var nodes: [FileTreeNode] = subdirs.keys.sorted().map { dir in
+            let path = prefix + dir + "/"
+            return .directory(id: "dir:" + path, name: dir, path: path, children: subtree(files: subdirs[dir]!, prefix: path))
+        }
+        nodes += leaves.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.map { .file($0) }
+        return nodes
+    }
+
+    // Build top-level tree: directories first, then root files
+    var tree: [FileTreeNode] = dirFiles.keys.sorted().map { dir in
+        let path = dir + "/"
+        return .directory(id: "dir:" + path, name: dir, path: path, children: subtree(files: dirFiles[dir]!, prefix: path))
+    }
+    tree += rootFiles.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.map { .file($0) }
+    return tree
+}
+
 struct DocumentTab: Identifiable {
     let id = UUID()
     let url: URL
