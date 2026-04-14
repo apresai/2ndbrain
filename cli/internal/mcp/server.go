@@ -49,6 +49,7 @@ func Start(v *vault.Vault, version string) error {
 	addTool(kbDeleteTool(), h.handleKBDelete)
 	addTool(kbIndexTool(), h.handleKBIndex)
 	addTool(kbSuggestLinksTool(), h.handleKBSuggestLinks)
+	addTool(kbPolishTool(), h.handleKBPolish)
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)
@@ -256,6 +257,25 @@ Example prompts that should trigger this tool:
 		InputSchema: mcplib.ToolInputSchema{
 			Type:       "object",
 			Properties: map[string]any{},
+		},
+	}
+}
+
+func kbPolishTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_polish",
+		Description: `Run an AI copy-editor pass over a document and return both the original and polished body. The caller is expected to present a diff for user review. Fixes spelling, grammar, and awkward phrasing while preserving voice, wikilinks, and structure. Does NOT write the result back to disk.
+
+Example prompts that should trigger this tool:
+- "Polish the JWT auth ADR for spelling and grammar"
+- "Clean up the writing in stripe-integration.md"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path":   map[string]any{"type": "string", "description": "Vault-relative path to the document to polish"},
+				"system": map[string]any{"type": "string", "description": "Optional system prompt override (default: copy-editor)"},
+			},
+			Required: []string{"path"},
 		},
 	}
 }

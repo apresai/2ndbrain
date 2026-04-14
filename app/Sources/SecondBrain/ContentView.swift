@@ -126,6 +126,16 @@ struct ContentView: View {
             .environment(appState)
         }
         .sheet(isPresented: Binding(
+            get: { appState.showPolish },
+            set: { appState.showPolish = $0 }
+        )) {
+            PolishView(isPresented: Binding(
+                get: { appState.showPolish },
+                set: { appState.showPolish = $0 }
+            ))
+            .environment(appState)
+        }
+        .sheet(isPresented: Binding(
             get: { appState.showIndexProgress },
             set: { appState.showIndexProgress = $0 }
         )) {

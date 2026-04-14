@@ -143,6 +143,12 @@ struct SecondBrainApp: App {
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(appState.currentDocument == nil)
 
+                Button("Polish Document") {
+                    appState.openPolish()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .option])
+                .disabled(appState.currentDocument == nil)
+
                 Divider()
 
                 Button("Focus Mode") {

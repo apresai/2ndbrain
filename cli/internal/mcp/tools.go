@@ -571,6 +571,62 @@ func (h *handlers) handleKBList(ctx context.Context, request mcplib.CallToolRequ
 	return mcplib.NewToolResultText(string(listData)), nil
 }
 
+const defaultPolishSystemPrompt = `You are a copy editor. Fix spelling, grammar, and punctuation errors in the markdown below. Improve clarity where wording is awkward, but preserve the author's voice, all wikilinks like [[foo]], all code blocks (fenced and inline), and the heading structure exactly. Do not add or remove sections. Do not reformat lists. Return ONLY the corrected markdown body with no explanation, no commentary, and no surrounding code fences.`
+
+func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+	if path == "" {
+		return mcplib.NewToolResultError("path is required"), nil
+	}
+	if strings.Contains(path, "..") {
+		return mcplib.NewToolResultError("path traversal not allowed"), nil
+	}
+	systemPrompt, _ := request.GetArguments()["system"].(string)
+	if systemPrompt == "" {
+		systemPrompt = defaultPolishSystemPrompt
+	}
+
+	absPath := h.vault.AbsPath(path)
+	if !strings.HasPrefix(absPath, h.vault.Root) {
+		return mcplib.NewToolResultError("path outside vault"), nil
+	}
+
+	parsed, err := document.ParseFile(absPath)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("parse source: %v", err)), nil
+	}
+
+	cfg := h.vault.Config.AI
+	generator, err := ai.DefaultRegistry.Generator(cfg.Provider)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("no generation provider: %v", err)), nil
+	}
+	if !generator.Available(ctx) {
+		return mcplib.NewToolResultError("generation provider not available"), nil
+	}
+
+	opts := ai.GenOpts{
+		Temperature:  0.2,
+		MaxTokens:    4096,
+		SystemPrompt: systemPrompt,
+	}
+	polished, err := generator.Generate(ctx, parsed.Body, opts)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("polish generation failed: %v", err)), nil
+	}
+	polished = strings.TrimSpace(polished)
+
+	result := map[string]any{
+		"path":     path,
+		"original": parsed.Body,
+		"polished": polished,
+		"provider": cfg.Provider,
+		"model":    cfg.GenerationModel,
+	}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
 func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	path, _ := request.GetArguments()["path"].(string)
 	if path == "" {

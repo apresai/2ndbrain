@@ -146,6 +146,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | AI-EV-009 | `kb_update_meta` updates frontmatter without modifying body | Integration | Invoke kb_update_meta, verify frontmatter field changed and body text identical | Complete | Not Written |
 | AI-EV-010 | `kb_structure` returns heading hierarchy as JSON tree | Integration | Invoke kb_structure, verify JSON tree with heading levels and chunk IDs | Complete | Not Written |
 | AI-EV-011 | Suggest Links analyzes document and suggests wikilinks | Integration | Run Suggest Links on a document, verify suggested links to semantically related docs | Complete | Not Written |
+| AI-EV-012 | Polish document with AI copy-editor, preview diff, accept or reject | Manual | Open a doc with typos, run Polish, verify diff preview and Accept/Open-as-new-tab/Reject actions | Complete | Not Written |
 | AI-ST-001 | MCP status indicator in status bar with client count | Manual | Start MCP server, connect a client, verify status bar shows connected count | Complete | Not Written |
 | AI-ST-002 | Embedding build progress shown as percentage in status bar | Manual | Trigger embedding build, verify percentage progress displayed in status bar | Complete | Not Written |
 | AI-ST-003 | Open document shows chunk count and token estimate in status bar | Manual | Open a document, verify chunk count and estimated token count in status bar | Not Started | Not Written |
@@ -341,7 +342,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | Markdown Rendering | 12 | 7 | 3 | 2 | 0 |
 | File System & Storage | 12 | 9 | 3 | 0 | 0 |
 | Search & Discovery | 19 | 14 | 4 | 1 | 0 |
-| AI Integration | 25 | 19 | 4 | 2 | 0 |
+| AI Integration | 26 | 20 | 4 | 2 | 0 |
 | CLI Interface | 20 | 20 | 0 | 0 | 0 |
 | Knowledge Graph & Linking | 15 | 9 | 6 | 0 | 0 |
 | Frontmatter & Metadata | 12 | 10 | 2 | 0 | 0 |
@@ -351,13 +352,13 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | Security & Privacy | 8 | 1 | 5 | 2 | 0 |
 | Error Handling & Recovery | 10 | 4 | 4 | 2 | 0 |
 | Obsidian Vault Conversion | 11 | 6 | 5 | 0 | 0 |
-| **Total** | **211** | **131** | **57** | **23** | **0** |
+| **Total** | **212** | **132** | **57** | **23** | **0** |
 
 ### Implementation Coverage
 
-- **Complete**: 62% (131 of 211 requirements fully implemented)
-- **Partial**: 27% (57 of 211 requirements partially implemented)
-- **Not Started**: 11% (23 of 211 requirements not yet started)
+- **Complete**: 62% (132 of 212 requirements fully implemented)
+- **Partial**: 27% (57 of 212 requirements partially implemented)
+- **Not Started**: 11% (23 of 212 requirements not yet started)
 - **Tests Written**: 0% (no formal test cases written yet)
 
 ### Priority Areas for Test Development

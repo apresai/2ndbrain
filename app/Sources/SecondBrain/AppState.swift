@@ -50,6 +50,10 @@ final class AppState {
     var suggestLinksLoading = false
     var suggestLinksError: String?
 
+    // Polish state
+    var showPolish = false
+    var polishState: PolishState = .idle
+
     // AI state
     var aiStatus: AIStatusInfo?
     var isIndexing = false
@@ -1015,6 +1019,72 @@ final class AppState {
         openDocuments[idx].content.append(linkText)
         openDocuments[idx].isDirty = true
         updateOutline()
+    }
+
+    // MARK: - Polish
+
+    func openPolish() {
+        polishState = .idle
+        showPolish = true
+    }
+
+    func runPolish() async {
+        guard let vault, let tab = currentDocument else {
+            polishState = .error("No document open.")
+            return
+        }
+        polishState = .loading
+        let relPath = vault.relativePath(for: tab.url)
+        do {
+            let data = try await runCLI(
+                ["polish", relPath, "--json", "--porcelain"],
+                cwd: vault.rootURL
+            )
+            let result = try JSONDecoder().decode(PolishResultInfo.self, from: data)
+            polishState = .loaded(result)
+        } catch {
+            polishState = .error("Could not polish document: \(error.localizedDescription). Ensure an AI generation provider is configured.")
+        }
+    }
+
+    func acceptPolishedRevision() {
+        guard case .loaded(let result) = polishState else { return }
+        guard let idx = validTabIndex else { return }
+        let tab = openDocuments[idx]
+        // Preserve frontmatter; replace only the body.
+        let (frontmatter, _) = FrontmatterParser.parse(tab.content)
+        openDocuments[idx].content = FrontmatterParser.serialize(
+            frontmatter: frontmatter,
+            body: result.polished
+        )
+        openDocuments[idx].isDirty = true
+        updateOutline()
+        polishState = .idle
+    }
+
+    func openPolishedAsNewTab() {
+        guard case .loaded(let result) = polishState else { return }
+        guard let vault, let tab = currentDocument else { return }
+        // Write the polished version to a sibling file with a -polished suffix
+        // so the user can diff and manually merge without losing the original.
+        let parent = tab.url.deletingLastPathComponent()
+        let stem = tab.url.deletingPathExtension().lastPathComponent
+        let ext = tab.url.pathExtension
+        let candidate = "\(stem)-polished.\(ext)"
+        let target = uniqueFilename(base: candidate, in: parent)
+        let (frontmatter, _) = FrontmatterParser.parse(tab.content)
+        let content = FrontmatterParser.serialize(frontmatter: frontmatter, body: result.polished)
+        do {
+            try content.write(to: target, atomically: true, encoding: .utf8)
+            refreshFiles()
+            openDocument(at: target)
+            log.info("Polished revision opened as \(target.lastPathComponent)")
+        } catch {
+            log.error("Failed to open polished revision: \(error.localizedDescription)")
+            errorLogger?.log("Failed to open polished revision", error: error)
+        }
+        _ = vault // silence unused warning; kept for future path joins
+        polishState = .idle
     }
 
     // MARK: - MCP Observability
