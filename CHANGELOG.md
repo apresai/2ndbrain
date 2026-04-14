@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.11] - 2026-04-14
+
+### Added
+- SecondBrain.app distributed via Homebrew Cask (`brew install --cask apresai/tap/secondbrain`)
+- GitHub Actions workflow builds, packages, and publishes the macOS app bundle on release tags
+- Cask template (`casks/secondbrain.rb.tmpl`) for automated formula generation
+
+
 ## [0.1.10] - 2026-04-14
 
 ### Added
