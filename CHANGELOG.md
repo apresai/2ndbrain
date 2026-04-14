@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.12] - 2026-04-14
+
+### Fixed
+- Remove `nonisolated` from `WKScriptMessageHandler` conformance for Xcode 16.4 compatibility
+
+
 ## [0.1.11] - 2026-04-14
 
 ### Added
