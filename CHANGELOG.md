@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.9] - 2026-04-14
+
+## [0.1.9] - 2026-04-14
+
+### Added
+- **Git integration** — `2nb git activity`, `git diff`, `git status` CLI commands; sidebar modified/untracked indicators; Git Activity panel (Cmd+Shift+G) and diff viewer in editor
+- **AI Polish** — `2nb polish` CLI command with diff preview; editor panel (Cmd+Option+P) with Accept / Open-as-new-tab / Reject flow
+- **Suggest Links** — `2nb suggest-links` via vector search; editor panel (Cmd+Shift+L) with click-to-insert wikilinks
+- **MCP observability** — sidecar status files per server process; `2nb mcp status` command; MCP Status panel (Cmd+Shift+M) in editor with per-client tool invocation history
+- **Editable preview mode** — WYSIWYG editing in preview via WKWebView ↔ Turndown.js bridge; source/split/preview segmented control in toolbar
+- **Merge conflict dialog** — side-by-side diff when FSEvents detects an external edit to a dirty tab
+- **Autosave** — configurable interval (Off / 15s / 30s / 60s) in Preferences
+- **Safety features** — pre-write crash snapshots, low-disk warning (<50 MB), filename collision suffix (-1, -2, …)
+- **Directory tree sidebar** with tag split pane, multi-tag filter, and breadcrumb bar
+- New, Save, and Share toolbar buttons in editor
+- Incremental re-embed on document save
+- High-resolution macOS application icon set (16 px – 1024 px)
+
+
 ## [0.1.8] - 2026-04-11
 
 ### Added
