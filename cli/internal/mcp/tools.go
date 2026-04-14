@@ -570,3 +570,116 @@ func (h *handlers) handleKBList(ctx context.Context, request mcplib.CallToolRequ
 	listData, _ := json.MarshalIndent(items, "", "  ")
 	return mcplib.NewToolResultText(string(listData)), nil
 }
+
+func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+	if path == "" {
+		return mcplib.NewToolResultError("path is required"), nil
+	}
+	if strings.Contains(path, "..") {
+		return mcplib.NewToolResultError("path traversal not allowed"), nil
+	}
+	limit := 10
+	if v, ok := request.GetArguments()["limit"].(float64); ok && v > 0 {
+		limit = int(v)
+	}
+
+	absPath := h.vault.AbsPath(path)
+	if !strings.HasPrefix(absPath, h.vault.Root) {
+		return mcplib.NewToolResultError("path outside vault"), nil
+	}
+
+	parsed, err := document.ParseFile(absPath)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("parse source: %v", err)), nil
+	}
+	parsed.Path = path
+
+	cfg := h.vault.Config.AI
+	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("no embedding provider: %v", err)), nil
+	}
+	if !embedder.Available(ctx) {
+		return mcplib.NewToolResultError("embedding provider not available"), nil
+	}
+
+	runes := []rune(parsed.Body)
+	if len(runes) > 2000 {
+		runes = runes[:2000]
+	}
+	queryVecs, err := embedder.Embed(ctx, []string{string(runes)})
+	if err != nil || len(queryVecs) == 0 {
+		return mcplib.NewToolResultError(fmt.Sprintf("embed source: %v", err)), nil
+	}
+
+	docIDs, embeddings, err := h.vault.DB.AllEmbeddings()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("load embeddings: %v", err)), nil
+	}
+
+	scored := search.VectorSearch(queryVecs[0], docIDs, embeddings, limit*3)
+
+	var sourceID string
+	if dbDoc, err := h.vault.DB.GetDocumentByPath(path); err == nil && dbDoc != nil {
+		sourceID = dbDoc.ID
+	}
+	linked := make(map[string]bool)
+	if sourceID != "" {
+		rows, err := h.vault.DB.Conn().Query(
+			`SELECT target_id FROM links WHERE source_id = ? AND target_id IS NOT NULL AND target_id != ''`,
+			sourceID,
+		)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var targetID string
+				if err := rows.Scan(&targetID); err == nil {
+					linked[targetID] = true
+				}
+			}
+		}
+	}
+
+	type suggestItem struct {
+		Path    string  `json:"path"`
+		Title   string  `json:"title"`
+		Score   float64 `json:"score"`
+		Snippet string  `json:"snippet"`
+	}
+
+	engine := search.NewEngine(h.vault.DB.Conn())
+	items := make([]suggestItem, 0, limit)
+	for _, s := range scored {
+		if s.DocID == sourceID || linked[s.DocID] {
+			continue
+		}
+		lookup, ok := engine.GetDocumentByID(s.DocID)
+		if !ok {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(h.vault.Root, lookup.Path))
+		snippet := ""
+		if err == nil {
+			if parsed, err := document.Parse(lookup.Path, content); err == nil {
+				r := []rune(parsed.Body)
+				if len(r) > 200 {
+					r = r[:200]
+				}
+				snippet = string(r)
+			}
+		}
+		items = append(items, suggestItem{
+			Path:    lookup.Path,
+			Title:   lookup.Title,
+			Score:   s.Score,
+			Snippet: snippet,
+		})
+		if len(items) >= limit {
+			break
+		}
+	}
+
+	data, _ := json.MarshalIndent(items, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}

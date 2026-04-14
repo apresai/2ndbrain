@@ -116,6 +116,16 @@ struct ContentView: View {
             .environment(appState)
         }
         .sheet(isPresented: Binding(
+            get: { appState.showSuggestLinks },
+            set: { appState.showSuggestLinks = $0 }
+        )) {
+            SuggestLinksView(isPresented: Binding(
+                get: { appState.showSuggestLinks },
+                set: { appState.showSuggestLinks = $0 }
+            ))
+            .environment(appState)
+        }
+        .sheet(isPresented: Binding(
             get: { appState.showIndexProgress },
             set: { appState.showIndexProgress = $0 }
         )) {

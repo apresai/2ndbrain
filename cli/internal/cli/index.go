@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,9 +22,20 @@ var indexCmd = &cobra.Command{
 	RunE:  runIndex,
 }
 
+var indexDocFlag string
+
 func init() {
 	indexCmd.GroupID = "ai"
+	indexCmd.Flags().StringVar(&indexDocFlag, "doc", "", "Re-index a single document (relative or absolute path) instead of the whole vault")
 	rootCmd.AddCommand(indexCmd)
+}
+
+// IndexDocResult is the JSON summary returned by `2nb index --doc <path>`.
+// Editors use this to know whether a save triggered real re-embedding work.
+type IndexDocResult struct {
+	Path       string `json:"path"`
+	Embedded   bool   `json:"embedded"`
+	DurationMs int64  `json:"duration_ms"`
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
@@ -33,6 +45,10 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 	setupFileLogging(v)
+
+	if indexDocFlag != "" {
+		return runIndexSingleDoc(cmd, v, indexDocFlag)
+	}
 
 	startTime := time.Now()
 	slog.Info("index started", "vault", v.Root)
@@ -82,6 +98,55 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(os.Stderr, "  2nb search \"your query\"")
 			fmt.Fprintln(os.Stderr, "  2nb ask \"your question\"")
 		}
+	}
+	return nil
+}
+
+func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) error {
+	start := time.Now()
+
+	absPath := docArg
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(v.Root, docArg)
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return fmt.Errorf("resolve doc path: %w", err)
+	}
+
+	if err := vault.IndexSingleFile(v, absPath); err != nil {
+		return err
+	}
+
+	// Re-run embeddings. DocumentsNeedingEmbedding will only include docs
+	// whose content_hash changed since the last embed, so this is cheap when
+	// nothing actually changed.
+	initAIProviders(v)
+	ctx := context.Background()
+	cfg := v.Config.AI
+	embedded := false
+	if err := embedDocuments(ctx, v, cfg); err != nil {
+		slog.Debug("incremental embed skipped", "reason", err.Error())
+	} else {
+		embedded = true
+	}
+
+	result := IndexDocResult{
+		Path:       v.RelPath(absPath),
+		Embedded:   embedded,
+		DurationMs: time.Since(start).Milliseconds(),
+	}
+
+	if getFormat(cmd) == output.FormatJSON {
+		data, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if !flagPorcelain {
+		fmt.Printf("Indexed %s in %dms\n", result.Path, result.DurationMs)
 	}
 	return nil
 }

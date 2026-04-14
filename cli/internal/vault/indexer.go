@@ -80,6 +80,25 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 	return stats, nil
 }
 
+// IndexSingleFile indexes one markdown file (upsert document, chunks, tags,
+// links) and re-resolves the global link table. Use this for incremental
+// editor saves instead of rebuilding the whole vault.
+func IndexSingleFile(v *Vault, absPath string) error {
+	relPath := v.RelPath(absPath)
+	if IsIgnored(relPath) {
+		return fmt.Errorf("path is ignored: %s", relPath)
+	}
+	if err := indexFile(v.DB, absPath, relPath); err != nil {
+		return fmt.Errorf("index file: %w", err)
+	}
+	// Re-resolve wikilinks so any new [[targets]] in this doc get linked
+	// against the rest of the vault. This is a cheap SQL-only operation.
+	if err := v.DB.ResolveLinks(); err != nil {
+		return fmt.Errorf("resolve links: %w", err)
+	}
+	return nil
+}
+
 func indexFile(db *store.DB, absPath, relPath string) error {
 	doc, err := document.ParseFile(absPath)
 	if err != nil {

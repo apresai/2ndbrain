@@ -135,7 +135,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | AI-UB-003 | Assign stable UUID at creation stored in `id` frontmatter field | Unit | Create document, rename file, verify UUID in frontmatter persists unchanged | Complete | Not Written |
 | AI-UB-004 | Expose vault operations through built-in MCP server via stdio | Integration | Start MCP server, send tool invocation over stdin, verify JSON response on stdout | Complete | Not Written |
 | AI-UB-005 | Support MCP Resources with audience, priority, lastModified | Integration | List MCP resources, verify documents exposed with proper annotations | Partial | Not Written |
-| AI-EV-001 | On save, re-embed only chunks with changed content hash | Integration | Save document with one changed section, verify only that chunk re-embedded | Not Started | Not Written |
+| AI-EV-001 | On save, re-embed only chunks with changed content hash | Integration | Save document with one changed section, verify only that chunk re-embedded | Partial | Not Written |
 | AI-EV-002 | New document gets auto-generated UUID in frontmatter `id` | Unit | Create new document via CLI and GUI, verify UUID populated in frontmatter | Complete | Not Written |
 | AI-EV-003 | Export Context Bundle generates CLAUDE.md-compatible file | Integration | Run export-context, verify output is valid CLAUDE.md format with relevant docs | Complete | Not Written |
 | AI-EV-004 | Cmd+Shift+M opens MCP server status panel | Manual | Press Cmd+Shift+M, verify status panel shows connected clients and recent invocations | Complete | Not Written |
@@ -145,7 +145,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | AI-EV-008 | `kb_create` creates document from template with UUID | Integration | Invoke kb_create with type, verify new file with template frontmatter and UUID | Complete | Not Written |
 | AI-EV-009 | `kb_update_meta` updates frontmatter without modifying body | Integration | Invoke kb_update_meta, verify frontmatter field changed and body text identical | Complete | Not Written |
 | AI-EV-010 | `kb_structure` returns heading hierarchy as JSON tree | Integration | Invoke kb_structure, verify JSON tree with heading levels and chunk IDs | Complete | Not Written |
-| AI-EV-011 | Suggest Links analyzes document and suggests wikilinks | Integration | Run Suggest Links on a document, verify suggested links to semantically related docs | Not Started | Not Written |
+| AI-EV-011 | Suggest Links analyzes document and suggests wikilinks | Integration | Run Suggest Links on a document, verify suggested links to semantically related docs | Complete | Not Written |
 | AI-ST-001 | MCP status indicator in status bar with client count | Manual | Start MCP server, connect a client, verify status bar shows connected count | Complete | Not Written |
 | AI-ST-002 | Embedding build progress shown as percentage in status bar | Manual | Trigger embedding build, verify percentage progress displayed in status bar | Complete | Not Written |
 | AI-ST-003 | Open document shows chunk count and token estimate in status bar | Manual | Open a document, verify chunk count and estimated token count in status bar | Not Started | Not Written |
@@ -341,7 +341,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | Markdown Rendering | 12 | 7 | 3 | 2 | 0 |
 | File System & Storage | 12 | 9 | 3 | 0 | 0 |
 | Search & Discovery | 19 | 14 | 4 | 1 | 0 |
-| AI Integration | 25 | 18 | 3 | 4 | 0 |
+| AI Integration | 25 | 19 | 4 | 2 | 0 |
 | CLI Interface | 20 | 20 | 0 | 0 | 0 |
 | Knowledge Graph & Linking | 15 | 9 | 6 | 0 | 0 |
 | Frontmatter & Metadata | 12 | 10 | 2 | 0 | 0 |
@@ -351,13 +351,13 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | Security & Privacy | 8 | 1 | 5 | 2 | 0 |
 | Error Handling & Recovery | 10 | 4 | 4 | 2 | 0 |
 | Obsidian Vault Conversion | 11 | 6 | 5 | 0 | 0 |
-| **Total** | **211** | **130** | **56** | **25** | **0** |
+| **Total** | **211** | **131** | **57** | **23** | **0** |
 
 ### Implementation Coverage
 
-- **Complete**: 62% (130 of 211 requirements fully implemented)
-- **Partial**: 27% (56 of 211 requirements partially implemented)
-- **Not Started**: 12% (25 of 211 requirements not yet started)
+- **Complete**: 62% (131 of 211 requirements fully implemented)
+- **Partial**: 27% (57 of 211 requirements partially implemented)
+- **Not Started**: 11% (23 of 211 requirements not yet started)
 - **Tests Written**: 0% (no formal test cases written yet)
 
 ### Priority Areas for Test Development
@@ -371,7 +371,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 ### Not Started Features (by area)
 
 - **Search**: Suggested queries on zero results (SRC-UW-001)
-- **AI**: Incremental re-embed on save, LLM autocomplete, Suggest Links, chunk count in status bar
+- **AI**: LLM autocomplete, chunk count in status bar (incremental re-embed shipped at document level; chunk-level still pending)
 - **Editor**: Vim mode
 - **Rendering**: Mermaid diagrams, LaTeX math
 - **Platform**: Quick Look extension, notarization, menu bar search, global hotkey, Touch ID, Handoff

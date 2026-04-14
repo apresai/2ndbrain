@@ -39,6 +39,17 @@ final class AppState {
     // Merge conflict controllers (one per active dialog, retained so the NSWindow stays alive)
     private var mergeControllers: [MergeConflictController] = []
 
+    // In-flight incremental re-embed tasks keyed by vault-relative path, so a
+    // second save for the same file queues behind the first instead of
+    // racing the database.
+    private var reindexTasks: [String: Task<Void, Never>] = [:]
+
+    // Suggest Links state
+    var showSuggestLinks = false
+    var suggestLinks: [SuggestLinkInfo] = []
+    var suggestLinksLoading = false
+    var suggestLinksError: String?
+
     // AI state
     var aiStatus: AIStatusInfo?
     var isIndexing = false
@@ -663,6 +674,7 @@ final class AppState {
             openDocuments[tabIdx].lastSavedContent = tab.content
             crashJournal?.clearSnapshotSync(documentID: tab.document.id)
             log.debug("\(isAutosave ? "Autosaved" : "Saved"): \(tab.url.lastPathComponent)")
+            triggerIncrementalReindex(for: tab.url)
             return true
         } catch {
             log.error("\(isAutosave ? "Autosave" : "Save") failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
@@ -937,6 +949,72 @@ final class AppState {
         } catch {
             mcpSetupText = "Failed to load MCP setup: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Incremental Re-Embed
+
+    private func triggerIncrementalReindex(for url: URL) {
+        guard let vault else { return }
+        let relPath = vault.relativePath(for: url)
+        // Queue behind any in-flight task for the same path so we never race
+        // the CLI writing chunks to SQLite.
+        let previous = reindexTasks[relPath]
+        let task = Task { [weak self] in
+            if let previous {
+                _ = await previous.value
+            }
+            guard let self else { return }
+            do {
+                _ = try await self.runCLI(
+                    ["index", "--doc", relPath, "--json", "--porcelain"],
+                    cwd: vault.rootURL
+                )
+            } catch {
+                log.debug("incremental reindex failed for \(relPath): \(error.localizedDescription)")
+            }
+            self.reindexTasks.removeValue(forKey: relPath)
+        }
+        reindexTasks[relPath] = task
+    }
+
+    // MARK: - Suggest Links
+
+    func openSuggestLinks() {
+        suggestLinks = []
+        suggestLinksError = nil
+        showSuggestLinks = true
+        Task { await loadSuggestLinks() }
+    }
+
+    func loadSuggestLinks() async {
+        guard let vault, let tab = currentDocument else {
+            suggestLinksError = "No document open."
+            return
+        }
+        suggestLinksLoading = true
+        defer { suggestLinksLoading = false }
+        let relPath = vault.relativePath(for: tab.url)
+        do {
+            let data = try await runCLI(
+                ["suggest-links", relPath, "--json", "--porcelain"],
+                cwd: vault.rootURL
+            )
+            if data.isEmpty {
+                suggestLinks = []
+                return
+            }
+            suggestLinks = (try JSONDecoder().decode([SuggestLinkInfo]?.self, from: data)) ?? []
+        } catch {
+            suggestLinksError = "Could not generate suggestions: \(error.localizedDescription). Ensure an AI provider is configured."
+        }
+    }
+
+    func insertWikilink(for suggestion: SuggestLinkInfo) {
+        guard let idx = validTabIndex else { return }
+        let linkText = "[[\(suggestion.title)]]"
+        openDocuments[idx].content.append(linkText)
+        openDocuments[idx].isDirty = true
+        updateOutline()
     }
 
     // MARK: - MCP Observability

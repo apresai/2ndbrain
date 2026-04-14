@@ -137,6 +137,12 @@ struct SecondBrainApp: App {
                 }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
 
+                Button("Suggest Links") {
+                    appState.openSuggestLinks()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(appState.currentDocument == nil)
+
                 Divider()
 
                 Button("Focus Mode") {

@@ -48,6 +48,7 @@ func Start(v *vault.Vault, version string) error {
 	addTool(kbStructureTool(), h.handleKBStructure)
 	addTool(kbDeleteTool(), h.handleKBDelete)
 	addTool(kbIndexTool(), h.handleKBIndex)
+	addTool(kbSuggestLinksTool(), h.handleKBSuggestLinks)
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)
@@ -255,6 +256,25 @@ Example prompts that should trigger this tool:
 		InputSchema: mcplib.ToolInputSchema{
 			Type:       "object",
 			Properties: map[string]any{},
+		},
+	}
+}
+
+func kbSuggestLinksTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_suggest_links",
+		Description: `Suggest semantically related documents that would make good [[wikilink]] targets from the given document. Uses vector search to find similar content, excluding documents already linked. Returns ranked candidates with title, path, score, and snippet.
+
+Example prompts that should trigger this tool:
+- "What should I link to from the JWT ADR?"
+- "Find wikilink candidates for my caching notes"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path":  map[string]any{"type": "string", "description": "Vault-relative path to the source document"},
+				"limit": map[string]any{"type": "integer", "description": "Maximum number of suggestions (default 10)"},
+			},
+			Required: []string{"path"},
 		},
 	}
 }
