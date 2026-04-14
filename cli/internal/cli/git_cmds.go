@@ -21,6 +21,8 @@ var gitCmd = &cobra.Command{
 uncommitted changes, and file diffs without the user having to leave 2ndbrain.
 
 All git commands are READ-ONLY. To commit, push, or pull, use git directly.`,
+	// Default action when invoked without a subcommand: show status.
+	RunE: runGitStatus,
 }
 
 var gitActivityCmd = &cobra.Command{

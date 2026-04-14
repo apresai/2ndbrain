@@ -54,9 +54,14 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Searching for relevant context...\n")
 	}
 
-	// Search for relevant context
+	// Search for relevant context. Apply the vault's similarity threshold
+	// so RAG doesn't ingest low-cosine neighbors as if they were context.
 	engine := search.NewEngine(v.DB.Conn())
-	opts := search.Options{Query: question, Limit: 5}
+	opts := search.Options{
+		Query:          question,
+		Limit:          5,
+		MinVectorScore: cfg.ResolveSimilarityThreshold(),
+	}
 
 	var results []search.Result
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)

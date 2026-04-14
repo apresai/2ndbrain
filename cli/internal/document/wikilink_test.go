@@ -62,3 +62,50 @@ func TestExtractWikiLinks_None(t *testing.T) {
 		t.Errorf("expected 0 links, got %d", len(links))
 	}
 }
+
+func TestExtractWikiLinks_IgnoresInlineCode(t *testing.T) {
+	// Discussion prose mentions wikilink syntax via backticks — must not
+	// produce broken-link warnings from lint.
+	body := "Use `[[Title]]` as a wikilink, or write [[real-doc]]."
+	links := ExtractWikiLinks(body)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d: %+v", len(links), links)
+	}
+	if links[0].Target != "real-doc" {
+		t.Errorf("target = %q, want real-doc", links[0].Target)
+	}
+}
+
+func TestExtractWikiLinks_IgnoresFencedCode(t *testing.T) {
+	// A fenced code block demonstrating wikilinks shouldn't count as a link.
+	body := "See docs:\n\n```markdown\n[[example-link]]\n```\n\nThen [[real-doc]] applies."
+	links := ExtractWikiLinks(body)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d: %+v", len(links), links)
+	}
+	if links[0].Target != "real-doc" {
+		t.Errorf("target = %q, want real-doc", links[0].Target)
+	}
+}
+
+func TestExtractWikiLinks_IgnoresTildeFencedCode(t *testing.T) {
+	body := "~~~\n[[inside]]\n~~~\n[[outside]]"
+	links := ExtractWikiLinks(body)
+	if len(links) != 1 || links[0].Target != "outside" {
+		t.Errorf("got %+v, want [outside]", links)
+	}
+}
+
+func TestExtractWikiLinks_MultipleInlineCodeMixed(t *testing.T) {
+	// Multiple inline code spans interleaved with real links.
+	body := "Real [[alpha]], code `[[fake]]`, real [[beta]], code `[[also-fake]]`, real [[gamma]]."
+	links := ExtractWikiLinks(body)
+	if len(links) != 3 {
+		t.Fatalf("expected 3 real links, got %d: %+v", len(links), links)
+	}
+	for i, want := range []string{"alpha", "beta", "gamma"} {
+		if links[i].Target != want {
+			t.Errorf("links[%d].Target = %q, want %q", i, links[i].Target, want)
+		}
+	}
+}

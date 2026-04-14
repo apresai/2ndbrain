@@ -14,6 +14,8 @@ import (
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "MCP server management and observability",
+	// Default action when invoked without a subcommand: show live servers.
+	RunE: runMCPStatus,
 }
 
 var mcpStatusCmd = &cobra.Command{

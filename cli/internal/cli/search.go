@@ -16,11 +16,12 @@ import (
 )
 
 var (
-	searchType    string
-	searchStatus  string
-	searchTag     string
-	searchLimit   int
-	searchBM25Only bool
+	searchType      string
+	searchStatus    string
+	searchTag       string
+	searchLimit     int
+	searchBM25Only  bool
+	searchThreshold float64
 )
 
 var searchCmd = &cobra.Command{
@@ -37,6 +38,7 @@ func init() {
 	searchCmd.Flags().StringVar(&searchTag, "tag", "", "Filter by tag")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "Maximum number of results")
 	searchCmd.Flags().BoolVar(&searchBM25Only, "bm25-only", false, "Use keyword search only (skip vector search)")
+	searchCmd.Flags().Float64Var(&searchThreshold, "threshold", 0, "Minimum cosine similarity for vector hits (default: ai.similarity_threshold, typically 0.20)")
 	searchCmd.GroupID = "ai"
 	rootCmd.AddCommand(searchCmd)
 }
@@ -79,13 +81,18 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	engine := search.NewEngine(v.DB.Conn())
+	threshold := searchThreshold
+	if threshold == 0 {
+		threshold = v.Config.AI.ResolveSimilarityThreshold()
+	}
 	opts := search.Options{
-		Query:    strings.TrimSpace(query),
-		Type:     searchType,
-		Status:   searchStatus,
-		Tag:      searchTag,
-		Limit:    searchLimit,
-		BM25Only: searchBM25Only,
+		Query:          strings.TrimSpace(query),
+		Type:           searchType,
+		Status:         searchStatus,
+		Tag:            searchTag,
+		Limit:          searchLimit,
+		BM25Only:       searchBM25Only,
+		MinVectorScore: threshold,
 	}
 
 	// Try hybrid search if embeddings are available
@@ -151,7 +158,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		if r.DocType != "" {
 			fmt.Printf(" [%s]", r.DocType)
 		}
-		fmt.Printf(" (%.3f)\n", r.Score)
+		if r.VectorScore > 0 {
+			fmt.Printf(" (rrf=%.3f, cos=%.3f)\n", r.Score, r.VectorScore)
+		} else {
+			fmt.Printf(" (rrf=%.3f)\n", r.Score)
+		}
 		if r.Content != "" {
 			// Show first 120 chars of content
 			snippet := r.Content

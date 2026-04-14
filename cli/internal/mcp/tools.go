@@ -145,16 +145,17 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 	}
 
 	engine := search.NewEngine(h.vault.DB.Conn())
+	cfg := h.vault.Config.AI
 	opts := search.Options{
-		Query:  query,
-		Type:   docType,
-		Status: status,
-		Tag:    tag,
-		Limit:  limit,
+		Query:          query,
+		Type:           docType,
+		Status:         status,
+		Tag:            tag,
+		Limit:          limit,
+		MinVectorScore: cfg.ResolveSimilarityThreshold(),
 	}
 
 	// Try hybrid search if provider is available
-	cfg := h.vault.Config.AI
 	var results []search.Result
 	var mode search.SearchMode
 
@@ -217,7 +218,11 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 
 	// Search for relevant context
 	engine := search.NewEngine(h.vault.DB.Conn())
-	opts := search.Options{Query: question, Limit: 5}
+	opts := search.Options{
+		Query:          question,
+		Limit:          5,
+		MinVectorScore: cfg.ResolveSimilarityThreshold(),
+	}
 
 	var results []search.Result
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
@@ -724,7 +729,7 @@ func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.Call
 		return mcplib.NewToolResultError(fmt.Sprintf("load embeddings: %v", err)), nil
 	}
 
-	scored := search.VectorSearch(queryVecs[0], docIDs, embeddings, limit*3)
+	scored := search.VectorSearchThreshold(queryVecs[0], docIDs, embeddings, limit*3, cfg.ResolveSimilarityThreshold())
 
 	var sourceID string
 	if dbDoc, err := h.vault.DB.GetDocumentByPath(path); err == nil && dbDoc != nil {

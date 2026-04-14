@@ -166,7 +166,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `search <query> [--type] [--status] [--tag]` | Hybrid BM25 + semantic search |
+| `search <query> [--type] [--status] [--tag] [--threshold]` | Hybrid BM25 + semantic search (shows `rrf` + raw `cos` scores) |
 | `ask <question>` | RAG Q&A with source citations |
 | `suggest-links <path> [--limit 10]` | Rank semantically related documents for wikilink insertion |
 | `polish <path> [--system <prompt>]` | AI copy-edit a document (JSON with original + polished body) |
@@ -222,12 +222,18 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `config show` | Show full vault configuration |
-| `config get <key>` | Get a config value (e.g., `ai.provider`) |
+| `config show` | Show full vault configuration (vault root + dir + name + all `ai.*` keys) |
+| `config get <key>` | Get a config value (e.g., `ai.provider`, `ai.similarity_threshold`) |
 | `config set <key> <value>` | Set a config value |
 | `config set-key <provider>` | Store API key in macOS Keychain |
 
 All commands support `--json`, `--yaml`, `--csv` for machine-readable output.
+
+### Defaults and search scoring
+
+- **Parent-command defaults** — running a command group without a subcommand invokes its most-useful read-only action: `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works on every command.
+- **Similarity threshold** — hybrid search drops vector hits whose cosine similarity is below `ai.similarity_threshold` (default `0.20`) so barely-related neighbors stop padding result lists. Configure with `2nb config set ai.similarity_threshold 0.25` or override per-query with `2nb search "foo" --threshold 0.35`.
+- **Score display** — `2nb search` now shows `(rrf=X.XXX, cos=Y.YYY)` on each result. The `rrf` is the Reciprocal Rank Fusion score used for ranking; `cos` is the raw cosine similarity from the vector channel, which is what you actually want to look at when judging whether a result is relevant. If legitimate matches are being cut, lower the threshold; if noise is slipping through, raise it.
 
 ## MCP Server
 

@@ -139,7 +139,7 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `read` | `--chunk` | Read full document or specific section |
 | `meta` | `--set key=value` | View or update frontmatter with schema validation |
 | `index` | `--doc <path>` | Rebuild vault search index (or a single document) |
-| `search` | `--type`, `--status`, `--tag`, `--limit` | Hybrid BM25 search with filters |
+| `search` | `--type`, `--status`, `--tag`, `--limit`, `--threshold`, `--bm25-only` | Hybrid BM25 + semantic search with configurable cosine cutoff |
 | `list` | `--type`, `--status`, `--tag`, `--limit`, `--sort` | List documents with filters |
 | `lint` | `[glob]` | Validate schemas, check broken wikilinks |
 | `stale` | `--since` | List documents not modified within N days |
@@ -174,12 +174,16 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `skills install` | `<agent>`, `--all`, `--force`, `--user` | Install skill file for an AI coding agent |
 | `skills uninstall` | `<agent>`, `--all`, `--user` | Remove skill file for an AI coding agent |
 | `skills show` | `<agent>` | Preview skill content for an agent |
-| `config show` | | Dump full vault configuration |
-| `config get` | `<key>` | Read a config value |
+| `config show` | | Dump full vault configuration including vault_root, vault_dir, vault_name |
+| `config get` | `<key>` | Read a config value (e.g. `ai.provider`, `ai.similarity_threshold`) |
 | `config set` | `<key> <value>` | Write a config value |
 | `config set-key` | `<provider>` | Store API key in macOS Keychain |
 
 **Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`
+
+**Parent-command defaults:** running a group without a subcommand invokes the most-useful read-only action instead of printing help. `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works on every command because Cobra intercepts it before `RunE`.
+
+**Similarity threshold:** hybrid search drops vector hits whose cosine similarity is below `ai.similarity_threshold` (default `0.20`, configurable via `2nb config set`). Pass `--threshold <float>` on `2nb search` for one-off overrides. Results display `(rrf=X.XXX, cos=Y.YYY)` so you can judge semantic relevance directly — the RRF score alone is opaque.
 
 **Logging:** When `--verbose` is used, structured logs (via `log/slog`) are written to stderr and to `.2ndbrain/logs/cli.log`. Without `--verbose`, only the log file is written.
 

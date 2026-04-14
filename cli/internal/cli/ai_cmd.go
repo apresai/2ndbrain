@@ -14,6 +14,8 @@ import (
 var aiCmd = &cobra.Command{
 	Use:   "ai",
 	Short: "AI provider management",
+	// Default action when invoked without a subcommand: show status.
+	RunE: runAIStatus,
 }
 
 var aiStatusCmd = &cobra.Command{

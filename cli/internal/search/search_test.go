@@ -128,3 +128,32 @@ func TestFtsQuery_KeywordUsesAND(t *testing.T) {
 		t.Errorf("ftsQuery = %q, want space-joined AND", got)
 	}
 }
+
+func TestFtsQuery_VersionStringQuoted(t *testing.T) {
+	// Terms with dots previously failed with "syntax error near ."
+	// because FTS5 parses bare dots as column-filter operators.
+	got := ftsQuery("v0.1.9 release")
+	want := `"v0.1.9" release`
+	if got != want {
+		t.Errorf("ftsQuery = %q, want %q", got, want)
+	}
+}
+
+func TestFtsQuery_DashedModelIdQuoted(t *testing.T) {
+	// Model IDs like "claude-haiku-4-5" also tripped the parser
+	// (FTS5 treats "-" as NOT).
+	got := ftsQuery("claude-haiku-4-5")
+	want := `"claude-haiku-4-5"`
+	if got != want {
+		t.Errorf("ftsQuery = %q, want %q", got, want)
+	}
+}
+
+func TestFtsQuery_PlainWordsNotQuoted(t *testing.T) {
+	// Regression guard: alphanumeric-only terms must stay unquoted
+	// so existing queries don't get wrapped unnecessarily.
+	got := ftsQuery("simple query test")
+	if got != "simple query test" {
+		t.Errorf("ftsQuery = %q, want unquoted", got)
+	}
+}

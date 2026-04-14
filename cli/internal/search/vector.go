@@ -30,27 +30,40 @@ func CosineSimilarity(a, b []float32) float64 {
 }
 
 // VectorSearch performs brute-force cosine similarity search over all embeddings.
+// Backwards-compatible wrapper — does not apply a similarity threshold.
+// New callers should prefer VectorSearchThreshold to filter out noise neighbors.
 func VectorSearch(query []float32, docIDs []string, embeddings [][]float32, limit int) []ScoredDoc {
+	return VectorSearchThreshold(query, docIDs, embeddings, limit, 0)
+}
+
+// VectorSearchThreshold performs brute-force cosine similarity search and
+// drops any hit below minScore before sorting. minScore <= 0 means "no filter".
+// Use ai.AIConfig.ResolveSimilarityThreshold() to pick a default.
+func VectorSearchThreshold(query []float32, docIDs []string, embeddings [][]float32, limit int, minScore float64) []ScoredDoc {
 	if len(docIDs) != len(embeddings) || len(docIDs) == 0 {
 		return nil
 	}
 
-	scored := make([]ScoredDoc, len(docIDs))
+	scored := make([]ScoredDoc, 0, len(docIDs))
 	for i, emb := range embeddings {
-		scored[i] = ScoredDoc{
-			DocID: docIDs[i],
-			Score: CosineSimilarity(query, emb),
+		score := CosineSimilarity(query, emb)
+		if minScore > 0 && score < minScore {
+			continue
 		}
+		scored = append(scored, ScoredDoc{
+			DocID: docIDs[i],
+			Score: score,
+		})
 	}
 
 	sort.Slice(scored, func(i, j int) bool {
 		return scored[i].Score > scored[j].Score
 	})
 
-	if limit > len(scored) {
-		limit = len(scored)
+	if limit > 0 && limit < len(scored) {
+		scored = scored[:limit]
 	}
-	return scored[:limit]
+	return scored
 }
 
 // DocLookup provides document metadata for vector-only results.
@@ -61,11 +74,15 @@ type DocLookup interface {
 // ReciprocalRankFusion combines BM25 and vector search results using RRF.
 // score = Σ 1/(k + rank_i) where k=60.
 // If lookup is provided, vector-only results get populated with full metadata.
+// The raw cosine similarity from the vector channel is preserved on each
+// result as VectorScore, so callers can surface it alongside the opaque
+// RRF score and judge relevance directly.
 func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit int, lookup DocLookup) []Result {
 	const k = 60.0
 
 	scores := make(map[string]float64)
 	resultMap := make(map[string]Result)
+	vectorScores := make(map[string]float64)
 
 	// Score BM25 results by rank
 	for rank, r := range bm25Results {
@@ -73,9 +90,10 @@ func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit
 		resultMap[r.DocID] = r
 	}
 
-	// Score vector results by rank
+	// Score vector results by rank and remember the raw cosine
 	for rank, v := range vectorResults {
 		scores[v.DocID] += 1.0 / (k + float64(rank+1))
+		vectorScores[v.DocID] = v.Score
 		if _, exists := resultMap[v.DocID]; !exists {
 			// Try to look up full metadata for vector-only results
 			if lookup != nil {
@@ -111,6 +129,7 @@ func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit
 	for i := 0; i < limit; i++ {
 		r := resultMap[entries[i].docID]
 		r.Score = entries[i].score
+		r.VectorScore = vectorScores[entries[i].docID]
 		results[i] = r
 	}
 	return results

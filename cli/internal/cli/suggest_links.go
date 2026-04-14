@@ -100,8 +100,13 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 	}
 
 	// Over-fetch so we still hit limit after filtering out the source doc and
-	// docs it already links to.
-	scored := search.VectorSearch(queryVecs[0], docIDs, embeddings, suggestLinksLimit*3)
+	// docs it already links to. Apply the vault's similarity threshold so we
+	// don't suggest links to docs that happen to be the nearest neighbors
+	// but aren't actually related.
+	scored := search.VectorSearchThreshold(
+		queryVecs[0], docIDs, embeddings, suggestLinksLimit*3,
+		cfg.ResolveSimilarityThreshold(),
+	)
 
 	// Resolve the source doc ID and its outgoing links for exclusion.
 	var sourceID string

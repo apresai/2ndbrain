@@ -14,6 +14,8 @@ import (
 var skillsCmd = &cobra.Command{
 	Use:   "skills",
 	Short: "Manage 2ndbrain skill files for AI coding agents",
+	// Default action when invoked without a subcommand: list agents and status.
+	RunE: runSkillsList,
 }
 
 var skillsListCmd = &cobra.Command{

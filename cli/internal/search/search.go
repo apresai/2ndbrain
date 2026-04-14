@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 type Result struct {
@@ -14,6 +15,10 @@ type Result struct {
 	HeadingPath string         `json:"heading_path"`
 	Content     string         `json:"content"`
 	Score       float64        `json:"score"`
+	// VectorScore is the raw cosine similarity when a result came through
+	// the vector channel. Zero when the result is BM25-only. Lets callers
+	// distinguish "strong semantic match" from "RRF scraped the barrel".
+	VectorScore float64        `json:"vector_score,omitempty"`
 	DocType     string         `json:"type"`
 	Status      string         `json:"status"`
 	Frontmatter map[string]any `json:"frontmatter,omitempty"`
@@ -26,6 +31,11 @@ type Options struct {
 	Tag      string
 	Limit    int
 	BM25Only bool // force keyword-only search
+	// MinVectorScore is the minimum cosine similarity for a vector hit to
+	// count. Below this the vector channel ignores the doc so it doesn't
+	// pad the RRF output with barely-related neighbors. Zero means "no
+	// filter" — the caller should supply ai.AIConfig.ResolveSimilarityThreshold().
+	MinVectorScore float64
 }
 
 // SearchMode indicates which search method was used.
@@ -82,8 +92,8 @@ func (e *Engine) HybridSearch(opts Options, queryEmbedding []float32, docIDs []s
 		return bm25Results, ModeKeyword, nil
 	}
 
-	// Vector search
-	vectorResults := VectorSearch(queryEmbedding, docIDs, embeddings, opts.Limit*2)
+	// Vector search, with optional threshold to drop noise neighbors
+	vectorResults := VectorSearchThreshold(queryEmbedding, docIDs, embeddings, opts.Limit*2, opts.MinVectorScore)
 
 	// Combine with RRF (engine implements DocLookup for vector-only results)
 	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e)
@@ -227,6 +237,11 @@ var stopWords = map[string]bool{
 
 // ftsQuery converts a query to FTS5 syntax.
 // Natural language questions use OR; keyword queries use AND (H2 fix).
+// Terms containing non-word characters (dots, dashes, slashes, colons)
+// are wrapped in double quotes so FTS5 treats them as literal phrases
+// instead of parsing them as column filters or other operators — without
+// this, queries like "v0.1.9" or "claude-haiku-4-5" fail with a syntax
+// error near "." or "-".
 func ftsQuery(q string) string {
 	words := strings.Fields(q)
 	if len(words) == 0 {
@@ -246,9 +261,10 @@ func ftsQuery(q string) string {
 		w = strings.ReplaceAll(w, "*", "")
 		w = strings.TrimRight(w, "?!.,;:")
 		w = strings.ToLower(w)
-		if w != "" && !stopWords[w] && !questionWords[w] {
-			parts = append(parts, w)
+		if w == "" || stopWords[w] || questionWords[w] {
+			continue
 		}
+		parts = append(parts, quoteForFTS(w))
 	}
 	if len(parts) == 0 {
 		return strings.Join(strings.Fields(q), " ")
@@ -259,4 +275,19 @@ func ftsQuery(q string) string {
 	}
 	// Keyword queries use implicit AND (space-separated = AND in FTS5)
 	return strings.Join(parts, " ")
+}
+
+// quoteForFTS wraps a term in double quotes when it contains any character
+// that isn't a letter, digit, or underscore. FTS5 parses unquoted terms
+// through its query grammar, where punctuation like "." (column filter),
+// "-" (NOT), "+" (AND), ":" (column separator) have operator meanings.
+// Quoted terms are treated as literal phrases which the tokenizer then
+// splits into tokens — giving us the "just search for this thing" behavior.
+func quoteForFTS(term string) string {
+	for _, r := range term {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return "\"" + term + "\""
+		}
+	}
+	return term
 }

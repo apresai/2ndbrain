@@ -28,6 +28,8 @@ var (
 var modelsCmd = &cobra.Command{
 	Use:   "models",
 	Short: "Manage AI models",
+	// Default action when invoked without a subcommand: list the catalog.
+	RunE: runModelsList,
 }
 
 var modelsListCmd = &cobra.Command{

@@ -14,6 +14,8 @@ import (
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage vault configuration",
+	// Default action when invoked without a subcommand: show config.
+	RunE: runConfigShow,
 }
 
 var configShowCmd = &cobra.Command{
@@ -52,6 +54,16 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 }
 
+// configDisplay wraps Config with vault location metadata so `config show`
+// answers "which vault am I editing?" at the top instead of requiring the
+// user to cross-reference with `2nb vault`.
+type configDisplay struct {
+	VaultRoot string   `json:"vault_root" yaml:"vault_root"`
+	VaultDir  string   `json:"vault_dir" yaml:"vault_dir"`
+	VaultName string   `json:"vault_name" yaml:"vault_name"`
+	Config    any      `json:"config" yaml:"config"`
+}
+
 func runConfigShow(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
@@ -59,8 +71,15 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
+	display := configDisplay{
+		VaultRoot: v.Root,
+		VaultDir:  v.DotDir,
+		VaultName: v.Config.Name,
+		Config:    v.Config,
+	}
+
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, v.Config)
+	return output.Write(os.Stdout, format, display)
 }
 
 func runConfigGet(cmd *cobra.Command, args []string) error {
