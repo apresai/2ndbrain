@@ -29,6 +29,45 @@ Bump targets (root `Makefile`):
 
 Each bump target also regenerates `Version.swift`. Never edit `Version.swift` by hand.
 
+## Release
+
+Both the CLI and macOS editor are published via Homebrew:
+
+```bash
+brew install apresai/tap/2nb                    # CLI only
+brew install --cask apresai/tap/secondbrain     # macOS editor (installs CLI as dependency)
+```
+
+### Release Pipeline
+
+1. `make bump-build` (or `bump-minor` / `bump-major`) — increment `VERSION`, regenerate `Version.swift`
+2. `make release` — updates `CHANGELOG.md`, commits, creates git tag `v<VERSION>`, pushes tag
+3. GitHub Actions (`.github/workflows/release.yml`) triggers on the tag push:
+   - Runs on `macos-latest` (arm64) with CGO_ENABLED=1 and Swift toolchain
+   - GoReleaser (`.goreleaser.yaml`) builds CLI for macOS arm64 + x86_64, creates GitHub Release, pushes formula `twonb.rb` to `apresai/homebrew-tap`
+   - Builds SecondBrain.app (`swift build -c release`), assembles `.app` bundle, ad-hoc codesigns
+   - Packages as `SecondBrain-<VERSION>-arm64.zip` via `ditto`, uploads to GitHub Release
+   - Pushes cask `Casks/secondbrain.rb` to `apresai/homebrew-tap` (generated from `casks/secondbrain.rb.tmpl`)
+4. `make release-local` — same flow but runs `goreleaser release --clean` locally (CLI only, no app build)
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `.goreleaser.yaml` | GoReleaser config: CLI builds, archives, changelog, Homebrew formula |
+| `.github/workflows/release.yml` | CI workflow triggered on `v*` tags (CLI + app) |
+| `casks/secondbrain.rb.tmpl` | Homebrew cask template with `CASK_VERSION`/`CASK_SHA256` tokens |
+| `scripts/update-changelog.sh` | Generates CHANGELOG.md entries for a version |
+| `CHANGELOG.md` | Auto-generated release history |
+
+### Secrets
+
+The `apresai` GitHub environment provides `HOMEBREW_TAP_TOKEN` — a PAT with write access to `apresai/homebrew-tap`.
+
+### App Distribution Notes
+
+The macOS editor is distributed as an arm64 ad-hoc signed `.app` bundle. It is **not** notarized with Apple Developer ID, so users must right-click > Open on first launch to bypass Gatekeeper. The cask declares `depends_on formula: "apresai/tap/twonb"` because the app shells out to `2nb` for AI, indexing, and lint features.
+
 ## Build
 
 ```bash

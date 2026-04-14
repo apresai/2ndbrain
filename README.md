@@ -9,10 +9,18 @@ AI-native markdown knowledge base with semantic search. A Go CLI, MCP server, an
 ## Install
 
 ```bash
+brew install --cask apresai/tap/secondbrain
+```
+
+This installs both the `2nb` CLI and the SecondBrain macOS editor. If you only need the CLI:
+
+```bash
 brew install apresai/tap/2nb
 ```
 
 Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/releases).
+
+> **Note:** The editor is ad-hoc signed (not notarized). On first launch, right-click the app and choose "Open" to bypass the macOS Gatekeeper warning.
 
 ## Quick Start
 
@@ -422,12 +430,46 @@ make test           # Go unit tests
 make test-swift     # Swift unit tests (JSON decoding, parsing, wizard logic)
 make test-gui       # GUI tests (AppleScript automation)
 make test-all       # Go + Swift + GUI
-make release        # Tag + push (GitHub Actions builds + publishes)
 ```
 
 Requires Go 1.24+, CGO_ENABLED=1, macOS 14+ (for Swift app).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+## Releasing
+
+Both the CLI and macOS editor are published to Homebrew via GitHub Actions.
+
+```bash
+# 1. Bump the version
+make bump-build          # 0.1.8 → 0.1.9 (or bump-minor / bump-major)
+
+# 2. Release — tags, pushes, and triggers CI
+make release
+```
+
+`make release` updates `CHANGELOG.md`, commits, creates a git tag, and pushes it. GitHub Actions then:
+
+1. Builds CLI binaries (arm64 + x86_64) via [GoReleaser](https://goreleaser.com)
+2. Builds SecondBrain.app (arm64, `swift build -c release`)
+3. Creates a [GitHub Release](https://github.com/apresai/2ndbrain/releases) with all archives
+4. Pushes the Homebrew formula and cask to [`apresai/homebrew-tap`](https://github.com/apresai/homebrew-tap)
+
+Users install with:
+
+```bash
+brew install apresai/tap/2nb                    # CLI
+brew install --cask apresai/tap/secondbrain     # macOS editor (includes CLI)
+```
+
+To build a release locally (without GitHub Actions):
+
+```bash
+make release-local       # runs goreleaser locally (CLI only)
+make package-app         # builds + zips SecondBrain.app locally
+```
+
+> **Note:** The editor is ad-hoc signed, not notarized with Apple Developer ID. Users must right-click > Open on first launch to bypass Gatekeeper.
 
 ## Architecture
 

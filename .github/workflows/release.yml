@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest  # CGO (SQLite) requires macOS toolchain
+    runs-on: macos-latest  # CGO (SQLite) + Swift require macOS toolchain
     environment: apresai    # Access HOMEBREW_TAP_TOKEN from this environment
     steps:
       - name: Checkout
@@ -23,6 +23,11 @@ jobs:
         with:
           go-version: '1.24'
 
+      - name: Read version
+        run: |
+          VERSION=$(cat VERSION | tr -d '\n')
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -33,20 +38,90 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
-      - name: Add Homebrew tap alias
+      - name: Build SecondBrain.app
+        run: |
+          # Generate Version.swift
+          echo '// Auto-generated from VERSION file — do not edit manually.' > app/Sources/SecondBrain/Version.swift
+          echo "let appVersion = \"${VERSION}\"" >> app/Sources/SecondBrain/Version.swift
+
+          # Build release binary
+          cd app && swift build -c release
+          cd ..
+
+          # Assemble .app bundle
+          BUNDLE="app/.build/arm64-apple-macosx/release/SecondBrain.app"
+          mkdir -p "${BUNDLE}/Contents/MacOS"
+          mkdir -p "${BUNDLE}/Contents/Resources"
+          cp -f "app/.build/arm64-apple-macosx/release/SecondBrain" "${BUNDLE}/Contents/MacOS/SecondBrain"
+          cp -f "app/Resources/AppIcon.icns" "${BUNDLE}/Contents/Resources/AppIcon.icns"
+
+          # Write Info.plist
+          cat > "${BUNDLE}/Contents/Info.plist" << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key><string>SecondBrain</string>
+            <key>CFBundleIdentifier</key><string>dev.apresai.2ndbrain</string>
+            <key>CFBundleName</key><string>SecondBrain</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+          </dict>
+          </plist>
+          PLIST
+
+          # Ad-hoc codesign
+          codesign -s - --deep --force "${BUNDLE}" 2>/dev/null || true
+
+      - name: Package and upload SecondBrain.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BUNDLE="app/.build/arm64-apple-macosx/release/SecondBrain.app"
+          ZIP_NAME="SecondBrain-${VERSION}-arm64.zip"
+
+          # ditto preserves macOS bundle metadata and extended attributes
+          ditto -c -k --keepParent "${BUNDLE}" "${ZIP_NAME}"
+
+          # Capture SHA256 for cask template
+          SHA256=$(shasum -a 256 "${ZIP_NAME}" | awk '{print $1}')
+          echo "APP_SHA256=${SHA256}" >> $GITHUB_ENV
+
+          # Attach to the GitHub Release that GoReleaser created
+          gh release upload "v${VERSION}" "${ZIP_NAME}"
+
+      - name: Update Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          # GoReleaser writes twonb.rb (valid Ruby class Twonb). Add an alias
-          # so "brew install apresai/tap/2nb" also works.
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/apresai/homebrew-tap.git /tmp/homebrew-tap
           cd /tmp/homebrew-tap
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Add 2nb alias for twonb formula (first release only)
           if [ -f twonb.rb ] && [ ! -L Aliases/2nb ]; then
             mkdir -p Aliases
             ln -s ../twonb.rb Aliases/2nb
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
             git add Aliases/2nb
-            git commit -m "Add 2nb alias for twonb formula"
+          fi
+
+          # Generate cask from template
+          mkdir -p Casks
+          sed \
+            -e "s/CASK_VERSION/${VERSION}/g" \
+            -e "s/CASK_SHA256/${APP_SHA256}/g" \
+            "$GITHUB_WORKSPACE/casks/secondbrain.rb.tmpl" \
+            > Casks/secondbrain.rb
+          git add Casks/secondbrain.rb
+
+          # Commit and push if there are staged changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Release v${VERSION}: update formula + cask"
             git push
           fi

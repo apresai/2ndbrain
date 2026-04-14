@@ -124,7 +124,7 @@ public final class VaultManager: @unchecked Sendable {
     /// Run the CLI indexer on this vault.
     public func runIndex() throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+        process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
         process.arguments = ["index"]
         process.currentDirectoryURL = rootURL
         try process.run()
@@ -134,7 +134,7 @@ public final class VaultManager: @unchecked Sendable {
     /// Run the CLI linter and return JSON results.
     public func runLint() throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+        process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
         process.arguments = ["lint", "--json"]
         process.currentDirectoryURL = rootURL
         let pipe = Pipe()

@@ -613,7 +613,7 @@ final class AppState {
         Task {
             do {
                 let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+                process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
                 process.arguments = ["index"]
                 process.currentDirectoryURL = vault.rootURL
                 let stderrPipe = Pipe()
@@ -1398,7 +1398,7 @@ final class AppState {
         log.debug("CLI exec: \(cmd)")
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
             process.arguments = args
             process.currentDirectoryURL = cwd
             let stdout = Pipe()
@@ -1436,7 +1436,7 @@ final class AppState {
         log.debug("CLI exec (non-zero ok): \(cmd)")
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
             process.arguments = args
             process.currentDirectoryURL = cwd
             let stdout = Pipe()

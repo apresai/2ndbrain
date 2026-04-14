@@ -281,7 +281,7 @@ struct SecondBrainApp: App {
     @MainActor
     private func runCLICommand(_ args: [String], cwd: URL? = nil, completion: @escaping @MainActor (Bool) -> Void) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/2nb")
+        process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
         process.arguments = args
         if let cwd { process.currentDirectoryURL = cwd }
 
