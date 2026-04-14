@@ -2,10 +2,12 @@ import Foundation
 import Markdown
 
 public enum MarkdownRenderer {
-    /// Renders markdown text to HTML for the preview pane.
-    public static func renderHTML(_ markdown: String) -> String {
+    /// Renders markdown to HTML for the preview pane. When `editable` is true,
+    /// the body is `contenteditable` and a Turndown.js bridge posts edits back
+    /// via `window.webkit.messageHandlers.contentChanged.postMessage(md)`.
+    public static func renderHTML(_ markdown: String, editable: Bool = false) -> String {
         let document = Document(parsing: markdown)
-        var visitor = HTMLVisitor()
+        var visitor = HTMLVisitor(editable: editable)
         return visitor.visit(document)
     }
 
@@ -30,12 +32,62 @@ public struct HeadingItem: Identifiable {
 private struct HTMLVisitor: MarkupVisitor {
     typealias Result = String
 
+    let editable: Bool
+
     mutating func defaultVisit(_ markup: any Markup) -> String {
         markup.children.map { visit($0) }.joined()
     }
 
     mutating func visitDocument(_ document: Document) -> String {
         let body = document.children.map { visit($0) }.joined()
+        let contentEditableAttr = editable ? " contenteditable=\"true\"" : ""
+        let editableCSS = editable ? """
+        body:focus { outline: none; }
+        body { cursor: text; min-height: 100vh; }
+        .mermaid-diagram { contenteditable: false; pointer-events: none; }
+        """ : ""
+        let turndownBridge = editable ? """
+        <script>
+        \(TurndownJS.source)
+        </script>
+        <script>
+        (function() {
+          var turndownService = new TurndownService({
+            headingStyle: 'atx',
+            hr: '---',
+            bulletListMarker: '-',
+            codeBlockStyle: 'fenced',
+            fence: '```',
+            emDelimiter: '*',
+            strongDelimiter: '**',
+            linkStyle: 'inlined'
+          });
+
+          // Keep task list checkboxes
+          turndownService.addRule('taskListItems', {
+            filter: function(node) {
+              return node.nodeName === 'INPUT' && node.getAttribute('type') === 'checkbox';
+            },
+            replacement: function(content, node) {
+              return node.checked ? '[x] ' : '[ ] ';
+            }
+          });
+
+          var debounceTimer = null;
+          document.body.addEventListener('input', function() {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(function() {
+              try {
+                var md = turndownService.turndown(document.body.innerHTML);
+                window.webkit.messageHandlers.contentChanged.postMessage(md);
+              } catch(e) {
+                console.error('Turndown error:', e);
+              }
+            }, 300);
+          });
+        })();
+        </script>
+        """ : ""
         return """
         <!DOCTYPE html>
         <html>
@@ -74,6 +126,7 @@ private struct HTMLVisitor: MarkupVisitor {
         ul.task-list { list-style: none; padding-left: 0; }
         ul.task-list li { position: relative; padding-left: 1.5em; }
         ul.task-list li input[type="checkbox"] { position: absolute; left: 0; top: 0.3em; }
+        \(editableCSS)
         </style>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
           onerror="this.remove()">
@@ -89,12 +142,12 @@ private struct HTMLVisitor: MarkupVisitor {
             document.querySelectorAll('pre code.language-mermaid').forEach(async (el) => {
               const pre = el.parentElement;
               const { svg } = await mermaid.render('mermaid-' + Math.random().toString(36).substr(2, 9), el.textContent);
-              pre.outerHTML = '<div class="mermaid-diagram">' + svg + '</div>';
+              pre.outerHTML = '<div class="mermaid-diagram" contenteditable="false">' + svg + '</div>';
             });
           } catch(e) { /* offline — mermaid code blocks show as plain text */ }
         </script>
         </head>
-        <body>\(body)</body>
+        <body\(contentEditableAttr)>\(body)\(turndownBridge)</body>
         </html>
         """
     }

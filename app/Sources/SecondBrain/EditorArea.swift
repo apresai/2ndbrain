@@ -18,11 +18,17 @@ struct EditorArea: View {
                     HSplitView {
                         sourceEditor(tabIndex: tabIndex, state: state)
                             .frame(minWidth: 300)
-                        MarkdownPreviewView(html: previewHTML)
+                        MarkdownPreviewView(html: { previewHTML })
                             .frame(minWidth: 300)
                     }
                 case .preview:
-                    MarkdownPreviewView(html: previewHTML)
+                    MarkdownPreviewView(
+                        html: { editablePreviewHTML },
+                        editable: true,
+                        onContentChanged: { newBody in
+                            appState.updateBodyOfCurrentDocument(newBody)
+                        }
+                    )
                 }
             }
             .toolbar {
@@ -98,12 +104,16 @@ struct EditorArea: View {
 
     private var validTabIndex: Int? { appState.validTabIndex }
 
-    private var previewHTML: String {
+    private var previewHTML: String { renderedPreviewHTML(editable: false) }
+    private var editablePreviewHTML: String { renderedPreviewHTML(editable: true) }
+
+    private func renderedPreviewHTML(editable: Bool) -> String {
         guard let idx = validTabIndex else { return "" }
-        let content = appState.openDocuments[idx].content
-        let (_, body) = FrontmatterParser.parse(content)
-        let html = MarkdownRenderer.renderHTML(body)
-        // Inject font overrides so preview scales with editor
+        let (_, body) = FrontmatterParser.parse(appState.openDocuments[idx].content)
+        return injectFontOverrides(MarkdownRenderer.renderHTML(body, editable: editable))
+    }
+
+    private func injectFontOverrides(_ html: String) -> String {
         let cssFontFamily = appState.editorFontFamily == "System Mono"
             ? "-apple-system, BlinkMacSystemFont, sans-serif"
             : "\"\(appState.editorFontFamily)\", -apple-system, sans-serif"
@@ -504,26 +514,50 @@ class LineNumberRulerView: NSRulerView {
 // This is a local-only editor with no external content injection.
 
 struct MarkdownPreviewView: NSViewRepresentable {
-    let html: String
+    let html: () -> String
+    var editable: Bool = false
+    var onContentChanged: ((String) -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
+        if editable {
+            config.userContentController.add(context.coordinator, name: "contentChanged")
+        }
         let webView = WKWebView(frame: .zero, configuration: config)
-        webView.loadHTMLString(html, baseURL: nil)
-        context.coordinator.lastHTML = html
+        let initialHTML = html()
+        webView.loadHTMLString(initialHTML, baseURL: nil)
+        context.coordinator.lastHTML = initialHTML
+        context.coordinator.onContentChanged = onContentChanged
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.lastHTML != html else { return }
-        context.coordinator.lastHTML = html
-        webView.loadHTMLString(html, baseURL: nil)
+        context.coordinator.onContentChanged = onContentChanged
+        // In editable mode the WKWebView owns state — reloading would destroy
+        // cursor and undo history. Content flows one-way via the JS bridge.
+        if editable { return }
+        let currentHTML = html()
+        guard context.coordinator.lastHTML != currentHTML else { return }
+        context.coordinator.lastHTML = currentHTML
+        webView.loadHTMLString(currentHTML, baseURL: nil)
     }
 
     func makeCoordinator() -> PreviewCoordinator { PreviewCoordinator() }
 
-    class PreviewCoordinator {
+    class PreviewCoordinator: NSObject, WKScriptMessageHandler {
         var lastHTML = ""
+        var onContentChanged: ((String) -> Void)?
+
+        nonisolated func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard message.name == "contentChanged",
+                  let markdown = message.body as? String else { return }
+            Task { @MainActor [weak self] in
+                self?.onContentChanged?(markdown)
+            }
+        }
     }
 }
 

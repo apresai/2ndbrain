@@ -611,6 +611,13 @@ final class AppState {
         crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
     }
 
+    func updateBodyOfCurrentDocument(_ newBody: String) {
+        guard let idx = validTabIndex else { return }
+        let (frontmatter, _) = FrontmatterParser.parse(openDocuments[idx].content)
+        openDocuments[idx].content = FrontmatterParser.serialize(frontmatter: frontmatter, body: newBody)
+        openDocuments[idx].isDirty = true
+    }
+
     func recoverDocument(_ entry: RecoveryEntry) {
         // Write recovered content to the vault
         guard let vault else { return }
