@@ -25,12 +25,26 @@ public final class CrashJournal: @unchecked Sendable {
         }
     }
 
+    /// Synchronously write a recovery snapshot before a potentially-destructive write.
+    /// Throws on disk errors so callers can decide whether to continue with the write.
+    public func savePreWriteSnapshot(documentID: String, content: String) throws {
+        let snapshotURL = recoveryDir.appendingPathComponent("\(documentID).recovery.md")
+        try content.write(to: snapshotURL, atomically: true, encoding: .utf8)
+    }
+
     /// Remove a snapshot when a document is successfully saved.
     public func clearSnapshot(documentID: String) {
         queue.async { [recoveryDir] in
             let snapshotURL = recoveryDir.appendingPathComponent("\(documentID).recovery.md")
             try? FileManager.default.removeItem(at: snapshotURL)
         }
+    }
+
+    /// Synchronously remove a snapshot. Use this in the save path to avoid races
+    /// where a queued async clear deletes a snapshot from a subsequent save.
+    public func clearSnapshotSync(documentID: String) {
+        let snapshotURL = recoveryDir.appendingPathComponent("\(documentID).recovery.md")
+        try? FileManager.default.removeItem(at: snapshotURL)
     }
 
     /// List all recoverable documents after a crash.

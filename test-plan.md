@@ -26,7 +26,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | DOC-EV-001 | New Document creates untitled doc with default frontmatter | Integration | Trigger New Document, verify frontmatter template applied with UUID and timestamps | Complete | Not Written |
 | DOC-EV-002 | Open file via Finder within 500ms for files under 1MB | Manual | Open a 500KB markdown file from Finder, measure load time under 500ms | Complete | Not Written |
 | DOC-EV-003 | Cmd+S writes atomically via temp file and rename | Inspection | Verify save implementation uses write-to-temp then atomic rename pattern | Partial | Not Written |
-| DOC-EV-004 | Export as PDF renders markdown to paginated PDF | Manual | Select Export as PDF, verify rendered output includes headings, code blocks, tables | Not Started | Not Written |
+| DOC-EV-004 | Export as PDF renders markdown to paginated PDF | Manual | Select Export as PDF, verify rendered output includes headings, code blocks, tables | Complete | Not Written |
 | DOC-EV-005 | Dragging tab outside tab bar opens document in new window | Manual | Drag a tab outside the bar, verify new window opens with that document | Not Started | Not Written |
 | DOC-EV-006 | Duplicate Document creates copy with new UUID and filename | Manual | Duplicate a document, verify new file has unique name and fresh UUID in frontmatter | Not Started | Not Written |
 | DOC-EV-007 | Drag markdown file into editor opens in new tab | Manual | Drag a .md file from Finder into the editor window, verify it opens in a new tab | Not Started | Not Written |
@@ -92,11 +92,11 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | FST-EV-002 | Renaming file updates all wikilinks referencing that file | Integration | Rename a file through editor, verify all wikilinks across vault are updated | Partial | Not Written |
 | FST-EV-003 | New markdown file added externally is indexed within 2 seconds | Integration | Add a .md file to vault directory, verify it appears in index within 2 seconds | Complete | Not Written |
 | FST-EV-004 | Creating new vault initializes `.2ndbrain/` with config, schemas, empty DB | Integration | Run vault creation, verify `.2ndbrain/` dir has config.yaml, schemas.yaml, and index.db | Complete | Not Written |
-| FST-ST-001 | Autosave writes unsaved changes every 30 seconds | Manual | Edit a document, wait 30 seconds without saving, verify file is written to disk | Not Started | Not Written |
+| FST-ST-001 | Autosave writes unsaved changes every 30 seconds | Manual | Edit a document, wait 30 seconds without saving, verify file is written to disk | Complete | Not Written |
 | FST-ST-002 | Index rebuild shows progress indicator and allows editing | Manual | Trigger index rebuild, verify progress bar visible and editor remains responsive | Complete | Not Written |
-| FST-UW-001 | Low disk space warning when below 50MB during save | Integration | Simulate low disk space, attempt save, verify warning displayed and save completes | Not Started | Not Written |
+| FST-UW-001 | Low disk space warning when below 50MB during save | Integration | Simulate low disk space, attempt save, verify warning displayed and save completes | Complete | Not Written |
 | FST-UW-002 | Corrupted index triggers full rebuild from markdown files | Integration | Corrupt the index.db, reopen vault, verify full rebuild is triggered automatically | Partial | Not Written |
-| FST-UW-003 | File move naming conflict appends numeric suffix | Integration | Attempt to move file to a conflicting name, verify numeric suffix appended and user notified | Not Started | Not Written |
+| FST-UW-003 | File move naming conflict appends numeric suffix | Integration | Attempt to move file to a conflicting name, verify numeric suffix appended and user notified | Partial | Not Written |
 
 ---
 
@@ -105,8 +105,8 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | Req ID | Description | Test Type | Test Description | Impl | Test |
 |--------|-------------|-----------|------------------|------|------|
 | SRC-UB-001 | Maintain full-text BM25 search index over all documents | Unit | Index 10 documents, run BM25 query, verify ranked results returned | Complete | Not Written |
-| SRC-UB-002 | Maintain vector embedding index for semantic search | Unit | Index documents with embeddings, query by vector similarity, verify results | Not Started | Not Written |
-| SRC-UB-003 | Support hybrid search via Reciprocal Rank Fusion | Unit | Run hybrid search combining BM25 and vector, verify RRF-fused ranking | Not Started | Not Written |
+| SRC-UB-002 | Maintain vector embedding index for semantic search | Unit | Index documents with embeddings, query by vector similarity, verify results | Complete | Not Written |
+| SRC-UB-003 | Support hybrid search via Reciprocal Rank Fusion | Unit | Run hybrid search combining BM25 and vector, verify RRF-fused ranking | Complete | Not Written |
 | SRC-UB-004 | Support structured filters on type, status, tags, date ranges | Unit | Search with type/status/tag/date filters, verify filtered results match criteria | Complete | Not Written |
 | SRC-EV-001 | Cmd+Shift+F opens vault-wide search panel | Manual | Press Cmd+Shift+F, verify search panel opens with focus on search input | Complete | Not Written |
 | SRC-EV-002 | Search results within 300ms for vaults up to 10k documents | Integration | Build index with 10k docs, run search, verify results returned within 300ms | Complete | Not Written |
@@ -115,13 +115,13 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | SRC-EV-005 | `tag:` prefix filters results by specified tag | Unit | Search with `tag:architecture`, verify only tagged documents returned | Complete | Not Written |
 | SRC-EV-006 | `type:` prefix filters results by document type | Unit | Search with `type:adr`, verify only ADR documents returned | Complete | Not Written |
 | SRC-EV-007 | `status:` prefix filters results by status value | Unit | Search with `status:accepted`, verify only accepted-status documents returned | Complete | Not Written |
-| SRC-EV-008 | Find Similar returns 10 most semantically similar documents | Integration | Select Find Similar on a document, verify 10 results ranked by cosine similarity | Not Started | Not Written |
+| SRC-EV-008 | Find Similar returns 10 most semantically similar documents | Integration | Select Find Similar on a document, verify 10 results ranked by cosine similarity | Complete | Not Written |
 | SRC-ST-001 | Search results highlight matching terms in preview pane | Manual | Run a search, verify matching terms are highlighted in the document preview | Partial | Not Written |
 | SRC-ST-002 | Search updates results incrementally as user types | Manual | Type a search query character by character, verify results update incrementally | Complete | Not Written |
 | SRC-ST-003 | Active filter shown as removable badge in search panel | Manual | Apply a tag filter, verify badge displayed in search panel and is removable | Partial | Not Written |
 | SRC-UW-001 | No results suggests semantically related queries | Integration | Search for a term with no matches, verify suggested alternative queries appear | Not Started | Not Written |
-| SRC-UW-002 | Missing vector index falls back to BM25 with notice | Integration | Search without vector index built, verify BM25 results returned with notice | Not Started | Not Written |
-| SRC-UW-003 | Embedding model load failure falls back to keyword search | Integration | Simulate model load failure, verify keyword-only search operates and failure logged | Not Started | Not Written |
+| SRC-UW-002 | Missing vector index falls back to BM25 with notice | Integration | Search without vector index built, verify BM25 results returned with notice | Complete | Not Written |
+| SRC-UW-003 | Embedding model load failure falls back to keyword search | Integration | Simulate model load failure, verify keyword-only search operates and failure logged | Complete | Not Written |
 | SRC-CX-001 | Tag filter + text query combines hybrid search on subset | Unit | Set tag filter, enter text query, verify combined filtered hybrid search results | Partial | Not Written |
 
 ---
@@ -130,7 +130,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 
 | Req ID | Description | Test Type | Test Description | Impl | Test |
 |--------|-------------|-----------|------------------|------|------|
-| AI-UB-001 | Generate vector embeddings locally using GGUF models | Integration | Load GGUF model, generate embeddings for a document, verify vector output | Not Started | Not Written |
+| AI-UB-001 | Generate vector embeddings locally using GGUF models | Integration | Load GGUF model, generate embeddings for a document, verify vector output | Complete | Not Written |
 | AI-UB-002 | Chunk documents at heading boundaries with frontmatter metadata | Unit | Chunk a multi-heading document, verify chunks split at headings with full frontmatter | Complete | Not Written |
 | AI-UB-003 | Assign stable UUID at creation stored in `id` frontmatter field | Unit | Create document, rename file, verify UUID in frontmatter persists unchanged | Complete | Not Written |
 | AI-UB-004 | Expose vault operations through built-in MCP server via stdio | Integration | Start MCP server, send tool invocation over stdin, verify JSON response on stdout | Complete | Not Written |
@@ -147,11 +147,11 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | AI-EV-010 | `kb_structure` returns heading hierarchy as JSON tree | Integration | Invoke kb_structure, verify JSON tree with heading levels and chunk IDs | Complete | Not Written |
 | AI-EV-011 | Suggest Links analyzes document and suggests wikilinks | Integration | Run Suggest Links on a document, verify suggested links to semantically related docs | Not Started | Not Written |
 | AI-ST-001 | MCP status indicator in status bar with client count | Manual | Start MCP server, connect a client, verify status bar shows connected count | Not Started | Not Written |
-| AI-ST-002 | Embedding build progress shown as percentage in status bar | Manual | Trigger embedding build, verify percentage progress displayed in status bar | Not Started | Not Written |
+| AI-ST-002 | Embedding build progress shown as percentage in status bar | Manual | Trigger embedding build, verify percentage progress displayed in status bar | Complete | Not Written |
 | AI-ST-003 | Open document shows chunk count and token estimate in status bar | Manual | Open a document, verify chunk count and estimated token count in status bar | Not Started | Not Written |
 | AI-OF-001 | Ollama LLM provides autocomplete suggestions while typing | Manual | Configure Ollama, type text, verify AI autocomplete suggestions appear | Not Started | Not Written |
-| AI-OF-002 | Local LLM provides Q&A over vault via RAG retrieval | Integration | Configure LLM, ask a question, verify RAG-based answer from vault content | Not Started | Not Written |
-| AI-UW-001 | Missing embedding model prompts download, disables semantic search | Integration | Remove model file, launch editor, verify download prompt and semantic search disabled | Not Started | Not Written |
+| AI-OF-002 | Local LLM provides Q&A over vault via RAG retrieval | Integration | Configure LLM, ask a question, verify RAG-based answer from vault content | Complete | Not Written |
+| AI-UW-001 | Missing embedding model prompts download, disables semantic search | Integration | Remove model file, launch editor, verify download prompt and semantic search disabled | Complete | Not Written |
 | AI-UW-002 | Failed MCP tool returns structured JSON error with code | Integration | Invoke MCP tool with invalid params, verify JSON error response with error code and message | Complete | Not Written |
 | AI-UW-003 | Chunk exceeding 2048 tokens splits at paragraph boundary | Unit | Create document with a heading section exceeding 2048 tokens, verify split at paragraph | Partial | Not Written |
 | AI-CX-001 | External file modification triggers MCP resource update notification | Integration | Modify file while MCP server running, verify resource update pushed to subscribed clients | Partial | Not Written |
@@ -309,7 +309,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | ERR-ST-001 | Repeated background failures pause operation with retry notification | Manual | Simulate repeated indexing failures, verify operation paused with retry/diagnostic options | Not Started | Not Written |
 | ERR-UW-001 | Failed save retains content in recovery journal with error message | Integration | Simulate filesystem error on save, verify content saved to recovery journal and error shown | Partial | Not Written |
 | ERR-UW-002 | Conflicting edits present diff-based merge conflict dialog | Manual | Edit file in editor and externally simultaneously, verify merge conflict dialog appears | Not Started | Not Written |
-| ERR-UW-003 | Corrupt frontmatter write-back restores from recovery journal | Integration | Simulate frontmatter corruption during write, verify pre-write backup restored | Not Started | Not Written |
+| ERR-UW-003 | Corrupt frontmatter write-back restores from recovery journal | Integration | Simulate frontmatter corruption during write, verify pre-write backup restored | Partial | Not Written |
 | ERR-UW-004 | Exhausted undo disables control and shows "Nothing to undo" | Manual | Undo all actions until history empty, verify undo disabled and status bar message shown | Partial | Not Written |
 
 ---
@@ -336,12 +336,12 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 
 | Area | Total | Complete | Partial | Not Started | Tests Written |
 |------|-------|----------|---------|-------------|---------------|
-| Document Management | 15 | 5 | 6 | 4 | 0 |
+| Document Management | 15 | 6 | 6 | 3 | 0 |
 | Editor Core | 17 | 13 | 3 | 1 | 0 |
 | Markdown Rendering | 12 | 7 | 3 | 2 | 0 |
-| File System & Storage | 12 | 7 | 2 | 3 | 0 |
-| Search & Discovery | 19 | 9 | 4 | 6 | 0 |
-| AI Integration | 25 | 12 | 3 | 10 | 0 |
+| File System & Storage | 12 | 9 | 3 | 0 | 0 |
+| Search & Discovery | 19 | 14 | 4 | 1 | 0 |
+| AI Integration | 25 | 16 | 3 | 6 | 0 |
 | CLI Interface | 20 | 20 | 0 | 0 | 0 |
 | Knowledge Graph & Linking | 15 | 9 | 6 | 0 | 0 |
 | Frontmatter & Metadata | 12 | 10 | 2 | 0 | 0 |
@@ -349,15 +349,15 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | macOS Platform Integration | 10 | 2 | 2 | 6 | 0 |
 | Performance | 10 | 2 | 5 | 3 | 0 |
 | Security & Privacy | 8 | 1 | 5 | 2 | 0 |
-| Error Handling & Recovery | 10 | 4 | 2 | 4 | 0 |
+| Error Handling & Recovery | 10 | 4 | 3 | 3 | 0 |
 | Obsidian Vault Conversion | 11 | 6 | 5 | 0 | 0 |
-| **Total** | **211** | **116** | **53** | **42** | **0** |
+| **Total** | **211** | **128** | **55** | **28** | **0** |
 
 ### Implementation Coverage
 
-- **Complete**: 55% (116 of 211 requirements fully implemented)
-- **Partial**: 25% (53 of 211 requirements partially implemented)
-- **Not Started**: 20% (42 of 211 requirements not yet started)
+- **Complete**: 61% (128 of 211 requirements fully implemented)
+- **Partial**: 26% (55 of 211 requirements partially implemented)
+- **Not Started**: 13% (28 of 211 requirements not yet started)
 - **Tests Written**: 0% (no formal test cases written yet)
 
 ### Priority Areas for Test Development
@@ -370,15 +370,15 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 
 ### Not Started Features (by area)
 
-- **Search**: Vector embeddings, semantic search, hybrid RRF, fallback behavior
-- **AI**: GGUF model loading, incremental embedding, LLM autocomplete, RAG Q&A, MCP status panel
+- **Search**: Suggested queries on zero results (SRC-UW-001)
+- **AI**: Incremental re-embed on save, LLM autocomplete, MCP status panel, Suggest Links, chunk count in status bar
 - **Editor**: Vim mode
 - **Rendering**: Mermaid diagrams, LaTeX math
 - **Platform**: Quick Look extension, notarization, menu bar search, global hotkey, Touch ID, Handoff
-- **Storage**: Autosave timer, low disk warning, file move conflict resolution
+- **Storage**: File move naming conflict on rename UI (create path handled)
 - **Performance**: Large file streaming mode, embedding batch processing, graph LOD rendering
 - **Security**: Vault lock/unlock flow
-- **Error Handling**: Plugin failure handling, merge conflict dialog, frontmatter corruption recovery
+- **Error Handling**: Plugin failure handling, merge conflict dialog, corrupt frontmatter detection on launch (pre-write snapshot shipped)
 
 ### Notes
 

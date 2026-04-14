@@ -31,6 +31,11 @@ final class AppState {
     var editorFontSize: CGFloat = UserDefaults.standard.object(forKey: "editorFontSize") as? CGFloat ?? 14
     var editorFontFamily: String = UserDefaults.standard.string(forKey: "editorFontFamily") ?? "System Mono"
 
+    // Autosave
+    var autosaveIntervalSeconds: Int = UserDefaults.standard.object(forKey: "autosaveIntervalSeconds") as? Int ?? 30
+    private var autosaveTimer: Timer?
+    private static let lowDiskThreshold: Int64 = 50 * 1024 * 1024
+
     // AI state
     var aiStatus: AIStatusInfo?
     var isIndexing = false
@@ -112,6 +117,9 @@ final class AppState {
 
         // Refresh AI status
         Task { await refreshAIStatus() }
+
+        // Start autosave timer for this vault
+        startAutosaveTimer()
 
         // Start watching for changes
         fileWatcher?.stop()
@@ -431,7 +439,7 @@ final class AppState {
             .replacingOccurrences(of: " ", with: "-")
             .filter { $0.isLetter || $0.isNumber || $0 == "-" }
         let filename = slug.isEmpty ? "\(type)-\(id.prefix(8)).md" : "\(slug).md"
-        let url = vault.rootURL.appendingPathComponent(filename)
+        let url = uniqueFilename(base: filename, in: vault.rootURL)
 
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
@@ -593,22 +601,113 @@ final class AppState {
     func saveCurrentDocument() {
         let idx = activeTabIndex
         guard idx >= 0, idx < openDocuments.count else { return }
-        let tab = openDocuments[idx]
-        do {
-            try tab.content.write(to: tab.url, atomically: true, encoding: .utf8)
-            openDocuments[idx].isDirty = false
-            crashJournal?.clearSnapshot(documentID: tab.document.id)
-            log.debug("Saved: \(tab.url.lastPathComponent)")
-        } catch {
-            log.error("Failed to save \(tab.url.lastPathComponent): \(error.localizedDescription)")
-            errorLogger?.log("Failed to save document", error: error)
-            crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
-        }
+        _ = performSave(tabIdx: idx, isAutosave: false)
     }
 
     func saveSnapshotForCurrentDocument() {
         guard let tab = currentDocument else { return }
         crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
+    }
+
+    /// Core save path used by both manual save and autosave.
+    /// Returns true on success. When isAutosave is true, skips the low-disk modal
+    /// (which would block the UI unexpectedly on a background timer tick).
+    @discardableResult
+    private func performSave(tabIdx: Int, isAutosave: Bool) -> Bool {
+        guard tabIdx >= 0, tabIdx < openDocuments.count else { return false }
+        let tab = openDocuments[tabIdx]
+
+        if !isAutosave, let avail = availableDiskSpace(at: tab.url), avail < Self.lowDiskThreshold {
+            let alert = NSAlert()
+            alert.messageText = "Low disk space"
+            alert.informativeText = "Only \(Self.formatBytes(avail)) free on this volume. Saving may fail."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Save Anyway")
+            if alert.runModal() == .alertFirstButtonReturn {
+                return false
+            }
+        }
+
+        do {
+            try crashJournal?.savePreWriteSnapshot(documentID: tab.document.id, content: tab.content)
+        } catch {
+            log.warning("Pre-write snapshot failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
+        }
+
+        do {
+            try tab.content.write(to: tab.url, atomically: true, encoding: .utf8)
+            openDocuments[tabIdx].isDirty = false
+            crashJournal?.clearSnapshotSync(documentID: tab.document.id)
+            log.debug("\(isAutosave ? "Autosaved" : "Saved"): \(tab.url.lastPathComponent)")
+            return true
+        } catch {
+            log.error("\(isAutosave ? "Autosave" : "Save") failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
+            errorLogger?.log("Failed to save document", error: error)
+            return false
+        }
+    }
+
+    // MARK: - Autosave
+
+    func startAutosaveTimer() {
+        autosaveTimer?.invalidate()
+        autosaveTimer = nil
+        guard autosaveIntervalSeconds > 0 else { return }
+        let interval = TimeInterval(autosaveIntervalSeconds)
+        autosaveTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.runAutosave()
+            }
+        }
+    }
+
+    func setAutosaveInterval(_ seconds: Int) {
+        autosaveIntervalSeconds = seconds
+        UserDefaults.standard.set(seconds, forKey: "autosaveIntervalSeconds")
+        startAutosaveTimer()
+    }
+
+    private func runAutosave() {
+        for idx in openDocuments.indices where openDocuments[idx].isDirty {
+            performSave(tabIdx: idx, isAutosave: true)
+        }
+    }
+
+    // MARK: - Filesystem Helpers
+
+    private func availableDiskSpace(at url: URL) -> Int64? {
+        let dir = url.deletingLastPathComponent()
+        guard let values = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]) else {
+            return nil
+        }
+        return values.volumeAvailableCapacityForImportantUsage
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
+
+    private func uniqueFilename(base: String, in dir: URL) -> URL {
+        let baseURL = dir.appendingPathComponent(base)
+        if !FileManager.default.fileExists(atPath: baseURL.path) {
+            return baseURL
+        }
+        let stem = (base as NSString).deletingPathExtension
+        let ext = (base as NSString).pathExtension
+        for counter in 1..<1000 {
+            let candidate = ext.isEmpty ? "\(stem)-\(counter)" : "\(stem)-\(counter).\(ext)"
+            let candidateURL = dir.appendingPathComponent(candidate)
+            if !FileManager.default.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+        }
+        let suffix = String(UUID().uuidString.prefix(8))
+        let fallback = ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
+        return dir.appendingPathComponent(fallback)
     }
 
     func updateBodyOfCurrentDocument(_ newBody: String) {

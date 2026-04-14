@@ -66,8 +66,21 @@ struct PreferencesView: View {
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 4)
             }
+
+            Section("Autosave") {
+                Picker("Autosave Interval", selection: Binding(
+                    get: { appState.autosaveIntervalSeconds },
+                    set: { appState.setAutosaveInterval($0) }
+                )) {
+                    Text("Off").tag(0)
+                    Text("Every 15 seconds").tag(15)
+                    Text("Every 30 seconds").tag(30)
+                    Text("Every 60 seconds").tag(60)
+                }
+                .pickerStyle(.menu)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 400, height: 220)
+        .frame(width: 400, height: 300)
     }
 }
