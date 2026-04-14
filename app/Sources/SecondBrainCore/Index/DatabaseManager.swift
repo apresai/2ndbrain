@@ -116,6 +116,13 @@ public final class DatabaseManager: Sendable {
             return try DocumentRecord.fetchAll(db, sql: sql, arguments: StatementArguments(args))
         }
     }
+    /// Count the chunks associated with a given document ID.
+    public func chunkCount(forDocID docID: String) throws -> Int {
+        try dbPool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chunks WHERE doc_id = ?", arguments: [docID]) ?? 0
+        }
+    }
+
     /// Fetch all link edges (source_id -> target_id).
     public func allLinks() throws -> [(source: String, target: String)] {
         try dbPool.read { db in

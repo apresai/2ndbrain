@@ -28,8 +28,8 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | DOC-EV-003 | Cmd+S writes atomically via temp file and rename | Inspection | Verify save implementation uses write-to-temp then atomic rename pattern | Partial | Not Written |
 | DOC-EV-004 | Export as PDF renders markdown to paginated PDF | Manual | Select Export as PDF, verify rendered output includes headings, code blocks, tables | Complete | Not Written |
 | DOC-EV-005 | Dragging tab outside tab bar opens document in new window | Manual | Drag a tab outside the bar, verify new window opens with that document | Not Started | Not Written |
-| DOC-EV-006 | Duplicate Document creates copy with new UUID and filename | Manual | Duplicate a document, verify new file has unique name and fresh UUID in frontmatter | Not Started | Not Written |
-| DOC-EV-007 | Drag markdown file into editor opens in new tab | Manual | Drag a .md file from Finder into the editor window, verify it opens in a new tab | Not Started | Not Written |
+| DOC-EV-006 | Duplicate Document creates copy with new UUID and filename | Manual | Duplicate a document, verify new file has unique name and fresh UUID in frontmatter | Complete | Not Written |
+| DOC-EV-007 | Drag markdown file into editor opens in new tab | Manual | Drag a .md file from Finder into the editor window, verify it opens in a new tab | Complete | Not Written |
 | DOC-ST-001 | Unsaved changes show modification indicator in tab and title bar | Manual | Edit a document, verify dot/indicator appears in tab title before saving | Complete | Not Written |
 | DOC-ST-002 | Loading document shows progress indicator and disables editing | Manual | Open a large document, verify progress indicator appears and editor is disabled until loaded | Partial | Not Written |
 | DOC-UW-001 | Closing unsaved document shows Save/Discard/Cancel dialog | Manual | Edit a document, close the tab, verify three-option confirmation dialog appears | Partial | Not Written |
@@ -153,7 +153,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | INT-GIT-004 | Show diff vs HEAD for a single file | Manual | Right-click a modified file, choose Show Changes vs HEAD, verify unified diff displays | Complete | Not Written |
 | AI-ST-001 | MCP status indicator in status bar with client count | Manual | Start MCP server, connect a client, verify status bar shows connected count | Complete | Not Written |
 | AI-ST-002 | Embedding build progress shown as percentage in status bar | Manual | Trigger embedding build, verify percentage progress displayed in status bar | Complete | Not Written |
-| AI-ST-003 | Open document shows chunk count and token estimate in status bar | Manual | Open a document, verify chunk count and estimated token count in status bar | Not Started | Not Written |
+| AI-ST-003 | Open document shows chunk count and token estimate in status bar | Manual | Open a document, verify chunk count and estimated token count in status bar | Complete | Not Written |
 | AI-OF-001 | Ollama LLM provides autocomplete suggestions while typing | Manual | Configure Ollama, type text, verify AI autocomplete suggestions appear | Not Started | Not Written |
 | AI-OF-002 | Local LLM provides Q&A over vault via RAG retrieval | Integration | Configure LLM, ask a question, verify RAG-based answer from vault content | Complete | Not Written |
 | AI-UW-001 | Missing embedding model prompts download, disables semantic search | Integration | Remove model file, launch editor, verify download prompt and semantic search disabled | Complete | Not Written |
@@ -249,7 +249,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | UI-ST-002 | Outline highlights heading nearest to cursor position | Manual | Move cursor between headings, verify outline highlight follows cursor position | Partial | Not Written |
 | UI-ST-003 | Split view synchronizes scroll between source and preview | Manual | Scroll in source pane, verify preview pane scrolls to same position | Partial | Not Written |
 | UI-UW-001 | Window below 600px collapses sidebar to single-pane layout | Manual | Resize window below 600px wide, verify sidebar auto-collapses | Partial | Not Written |
-| UI-CX-001 | Focus mode: mouse at top edge reveals toolbar temporarily | Manual | Enter focus mode, move mouse to top edge, verify toolbar reveals temporarily | Not Started | Not Written |
+| UI-CX-001 | Focus mode: mouse at top edge reveals toolbar temporarily | Manual | Enter focus mode, move mouse to top edge, verify toolbar reveals temporarily | Complete | Not Written |
 
 ---
 
@@ -282,7 +282,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | PERF-EV-003 | Full index rebuild of 5000 documents within 60 seconds | Integration | Index 5000 documents, measure total rebuild time, verify under 60 seconds | Complete | Not Written |
 | PERF-ST-001 | 20+ open tabs use lazy-loading and release memory for hidden tabs | Manual | Open 20+ tabs, verify memory usage is controlled and non-visible tabs are lazy-loaded | Partial | Not Written |
 | PERF-ST-002 | Graph view with 1000+ nodes uses level-of-detail rendering | Manual | Open graph with 1000+ nodes, verify only viewport labels rendered at full detail | Not Started | Not Written |
-| PERF-UW-001 | Document over 100MB opens in read-only streaming mode with warning | Integration | Attempt to open a 100MB+ file, verify read-only mode and large file warning | Not Started | Not Written |
+| PERF-UW-001 | Document over 100MB opens in read-only streaming mode with warning | Integration | Attempt to open a 100MB+ file, verify read-only mode and large file warning | Partial | Not Written |
 | PERF-UW-002 | Embedding build processes in batches of 100 if memory exceeded | Integration | Build embeddings with constrained memory, verify batch processing at 100-doc increments | Not Started | Not Written |
 
 ---
@@ -313,8 +313,8 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | ERR-EV-003 | Failed plugin load disables plugin and continues launching | Integration | Provide a broken plugin, launch editor, verify plugin disabled and app continues | Not Started | Not Written |
 | ERR-ST-001 | Repeated background failures pause operation with retry notification | Manual | Simulate repeated indexing failures, verify operation paused with retry/diagnostic options | Not Started | Not Written |
 | ERR-UW-001 | Failed save retains content in recovery journal with error message | Integration | Simulate filesystem error on save, verify content saved to recovery journal and error shown | Partial | Not Written |
-| ERR-UW-002 | Conflicting edits present diff-based merge conflict dialog | Manual | Edit file in editor and externally simultaneously, verify merge conflict dialog appears | Partial | Not Written |
-| ERR-UW-003 | Corrupt frontmatter write-back restores from recovery journal | Integration | Simulate frontmatter corruption during write, verify pre-write backup restored | Partial | Not Written |
+| ERR-UW-002 | Conflicting edits present diff-based merge conflict dialog | Manual | Edit file in editor and externally simultaneously, verify merge conflict dialog appears | Complete | Not Written |
+| ERR-UW-003 | Corrupt frontmatter write-back restores from recovery journal | Integration | Simulate frontmatter corruption during write, verify pre-write backup restored | Complete | Not Written |
 | ERR-UW-004 | Exhausted undo disables control and shows "Nothing to undo" | Manual | Undo all actions until history empty, verify undo disabled and status bar message shown | Partial | Not Written |
 
 ---
@@ -341,28 +341,28 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 
 | Area | Total | Complete | Partial | Not Started | Tests Written |
 |------|-------|----------|---------|-------------|---------------|
-| Document Management | 15 | 6 | 6 | 3 | 0 |
+| Document Management | 15 | 8 | 6 | 1 | 0 |
 | Editor Core | 17 | 13 | 3 | 1 | 0 |
 | Markdown Rendering | 12 | 7 | 3 | 2 | 0 |
 | File System & Storage | 12 | 9 | 3 | 0 | 0 |
 | Search & Discovery | 19 | 14 | 4 | 1 | 0 |
-| AI Integration | 26 | 20 | 4 | 2 | 0 |
+| AI Integration | 26 | 21 | 4 | 1 | 0 |
 | CLI Interface | 20 | 20 | 0 | 0 | 0 |
 | Knowledge Graph & Linking | 15 | 9 | 6 | 0 | 0 |
 | Frontmatter & Metadata | 12 | 10 | 2 | 0 | 0 |
-| User Interface | 15 | 9 | 5 | 1 | 0 |
+| User Interface | 15 | 10 | 5 | 0 | 0 |
 | macOS Platform Integration | 10 | 2 | 2 | 6 | 0 |
-| Performance | 10 | 2 | 5 | 3 | 0 |
+| Performance | 10 | 2 | 6 | 2 | 0 |
 | Security & Privacy | 8 | 1 | 5 | 2 | 0 |
-| Error Handling & Recovery | 10 | 4 | 4 | 2 | 0 |
+| Error Handling & Recovery | 10 | 6 | 2 | 2 | 0 |
 | Obsidian Vault Conversion | 11 | 6 | 5 | 0 | 0 |
-| **Total** | **216** | **136** | **57** | **23** | **0** |
+| **Total** | **216** | **142** | **56** | **18** | **0** |
 
 ### Implementation Coverage
 
-- **Complete**: 63% (136 of 216 requirements fully implemented)
-- **Partial**: 26% (57 of 216 requirements partially implemented)
-- **Not Started**: 11% (23 of 216 requirements not yet started)
+- **Complete**: 66% (142 of 216 requirements fully implemented)
+- **Partial**: 26% (56 of 216 requirements partially implemented)
+- **Not Started**: 8% (18 of 216 requirements not yet started)
 - **Tests Written**: 0% (no formal test cases written yet)
 
 ### Priority Areas for Test Development
@@ -376,14 +376,14 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 ### Not Started Features (by area)
 
 - **Search**: Suggested queries on zero results (SRC-UW-001)
-- **AI**: LLM autocomplete, chunk count in status bar (incremental re-embed shipped at document level; chunk-level still pending)
+- **AI**: LLM autocomplete (incremental re-embed shipped at document level; chunk-level still pending)
 - **Editor**: Vim mode
 - **Rendering**: Mermaid diagrams, LaTeX math
 - **Platform**: Quick Look extension, notarization, menu bar search, global hotkey, Touch ID, Handoff
 - **Storage**: File move naming conflict on rename UI (create path handled)
 - **Performance**: Large file streaming mode, embedding batch processing, graph LOD rendering
 - **Security**: Vault lock/unlock flow
-- **Error Handling**: Plugin failure handling, diff-highlighted merge conflict UI (three-pane text dialog shipped, diff view deferred to Phase 4), corrupt frontmatter detection on launch (pre-write snapshot shipped)
+- **Error Handling**: Plugin failure handling, repeated background-failure retry notifications
 
 ### Notes
 

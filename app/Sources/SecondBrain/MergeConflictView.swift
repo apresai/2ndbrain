@@ -27,11 +27,21 @@ struct MergeConflictView: View {
             .padding(.vertical, 12)
 
             HStack(spacing: 0) {
-                pane(title: "On Disk", subtitle: "external changes", content: theirs, tint: .orange)
+                diffPane(
+                    title: "On Disk",
+                    subtitle: "diff vs last saved",
+                    tint: .orange,
+                    original: ancestor,
+                    modified: theirs
+                )
                 Divider()
-                pane(title: "Yours", subtitle: "unsaved edits", content: mine, tint: .blue)
-                Divider()
-                pane(title: "Common Ancestor", subtitle: "last saved version", content: ancestor, tint: .secondary)
+                diffPane(
+                    title: "Yours",
+                    subtitle: "diff vs last saved",
+                    tint: .blue,
+                    original: ancestor,
+                    modified: mine
+                )
             }
             .frame(minHeight: 360)
 
@@ -48,7 +58,7 @@ struct MergeConflictView: View {
         .frame(width: 1000, height: 560)
     }
 
-    private func pane(title: String, subtitle: String, content: String, tint: Color) -> some View {
+    private func diffPane(title: String, subtitle: String, tint: Color, original: String, modified: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -64,13 +74,7 @@ struct MergeConflictView: View {
 
             Divider()
 
-            ScrollView {
-                Text(content)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-            }
+            DiffView(original: original, modified: modified)
         }
     }
 }

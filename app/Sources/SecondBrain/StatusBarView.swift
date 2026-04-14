@@ -22,7 +22,7 @@ struct StatusBarView: View {
 
                 Spacer()
 
-                Text(wordCount)
+                Text(documentMetrics)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -116,10 +116,17 @@ struct StatusBarView: View {
         .overlay(alignment: .top) { Divider() }
     }
 
-    private var wordCount: String {
+    private var documentMetrics: String {
         guard let tab = appState.currentDocument else { return "" }
         let words = tab.content.split { $0.isWhitespace || $0.isNewline }.count
-        return "\(words) words"
+        let tokens = max(tab.content.count / 4, 0)
+        var parts = ["\(words) words"]
+        let chunks = appState.currentDocumentChunkCount
+        if chunks > 0 {
+            parts.append("\(chunks) chunks")
+        }
+        parts.append("~\(tokens) tokens")
+        return parts.joined(separator: " · ")
     }
 
     private var aiDotColor: Color {

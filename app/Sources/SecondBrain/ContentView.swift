@@ -1,17 +1,40 @@
 import SwiftUI
 import SecondBrainCore
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
     @State private var showProperties = false
+    @State private var focusChromeVisible = false
 
     private var anyOverlayVisible: Bool {
         appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI || appState.showTemplatePicker || appState.showAISetupWizard
     }
 
+    /// Handle .md files dropped onto the editor window. We load each URL
+    /// asynchronously (loadObject is off the main thread) and then jump back
+    /// to MainActor to mutate AppState.
+    private func handleFileDrop(providers: [NSItemProvider]) -> Bool {
+        var handled = false
+        for provider in providers {
+            guard provider.canLoadObject(ofClass: URL.self) else { continue }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.pathExtension.lowercased() == "md" else { return }
+                Task { @MainActor in
+                    appState.openDocument(at: url)
+                }
+            }
+            handled = true
+        }
+        return handled
+    }
+
     var body: some View {
         ZStack {
             mainContent
+                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                    handleFileDrop(providers: providers)
+                }
 
             // Modal overlays
             if appState.showSearch {
@@ -189,11 +212,42 @@ struct ContentView: View {
     @ViewBuilder
     private var mainContent: some View {
         if appState.focusModeActive {
-            // Focus mode: just the editor, no chrome
-            if appState.openDocuments.isEmpty {
-                WelcomeView()
-            } else {
-                EditorArea()
+            // Focus mode: just the editor. Chrome (tab bar + breadcrumb)
+            // auto-reveals when the mouse reaches the top edge, then fades
+            // out when the user moves back into the body.
+            ZStack(alignment: .top) {
+                Group {
+                    if appState.openDocuments.isEmpty {
+                        WelcomeView()
+                    } else {
+                        EditorArea()
+                    }
+                }
+
+                if focusChromeVisible && !appState.openDocuments.isEmpty {
+                    VStack(spacing: 0) {
+                        TabBarView()
+                        BreadcrumbBar()
+                    }
+                    .background(.regularMaterial)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .onContinuousHover { phase in
+                guard case .active(let location) = phase else {
+                    if focusChromeVisible {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            focusChromeVisible = false
+                        }
+                    }
+                    return
+                }
+                let shouldShow = location.y < 50
+                if shouldShow != focusChromeVisible {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        focusChromeVisible = shouldShow
+                    }
+                }
             }
         } else {
             NavigationSplitView {

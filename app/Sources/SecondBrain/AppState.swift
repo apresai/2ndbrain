@@ -54,6 +54,10 @@ final class AppState {
     var showPolish = false
     var polishState: PolishState = .idle
 
+    // Current document metrics (chunk count is refreshed on open/switch/reindex;
+    // token estimate is computed live from content.count / 4)
+    var currentDocumentChunkCount: Int = 0
+
     // Git state
     var vaultIsGitRepo: Bool = false
     var gitFileStatus: [String: String] = [:]
@@ -229,18 +233,56 @@ final class AppState {
             return
         }
 
+        // Big-file guard: anything >100 MB gets an explicit warning + read-only
+        // fallback. This sits before the FrontmatterParser load so a huge file
+        // with malformed frontmatter doesn't block the user choice.
+        var forceReadOnly = false
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int64, size > 100 * 1024 * 1024 {
+            let alert = NSAlert()
+            alert.messageText = "Large file"
+            alert.informativeText = "\(url.lastPathComponent) is \(Self.formatBytes(size)). Opening it may be slow. It will open in read-only mode to protect your data."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Open Read-Only")
+            if alert.runModal() == .alertFirstButtonReturn {
+                return
+            }
+            forceReadOnly = true
+        }
+
         do {
             let doc = try FrontmatterParser.loadDocument(from: url)
             let content = try String(contentsOf: url, encoding: .utf8)
             var tab = DocumentTab(url: url, document: doc, content: content)
             tab.lastSavedContent = content
+            tab.readOnly = forceReadOnly
             openDocuments.append(tab)
             activeTabIndex = openDocuments.count - 1
             updateOutline()
-            log.info("Opened document: \(url.lastPathComponent) (type=\(doc.docType), id=\(doc.id.prefix(8)))")
+            log.info("Opened document: \(url.lastPathComponent) (type=\(doc.docType), id=\(doc.id.prefix(8))\(forceReadOnly ? ", read-only" : ""))")
         } catch {
+            // Parse failed — the frontmatter is likely corrupt. Surface any
+            // available recovery snapshots so the user can restore rather than
+            // losing work. We can't target a specific snapshot because we can't
+            // recover the document ID from an unparseable file, so we show the
+            // whole queue and let the user pick.
             log.error("Failed to open document \(url.lastPathComponent): \(error.localizedDescription)")
             errorLogger?.log("Failed to open document", error: error)
+            if let journal = crashJournal {
+                let entries = journal.recoverableDocuments()
+                if !entries.isEmpty {
+                    recoveryEntries = entries
+                    showRecoveryDialog = true
+                    return
+                }
+            }
+            let alert = NSAlert()
+            alert.messageText = "Unable to open \(url.lastPathComponent)"
+            alert.informativeText = "The file's frontmatter could not be parsed: \(error.localizedDescription)"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
 
@@ -501,6 +543,37 @@ final class AppState {
         } catch {
             log.error("Failed to create vault at \(url.path): \(error.localizedDescription)")
             errorLogger?.log("Failed to create vault", error: error)
+        }
+    }
+
+    func duplicateDocument(at url: URL) {
+        guard vault != nil else { return }
+        do {
+            let content = try String(contentsOf: url, encoding: .utf8)
+            var (frontmatter, body) = FrontmatterParser.parse(content)
+            // Fresh UUID so the duplicate has its own identity in the index.
+            frontmatter["id"] = UUID().uuidString.lowercased()
+            let now = ISO8601DateFormatter().string(from: Date())
+            frontmatter["created"] = now
+            frontmatter["modified"] = now
+            if let oldTitle = frontmatter["title"] as? String, !oldTitle.isEmpty {
+                frontmatter["title"] = "\(oldTitle) (copy)"
+            }
+            let newContent = FrontmatterParser.serialize(frontmatter: frontmatter, body: body)
+
+            let stem = url.deletingPathExtension().lastPathComponent
+            let ext = url.pathExtension
+            let baseCandidate = ext.isEmpty ? "\(stem)-copy" : "\(stem)-copy.\(ext)"
+            let parent = url.deletingLastPathComponent()
+            let target = uniqueFilename(base: baseCandidate, in: parent)
+
+            try newContent.write(to: target, atomically: true, encoding: .utf8)
+            refreshFiles()
+            openDocument(at: target)
+            log.info("Duplicated \(url.lastPathComponent) → \(target.lastPathComponent)")
+        } catch {
+            log.error("Failed to duplicate \(url.lastPathComponent): \(error.localizedDescription)")
+            errorLogger?.log("Failed to duplicate document", error: error)
         }
     }
 
@@ -806,11 +879,21 @@ final class AppState {
     func updateOutline() {
         guard let tab = currentDocument else {
             outline = []
+            currentDocumentChunkCount = 0
             return
         }
         // Extract body (skip frontmatter)
         let (_, body) = FrontmatterParser.parse(tab.content)
         outline = MarkdownRenderer.extractOutline(body)
+        refreshChunkCount()
+    }
+
+    func refreshChunkCount() {
+        guard let tab = currentDocument, let db = database else {
+            currentDocumentChunkCount = 0
+            return
+        }
+        currentDocumentChunkCount = (try? db.chunkCount(forDocID: tab.document.id)) ?? 0
     }
 
     func reindexSpotlight() {
@@ -1628,6 +1711,9 @@ struct DocumentTab: Identifiable {
     /// True when external changes were detected and the user deferred resolution.
     /// Blocks further saves until resolved via the merge conflict dialog.
     var hasExternalConflict: Bool = false
+    /// True when the file was opened in read-only mode (e.g. because it's huge).
+    /// The editor disables text input when this is set; autosave skips the tab.
+    var readOnly: Bool = false
 
     var title: String {
         document.title.isEmpty ? url.deletingPathExtension().lastPathComponent : document.title

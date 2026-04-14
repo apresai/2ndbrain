@@ -138,6 +138,9 @@ struct SidebarView: View {
             Button("Open") {
                 appState.openDocument(at: file.url)
             }
+            Button("Duplicate") {
+                appState.duplicateDocument(at: file.url)
+            }
             Button("Find Similar") {
                 appState.pendingFindSimilarQuery = file.name
                 appState.showSearch = true

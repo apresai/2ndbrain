@@ -81,6 +81,7 @@ struct EditorArea: View {
 
     @ViewBuilder
     private func sourceEditor(tabIndex: Int, state: AppState) -> some View {
+        let readOnly = tabIndex < state.openDocuments.count && state.openDocuments[tabIndex].readOnly
         MarkdownEditorView(
             text: Binding(
                 get: {
@@ -89,6 +90,7 @@ struct EditorArea: View {
                 },
                 set: { newValue in
                     guard tabIndex < state.openDocuments.count else { return }
+                    guard !state.openDocuments[tabIndex].readOnly else { return }
                     state.openDocuments[tabIndex].content = newValue
                     state.openDocuments[tabIndex].isDirty = true
                     state.updateOutline()
@@ -98,7 +100,8 @@ struct EditorArea: View {
             typewriterMode: state.typewriterModeActive,
             inlineRendering: state.inlineRenderingEnabled,
             fontSize: state.editorFontSize,
-            fontFamily: state.editorFontFamily
+            fontFamily: state.editorFontFamily,
+            readOnly: readOnly
         )
     }
 
@@ -131,6 +134,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var inlineRendering: Bool = false
     var fontSize: CGFloat = 14
     var fontFamily: String = "System Mono"
+    var readOnly: Bool = false
 
     private func resolveFont(size: CGFloat? = nil) -> NSFont {
         let sz = size ?? fontSize
@@ -145,7 +149,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         let scrollView = NSTextView.scrollableTextView()
         guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
 
-        textView.isEditable = true
+        textView.isEditable = !readOnly
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.isRichText = false
@@ -186,6 +190,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         context.coordinator.inlineRendering = inlineRendering
         context.coordinator.fontSize = fontSize
         context.coordinator.fontFamily = fontFamily
+        textView.isEditable = !readOnly
 
         // Update font when size or family changed
         if fontChanged {
