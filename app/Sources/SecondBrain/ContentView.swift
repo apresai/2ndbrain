@@ -106,6 +106,16 @@ struct ContentView: View {
             .environment(appState)
         }
         .sheet(isPresented: Binding(
+            get: { appState.showMCPStatus },
+            set: { appState.showMCPStatus = $0 }
+        )) {
+            MCPStatusView(isPresented: Binding(
+                get: { appState.showMCPStatus },
+                set: { appState.showMCPStatus = $0 }
+            ))
+            .environment(appState)
+        }
+        .sheet(isPresented: Binding(
             get: { appState.showIndexProgress },
             set: { appState.showIndexProgress = $0 }
         )) {

@@ -85,6 +85,22 @@ struct StatusBarView: View {
                         .frame(width: 280)
                         .padding(12)
                 }
+
+                Button {
+                    appState.showMCPStatus = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(mcpDotColor)
+                            .frame(width: 6, height: 6)
+                        Text(mcpLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(appState.vault == nil)
+                .help("MCP Server Status (Cmd+Shift+M)")
             }
 
             if let vault = appState.vault {
@@ -114,6 +130,15 @@ struct StatusBarView: View {
         }
         if status.embedAvailable || status.genAvailable { return .yellow }
         return .gray
+    }
+
+    private var mcpDotColor: Color {
+        appState.mcpStatuses.isEmpty ? .gray : .green
+    }
+
+    private var mcpLabel: String {
+        let count = appState.mcpStatuses.count
+        return count > 0 ? "MCP \(count)" : "MCP"
     }
 
     @ViewBuilder

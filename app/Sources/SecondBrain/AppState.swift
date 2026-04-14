@@ -57,6 +57,9 @@ final class AppState {
     var skillsInstallResult: String?
     var showMCPSetup = false
     var mcpSetupText: String?
+    var showMCPStatus = false
+    var mcpStatuses: [MCPServerStatusInfo] = []
+    private var mcpStatusTimer: Timer?
     var spotlightIndexer: SpotlightIndexer?
     var crashJournal: CrashJournal?
     var errorLogger: ErrorLogger?
@@ -123,6 +126,9 @@ final class AppState {
 
         // Start autosave timer for this vault
         startAutosaveTimer()
+
+        // Start polling MCP server status (used by status bar indicator)
+        startMCPStatusTimer()
 
         // Start watching for changes
         fileWatcher?.stop()
@@ -930,6 +936,41 @@ final class AppState {
             mcpSetupText = String(data: data, encoding: .utf8) ?? ""
         } catch {
             mcpSetupText = "Failed to load MCP setup: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - MCP Observability
+
+    func refreshMCPStatus() async {
+        guard let vault else {
+            mcpStatuses = []
+            return
+        }
+        do {
+            let data = try await runCLI(["mcp", "status", "--json"], cwd: vault.rootURL)
+            // Empty stdout means "no servers" — not an error, just an empty array.
+            if data.isEmpty {
+                mcpStatuses = []
+                return
+            }
+            let statuses = try JSONDecoder().decode([MCPServerStatusInfo]?.self, from: data) ?? []
+            mcpStatuses = statuses
+        } catch {
+            log.debug("MCP status unavailable: \(error.localizedDescription)")
+            mcpStatuses = []
+        }
+    }
+
+    func startMCPStatusTimer() {
+        mcpStatusTimer?.invalidate()
+        mcpStatusTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refreshMCPStatus()
+            }
+        }
+        // Fire once immediately so the status bar doesn't lag for 5s after vault open
+        Task { @MainActor in
+            await refreshMCPStatus()
         }
     }
 

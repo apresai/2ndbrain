@@ -1,6 +1,11 @@
 package mcp
 
 import (
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/apresai/2ndbrain/internal/vault"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -15,19 +20,50 @@ func Start(v *vault.Vault, version string) error {
 
 	h := &handlers{vault: v}
 
-	s.AddTool(kbInfoTool(), h.handleKBInfo)
-	s.AddTool(kbSearchTool(), h.handleKBSearch)
-	s.AddTool(kbAskTool(), h.handleKBAsk)
-	s.AddTool(kbReadTool(), h.handleKBRead)
-	s.AddTool(kbListTool(), h.handleKBList)
-	s.AddTool(kbCreateTool(), h.handleKBCreate)
-	s.AddTool(kbUpdateMetaTool(), h.handleKBUpdateMeta)
-	s.AddTool(kbRelatedTool(), h.handleKBRelated)
-	s.AddTool(kbStructureTool(), h.handleKBStructure)
-	s.AddTool(kbDeleteTool(), h.handleKBDelete)
-	s.AddTool(kbIndexTool(), h.handleKBIndex)
+	// Status writer records per-invocation telemetry to .2ndbrain/mcp/<pid>.json
+	// so the editor can display live MCP server state. Failure here shouldn't
+	// prevent the server from starting.
+	var statusWriter *StatusWriter
+	if sw, err := NewStatusWriter(v); err == nil {
+		statusWriter = sw
+	} else {
+		slog.Warn("mcp status writer unavailable", "err", err)
+	}
 
-	return server.ServeStdio(s)
+	addTool := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {
+		if statusWriter != nil {
+			handler = statusWriter.Wrap(tool.Name, handler)
+		}
+		s.AddTool(tool, handler)
+	}
+
+	addTool(kbInfoTool(), h.handleKBInfo)
+	addTool(kbSearchTool(), h.handleKBSearch)
+	addTool(kbAskTool(), h.handleKBAsk)
+	addTool(kbReadTool(), h.handleKBRead)
+	addTool(kbListTool(), h.handleKBList)
+	addTool(kbCreateTool(), h.handleKBCreate)
+	addTool(kbUpdateMetaTool(), h.handleKBUpdateMeta)
+	addTool(kbRelatedTool(), h.handleKBRelated)
+	addTool(kbStructureTool(), h.handleKBStructure)
+	addTool(kbDeleteTool(), h.handleKBDelete)
+	addTool(kbIndexTool(), h.handleKBIndex)
+
+	if statusWriter != nil {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			statusWriter.Remove()
+			os.Exit(0)
+		}()
+	}
+
+	err := server.ServeStdio(s)
+	if statusWriter != nil {
+		statusWriter.Remove()
+	}
+	return err
 }
 
 func kbInfoTool() mcplib.Tool {

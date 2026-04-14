@@ -102,6 +102,12 @@ struct SecondBrainApp: App {
                 }
                 .disabled(appState.vault == nil)
 
+                Button("MCP Server Status...") {
+                    appState.showMCPStatus = true
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(appState.vault == nil)
+
                 Divider()
 
                 Button("Validate Knowledge Base...") {
