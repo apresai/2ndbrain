@@ -36,6 +36,9 @@ final class AppState {
     private var autosaveTimer: Timer?
     private static let lowDiskThreshold: Int64 = 50 * 1024 * 1024
 
+    // Merge conflict controllers (one per active dialog, retained so the NSWindow stays alive)
+    private var mergeControllers: [MergeConflictController] = []
+
     // AI state
     var aiStatus: AIStatusInfo?
     var isIndexing = false
@@ -193,7 +196,8 @@ final class AppState {
         do {
             let doc = try FrontmatterParser.loadDocument(from: url)
             let content = try String(contentsOf: url, encoding: .utf8)
-            let tab = DocumentTab(url: url, document: doc, content: content)
+            var tab = DocumentTab(url: url, document: doc, content: content)
+            tab.lastSavedContent = content
             openDocuments.append(tab)
             activeTabIndex = openDocuments.count - 1
             updateOutline()
@@ -617,6 +621,18 @@ final class AppState {
         guard tabIdx >= 0, tabIdx < openDocuments.count else { return false }
         let tab = openDocuments[tabIdx]
 
+        if tab.hasExternalConflict {
+            if !isAutosave {
+                let alert = NSAlert()
+                alert.messageText = "Unresolved merge conflict"
+                alert.informativeText = "\(tab.url.lastPathComponent) has unresolved external changes. Resolve the conflict before saving."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+            return false
+        }
+
         if !isAutosave, let avail = availableDiskSpace(at: tab.url), avail < Self.lowDiskThreshold {
             let alert = NSAlert()
             alert.messageText = "Low disk space"
@@ -638,6 +654,7 @@ final class AppState {
         do {
             try tab.content.write(to: tab.url, atomically: true, encoding: .utf8)
             openDocuments[tabIdx].isDirty = false
+            openDocuments[tabIdx].lastSavedContent = tab.content
             crashJournal?.clearSnapshotSync(documentID: tab.document.id)
             log.debug("\(isAutosave ? "Autosaved" : "Saved"): \(tab.url.lastPathComponent)")
             return true
@@ -764,10 +781,63 @@ final class AppState {
 
     private func reloadIfOpen(path: String) {
         guard let idx = openDocuments.firstIndex(where: { $0.url.path == path }) else { return }
-        if let content = try? String(contentsOfFile: path, encoding: .utf8) {
-            if !openDocuments[idx].isDirty {
-                openDocuments[idx].content = content
-            }
+        guard let diskContent = try? String(contentsOfFile: path, encoding: .utf8) else {
+            // File vanished or unreadable — leave the tab alone for now. External
+            // deletion handling is deferred; the user can still save to recreate it.
+            return
+        }
+        let tab = openDocuments[idx]
+        // No external change if disk matches what we last saw.
+        if diskContent == tab.lastSavedContent {
+            return
+        }
+        // External change detected.
+        if !tab.isDirty {
+            // Safe to reload silently — editor has no unsaved work.
+            openDocuments[idx].content = diskContent
+            openDocuments[idx].lastSavedContent = diskContent
+            return
+        }
+        // Conflict: editor is dirty and disk changed under us.
+        if tab.hasExternalConflict {
+            return // already prompting the user
+        }
+        openDocuments[idx].hasExternalConflict = true
+        let filename = tab.url.lastPathComponent
+        let ancestor = tab.lastSavedContent
+        let mine = tab.content
+        let tabID = tab.id
+        let controller = MergeConflictController()
+        mergeControllers.append(controller)
+        controller.present(
+            filename: filename,
+            theirs: diskContent,
+            mine: mine,
+            ancestor: ancestor
+        ) { [weak self] resolution in
+            guard let self else { return }
+            self.handleMergeResolution(tabID: tabID, diskContent: diskContent, resolution: resolution)
+            self.mergeControllers.removeAll { $0 === controller }
+        }
+    }
+
+    private func handleMergeResolution(tabID: UUID, diskContent: String, resolution: MergeConflictResolution) {
+        guard let idx = openDocuments.firstIndex(where: { $0.id == tabID }) else { return }
+        switch resolution {
+        case .keepMine:
+            openDocuments[idx].hasExternalConflict = false
+            // lastSavedContent must equal diskContent before performSave so the
+            // next FSEvents tick from our own write isn't mistaken for another
+            // external change. We overwrite the external edits with ours.
+            openDocuments[idx].lastSavedContent = diskContent
+            performSave(tabIdx: idx, isAutosave: false)
+        case .useTheirs:
+            openDocuments[idx].content = diskContent
+            openDocuments[idx].lastSavedContent = diskContent
+            openDocuments[idx].isDirty = false
+            openDocuments[idx].hasExternalConflict = false
+        case .cancel:
+            openDocuments[idx].hasExternalConflict = true
         }
     }
 
@@ -1246,6 +1316,12 @@ struct DocumentTab: Identifiable {
     var document: MarkdownDocument
     var content: String
     var isDirty: Bool = false
+    /// Content as it was on disk at the last successful load or save.
+    /// Used as the common ancestor for merge conflict detection.
+    var lastSavedContent: String = ""
+    /// True when external changes were detected and the user deferred resolution.
+    /// Blocks further saves until resolved via the merge conflict dialog.
+    var hasExternalConflict: Bool = false
 
     var title: String {
         document.title.isEmpty ? url.deletingPathExtension().lastPathComponent : document.title

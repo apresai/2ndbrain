@@ -308,7 +308,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | ERR-EV-003 | Failed plugin load disables plugin and continues launching | Integration | Provide a broken plugin, launch editor, verify plugin disabled and app continues | Not Started | Not Written |
 | ERR-ST-001 | Repeated background failures pause operation with retry notification | Manual | Simulate repeated indexing failures, verify operation paused with retry/diagnostic options | Not Started | Not Written |
 | ERR-UW-001 | Failed save retains content in recovery journal with error message | Integration | Simulate filesystem error on save, verify content saved to recovery journal and error shown | Partial | Not Written |
-| ERR-UW-002 | Conflicting edits present diff-based merge conflict dialog | Manual | Edit file in editor and externally simultaneously, verify merge conflict dialog appears | Not Started | Not Written |
+| ERR-UW-002 | Conflicting edits present diff-based merge conflict dialog | Manual | Edit file in editor and externally simultaneously, verify merge conflict dialog appears | Partial | Not Written |
 | ERR-UW-003 | Corrupt frontmatter write-back restores from recovery journal | Integration | Simulate frontmatter corruption during write, verify pre-write backup restored | Partial | Not Written |
 | ERR-UW-004 | Exhausted undo disables control and shows "Nothing to undo" | Manual | Undo all actions until history empty, verify undo disabled and status bar message shown | Partial | Not Written |
 
@@ -349,15 +349,15 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | macOS Platform Integration | 10 | 2 | 2 | 6 | 0 |
 | Performance | 10 | 2 | 5 | 3 | 0 |
 | Security & Privacy | 8 | 1 | 5 | 2 | 0 |
-| Error Handling & Recovery | 10 | 4 | 3 | 3 | 0 |
+| Error Handling & Recovery | 10 | 4 | 4 | 2 | 0 |
 | Obsidian Vault Conversion | 11 | 6 | 5 | 0 | 0 |
-| **Total** | **211** | **128** | **55** | **28** | **0** |
+| **Total** | **211** | **128** | **56** | **27** | **0** |
 
 ### Implementation Coverage
 
 - **Complete**: 61% (128 of 211 requirements fully implemented)
-- **Partial**: 26% (55 of 211 requirements partially implemented)
-- **Not Started**: 13% (28 of 211 requirements not yet started)
+- **Partial**: 27% (56 of 211 requirements partially implemented)
+- **Not Started**: 13% (27 of 211 requirements not yet started)
 - **Tests Written**: 0% (no formal test cases written yet)
 
 ### Priority Areas for Test Development
@@ -378,7 +378,7 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 - **Storage**: File move naming conflict on rename UI (create path handled)
 - **Performance**: Large file streaming mode, embedding batch processing, graph LOD rendering
 - **Security**: Vault lock/unlock flow
-- **Error Handling**: Plugin failure handling, merge conflict dialog, corrupt frontmatter detection on launch (pre-write snapshot shipped)
+- **Error Handling**: Plugin failure handling, diff-highlighted merge conflict UI (three-pane text dialog shipped, diff view deferred to Phase 4), corrupt frontmatter detection on launch (pre-write snapshot shipped)
 
 ### Notes
 
