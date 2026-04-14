@@ -113,7 +113,8 @@ Test scripts live in `tests/`:
 | `internal/store` | SQLite database CRUD, migrations, link resolution |
 | `internal/search` | BM25 search engine with structured filters |
 | `internal/graph` | Link graph BFS traversal |
-| `internal/mcp` | MCP server with 11 tools |
+| `internal/mcp` | MCP server with 16 tools + sidecar status files |
+| `internal/git` | Read-only git wrappers (IsRepo, Activity, DiffFile, StatusFiles) |
 | `internal/skills` | Skill file generation and agent registry |
 | `internal/output` | JSON/CSV/YAML formatters |
 | `internal/testutil` | Test helpers (NewTestVault, CreateAndIndex) |
@@ -126,7 +127,7 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (39)
+### CLI Commands (46)
 
 Commands are organized into groups (Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration).
 
@@ -137,7 +138,7 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `create` | `--type`, `--title` | Create document from template (adr/runbook/note/postmortem) |
 | `read` | `--chunk` | Read full document or specific section |
 | `meta` | `--set key=value` | View or update frontmatter with schema validation |
-| `index` | | Rebuild vault search index |
+| `index` | `--doc <path>` | Rebuild vault search index (or a single document) |
 | `search` | `--type`, `--status`, `--tag`, `--limit` | Hybrid BM25 search with filters |
 | `list` | `--type`, `--status`, `--tag`, `--limit`, `--sort` | List documents with filters |
 | `lint` | `[glob]` | Validate schemas, check broken wikilinks |
@@ -150,6 +151,12 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `export-obsidian` | `--strip-ids` | Export vault to Obsidian format |
 | `mcp-server` | | Start MCP server on stdio transport |
 | `mcp-setup` | | Show MCP setup instructions for all AI tools |
+| `mcp status` | `--json` | List live MCP server processes and recent tool invocations |
+| `suggest-links` | `<path>`, `--limit` | Suggest semantically related documents to link from a document |
+| `polish` | `<path>`, `--system`, `--max-tokens` | AI copy-edit a document (returns original + polished for diff preview) |
+| `git activity` | `--since 7d`, `--json` | Recent commits that touched vault files (read-only git) |
+| `git diff` | `<path>`, `--json` | Unified diff of a file against HEAD |
+| `git status` | `--json` | List uncommitted/untracked files in the vault |
 | `ask` | `<question>` | RAG Q&A — search vault, generate answer with sources |
 | `ai status` | | Show AI provider, models, readiness, embedding count |
 | `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
@@ -176,7 +183,9 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 
 **Logging:** When `--verbose` is used, structured logs (via `log/slog`) are written to stderr and to `.2ndbrain/logs/cli.log`. Without `--verbose`, only the log file is written.
 
-### MCP Server (11 tools)
+### MCP Server (16 tools)
+
+Each `2nb mcp-server` process writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` with PID, start time, parent PID, and the last 50 tool invocations (tool name, timestamp, duration, ok/error). The editor polls `2nb mcp status --json` every 5s to populate the status bar indicator and Cmd+Shift+M panel. mark3labs/mcp-go has no client-connected hook, so sidecar files are the only way to enumerate live servers.
 
 | Tool | Purpose |
 |------|---------|
@@ -191,6 +200,11 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `kb_structure` | Get document heading hierarchy |
 | `kb_delete` | Delete document from vault and index |
 | `kb_index` | Rebuild search index and generate embeddings |
+| `kb_suggest_links` | Find semantically related documents to link from a given document |
+| `kb_polish` | AI copy-editor returns original + polished body for diff review |
+| `kb_git_activity` | Recent git commits that touched vault files (read-only) |
+| `kb_git_diff` | Unified diff of a file against HEAD |
+| `kb_git_status` | Map of path → git porcelain status for uncommitted files |
 
 ### Testing
 
@@ -229,11 +243,20 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 |---------|------|-------------|
 | Vault creation | VaultManager.swift | Create new vault with .2ndbrain directory |
 | Vault opening | SecondBrainApp.swift | Open existing vault via folder picker (Cmd+Shift+O) |
-| Document editing | EditorArea.swift | NSTextView with configurable font, debounced sync |
+| Document editing | EditorArea.swift | NSTextView with configurable font, debounced sync, read-only mode for >100 MB files |
 | Editor mode toggle | EditorArea.swift | Source / Split / Preview segmented control in toolbar |
+| Editable preview | EditorArea.swift | WKWebView ↔ Turndown.js bridge for WYSIWYG editing in preview mode |
 | Live preview | EditorArea.swift | HTML preview via WKWebView (split or full-width) |
 | Document templates | AppState.swift | Create from ADR, Runbook, Note, Postmortem, PRD, PR/FAQ templates |
+| Document duplication | SidebarView.swift | Context menu Duplicate with fresh UUID and "(copy)" title |
+| Drag to open | ContentView.swift | Drop `.md` files from Finder to open in new tabs |
 | Document deletion | SidebarView.swift | Context menu delete with confirmation |
+| 30s autosave | AppState.swift | Scheduled autosave with Off/15/30/60 preference |
+| Low disk warning | AppState.swift | NSAlert when volume available capacity < 50 MB before save |
+| Filename collision suffix | AppState.swift | `uniqueFilename` appends -1, -2, ... on create/duplicate |
+| Pre-write crash snapshot | CrashJournal.swift | Sync `.recovery.md` snapshot before every write |
+| Merge conflict dialog | MergeConflictView.swift | NSHostingController window with two DiffView panes when FSEvents detects external edit to a dirty tab |
+| Parse-on-open recovery | AppState.swift | Shows existing recovery dialog when FrontmatterParser.loadDocument throws |
 | Frontmatter editing | PropertiesView.swift | Editable properties with type-appropriate controls |
 | Wikilink autocomplete | MentionAutocompleteController.swift | `@` and `[[` triggered popover with document search |
 | Search panel | SearchPanelView.swift | Vault-wide search with type filters (Cmd+Shift+F) |
@@ -244,9 +267,11 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Outline panel | SidebarView.swift | Document heading hierarchy |
 | Properties panel | PropertiesView.swift | Editable frontmatter fields (Cmd+Option+I) |
 | Tab system | TabBarView.swift | Multiple documents with dirty indicators |
-| Focus mode | ContentView.swift | Distraction-free editing (Cmd+Shift+E) |
-| Status bar | StatusBarView.swift | Doc type, status, word count, interactive AI dot |
+| Focus mode | ContentView.swift | Distraction-free editing (Cmd+Shift+E); mouse top edge reveals tab bar + breadcrumb briefly |
+| Status bar | StatusBarView.swift | Doc type, status, word count, chunk count, token estimate, AI dot, MCP dot |
 | AI status popover | StatusBarView.swift | Clickable AI dot → provider/models/staleness/rebuild |
+| MCP status panel | MCPStatusView.swift | Cmd+Shift+M → per-client list with recent tool invocations |
+| MCP status indicator | StatusBarView.swift | Green dot + client count, polls `2nb mcp status --json` every 5s |
 | Index rebuild | IndexProgressView.swift | Confirmation dialog → progress bars → stats summary |
 | Lint validation | LintResultsView.swift | Shell out to `2nb lint --json`, clickable issues |
 | Skills install | SkillsInstallView.swift | Install SKILL.md for 8 AI agents (Tools menu) |
@@ -262,8 +287,14 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Semantic search | SearchPanelView.swift | Toggle for AI-powered hybrid search |
 | Find Similar | SidebarView.swift | Context menu → semantic search for similar docs |
 | Tag drill-down | TagBrowserView.swift | Click tag → filtered file list → back button |
-| Preferences | PreferencesView.swift | Font family/size picker (Cmd+,) |
+| Preferences | PreferencesView.swift | Font family/size picker + autosave interval (Cmd+,) |
 | PDF/HTML/MD export | ExportController.swift | Export menu with PDF (WKWebView), HTML, Markdown |
+| Suggest Links | SuggestLinksView.swift | Cmd+Shift+L → `2nb suggest-links` → click-to-insert wikilinks |
+| AI Polish | PolishView.swift | Cmd+Option+P → `2nb polish` → DiffView with Accept/Open-as-new-tab/Reject |
+| Diff view | DiffView.swift | Reusable Myers LCS unified diff (polish, merge conflict, git diff) |
+| Git sidebar indicators | SidebarView.swift | Orange dot for modified, blue for untracked (when vault is a git repo) |
+| Git activity | GitActivityView.swift | Cmd+Shift+G → recent commits with 1/3/7/30 day window |
+| Git diff viewer | GitDiffView.swift | Right-click → Show Changes vs HEAD → raw unified diff |
 
 ### Keyboard Shortcuts
 
@@ -275,6 +306,10 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Cmd+P | Quick Open |
 | Cmd+Shift+P | Command Palette |
 | Cmd+Shift+A | Ask AI |
+| Cmd+Shift+L | Suggest Links |
+| Cmd+Option+P | Polish Document |
+| Cmd+Shift+M | MCP Server Status |
+| Cmd+Shift+G | Recent Git Activity |
 | Cmd+Shift+F | Search Panel |
 | Cmd+Shift+E | Focus Mode |
 | Cmd+Option+I | Properties Panel |
@@ -296,8 +331,9 @@ vault-root/
 │   ├── schemas.yaml     # Document type schemas
 │   ├── index.db         # SQLite index (shared between CLI and editor)
 │   ├── bench.db         # Benchmark history and favorites (created on first bench)
+│   ├── mcp/             # One <pid>.json per running mcp-server process
 │   ├── models/          # Embedding model files
-│   ├── recovery/        # Crash recovery snapshots
+│   ├── recovery/        # Crash recovery snapshots (pre-write + failure snapshots)
 │   └── logs/            # Error logs
 ├── document-1.md
 ├── document-2.md

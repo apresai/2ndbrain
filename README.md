@@ -40,13 +40,18 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 
 - **Hybrid search** — BM25 keyword + vector semantic search with Reciprocal Rank Fusion
 - **RAG Q&A** — Ask questions, get answers with source citations
-- **MCP server** — 11 tools for Claude Code, Cursor, and any MCP client
+- **MCP server** — 16 tools for Claude Code, Cursor, and any MCP client, with live status sidecar files and an observability panel
+- **Suggest Links** — AI finds semantically related documents in your vault and proposes wikilinks to insert
+- **Polish** — AI copy-editor fixes spelling, grammar, and awkward phrasing with a diff preview (Accept / Open in new tab / Reject)
+- **Incremental re-embed on save** — embeddings rebuild only for the document whose content hash changed
+- **Git integration (read-only)** — sidebar dots for uncommitted/untracked files, Recent Activity panel, Show Changes vs HEAD, MCP tools for AI clients
+- **Merge conflict resolution** — FSEvents-backed 3-way diff dialog when a tab's file changes externally while dirty
 - **Skill files** — One command to teach 8 AI coding agents about your vault
 - **Three AI providers** — AWS Bedrock, OpenRouter, Ollama (fully local)
 - **Schema validation** — Typed frontmatter, enum constraints, status state machines
 - **Wikilinks** — `[[target#heading|alias]]` with link resolution and graph traversal
-- **Document templates** — ADR, runbook, postmortem, note with enforced schemas
-- **Native macOS editor** — SwiftUI + AppKit with live preview, tabs, search, graph view
+- **Document templates** — ADR, runbook, prd, prfaq, postmortem, note with enforced schemas
+- **Native macOS editor** — SwiftUI + AppKit with live preview, editable preview (WYSIWYG via Turndown), tabs, search, graph view, autosave, crash recovery
 - **Local-first** — All data on disk as plain markdown. Obsidian-compatible.
 
 ## AI Providers
@@ -163,7 +168,9 @@ Commands are organized into groups (`2nb --help` shows the full list).
 |---------|-------------|
 | `search <query> [--type] [--status] [--tag]` | Hybrid BM25 + semantic search |
 | `ask <question>` | RAG Q&A with source citations |
-| `index` | Build search index + generate embeddings |
+| `suggest-links <path> [--limit 10]` | Rank semantically related documents for wikilink insertion |
+| `polish <path> [--system <prompt>]` | AI copy-edit a document (JSON with original + polished body) |
+| `index [--doc <path>]` | Build search index + embeddings (full vault or a single document) |
 | `ai status` | Show AI provider, models, embedding count |
 | `ai setup` | Multi-provider setup wizard (easy mode or custom) |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
@@ -173,6 +180,14 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `models bench` | Benchmark favorites with persistent history |
 | `models bench fav <model-id>` | Add model to benchmark favorites |
 | `models bench compare` | Side-by-side latency leaderboard |
+
+### Git (read-only)
+
+| Command | Description |
+|---------|-------------|
+| `git activity [--since 7d]` | Recent commits that touched vault files |
+| `git diff <path>` | Unified diff of a file against HEAD |
+| `git status` | Uncommitted/untracked files in the vault |
 
 ### Quality
 
@@ -189,6 +204,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 |---------|-------------|
 | `mcp-server` | Start MCP server on stdio |
 | `mcp-setup` | Show MCP setup instructions for all AI tools |
+| `mcp status [--json]` | List live MCP server processes and their recent tool invocations |
 | `export-context --types <types>` | Generate CLAUDE.md context bundle |
 | `skills list` | List supported AI agents and install status |
 | `skills install <agent> [--all] [--user]` | Install skill file for an AI coding agent |
@@ -215,7 +231,7 @@ All commands support `--json`, `--yaml`, `--csv` for machine-readable output.
 
 ## MCP Server
 
-The MCP server exposes 11 tools for AI coding assistants:
+The MCP server exposes 16 tools for AI coding assistants:
 
 | Tool | Description |
 |------|-------------|
@@ -230,6 +246,13 @@ The MCP server exposes 11 tools for AI coding assistants:
 | `kb_structure` | Get document heading tree as JSON |
 | `kb_delete` | Delete document from vault and index |
 | `kb_index` | Rebuild search index and generate embeddings |
+| `kb_suggest_links` | Suggest semantically related documents to wikilink from a source doc |
+| `kb_polish` | AI copy-editor returns original + polished body for diff review |
+| `kb_git_activity` | Recent git commits that touched vault files (read-only) |
+| `kb_git_diff` | Unified diff of a file against HEAD |
+| `kb_git_status` | Uncommitted/untracked files in the vault |
+
+Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` with PID, start time, parent PID, and the last 50 tool invocations. Run `2nb mcp status` to list live servers, or use the Cmd+Shift+M status panel in the editor.
 
 ### Claude Code
 
@@ -305,23 +328,34 @@ Supported agents: Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Ro
 
 A native SwiftUI + AppKit editor with:
 
-- Markdown editing with Source / Split / Preview mode toggle
+- Markdown editing with Source / Split / Preview mode toggle (editable preview via Turndown.js ↔ WKWebView bridge)
+- 30-second autosave (Off / 15s / 30s / 60s in Preferences), low-disk warning, filename collision suffixing, pre-write crash snapshots
+- Merge conflict dialog — when a file changes externally while a tab is dirty, a 2-pane diff window shows On Disk vs Ancestor and Yours vs Ancestor
 - Configurable editor font family and size (Preferences via Cmd+,, zoom with Cmd+=/Cmd+-/Cmd+0)
 - Quick Open (Cmd+P), Command Palette (Cmd+Shift+P)
 - Search panel with semantic search toggle (Cmd+Shift+F)
 - Ask AI panel for RAG Q&A (Cmd+Shift+A)
+- **Suggest Links** (Cmd+Shift+L) — click-to-insert AI-suggested wikilinks to semantically related documents
+- **Polish** (Cmd+Option+P) — AI copy-edit the current document with an accept/reject diff preview
+- **MCP Server Status** (Cmd+Shift+M) — see which AI clients are connected and which tools they've invoked, plus a live status-bar indicator
+- **Recent Activity** (Cmd+Shift+G) — for vaults that are git repos, browse recent commits with 1/3/7/30-day window
+- **Git diff viewer** — right-click any file in the sidebar → Show Changes vs HEAD
+- **Git sidebar indicators** — orange dot for modified, blue dot for untracked
 - AI setup wizard — guided provider/credentials/model configuration (Tools menu)
 - Interactive AI status popover with staleness indicator and index rebuild
+- Status bar shows document type, status, word count, chunk count, token estimate, AI dot, MCP dot
 - Index rebuild dialog with confirmation, progress bars, and stats summary
 - Tag drill-down navigation — click a tag to see filtered files, back button to return
 - Export as PDF, HTML, or Markdown (Export menu, Cmd+Shift+X for PDF)
-- Tools menu: Install AI Agent Skills, Connect AI Tools (MCP), Validate Knowledge Base, Rebuild Index
+- Tools menu: Install AI Agent Skills, Connect AI Tools (MCP), MCP Server Status, Validate Knowledge Base, Rebuild Index
 - Interactive link graph visualization
 - Wikilink autocomplete, backlinks panel, outline view
-- Tabs with dirty indicators, focus mode
+- Tabs with dirty indicators, focus mode with hover-to-reveal toolbar
+- Sidebar context menu: Open, Duplicate, Find Similar, Show Changes vs HEAD, Delete
+- Drag `.md` files from Finder into the editor to open in new tabs
 - 6 document templates: Note, ADR, Runbook, Postmortem, PRD, PR/FAQ
 - Obsidian import/export
-- Spotlight indexing, crash recovery, file watching
+- Spotlight indexing, crash recovery (parse-on-open corruption detection), file watching
 
 Build and install:
 
