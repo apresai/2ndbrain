@@ -553,15 +553,13 @@ struct MarkdownPreviewView: NSViewRepresentable {
         var lastHTML = ""
         var onContentChanged: ((String) -> Void)?
 
-        nonisolated func userContentController(
+        func userContentController(
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
             guard message.name == "contentChanged",
                   let markdown = message.body as? String else { return }
-            Task { @MainActor [weak self] in
-                self?.onContentChanged?(markdown)
-            }
+            onContentChanged?(markdown)
         }
     }
 }
