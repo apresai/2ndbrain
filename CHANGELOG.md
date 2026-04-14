@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.10] - 2026-04-14
+
+### Added
+- Search results now display RRF and cosine similarity scores (`rrf=X.XXX, cos=Y.YYY`) for transparency into hybrid ranking
+- Parent-command defaults: running `2nb ai`, `2nb models`, `2nb git`, `2nb mcp`, `2nb skills`, or `2nb config` without a subcommand now invokes the most useful read-only action instead of printing help
+
+### Changed
+- Expanded MCP tool descriptions and skill file content with richer LLM-facing context for all 16 tools
+
+### Fixed
+- Wikilink resolution correctness (title/filename matching edge cases)
+- Vector search threshold filtering applied consistently across hybrid and standalone semantic queries
+
+
 ## [0.1.9] - 2026-04-14
 
 ## [0.1.9] - 2026-04-14
