@@ -74,12 +74,18 @@ func Start(v *vault.Vault, version string) error {
 func kbInfoTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_info",
-		Description: `Get an overview of the knowledge base: vault name, document types with schemas, document counts by type, and AI provider status. Call this FIRST when starting work with the knowledge base to understand what's available.
+		Description: `Get an overview of the knowledge base: vault name, vault root path, document types with schemas, document counts by type, and AI provider status. Call this FIRST when starting work with the knowledge base to confirm which vault you're connected to and what's available.
+
+After kb_info, typical next moves:
+- kb_list (filter by type/tag to discover what exists before creating)
+- kb_search (natural-language query for specific content)
+- kb_ask (synthesize an answer across multiple docs)
 
 Example prompts that should trigger this tool:
 - "What's in my knowledge base?"
 - "What document types do I have?"
-- "Show me the vault overview"`,
+- "Show me the vault overview"
+- "Which vault am I working with?"`,
 		InputSchema: mcplib.ToolInputSchema{
 			Type:       "object",
 			Properties: map[string]any{},
@@ -90,7 +96,20 @@ Example prompts that should trigger this tool:
 func kbSearchTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_search",
-		Description: `Search the knowledge base using hybrid BM25 keyword + semantic vector search. Returns ranked results with content snippets, metadata, and relevance scores. Use natural language queries for best semantic results.
+		Description: `Search the knowledge base using hybrid BM25 keyword + semantic vector search. Returns ranked results with content snippets, metadata, and two relevance numbers per result: "score" is the Reciprocal Rank Fusion score (good for ordering, opaque as a relevance signal), and "vector_score" is the raw cosine similarity (use this to judge how relevant a hit actually is). Hits below the configured similarity threshold (default 0.20) are filtered out entirely.
+
+Interpreting vector_score:
+- >= 0.6 — strong semantic match
+- 0.35 – 0.6 — related
+- 0.20 – 0.35 — weakly related
+- missing — this was a BM25-only match (still valid, just no vector signal)
+
+After kb_search, typical next moves:
+- kb_read to fetch the full content for a promising result
+- kb_structure if the doc is long and you want to pick a specific chunk
+- kb_related to explore what links out from a result
+
+If kb_search returns nothing, broaden the query or drop filters. If kb_ask said "no relevant documents", drop to kb_search with a less specific query — kb_ask is stricter.
 
 Example prompts that should trigger this tool:
 - "Search for authentication patterns"
@@ -113,7 +132,12 @@ Example prompts that should trigger this tool:
 func kbReadTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_read",
-		Description: `Read a document's full content with frontmatter metadata, or a specific section by heading name. Use kb_list first to discover paths, then kb_read to get content. Use the chunk parameter to read just one section of a long document.
+		Description: `Read a document's full content with frontmatter metadata, or a specific section by heading name. Paths are always vault-relative (e.g. "use-jwt-for-auth.md" or "subdir/foo.md") — absolute paths will fail.
+
+Typical flow:
+- Before kb_read, call kb_list or kb_search to discover the path.
+- For long documents, call kb_structure first to see the heading tree, then pass one of those headings as the "chunk" argument to avoid pulling the whole body.
+- If kb_read fails with "path outside vault", you probably have an absolute path or a stale path — re-run kb_list to get the canonical vault-relative path.
 
 Example prompts that should trigger this tool:
 - "Read the JWT authentication ADR"
@@ -133,11 +157,16 @@ Example prompts that should trigger this tool:
 func kbRelatedTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_related",
-		Description: `Find documents connected to a given document via [[wikilink]] graph traversal. Returns linked documents up to the specified depth. Useful for understanding context around a topic.
+		Description: `Find documents connected to a given document via [[wikilink]] graph traversal. Returns linked documents up to the specified depth. This is the explicit-connection view — for semantic similarity (docs that aren't linked but discuss related things), use kb_suggest_links instead.
+
+kb_related (this tool) vs kb_suggest_links:
+- kb_related — "what does this doc actually link to?" — uses the [[wikilink]] graph
+- kb_suggest_links — "what SHOULD this doc link to based on content similarity?" — uses vector embeddings
 
 Example prompts that should trigger this tool:
 - "What's related to the auth ADR?"
-- "Show connected documents for stripe.md"`,
+- "Show connected documents for stripe.md"
+- "Follow the links out from this postmortem"`,
 		InputSchema: mcplib.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]any{
@@ -153,6 +182,15 @@ func kbCreateTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_create",
 		Description: `Create a new document from a template. Auto-generates UUID, populates frontmatter with schema defaults, and indexes it for search. Types: adr (architecture decision), runbook (operational procedure), prd (product requirements), prfaq (press release / FAQ), postmortem (incident analysis), note (general knowledge).
+
+IMPORTANT before calling:
+1. Run kb_search (or kb_list with a relevant tag/type filter) to check for duplicates. Vaults accumulate duplicates fast when agents skip this step.
+2. Confirm the vault root via kb_info if you're not sure which vault you're writing to — kb_create writes to the vault configured for this MCP server, not to the filesystem location of any prompts.
+
+After kb_create, typical next moves:
+- kb_read the new path to get the template body.
+- Use a file-edit tool (or kb_update_meta for frontmatter-only changes) to fill in the body with [[wikilinks]] to related docs found in step 1.
+- No need to call kb_index — creation auto-indexes.
 
 Example prompts that should trigger this tool:
 - "Create an ADR for switching to PostgreSQL"
@@ -174,7 +212,16 @@ Example prompts that should trigger this tool:
 func kbUpdateMetaTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_update_meta",
-		Description: `Update frontmatter metadata on a document without changing the body. Validates values against the document type schema (e.g., ADR status must follow: proposed → accepted → deprecated/superseded).
+		Description: `Update frontmatter metadata on a document without changing the body. Validates values against the document type schema and enforces status state machines:
+- adr: proposed → accepted → deprecated/superseded
+- runbook: draft → active → archived
+- postmortem: draft → reviewed → published
+- prd: draft → review → approved → shipped → archived
+- prfaq: draft → review → final
+
+Jumping over a state (e.g., proposed → superseded directly) will be rejected. Walk the transitions.
+
+Do NOT modify the "modified" timestamp manually — it's maintained automatically and hand-edits can desync with the content hash and cause spurious re-embeds. If you need to touch the body, use a regular file-edit tool and the save path will update the timestamp.
 
 Example prompts that should trigger this tool:
 - "Mark the JWT ADR as accepted"
@@ -194,7 +241,14 @@ Example prompts that should trigger this tool:
 func kbStructureTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_structure",
-		Description: `Get the heading outline of a document as a JSON tree. Useful for understanding a document's organization before reading specific sections with kb_read's chunk parameter.
+		Description: `Get the heading outline of a document as a JSON tree. Useful for long documents where you don't want to read the whole body — call kb_structure first to pick a heading, then kb_read with that heading as the "chunk" argument.
+
+Typical flow:
+1. kb_search or kb_list → find a path
+2. kb_structure → see the heading tree
+3. kb_read with chunk="<heading>" → fetch just the section you need
+
+For short documents (< 500 lines), it's usually faster to skip kb_structure and just kb_read the whole thing.
 
 Example prompts that should trigger this tool:
 - "Show me the outline of the auth runbook"
@@ -212,7 +266,12 @@ Example prompts that should trigger this tool:
 func kbDeleteTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_delete",
-		Description: `Permanently delete a document from the vault. Removes the file from disk and all index entries (chunks, tags, links, embeddings). This cannot be undone.
+		Description: `Permanently delete a document from the vault. Removes the file from disk AND all index entries (chunks, tags, links, embeddings). This cannot be undone by 2nb — if the vault is git-backed, the file is still recoverable via git, otherwise it's gone.
+
+Before calling:
+1. Confirm the exact path with kb_list or kb_search. Similar titles can have different UUIDs.
+2. Check for inbound wikilinks with kb_related — deleting a heavily-linked doc leaves dangling references that 2nb lint will flag.
+3. Prefer kb_update_meta to change status (e.g., adr → deprecated) if the content is still worth preserving for history.
 
 Example prompts that should trigger this tool:
 - "Delete the old caching note"
@@ -230,12 +289,19 @@ Example prompts that should trigger this tool:
 func kbListTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_list",
-		Description: `List documents in the knowledge base with optional filters. Returns titles, paths, types, and statuses without content. Use this to discover what documents exist before reading them.
+		Description: `List documents in the knowledge base with optional filters. Returns titles, paths, types, and statuses WITHOUT content (so it's cheap and cache-friendly).
+
+kb_list vs kb_search:
+- kb_list — "what exists?" — enumerate by metadata filters. No query needed.
+- kb_search — "what matches this idea?" — requires a query, ranks by relevance.
+
+Use kb_list when you know the filter dimensions (type, tag, status) and want an exhaustive list. Use kb_search when you have a topic in mind and want the best matches. Results from kb_list are always feed-forward: follow up with kb_read to get content for any path you care about.
 
 Example prompts that should trigger this tool:
 - "List all my ADRs"
 - "Show draft runbooks"
-- "What documents are tagged with 'security'?"`,
+- "What documents are tagged with 'security'?"
+- "What notes do I have about caching?" (alternate: use kb_search if you want ranked semantic matches)`,
 		InputSchema: mcplib.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]any{
@@ -251,7 +317,14 @@ Example prompts that should trigger this tool:
 func kbIndexTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_index",
-		Description: `Rebuild the search index and generate AI embeddings for all documents. Run this after bulk changes to ensure search results are up to date. Individual document creates are auto-indexed, but this is needed after external edits or imports.
+		Description: `Rebuild the search index and generate AI embeddings for all documents. This is usually unnecessary — kb_create, kb_update_meta, and the macOS editor all auto-index their own changes, and embeddings only regenerate for docs whose content hash changed.
+
+Call kb_index only when:
+- You've bulk-imported or externally edited a lot of files (e.g., rsync'd content into the vault)
+- You're debugging stale search results and want to force a full rebuild
+- You switched embedding models and need to re-embed everything
+
+For a single document that you edited externally, you can skip kb_index and just wait — the next save from the editor will trigger an incremental re-embed. Or run "2nb index --doc <path>" on the CLI if you need it now.
 
 Example prompts that should trigger this tool:
 - "Reindex the knowledge base"
@@ -355,7 +428,17 @@ Example prompts that should trigger this tool:
 func kbAskTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_ask",
-		Description: `Ask a natural language question and get an answer synthesized from the knowledge base using RAG (retrieval-augmented generation). Searches for relevant documents, then generates an answer with source citations. Requires an AI provider to be configured.
+		Description: `Ask a natural-language question and get an answer synthesized from the knowledge base using RAG (retrieval-augmented generation). Internally: runs hybrid search, takes the top 5 chunks above the similarity threshold, feeds them to the configured generation provider with the question, and returns the answer + source paths.
+
+Requires both an embedding provider and a generation provider to be configured (check with kb_info). Returns an error if either is missing.
+
+After kb_ask, typical next moves:
+- kb_read each path in the "sources" field to verify the answer — RAG can hallucinate details from retrieved chunks.
+- If kb_ask says "no relevant documents found", the similarity threshold filtered everything out. Fall back to kb_search with the same query (it doesn't gate on threshold the same way) to see if there's anything borderline worth reading manually.
+
+kb_ask vs kb_search:
+- kb_ask — "I want a synthesized answer that cites vault content" — LLM does the work
+- kb_search — "I want the raw matching documents ranked by relevance" — you do the reading
 
 Example prompts that should trigger this tool:
 - "What authentication approach did we choose and why?"

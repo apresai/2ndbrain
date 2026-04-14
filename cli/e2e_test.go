@@ -370,8 +370,20 @@ func TestE2E_ConfigShow(t *testing.T) {
 		t.Fatalf("config show exit %d: %s", code, out)
 	}
 	obj := parseJSONObject(t, out)
-	if obj["ai"] == nil {
-		t.Error("expected 'ai' key in config output")
+	// Output now wraps config under a display struct with vault metadata
+	// so users can see "which vault am I editing?" without cross-referencing.
+	if obj["vault_root"] == nil {
+		t.Error("expected 'vault_root' key in config output")
+	}
+	if obj["vault_dir"] == nil {
+		t.Error("expected 'vault_dir' key in config output")
+	}
+	cfg, ok := obj["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'config' map in output, got %T", obj["config"])
+	}
+	if cfg["ai"] == nil {
+		t.Error("expected 'ai' key nested under 'config'")
 	}
 }
 
