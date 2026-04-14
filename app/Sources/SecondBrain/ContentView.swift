@@ -136,6 +136,29 @@ struct ContentView: View {
             .environment(appState)
         }
         .sheet(isPresented: Binding(
+            get: { appState.showGitActivity },
+            set: { appState.showGitActivity = $0 }
+        )) {
+            GitActivityView(isPresented: Binding(
+                get: { appState.showGitActivity },
+                set: { appState.showGitActivity = $0 }
+            ))
+            .environment(appState)
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.showGitDiff },
+            set: { appState.showGitDiff = $0 }
+        )) {
+            GitDiffView(
+                isPresented: Binding(
+                    get: { appState.showGitDiff },
+                    set: { appState.showGitDiff = $0 }
+                ),
+                relPath: appState.gitDiffPath
+            )
+            .environment(appState)
+        }
+        .sheet(isPresented: Binding(
             get: { appState.showIndexProgress },
             set: { appState.showIndexProgress = $0 }
         )) {

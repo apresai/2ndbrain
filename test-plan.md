@@ -147,6 +147,10 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | AI-EV-010 | `kb_structure` returns heading hierarchy as JSON tree | Integration | Invoke kb_structure, verify JSON tree with heading levels and chunk IDs | Complete | Not Written |
 | AI-EV-011 | Suggest Links analyzes document and suggests wikilinks | Integration | Run Suggest Links on a document, verify suggested links to semantically related docs | Complete | Not Written |
 | AI-EV-012 | Polish document with AI copy-editor, preview diff, accept or reject | Manual | Open a doc with typos, run Polish, verify diff preview and Accept/Open-as-new-tab/Reject actions | Complete | Not Written |
+| INT-GIT-001 | Detect git-backed vault and expose read-only git commands | Integration | Run `2nb git status` in a git repo vault, verify porcelain output; in a non-repo vault, verify friendly message | Complete | Not Written |
+| INT-GIT-002 | Show recent commit activity window with date filter | Manual | Open Recent Activity (Cmd+Shift+G), verify commits from configured window appear with hash, author, subject, file count | Complete | Not Written |
+| INT-GIT-003 | Sidebar indicator shows uncommitted-change status per file | Manual | Edit a file in a git vault, verify sidebar dot appears orange for modified and blue for untracked | Complete | Not Written |
+| INT-GIT-004 | Show diff vs HEAD for a single file | Manual | Right-click a modified file, choose Show Changes vs HEAD, verify unified diff displays | Complete | Not Written |
 | AI-ST-001 | MCP status indicator in status bar with client count | Manual | Start MCP server, connect a client, verify status bar shows connected count | Complete | Not Written |
 | AI-ST-002 | Embedding build progress shown as percentage in status bar | Manual | Trigger embedding build, verify percentage progress displayed in status bar | Complete | Not Written |
 | AI-ST-003 | Open document shows chunk count and token estimate in status bar | Manual | Open a document, verify chunk count and estimated token count in status bar | Not Started | Not Written |
@@ -352,13 +356,13 @@ This test plan maps every requirement in reqs.md to specific test cases with typ
 | Security & Privacy | 8 | 1 | 5 | 2 | 0 |
 | Error Handling & Recovery | 10 | 4 | 4 | 2 | 0 |
 | Obsidian Vault Conversion | 11 | 6 | 5 | 0 | 0 |
-| **Total** | **212** | **132** | **57** | **23** | **0** |
+| **Total** | **216** | **136** | **57** | **23** | **0** |
 
 ### Implementation Coverage
 
-- **Complete**: 62% (132 of 212 requirements fully implemented)
-- **Partial**: 27% (57 of 212 requirements partially implemented)
-- **Not Started**: 11% (23 of 212 requirements not yet started)
+- **Complete**: 63% (136 of 216 requirements fully implemented)
+- **Partial**: 26% (57 of 216 requirements partially implemented)
+- **Not Started**: 11% (23 of 216 requirements not yet started)
 - **Tests Written**: 0% (no formal test cases written yet)
 
 ### Priority Areas for Test Development

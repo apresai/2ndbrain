@@ -54,6 +54,18 @@ final class AppState {
     var showPolish = false
     var polishState: PolishState = .idle
 
+    // Git state
+    var vaultIsGitRepo: Bool = false
+    var gitFileStatus: [String: String] = [:]
+    var gitActivity: [GitChangeInfo] = []
+    var gitActivityLoading: Bool = false
+    var gitActivityDays: Int = UserDefaults.standard.object(forKey: "gitActivityDays") as? Int ?? 7
+    var showGitActivity: Bool = false
+    var showGitDiff: Bool = false
+    var gitDiffPath: String = ""
+    var gitDiffText: String = ""
+    var gitDiffLoading: Bool = false
+
     // AI state
     var aiStatus: AIStatusInfo?
     var isIndexing = false
@@ -144,6 +156,9 @@ final class AppState {
 
         // Start polling MCP server status (used by status bar indicator)
         startMCPStatusTimer()
+
+        // Refresh git state (non-blocking)
+        Task { await refreshGitStatus() }
 
         // Start watching for changes
         fileWatcher?.stop()
@@ -679,6 +694,9 @@ final class AppState {
             crashJournal?.clearSnapshotSync(documentID: tab.document.id)
             log.debug("\(isAutosave ? "Autosaved" : "Saved"): \(tab.url.lastPathComponent)")
             triggerIncrementalReindex(for: tab.url)
+            if vaultIsGitRepo {
+                Task { await refreshGitStatus() }
+            }
             return true
         } catch {
             log.error("\(isAutosave ? "Autosave" : "Save") failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
@@ -1060,6 +1078,105 @@ final class AppState {
         openDocuments[idx].isDirty = true
         updateOutline()
         polishState = .idle
+    }
+
+    // MARK: - Git Integration
+
+    func refreshGitStatus() async {
+        guard let vault else {
+            vaultIsGitRepo = false
+            gitFileStatus = [:]
+            return
+        }
+        do {
+            let data = try await runCLI(
+                ["git", "status", "--json", "--porcelain"],
+                cwd: vault.rootURL
+            )
+            if data.isEmpty {
+                gitFileStatus = [:]
+                vaultIsGitRepo = false
+                return
+            }
+            // When not a git repo, the CLI emits {"git_repo": false}
+            if let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let isRepo = envelope["git_repo"] as? Bool, !isRepo {
+                vaultIsGitRepo = false
+                gitFileStatus = [:]
+                return
+            }
+            let decoded = try JSONDecoder().decode([String: String].self, from: data)
+            vaultIsGitRepo = true
+            gitFileStatus = decoded
+        } catch {
+            log.debug("git status unavailable: \(error.localizedDescription)")
+            vaultIsGitRepo = false
+            gitFileStatus = [:]
+        }
+    }
+
+    func setGitActivityDays(_ days: Int) {
+        gitActivityDays = days
+        UserDefaults.standard.set(days, forKey: "gitActivityDays")
+        Task { await refreshGitActivity() }
+    }
+
+    func refreshGitActivity() async {
+        guard let vault else { return }
+        gitActivityLoading = true
+        defer { gitActivityLoading = false }
+        do {
+            let data = try await runCLI(
+                ["git", "activity", "--since", "\(gitActivityDays)d", "--json", "--porcelain"],
+                cwd: vault.rootURL
+            )
+            if data.isEmpty {
+                gitActivity = []
+                return
+            }
+            // When not a git repo, CLI emits {"git_repo": false}
+            if let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               envelope["git_repo"] as? Bool == false {
+                vaultIsGitRepo = false
+                gitActivity = []
+                return
+            }
+            vaultIsGitRepo = true
+            gitActivity = (try JSONDecoder().decode([GitChangeInfo]?.self, from: data)) ?? []
+        } catch {
+            log.debug("git activity unavailable: \(error.localizedDescription)")
+            gitActivity = []
+        }
+    }
+
+    func openGitActivity() {
+        showGitActivity = true
+    }
+
+    func openGitDiff(for relPath: String) {
+        gitDiffPath = relPath
+        gitDiffText = ""
+        showGitDiff = true
+    }
+
+    func loadGitDiff(for relPath: String) async {
+        guard let vault else { return }
+        gitDiffLoading = true
+        defer { gitDiffLoading = false }
+        do {
+            let data = try await runCLI(
+                ["git", "diff", relPath, "--json", "--porcelain"],
+                cwd: vault.rootURL
+            )
+            if let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+                gitDiffText = decoded["diff"] ?? ""
+            } else {
+                gitDiffText = ""
+            }
+        } catch {
+            log.debug("git diff unavailable: \(error.localizedDescription)")
+            gitDiffText = ""
+        }
     }
 
     func openPolishedAsNewTab() {

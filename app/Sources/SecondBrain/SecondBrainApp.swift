@@ -151,6 +151,14 @@ struct SecondBrainApp: App {
 
                 Divider()
 
+                Button("Recent Activity") {
+                    appState.openGitActivity()
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(appState.vault == nil)
+
+                Divider()
+
                 Button("Focus Mode") {
                     appState.focusModeActive.toggle()
                 }

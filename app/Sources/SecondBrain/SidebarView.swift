@@ -113,15 +113,22 @@ struct SidebarView: View {
         Button {
             appState.openDocument(at: file.url)
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(file.name)
-                    .font(.body)
-                    .lineLimit(1)
-                if !searchText.isEmpty {
-                    Text(file.relativePath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                if let dotColor = gitIndicatorColor(for: file) {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: 6, height: 6)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.name)
+                        .font(.body)
                         .lineLimit(1)
+                    if !searchText.isEmpty {
+                        Text(file.relativePath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             .padding(.vertical, 2)
@@ -136,12 +143,26 @@ struct SidebarView: View {
                 appState.showSearch = true
             }
             .disabled(appState.aiStatus?.embedAvailable != true)
+            if appState.vaultIsGitRepo {
+                Divider()
+                Button("Show Changes vs HEAD") {
+                    appState.openGitDiff(for: file.relativePath)
+                }
+                .disabled(appState.gitFileStatus[file.relativePath] == nil)
+            }
             Divider()
             Button("Delete", role: .destructive) {
                 fileToDelete = file
                 showDeleteConfirmation = true
             }
         }
+    }
+
+    private func gitIndicatorColor(for file: FileItem) -> Color? {
+        guard appState.vaultIsGitRepo else { return nil }
+        guard let code = appState.gitFileStatus[file.relativePath] else { return nil }
+        if code.hasPrefix("??") { return .blue }
+        return .orange
     }
 
     private var outlineList: some View {

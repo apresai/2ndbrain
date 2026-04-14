@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
+	gitpkg "github.com/apresai/2ndbrain/internal/git"
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -572,6 +574,54 @@ func (h *handlers) handleKBList(ctx context.Context, request mcplib.CallToolRequ
 }
 
 const defaultPolishSystemPrompt = `You are a copy editor. Fix spelling, grammar, and punctuation errors in the markdown below. Improve clarity where wording is awkward, but preserve the author's voice, all wikilinks like [[foo]], all code blocks (fenced and inline), and the heading structure exactly. Do not add or remove sections. Do not reformat lists. Return ONLY the corrected markdown body with no explanation, no commentary, and no surrounding code fences.`
+
+func (h *handlers) handleKBGitActivity(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	days := 7
+	if v, ok := request.GetArguments()["since_days"].(float64); ok && v > 0 {
+		days = int(v)
+	}
+	if !gitpkg.IsRepo(h.vault.Root) {
+		return mcplib.NewToolResultText(`{"git_repo": false, "message": "vault is not a git repository"}`), nil
+	}
+	changes, err := gitpkg.Activity(h.vault.Root, time.Duration(days)*24*time.Hour)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("git log: %v", err)), nil
+	}
+	data, _ := json.MarshalIndent(changes, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (h *handlers) handleKBGitDiff(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+	if path == "" {
+		return mcplib.NewToolResultError("path is required"), nil
+	}
+	if strings.Contains(path, "..") {
+		return mcplib.NewToolResultError("path traversal not allowed"), nil
+	}
+	if !gitpkg.IsRepo(h.vault.Root) {
+		return mcplib.NewToolResultText(`{"git_repo": false, "message": "vault is not a git repository"}`), nil
+	}
+	diff, err := gitpkg.DiffFile(h.vault.Root, path)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("git diff: %v", err)), nil
+	}
+	result := map[string]any{"path": path, "diff": diff}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (h *handlers) handleKBGitStatus(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	if !gitpkg.IsRepo(h.vault.Root) {
+		return mcplib.NewToolResultText(`{"git_repo": false, "message": "vault is not a git repository"}`), nil
+	}
+	statuses, err := gitpkg.StatusFiles(h.vault.Root)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("git status: %v", err)), nil
+	}
+	data, _ := json.MarshalIndent(statuses, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
 
 func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	path, _ := request.GetArguments()["path"].(string)

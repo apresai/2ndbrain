@@ -50,6 +50,9 @@ func Start(v *vault.Vault, version string) error {
 	addTool(kbIndexTool(), h.handleKBIndex)
 	addTool(kbSuggestLinksTool(), h.handleKBSuggestLinks)
 	addTool(kbPolishTool(), h.handleKBPolish)
+	addTool(kbGitActivityTool(), h.handleKBGitActivity)
+	addTool(kbGitDiffTool(), h.handleKBGitDiff)
+	addTool(kbGitStatusTool(), h.handleKBGitStatus)
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)
@@ -254,6 +257,56 @@ Example prompts that should trigger this tool:
 - "Reindex the knowledge base"
 - "Update the search index"
 - "Rebuild embeddings"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type:       "object",
+			Properties: map[string]any{},
+		},
+	}
+}
+
+func kbGitActivityTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_git_activity",
+		Description: `Show recent git commits that touched files in the vault. Only works when the vault is a git repository. Returns hash, author, date, subject, and changed files for each commit.
+
+Example prompts that should trigger this tool:
+- "What have I changed in the last week?"
+- "Show recent vault activity"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"since_days": map[string]any{"type": "integer", "description": "Days to look back (default 7)"},
+			},
+		},
+	}
+}
+
+func kbGitDiffTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_git_diff",
+		Description: `Return the unified diff of a vault file against HEAD. Only works when the vault is a git repository. Returns an empty diff if the file is untracked or unchanged.
+
+Example prompts that should trigger this tool:
+- "Show changes to the JWT ADR"
+- "What did I change in stripe.md?"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path": map[string]any{"type": "string", "description": "Vault-relative path to the file"},
+			},
+			Required: []string{"path"},
+		},
+	}
+}
+
+func kbGitStatusTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_git_status",
+		Description: `List uncommitted and untracked files in the vault as a map of path → git porcelain status code (M=modified, A=added, D=deleted, ??=untracked). Only works when the vault is a git repository.
+
+Example prompts that should trigger this tool:
+- "What's dirty in the vault?"
+- "Show files I haven't committed yet"`,
 		InputSchema: mcplib.ToolInputSchema{
 			Type:       "object",
 			Properties: map[string]any{},
