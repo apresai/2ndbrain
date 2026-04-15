@@ -240,11 +240,25 @@ struct MarkdownEditorView: NSViewRepresentable {
             }
         }
 
-        // Honor a pending first-responder request from openDocument.
+        // Honor a pending first-responder request from openDocument, but
+        // never steal focus from a live overlay. If any picker/panel is
+        // up the user is interacting with it; applying makeFirstResponder
+        // would yank focus into the editor mid-keystroke. Leave the flag
+        // set — the next updateNSView cycle (triggered when the overlay's
+        // own @Observable flag flips to false) will pick it up.
         if appState.pendingFirstResponder {
-            DispatchQueue.main.async {
-                scrollView.window?.makeFirstResponder(textView)
-                appState.pendingFirstResponder = false
+            let overlayActive = appState.showSearch
+                || appState.showQuickOpen
+                || appState.showCommandPalette
+                || appState.showAskAI
+                || appState.showTemplatePicker
+                || appState.showSuggestLinks
+                || appState.showPolish
+            if !overlayActive {
+                DispatchQueue.main.async {
+                    scrollView.window?.makeFirstResponder(textView)
+                    appState.pendingFirstResponder = false
+                }
             }
         }
     }
@@ -329,22 +343,31 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
 
         /// NSTextView delegate hook for link clicks. We use a custom
-        /// `wikilink://` scheme in the syntax highlighter to mark
+        /// `wikilink://` prefix in the syntax highlighter to mark
         /// [[wikilink]] ranges; intercept those here and route through
         /// AppState.openWikilink. Return true to indicate we handled the
-        /// click ourselves (so NSTextView doesn't also try to open the
-        /// "URL" in Safari).
+        /// click ourselves.
+        ///
+        /// The link value is stored as an NSString (not URL) because
+        /// Foundation's URL parser mangles path separators in the "host"
+        /// portion — wikilinks with subdirectories would lose everything
+        /// after the first `/`. We accept URL as a fallback for any
+        /// other code path that may still store URLs here.
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            guard let url = link as? URL else { return false }
-            if url.scheme == "wikilink" {
-                // The "host" is a URL-encoded wikilink payload like
-                // "target#heading|alias". Decode it back to raw form.
-                let payload = url.host?.removingPercentEncoding
-                    ?? url.absoluteString.replacingOccurrences(of: "wikilink://", with: "")
-                appState?.openWikilink(payload)
-                return true
+            let raw: String
+            if let s = link as? String {
+                raw = s
+            } else if let s = link as? NSString {
+                raw = s as String
+            } else if let u = link as? URL {
+                raw = u.absoluteString
+            } else {
+                return false
             }
-            return false
+            guard raw.hasPrefix("wikilink://") else { return false }
+            let target = String(raw.dropFirst("wikilink://".count))
+            appState?.openWikilink(target)
+            return true
         }
 
         func resolvedFont() -> NSFont {
@@ -702,6 +725,18 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 }
                 decisionHandler(.cancel)
                 return
+            }
+
+            // Block dangerous schemes defense-in-depth, even though
+            // swift-markdown currently escapes raw HTML in preview output.
+            // If that ever changes, a doc containing
+            // `<a href="javascript:...">` must not execute script in our
+            // webview, and `data:` URIs shouldn't load arbitrary content.
+            if let scheme = url.scheme?.lowercased() {
+                if scheme == "javascript" || scheme == "data" {
+                    decisionHandler(.cancel)
+                    return
+                }
             }
 
             if navigationAction.navigationType == .linkActivated {

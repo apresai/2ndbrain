@@ -138,22 +138,41 @@ type CommitFile struct {
 // be any git revision spec (full SHA, short SHA, ref name); git resolves
 // it. Returns an error if the repo is not initialized or the hash is
 // unknown. Merge commits get diffed against the first parent.
+//
+// Uses a single `git show` invocation with --numstat --patch, then parses
+// the combined output. Previous implementation ran git N+1 times (once
+// for numstat + once per file for the patch); for commits touching many
+// files this was substantially slower. Output ordering is deterministic:
+// header, blank line, numstat block, blank line, per-file patches each
+// starting with "diff --git a/...".
 func Show(root, hash string) (*CommitDetail, error) {
 	if !IsRepo(root) {
 		return nil, fmt.Errorf("not a git repository: %s", root)
 	}
 
-	// Header: %H %an %aI %s %b, separated by ASCII field/record separators
-	// so commit messages containing newlines or tabs can't break parsing.
+	// Delimit the header with ASCII field/record separators so commit
+	// messages containing newlines or tabs can't break parsing. We mark
+	// the end of the header with a sentinel line that's impossible to
+	// collide with real git output.
 	const fieldSep = "\x1f"
-	const recordSep = "\x1e"
-	format := "--pretty=format:" + "%H" + fieldSep + "%an" + fieldSep +
-		"%aI" + fieldSep + "%s" + fieldSep + "%b" + recordSep
-	headerOut, err := runGit(root, "show", "-s", format, hash)
+	const headerEnd = "\x1e__2NB_HEADER_END__\x1e"
+	format := "--format=" + "%H" + fieldSep + "%an" + fieldSep +
+		"%aI" + fieldSep + "%s" + fieldSep + "%b" + headerEnd
+
+	combined, err := runGit(root, "show", "-m", "--first-parent",
+		format, "--numstat", "--patch", hash)
 	if err != nil {
 		return nil, err
 	}
-	headerRec := strings.TrimSuffix(strings.TrimSpace(headerOut), recordSep)
+
+	// Split header from numstat+patch body using the sentinel.
+	headerIdx := strings.Index(combined, headerEnd)
+	if headerIdx == -1 {
+		return nil, fmt.Errorf("unexpected git show output for %s: missing header sentinel", hash)
+	}
+	headerRec := strings.TrimSpace(combined[:headerIdx])
+	body := combined[headerIdx+len(headerEnd):]
+
 	parts := strings.SplitN(headerRec, fieldSep, 5)
 	if len(parts) < 4 {
 		return nil, fmt.Errorf("unexpected git show header format for %s", hash)
@@ -169,17 +188,21 @@ func Show(root, hash string) (*CommitDetail, error) {
 		detail.Body = strings.TrimRight(parts[4], "\n")
 	}
 
-	// --numstat gives per-file add/delete counts; "-" means binary.
-	// -m --first-parent makes merge commits produce a diff against the
-	// first parent instead of being empty.
-	numstatOut, err := runGit(root, "show", "-m", "--first-parent",
-		"--numstat", "--format=", hash)
-	if err != nil {
-		return nil, err
+	// The body contains numstat lines (tab-separated add/del/path) then
+	// the unified patches. Numstat lines appear first, one per file,
+	// before any "diff --git a/" marker. Split on the first "diff --git"
+	// occurrence to isolate the numstat section.
+	numstatSection := body
+	patchSection := ""
+	if idx := strings.Index(body, "diff --git "); idx != -1 {
+		numstatSection = body[:idx]
+		patchSection = body[idx:]
 	}
+
 	var files []CommitFile
 	var totalIns, totalDel int
-	for _, line := range strings.Split(numstatOut, "\n") {
+	pathIndex := map[string]int{}
+	for _, line := range strings.Split(numstatSection, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -196,6 +219,7 @@ func Show(root, hash string) (*CommitDetail, error) {
 		}
 		totalIns += add
 		totalDel += del
+		pathIndex[cols[2]] = len(files)
 		files = append(files, CommitFile{
 			Path:      cols[2],
 			Additions: add,
@@ -204,22 +228,47 @@ func Show(root, hash string) (*CommitDetail, error) {
 		})
 	}
 
-	// Per-file diff: single `git show -m --first-parent -- <path>` per file.
-	// Doing this lazily in the UI would be ideal but the CLI returns the
-	// whole commit upfront for simplicity; large commits with 100+ files
-	// are rare and the disk I/O is small.
-	for i := range files {
-		if files[i].Binary {
-			continue
+	// Parse the patch section: each per-file patch starts with a line
+	// like "diff --git a/<path> b/<path>". Splitting on "\ndiff --git "
+	// gives us individual patch chunks; the first split produces the
+	// first patch (minus the leading "diff --git " prefix).
+	if patchSection != "" {
+		// Ensure the first chunk also starts with "diff --git " for
+		// uniform handling below.
+		chunks := strings.Split("\n"+patchSection, "\ndiff --git ")
+		for _, chunk := range chunks {
+			chunk = strings.TrimSpace(chunk)
+			if chunk == "" {
+				continue
+			}
+			// Extract the "a/<path>" portion from the first line.
+			// Form: "a/<path> b/<path>\n<rest>"
+			firstLineEnd := strings.IndexByte(chunk, '\n')
+			if firstLineEnd == -1 {
+				continue
+			}
+			firstLine := chunk[:firstLineEnd]
+			// The path spec is "a/<path> b/<path>" — take everything
+			// between "a/" and " b/".
+			aIdx := strings.Index(firstLine, "a/")
+			bIdx := strings.Index(firstLine, " b/")
+			if aIdx == -1 || bIdx == -1 || bIdx <= aIdx {
+				continue
+			}
+			path := firstLine[aIdx+2 : bIdx]
+			idx, ok := pathIndex[path]
+			if !ok {
+				// Numstat didn't report this path (unusual). Skip.
+				continue
+			}
+			if files[idx].Binary {
+				// Binary files have no textual diff; leave Diff empty.
+				continue
+			}
+			// Reconstruct the full patch including the "diff --git "
+			// prefix that was consumed by the split.
+			files[idx].Diff = "diff --git " + chunk + "\n"
 		}
-		diff, err := runGit(root, "show", "-m", "--first-parent",
-			"--format=", hash, "--", files[i].Path)
-		if err != nil {
-			// Don't fail the whole commit for one file; log empty diff.
-			files[i].Diff = ""
-			continue
-		}
-		files[i].Diff = diff
 	}
 
 	detail.Stats = CommitStats{

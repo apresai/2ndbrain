@@ -164,14 +164,21 @@ class SyntaxHighlighter {
             }
             if inCode { continue }
 
-            // Extract the inner target (group 1) for the URL payload.
+            // Extract the inner target (group 1).
             guard match.numberOfRanges >= 2 else { continue }
             let innerRange = match.range(at: 1)
             let inner = nsText.substring(with: innerRange)
-            let encoded = inner.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? inner
-            guard let url = URL(string: "wikilink://\(encoded)") else { continue }
 
-            textStorage.addAttribute(.link, value: url, range: range)
+            // Store the link as a raw string, not a URL. Using URL here
+            // runs into Foundation's URL parser treating path separators
+            // as host/path boundaries — wikilinks with subdirectories
+            // (e.g. [[projects/q2]]) lose everything after the first
+            // `/` because URL.host returns only "projects". NSAttributedString
+            // .link accepts NSString, and textView(_:clickedOnLink:at:)
+            // receives it as Any, so the click handler can recover the
+            // target verbatim by stripping the "wikilink://" prefix.
+            let linkValue = "wikilink://\(inner)" as NSString
+            textStorage.addAttribute(.link, value: linkValue, range: range)
             textStorage.addAttribute(.foregroundColor, value: linkColor, range: range)
             textStorage.addAttribute(.underlineStyle,
                                       value: NSUnderlineStyle.single.rawValue,

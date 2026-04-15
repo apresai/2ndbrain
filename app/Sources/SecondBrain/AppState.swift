@@ -130,6 +130,13 @@ final class AppState {
     var showCommitDetail: Bool = false
     var commitDetail: CommitDetail?
     var commitDetailError: String?
+    // Guards openCommitDetail against a last-write-wins race: if the user
+    // clicks commit A then commit B in rapid succession, A's Task may
+    // complete after B's and overwrite B's data. The Task captures the
+    // hash it was started for and checks this field before publishing —
+    // only the most recent request is allowed to write. Set on each
+    // openCommitDetail call; never cleared (the next call overwrites it).
+    private var commitDetailRequestedHash: String?
 
     // Invoked from outline row clicks. If the editor is currently in
     // preview-only mode, switching back to source mode is the caller's
@@ -1305,10 +1312,17 @@ final class AppState {
     /// Opens the commit detail modal for `hash`. Loads the commit lazily
     /// via `2nb git show --json <hash>`. The modal shows a progress
     /// indicator while loading; on failure it shows commitDetailError.
+    ///
+    /// Rapid clicks on different commits are handled by capturing the
+    /// hash in the Task closure and comparing it against
+    /// `commitDetailRequestedHash` before publishing — only the most
+    /// recent request wins, even if an earlier Task's git-show returns
+    /// later.
     func openCommitDetail(_ hash: String) {
         guard let vault else { return }
         commitDetail = nil
         commitDetailError = nil
+        commitDetailRequestedHash = hash
         showCommitDetail = true
         log.info("openCommitDetail: hash=\(hash)")
 
@@ -1319,10 +1333,18 @@ final class AppState {
                     cwd: vault.rootURL
                 )
                 let detail = try JSONDecoder().decode(CommitDetail.self, from: data)
+                guard self.commitDetailRequestedHash == hash else {
+                    log.debug("commitDetail: dropping stale result for \(hash)")
+                    return
+                }
                 self.commitDetail = detail
                 log.info("commitDetail: loaded \(detail.files.count) files, +\(detail.stats.insertions)/-\(detail.stats.deletions)")
             } catch {
                 let msg = error.localizedDescription
+                guard self.commitDetailRequestedHash == hash else {
+                    log.debug("commitDetail: dropping stale error for \(hash): \(msg)")
+                    return
+                }
                 self.commitDetailError = msg
                 log.warning("commitDetail load failed: \(msg)")
             }

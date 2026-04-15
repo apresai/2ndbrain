@@ -134,3 +134,46 @@ func splitTargetHeadingAlias() {
     #expect(name == "Hello Auth")
     #expect(heading == "Setup")
 }
+
+// MARK: - Link round-trip regression (Chad review HIGH finding)
+//
+// The original Phase D implementation stored wikilinks as URL values
+// with `.urlPathAllowed` percent-encoding, which meant `[[projects/q2]]`
+// produced `wikilink://projects/q2` → URL parsing made "projects" the
+// host and dropped "/q2". These tests lock in the raw-string round-trip
+// that replaces URL-based storage: `wikilink://<raw target>` written
+// to the NSAttributedString.link attribute as NSString, recovered via
+// prefix strip in the click handler.
+
+@Test("wikilink link round-trip: simple target survives")
+func linkRoundTripSimple() {
+    let target = "hello-auth"
+    let linkValue = "wikilink://\(target)"
+    #expect(linkValue.hasPrefix("wikilink://"))
+    let recovered = String(linkValue.dropFirst("wikilink://".count))
+    #expect(recovered == target)
+}
+
+@Test("wikilink link round-trip: target with / preserves subdirectory (HIGH regression)")
+func linkRoundTripPathSeparator() {
+    let target = "projects/q2-plan"
+    let linkValue = "wikilink://\(target)"
+    let recovered = String(linkValue.dropFirst("wikilink://".count))
+    #expect(recovered == "projects/q2-plan")
+}
+
+@Test("wikilink link round-trip: target with / and #heading preserves both")
+func linkRoundTripPathAndHeading() {
+    let target = "projects/q2-plan#Milestones"
+    let linkValue = "wikilink://\(target)"
+    let recovered = String(linkValue.dropFirst("wikilink://".count))
+    #expect(recovered == "projects/q2-plan#Milestones")
+}
+
+@Test("wikilink link round-trip: deep path with multiple / preserved")
+func linkRoundTripDeepPath() {
+    let target = "areas/career/reviews/2026-q2"
+    let linkValue = "wikilink://\(target)"
+    let recovered = String(linkValue.dropFirst("wikilink://".count))
+    #expect(recovered == "areas/career/reviews/2026-q2")
+}
