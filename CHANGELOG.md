@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.13] - 2026-04-15
+
+## [0.1.13] - 2026-04-15
+
+### Added
+- `2nb index --force-reembed` flag: invalidates all stored embeddings and re-embeds from scratch (use after switching providers)
+- `2nb ai status` now reports vault portability state — dimension mismatch, model mismatch, provider unavailable, mixed embeddings, unindexed — with one-line fix hints
+- `VectorCompat` helper: `search` and `ask` automatically degrade to BM25-only with a stderr warning when stored embeddings are incompatible with the current provider
+- Vault `.gitignore` initialized by `2nb init` now excludes `config.yaml`, `index.db` (+ WAL), `bench.db`, `logs/`, `recovery/`, `mcp/`, and `*.bak`
+- `config.yaml` self-heals: missing or corrupt config regenerates from defaults; corrupt original preserved as `.bak`
+- macOS app shows a yellow warning banner over search and Ask AI results when the CLI reports degraded vector mode
+- macOS app AI status dot turns yellow on any non-OK portability state
+
+### Changed
+- **Breaking:** `2nb search --json` and `2nb ask --json` now return structured envelopes — `{mode, warnings, results}` and `{mode, warnings, answer, sources}` respectively; consumers must extract `.results` / `.answer` instead of decoding a raw array/object
+
+
 ## [0.1.12] - 2026-04-14
 
 ### Fixed
