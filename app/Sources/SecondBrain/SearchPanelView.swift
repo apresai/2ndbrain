@@ -55,6 +55,28 @@ struct SearchPanelView: View {
 
             Divider()
 
+            // Portability warning banner — surfaces CLI stderr warnings
+            // for dimension mismatch, provider unavailable, etc. The
+            // banner only appears when semantic search was attempted
+            // and degraded; BM25 search has no warnings to show.
+            if useSemanticSearch, !appState.lastSemanticWarnings.isEmpty {
+                ForEach(appState.lastSemanticWarnings, id: \.self) { warning in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.yellow.opacity(0.08))
+                }
+                Divider()
+            }
+
             // Results
             if results.isEmpty && !query.isEmpty {
                 Text("No results found")

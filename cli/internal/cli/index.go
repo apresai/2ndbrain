@@ -82,7 +82,15 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	if err := embedDocuments(ctx, v, cfg); err != nil {
 		slog.Debug("embedding skipped", "reason", err.Error())
 		if !flagPorcelain {
-			fmt.Fprintf(os.Stderr, "  embedding skipped: %v\n", err)
+			// When no provider is configured at all, guide the user
+			// directly to `2nb ai setup` instead of printing a raw
+			// registry-lookup error — that's the "just works"
+			// onboarding path for receivers of a shipped vault.
+			if cfg.Provider == "" {
+				fmt.Fprintln(os.Stderr, "  no AI provider configured — run '2nb ai setup' to enable semantic search (BM25 index built)")
+			} else {
+				fmt.Fprintf(os.Stderr, "  embedding skipped: %v\n", err)
+			}
 		}
 	}
 

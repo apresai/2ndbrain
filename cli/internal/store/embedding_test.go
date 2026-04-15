@@ -3,6 +3,7 @@ package store
 import (
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,6 +108,155 @@ func TestAllEmbeddings(t *testing.T) {
 	}
 	if len(ids) != 2 || len(vecs) != 2 {
 		t.Errorf("got %d ids, %d vecs, want 2 each", len(ids), len(vecs))
+	}
+}
+
+func TestSampleEmbeddingDim(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Empty vault → 0
+	dim, err := db.SampleEmbeddingDim()
+	if err != nil {
+		t.Fatalf("SampleEmbeddingDim empty: %v", err)
+	}
+	if dim != 0 {
+		t.Errorf("empty vault: got dim=%d, want 0", dim)
+	}
+
+	// Add a 768-dim embedding → 768
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('a', 'a.md', 'A')`)
+	vec768 := make([]float32, 768)
+	for i := range vec768 {
+		vec768[i] = float32(i) * 0.001
+	}
+	if err := db.SetEmbedding("a", vec768, "nomic", "h1"); err != nil {
+		t.Fatal(err)
+	}
+	dim, err = db.SampleEmbeddingDim()
+	if err != nil {
+		t.Fatalf("SampleEmbeddingDim 768: %v", err)
+	}
+	if dim != 768 {
+		t.Errorf("768d blob: got dim=%d, want 768", dim)
+	}
+
+	// Add a 1024-dim embedding — sample still returns one consistent dim
+	// (we only sample one row; the caller is responsible for detecting
+	// mixed-dim vaults via DistinctEmbeddingModels).
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('b', 'b.md', 'B')`)
+	vec1024 := make([]float32, 1024)
+	if err := db.SetEmbedding("b", vec1024, "nova", "h2"); err != nil {
+		t.Fatal(err)
+	}
+	dim, err = db.SampleEmbeddingDim()
+	if err != nil {
+		t.Fatalf("SampleEmbeddingDim mixed: %v", err)
+	}
+	if dim != 768 && dim != 1024 {
+		t.Errorf("mixed vault: got dim=%d, want 768 or 1024", dim)
+	}
+}
+
+func TestDistinctEmbeddingModels(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// No embeddings → empty slice
+	models, err := db.DistinctEmbeddingModels()
+	if err != nil {
+		t.Fatalf("empty: %v", err)
+	}
+	if len(models) != 0 {
+		t.Errorf("empty vault: got %d models, want 0", len(models))
+	}
+
+	// One model
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('a', 'a.md', 'A')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('b', 'b.md', 'B')`)
+	db.SetEmbedding("a", []float32{1, 2, 3}, "nomic", "h1")
+	db.SetEmbedding("b", []float32{4, 5, 6}, "nomic", "h2")
+	models, _ = db.DistinctEmbeddingModels()
+	if len(models) != 1 || models[0] != "nomic" {
+		t.Errorf("single model: got %v, want [nomic]", models)
+	}
+
+	// Two models
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('c', 'c.md', 'C')`)
+	db.SetEmbedding("c", []float32{7, 8, 9}, "nova", "h3")
+	models, _ = db.DistinctEmbeddingModels()
+	if len(models) != 2 {
+		t.Errorf("mixed models: got %d, want 2 (%v)", len(models), models)
+	}
+
+	// Empty string model doesn't count (filtered by SQL)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('d', 'd.md', 'D')`)
+	db.SetEmbedding("d", []float32{0, 0, 0}, "", "h4")
+	models, _ = db.DistinctEmbeddingModels()
+	if len(models) != 2 {
+		t.Errorf("empty-model should be filtered: got %d, want 2", len(models))
+	}
+}
+
+func TestEmbeddingCounts(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Empty vault
+	total, embedded, err := db.EmbeddingCounts()
+	if err != nil {
+		t.Fatalf("empty: %v", err)
+	}
+	if total != 0 || embedded != 0 {
+		t.Errorf("empty: got (%d, %d), want (0, 0)", total, embedded)
+	}
+
+	// 3 docs, 2 embedded
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('a', 'a.md', 'A')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('b', 'b.md', 'B')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('c', 'c.md', 'C')`)
+	db.SetEmbedding("a", []float32{1, 2}, "m", "h")
+	db.SetEmbedding("b", []float32{3, 4}, "m", "h")
+
+	total, embedded, err = db.EmbeddingCounts()
+	if err != nil {
+		t.Fatalf("seeded: %v", err)
+	}
+	if total != 3 || embedded != 2 {
+		t.Errorf("seeded: got (%d, %d), want (3, 2)", total, embedded)
+	}
+}
+
+func TestMigrateSchemaVersionCeiling(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ceiling.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Set version to one above the ceiling and close so the next Open
+	// re-runs migrate() with the tampered version.
+	if _, err := db.Conn().Exec(`UPDATE schema_version SET version = ?`, MaxSchemaVersion+1); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	_, err = Open(dbPath)
+	if err == nil {
+		t.Fatal("expected error opening DB with future schema version, got nil")
+	}
+	// Error should mention the version and upgrade hint.
+	msg := err.Error()
+	if !strings.Contains(msg, "schema v") || !strings.Contains(msg, "supports up to") {
+		t.Errorf("error message doesn't match expected ceiling error: %q", msg)
 	}
 }
 

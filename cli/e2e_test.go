@@ -207,7 +207,13 @@ func TestE2E_Search(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("search exit %d: %s", code, out)
 	}
-	results := parseJSONArray(t, out)
+	// `search --json` returns an envelope: {mode, warnings, results}.
+	// Swift and automation consumers extract `.results`.
+	env := parseJSONObject(t, out)
+	results, ok := env["results"].([]any)
+	if !ok {
+		t.Fatalf("expected .results array in search envelope: %s", out)
+	}
 	if len(results) == 0 {
 		t.Fatal("expected search results for 'auth'")
 	}

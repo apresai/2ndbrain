@@ -24,6 +24,16 @@ var (
 	searchThreshold float64
 )
 
+// SearchResponse is the JSON envelope returned by `2nb search --json`.
+// Consumers that previously decoded []search.Result must now extract
+// `.results` — this is a breaking change to the JSON contract,
+// acceptable at pre-1.0 and documented in the release notes.
+type SearchResponse struct {
+	Mode     string          `json:"mode"` // "hybrid" or "keyword"
+	Warnings []string        `json:"warnings,omitempty"`
+	Results  []search.Result `json:"results"`
+}
+
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search the vault with hybrid BM25 + semantic search",
@@ -99,14 +109,29 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	initAIProviders(v)
 	var results []search.Result
 	var mode search.SearchMode
+	var warnings []string
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
-	embCount, _ := v.DB.EmbeddingCount()
+	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
 
-	if !opts.BM25Only && embErr == nil && embedder.Available(ctx) && embCount > 0 && opts.Query != "" {
-		// Embed the query
+	// VectorCompat is the single decision point for "can we run hybrid?".
+	// It returns a human message when the vault's embeddings are
+	// incompatible with the current provider (dim break, model mismatch,
+	// provider unavailable) so the user sees the degradation instead of
+	// silently falling back to BM25.
+	if !opts.BM25Only && opts.Query != "" {
+		if ready, msg := VectorCompat(ctx, v, embedder); !ready {
+			if msg != "" {
+				fmt.Fprintln(os.Stderr, "  "+msg)
+				warnings = append(warnings, msg)
+			}
+			opts.BM25Only = true
+		}
+	}
+
+	if !opts.BM25Only && opts.Query != "" {
+		// VectorCompat passed — embedder is usable and dim matches.
 		queryVecs, err := embedder.Embed(ctx, []string{opts.Query})
 		if err == nil && len(queryVecs) > 0 {
 			docIDs, embeddings, err := v.DB.AllEmbeddings()
@@ -116,6 +141,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 					return fmt.Errorf("hybrid search: %w", err)
 				}
 			}
+		} else if err != nil {
+			// Provider was Available() but Embed() failed — most common
+			// cause is Ollama's daemon up but model not pulled. Warn
+			// loudly and degrade to BM25 so the user can diagnose.
+			msg := fmt.Sprintf("semantic search disabled: embedder returned error (%v) — if using Ollama, verify the model is pulled", err)
+			fmt.Fprintln(os.Stderr, "  "+msg)
+			warnings = append(warnings, msg)
 		}
 	}
 
@@ -144,6 +176,17 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
+	if format == output.FormatJSON {
+		// JSON consumers (the Swift macOS app, automation) need to see
+		// mode + warnings alongside results, so the `--json` output is
+		// wrapped in an envelope. CSV/YAML stay flat — envelope only
+		// makes sense for JSON.
+		return output.Write(os.Stdout, format, SearchResponse{
+			Mode:     string(mode),
+			Warnings: warnings,
+			Results:  results,
+		})
+	}
 	if format != "" {
 		return output.Write(os.Stdout, format, results)
 	}

@@ -9,6 +9,13 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// MaxSchemaVersion is the highest schema version this binary understands.
+// A vault whose schema_version row exceeds this value was produced by a
+// newer 2nb and will be refused at open time with an upgrade hint — this
+// is cheaper than risking silent corruption if a future migration adds
+// required columns or behavior.
+const MaxSchemaVersion = 2
+
 type DB struct {
 	conn *sql.DB
 	path string
@@ -74,6 +81,14 @@ func (db *DB) migrate() error {
 			}
 		}
 		db.conn.Exec("COMMIT")
+	}
+
+	// Refuse to open a vault produced by a newer 2nb. Older binaries
+	// reading unknown columns are usually fine, but future migrations may
+	// introduce required invariants (e.g., new NOT NULL columns) that this
+	// binary can't satisfy. Fail loud here rather than quietly.
+	if version > MaxSchemaVersion {
+		return fmt.Errorf("vault uses schema v%d but this 2nb binary supports up to v%d — upgrade with 'brew upgrade apresai/tap/twonb'", version, MaxSchemaVersion)
 	}
 
 	return nil

@@ -32,6 +32,28 @@ struct AskAIView: View {
 
             Divider()
 
+            // Portability warning banner — surfaces CLI stderr warnings
+            // for the retrieval step (dimension mismatch, provider
+            // unavailable, etc.). The answer still generates against
+            // BM25 results; this tells the user retrieval degraded.
+            if !appState.lastSemanticWarnings.isEmpty {
+                ForEach(appState.lastSemanticWarnings, id: \.self) { warning in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.yellow.opacity(0.08))
+                }
+                Divider()
+            }
+
             // Content area
             if !errorMessage.isEmpty {
                 VStack(spacing: 8) {

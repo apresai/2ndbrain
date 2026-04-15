@@ -72,6 +72,12 @@ final class AppState {
 
     // AI state
     var aiStatus: AIStatusInfo?
+
+    // Portability warnings from the most recent CLI search/ask. When
+    // non-empty, the vault is in a degraded state (dimension mismatch,
+    // provider unavailable, model mismatch, etc.) and views should show
+    // a banner explaining why. Cleared on the next successful run.
+    var lastSemanticWarnings: [String] = []
     var isIndexing = false
     var indexError: String?
     var embeddingProgress: EmbeddingProgress?
@@ -985,14 +991,17 @@ final class AppState {
     func askAI(question: String) async throws -> AIAskResult {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)
-        return try JSONDecoder().decode(AIAskResult.self, from: data)
+        let response = try JSONDecoder().decode(CLIAskResponse.self, from: data)
+        self.lastSemanticWarnings = response.warnings ?? []
+        return AIAskResult(answer: response.answer, sources: response.sources)
     }
 
     func searchSemantic(query: String) async throws -> [SearchResultItem] {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["search", "--json", "--porcelain", query], cwd: vault.rootURL)
-        let results = try JSONDecoder().decode([CLISearchResult].self, from: data)
-        return results.map { r in
+        let response = try JSONDecoder().decode(CLISearchResponse.self, from: data)
+        self.lastSemanticWarnings = response.warnings ?? []
+        return response.results.map { r in
             SearchResultItem(
                 id: r.docID,
                 path: r.path,
@@ -1470,6 +1479,17 @@ struct AIStatusInfo: Codable {
     let embeddingCount: Int
     let documentCount: Int
 
+    // Portability — the vault's self-reported embedding state from the
+    // DB (source of truth), plus a derived status label. Optional for
+    // decoder compatibility with older 2nb binaries that don't emit
+    // these fields yet.
+    let vaultEmbeddingModels: [String]?
+    let vaultEmbeddingDim: Int?
+    let vaultTotalDocs: Int?
+    let vaultEmbeddedDocs: Int?
+    let portabilityStatus: String?
+    let portabilityAction: String?
+
     enum CodingKeys: String, CodingKey {
         case provider
         case embeddingModel = "embedding_model"
@@ -1479,12 +1499,35 @@ struct AIStatusInfo: Codable {
         case genAvailable = "gen_available"
         case embeddingCount = "embedding_count"
         case documentCount = "document_count"
+        case vaultEmbeddingModels = "vault_embedding_models"
+        case vaultEmbeddingDim = "vault_embedding_dim"
+        case vaultTotalDocs = "vault_total_docs"
+        case vaultEmbeddedDocs = "vault_embedded_docs"
+        case portabilityStatus = "portability_status"
+        case portabilityAction = "portability_action"
     }
 }
 
 struct AIAskResult: Codable {
     let answer: String
     let sources: [String]
+}
+
+// CLIAskResponse is the envelope `2nb ask --json` now returns.
+// Breaking change from pre-Phase-1: used to be AIAskResult directly.
+struct CLIAskResponse: Codable {
+    let mode: String
+    let warnings: [String]?
+    let answer: String
+    let sources: [String]
+}
+
+// CLISearchResponse is the envelope `2nb search --json` now returns.
+// Breaking change from pre-Phase-1: used to be [CLISearchResult] directly.
+struct CLISearchResponse: Codable {
+    let mode: String
+    let warnings: [String]?
+    let results: [CLISearchResult]
 }
 
 struct CLISearchResult: Codable {

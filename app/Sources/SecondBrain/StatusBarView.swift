@@ -131,6 +131,22 @@ struct StatusBarView: View {
 
     private var aiDotColor: Color {
         guard let status = appState.aiStatus else { return .gray }
+        // Portability status beats local availability — if the vault
+        // can't do semantic search at all (dimension break, mixed,
+        // model not loaded), surface it loudly as yellow even when
+        // the provider is technically reachable.
+        if let portability = status.portabilityStatus,
+           portability != "ok" && portability != "" {
+            switch portability {
+            case "dimension_break", "mixed", "provider_unavailable", "model_mismatch":
+                return .yellow
+            default:
+                break
+            }
+        }
+        // Recent search/ask returned warnings — degraded even if the
+        // vault's stored state looks fine.
+        if !appState.lastSemanticWarnings.isEmpty { return .yellow }
         if status.embedAvailable && status.genAvailable {
             if status.embeddingCount < status.documentCount { return .yellow }
             return .green
@@ -187,6 +203,48 @@ struct StatusBarView: View {
                     LabeledContent("Embeddings") {
                         Text("\(status.embeddingCount)/\(status.documentCount) docs")
                             .font(.callout)
+                    }
+                }
+
+                // Portability — the self-describing "is this vault
+                // ready to use here?" section. Only shown when we have
+                // derived fields (older 2nb binaries don't emit them).
+                if let portability = status.portabilityStatus, !portability.isEmpty {
+                    Divider()
+                    Text("Vault Embedding State")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+
+                    if let dim = status.vaultEmbeddingDim, dim > 0 {
+                        let modelLabel: String = {
+                            guard let models = status.vaultEmbeddingModels, !models.isEmpty else {
+                                return "(no model recorded)"
+                            }
+                            if models.count == 1 { return models[0] }
+                            return "mixed: \(models.joined(separator: ", "))"
+                        }()
+                        let embeddedDocs = status.vaultEmbeddedDocs ?? 0
+                        let totalDocs = status.vaultTotalDocs ?? 0
+                        LabeledContent("As-embedded") {
+                            Text("\(modelLabel) (\(dim)d), \(embeddedDocs)/\(totalDocs)")
+                                .font(.callout)
+                                .lineLimit(2)
+                        }
+                    }
+
+                    LabeledContent("Status") {
+                        Text(portability.replacingOccurrences(of: "_", with: " ").uppercased())
+                            .font(.callout)
+                            .foregroundStyle(portability == "ok" ? .green : .yellow)
+                    }
+
+                    if let action = status.portabilityAction, !action.isEmpty {
+                        Text(action)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
                     }
                 }
             } else {

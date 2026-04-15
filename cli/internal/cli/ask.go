@@ -14,6 +14,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// AskResponse is the JSON envelope returned by `2nb ask --json`. Same
+// rationale as SearchResponse: Swift and automation consumers need to
+// see retrieval warnings alongside the answer. Previous consumers that
+// decoded *ai.RAGResult directly must now read `.answer` and `.sources`
+// out of the envelope.
+type AskResponse struct {
+	Mode     string   `json:"mode"` // "hybrid" or "keyword"
+	Warnings []string `json:"warnings,omitempty"`
+	Answer   string   `json:"answer"`
+	Sources  []string `json:"sources"`
+}
+
 var askCmd = &cobra.Command{
 	Use:   "ask <question>",
 	Short: "Ask a question about your knowledge base (RAG)",
@@ -64,14 +76,31 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	var results []search.Result
-	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
-	embCount, _ := v.DB.EmbeddingCount()
+	var warnings []string
+	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
 
-	if embErr == nil && embedder.Available(ctx) && embCount > 0 {
+	// Same compat gate as `2nb search` — if VectorCompat fails, we warn
+	// once and fall back to BM25-only retrieval. The generator still runs
+	// against whatever BM25 returns, so ask still produces an answer; the
+	// user just knows the retrieval degraded.
+	useHybrid := true
+	if ready, msg := VectorCompat(ctx, v, embedder); !ready {
+		if msg != "" {
+			fmt.Fprintln(os.Stderr, "  "+msg)
+			warnings = append(warnings, msg)
+		}
+		useHybrid = false
+	}
+
+	if useHybrid {
 		queryVecs, err := embedder.Embed(ctx, []string{question})
 		if err == nil && len(queryVecs) > 0 {
 			docIDs, embeddings, _ := v.DB.AllEmbeddings()
 			results, _, _ = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
+		} else if err != nil {
+			msg := fmt.Sprintf("semantic retrieval disabled: embedder returned error (%v)", err)
+			fmt.Fprintln(os.Stderr, "  "+msg)
+			warnings = append(warnings, msg)
 		}
 	}
 	if results == nil {
@@ -118,7 +147,20 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	slog.Info("ask complete", "question", question, "sources", len(result.Sources))
 
+	mode := "hybrid"
+	if !useHybrid {
+		mode = "keyword"
+	}
+
 	format := getFormat(cmd)
+	if format == output.FormatJSON {
+		return output.Write(os.Stdout, format, AskResponse{
+			Mode:     mode,
+			Warnings: warnings,
+			Answer:   result.Answer,
+			Sources:  result.Sources,
+		})
+	}
 	if format != "" {
 		return output.Write(os.Stdout, format, result)
 	}
