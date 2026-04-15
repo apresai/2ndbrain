@@ -177,7 +177,7 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `create` | `--type`, `--title` | Create document from template (adr/runbook/note/postmortem) |
 | `read` | `--chunk` | Read full document or specific section |
 | `meta` | `--set key=value` | View or update frontmatter with schema validation |
-| `index` | `--doc <path>` | Rebuild vault search index (or a single document) |
+| `index` | `--doc <path>`, `--force-reembed` | Rebuild vault search index (or a single document); `--force-reembed` invalidates every stored embedding so the next pass re-embeds from scratch (use after intentionally switching providers) |
 | `search` | `--type`, `--status`, `--tag`, `--limit`, `--threshold`, `--bm25-only` | Hybrid BM25 + semantic search with configurable cosine cutoff |
 | `list` | `--type`, `--status`, `--tag`, `--limit`, `--sort` | List documents with filters |
 | `lint` | `[glob]` | Validate schemas, check broken wikilinks |
@@ -197,7 +197,7 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `git diff` | `<path>`, `--json` | Unified diff of a file against HEAD |
 | `git status` | `--json` | List uncommitted/untracked files in the vault |
 | `ask` | `<question>` | RAG Q&A — search vault, generate answer with sources |
-| `ai status` | | Show AI provider, models, readiness, embedding count |
+| `ai status` | | Show AI provider, models, readiness, embedding count, and vault portability state (dimension mismatch, model mismatch, provider unavailable, etc.) with one-line fix hints |
 | `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
 | `ai setup` | `--provider`, `--embedding-model`, `--generation-model` | Multi-provider setup wizard with easy mode |
 | `ai local` | | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
@@ -225,6 +225,44 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 **Similarity threshold:** hybrid search drops vector hits whose cosine similarity is below `ai.similarity_threshold` (default `0.20`, configurable via `2nb config set`). Pass `--threshold <float>` on `2nb search` for one-off overrides. Results display `(rrf=X.XXX, cos=Y.YYY)` so you can judge semantic relevance directly — the RRF score alone is opaque.
 
 **Logging:** When `--verbose` is used, structured logs (via `log/slog`) are written to stderr and to `.2ndbrain/logs/cli.log`. Without `--verbose`, only the log file is written.
+
+### Vault Portability
+
+A vault is self-contained: markdown files plus `.2ndbrain/index.db` plus `.2ndbrain/config.yaml`. You can `tar czf` it and open it on another machine with no migration. Paths in the DB are relative to the vault root (`internal/vault/indexer.go`), IDs are UUIDs from frontmatter, and embeddings are self-contained `[]float32` BLOBs — nothing in the index refers to an absolute path or a host-specific resource.
+
+**Source of truth:** the DB's `documents.embedding_model` column and the BLOB length itself record what produced the stored embeddings. Config is user preference only — nothing in `2nb index` writes derived state back to `config.yaml`, so team vaults shared via git don't produce merge conflicts.
+
+**Decision table (rendered live by `2nb ai status`):**
+
+| DB state | Current config/env | Outcome | Fix |
+|---|---|---|---|
+| embeddings match dim D and model M, provider available | — | **OK** | none |
+| dim D in DB, current provider produces D' ≠ D | — | **DIMENSION BREAK** | `2nb index --force-reembed` or switch provider back |
+| model M in DB, M' ≠ M in config, same dim | — | **MODEL MISMATCH** | next `2nb index` auto re-embeds on content change, or `--force-reembed` now |
+| provider configured but `Available()=false` | — | **PROVIDER UNAVAILABLE** | start/install provider; BM25 runs meanwhile |
+| mixed models in DB | — | **MIXED** | `2nb index --force-reembed` |
+| zero embeddings, docs present | — | **UNINDEXED** | `2nb index` (BM25 still works) |
+| vault `schema_version > max` | — | **DB TOO NEW** | `brew upgrade apresai/tap/twonb` |
+| `config.yaml` missing/corrupt | — | **self-heals** | regenerated with defaults, `.bak` preserved on corrupt |
+
+**Loud degradation:** `2nb search` and `2nb ask` call `VectorCompat` (`cli/internal/cli/helpers_vector.go`) at the hybrid gate. If the vault's embeddings aren't usable by the current provider, they print one stderr line explaining why, collect the message into a `warnings` slice, and force BM25-only for the rest of the call. The Swift macOS app sees the same messages via the `--json` envelope and shows a yellow banner over search results / Ask AI answers; the status-bar AI dot turns yellow on any non-OK portability state.
+
+**Shipping a vault:** the recommended tarball excludes personal/local state that a receiver shouldn't need (or shouldn't see):
+
+```bash
+tar czf vault.tar.gz \
+  --exclude='.2ndbrain/logs' \
+  --exclude='.2ndbrain/recovery' \
+  --exclude='.2ndbrain/mcp' \
+  --exclude='.2ndbrain/bench.db' \
+  my-vault/
+```
+
+`.2ndbrain/config.yaml` and `.2ndbrain/index.db` *should* be in the tarball for single-user sharing — config keeps the receiver's first `ai status` meaningful, and the DB carries the embeddings (without which every semantic search would re-embed from scratch). For git-shared team vaults, `2nb init` writes a `.gitignore` that excludes `config.yaml`, `index.db` (+ WAL files), `bench.db`, `logs/`, `recovery/`, `mcp/`, and `*.bak` — only `schemas.yaml` (shared doc-type definitions) is committable.
+
+**Privacy caveat:** embeddings are a lossy representation of the source text. Shipping a vault with embeddings is functionally equivalent to shipping the (approximate) content — useful for trusted sharing, not for publishing to strangers. A `--strip-embeddings` export mode is future work.
+
+**JSON envelope (breaking change from 0.1.12):** `2nb search --json` and `2nb ask --json` now return `{mode, warnings, results}` / `{mode, warnings, answer, sources}` envelopes. Programmatic consumers that previously decoded a raw array/object need to extract `.results` / `.answer`. The macOS app decodes the envelope as `CLISearchResponse` / `CLIAskResponse` in `AppState.swift`.
 
 ### MCP Server (16 tools)
 

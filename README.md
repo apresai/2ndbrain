@@ -178,8 +178,8 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ask <question>` | RAG Q&A with source citations |
 | `suggest-links <path> [--limit 10]` | Rank semantically related documents for wikilink insertion |
 | `polish <path> [--system <prompt>]` | AI copy-edit a document (JSON with original + polished body) |
-| `index [--doc <path>]` | Build search index + embeddings (full vault or a single document) |
-| `ai status` | Show AI provider, models, embedding count |
+| `index [--doc <path>] [--force-reembed]` | Build search index + embeddings (full vault or a single document); `--force-reembed` invalidates every stored embedding for after an intentional provider switch |
+| `ai status` | Show AI provider, models, embedding count, and vault portability state |
 | `ai setup` | Multi-provider setup wizard (easy mode or custom) |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
 | `ai embed <text>` | Generate embedding vector (debug) |
@@ -242,6 +242,38 @@ All commands support `--json`, `--yaml`, `--csv` for machine-readable output.
 - **Parent-command defaults** — running a command group without a subcommand invokes its most-useful read-only action: `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works on every command.
 - **Similarity threshold** — hybrid search drops vector hits whose cosine similarity is below `ai.similarity_threshold` (default `0.20`) so barely-related neighbors stop padding result lists. Configure with `2nb config set ai.similarity_threshold 0.25` or override per-query with `2nb search "foo" --threshold 0.35`.
 - **Score display** — `2nb search` now shows `(rrf=X.XXX, cos=Y.YYY)` on each result. The `rrf` is the Reciprocal Rank Fusion score used for ranking; `cos` is the raw cosine similarity from the vector channel, which is what you actually want to look at when judging whether a result is relevant. If legitimate matches are being cut, lower the threshold; if noise is slipping through, raise it.
+
+### Portable vaults
+
+A vault is self-describing. Paths in the index are relative, IDs are UUIDs, and embeddings live in the DB as raw float32 BLOBs — you can `tar` a vault and open it on another machine without any migration step.
+
+If the receiver's current AI provider doesn't match what produced the embeddings, `2nb ai status` tells you exactly what's wrong:
+
+```
+Vault Embedding State:
+  As-embedded:    amazon.nova-2-multimodal-embeddings-v1:0 (1024d), 42 of 42 docs
+  Current cfg:    ollama / nomic-embed-text (768d)
+  Status:         DIMENSION BREAK
+  Action:         Vault was embedded with 1024d vectors but current provider produces 768d.
+                  Run `2nb index --force-reembed` or switch provider back.
+```
+
+`2nb search` and `2nb ask` fail loudly (stderr + BM25 fallback) on dimension mismatch instead of silently returning worse results. The macOS app surfaces the same warnings as a yellow banner over search results and the Ask AI panel, and the status bar AI dot turns yellow.
+
+**Shipping a vault:**
+
+```bash
+tar czf vault.tar.gz \
+  --exclude='.2ndbrain/logs' \
+  --exclude='.2ndbrain/recovery' \
+  --exclude='.2ndbrain/mcp' \
+  --exclude='.2ndbrain/bench.db' \
+  my-vault/
+```
+
+Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets the vault's as-embedded state and avoids re-embedding from scratch. For git-shared team vaults, `2nb init` writes a `.gitignore` that excludes personal/local state (config, DBs, logs, recovery) and commits only `schemas.yaml`. Missing or corrupt `config.yaml` / `index.db` self-heal on next open with a one-line stderr warning — the vault never bricks.
+
+> **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`). If you were parsing a raw array/object, extract `.results` / `.answer`.
 
 ## MCP Server
 
