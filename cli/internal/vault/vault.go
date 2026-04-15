@@ -43,15 +43,37 @@ func Open(dir string) (*Vault, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
+	// Surface config self-healing so the user sees it happened without
+	// having to dig through logs. stderr only — this is operational
+	// information, not an error, and the command the user ran still
+	// proceeds normally.
+	switch cfg.Recovered {
+	case "config_missing":
+		fmt.Fprintln(os.Stderr, "  .2ndbrain/config.yaml was missing — regenerated with defaults")
+	case "config_corrupt_backup":
+		fmt.Fprintln(os.Stderr, "  .2ndbrain/config.yaml was corrupt — backed up to config.yaml.bak and regenerated with defaults")
+	}
 
 	schemas, err := LoadSchemas(dotDir)
 	if err != nil {
 		return nil, fmt.Errorf("load schemas: %w", err)
 	}
 
-	db, err := store.Open(filepath.Join(dotDir, "index.db"))
+	// Detect a missing index.db specifically — the user likely deleted
+	// it thinking it was a cache. Recreate an empty DB and tell them
+	// to rebuild. The vault still opens; markdown files are intact.
+	indexPath := filepath.Join(dotDir, "index.db")
+	indexWasMissing := false
+	if _, statErr := os.Stat(indexPath); os.IsNotExist(statErr) {
+		indexWasMissing = true
+	}
+
+	db, err := store.Open(indexPath)
 	if err != nil {
 		return nil, fmt.Errorf("open index: %w", err)
+	}
+	if indexWasMissing {
+		fmt.Fprintln(os.Stderr, "  .2ndbrain/index.db was missing — created empty index (run '2nb index' to rebuild)")
 	}
 
 	return &Vault{

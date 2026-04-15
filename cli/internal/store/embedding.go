@@ -153,6 +153,21 @@ func (db *DB) EmbeddingCounts() (total, embedded int, err error) {
 	return total, embedded, err
 }
 
+// InvalidateAllEmbeddings clears the embedding_hash column on every row
+// that has an embedding, which makes DocumentsNeedingEmbedding match
+// them all on the next index pass. Used by `2nb index --force-reembed`
+// when the user intentionally switches providers and wants to re-embed
+// the entire vault now instead of waiting for per-document drift to
+// trigger it. Returns the number of rows affected so the caller can
+// report a useful progress line.
+func (db *DB) InvalidateAllEmbeddings() (int64, error) {
+	res, err := db.conn.Exec(`UPDATE documents SET embedding_hash = '' WHERE embedding IS NOT NULL`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func float32sToBytes(fs []float32) []byte {
 	buf := make([]byte, len(fs)*4)
 	for i, f := range fs {

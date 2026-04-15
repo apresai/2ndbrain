@@ -236,6 +236,42 @@ func TestEmbeddingCounts(t *testing.T) {
 	}
 }
 
+func TestInvalidateAllEmbeddings(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	db.Conn().Exec(`INSERT INTO documents (id, path, title, content_hash) VALUES ('a', 'a.md', 'A', 'h1')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title, content_hash) VALUES ('b', 'b.md', 'B', 'h2')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title, content_hash) VALUES ('c', 'c.md', 'C', 'h3')`)
+
+	// Embed two of the three with matching hash + content_hash.
+	// DocumentsNeedingEmbedding should return zero until we invalidate.
+	db.SetEmbedding("a", []float32{1, 2}, "m", "h1")
+	db.SetEmbedding("b", []float32{3, 4}, "m", "h2")
+
+	needing, _ := db.DocumentsNeedingEmbedding("m")
+	// Doc c has no embedding, so it's already in the needing set.
+	if len(needing) != 1 || needing[0].ID != "c" {
+		t.Errorf("pre-invalidate: expected only doc 'c' needing embedding, got %+v", needing)
+	}
+
+	n, err := db.InvalidateAllEmbeddings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 rows invalidated, got %d", n)
+	}
+
+	needing, _ = db.DocumentsNeedingEmbedding("m")
+	if len(needing) != 3 {
+		t.Errorf("post-invalidate: expected all 3 docs needing embedding, got %d", len(needing))
+	}
+}
+
 func TestMigrateSchemaVersionCeiling(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "ceiling.db")
 	db, err := Open(dbPath)

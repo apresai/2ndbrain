@@ -18,6 +18,9 @@ app/*.xcworkspace/xcuserdata/
 .build/
 .swiftpm/
 
-# Vault content — never commit personal knowledge base data
-vault/
+# Vault content — never commit personal knowledge base data.
+# Anchored to repo root so it doesn't collide with the Go package
+# at cli/internal/vault or the Swift module at
+# app/Sources/SecondBrainCore/Vault (both tracked).
+/vault/
 .2ndbrain/          # includes index.db, bench.db, models/, recovery/

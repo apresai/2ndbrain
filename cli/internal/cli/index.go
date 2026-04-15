@@ -22,11 +22,15 @@ var indexCmd = &cobra.Command{
 	RunE:  runIndex,
 }
 
-var indexDocFlag string
+var (
+	indexDocFlag     string
+	indexForceReembed bool
+)
 
 func init() {
 	indexCmd.GroupID = "ai"
 	indexCmd.Flags().StringVar(&indexDocFlag, "doc", "", "Re-index a single document (relative or absolute path) instead of the whole vault")
+	indexCmd.Flags().BoolVar(&indexForceReembed, "force-reembed", false, "Re-embed every document (use after intentionally switching AI providers)")
 	rootCmd.AddCommand(indexCmd)
 }
 
@@ -79,6 +83,22 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	initAIProviders(v)
 	ctx := context.Background()
 	cfg := v.Config.AI
+
+	// --force-reembed clears embedding_hash on every embedded row so
+	// DocumentsNeedingEmbedding returns all of them. Used when the
+	// user intentionally switches providers and wants a full rebuild
+	// immediately instead of per-document drift re-embedding.
+	if indexForceReembed {
+		n, err := v.DB.InvalidateAllEmbeddings()
+		if err != nil {
+			return fmt.Errorf("invalidate embeddings: %w", err)
+		}
+		slog.Info("force-reembed: invalidated embeddings", "count", n)
+		if !flagPorcelain {
+			fmt.Fprintf(os.Stderr, "  force-reembed: invalidated %d embeddings, re-embedding...\n", n)
+		}
+	}
+
 	if err := embedDocuments(ctx, v, cfg); err != nil {
 		slog.Debug("embedding skipped", "reason", err.Error())
 		if !flagPorcelain {
