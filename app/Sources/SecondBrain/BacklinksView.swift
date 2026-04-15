@@ -29,14 +29,18 @@ struct BacklinksView: View {
                     Button {
                         openBacklink(link)
                     } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(link.title)
-                                .font(.body)
-                            Text(link.context)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(link.title)
+                                    .font(.body)
+                                Text(link.context)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 0)
                         }
+                        .contentShape(Rectangle())
                         .padding(.vertical, 2)
                     }
                     .buttonStyle(.plain)

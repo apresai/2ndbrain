@@ -109,6 +109,9 @@ struct LintResultsView: View {
         guard let vault = appState.vault else { return }
         let url = URL(fileURLWithPath: vault.rootURL.path).appendingPathComponent(issue.path)
         appState.openDocument(at: url)
+        if let line = issue.line, line > 0 {
+            appState.jumpToLine(line)
+        }
         isPresented = false
     }
 }

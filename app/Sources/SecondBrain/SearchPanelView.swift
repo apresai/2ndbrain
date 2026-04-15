@@ -183,9 +183,13 @@ struct SearchPanelView: View {
     }
 
     private func openResult(_ result: SearchResultItem) {
-        guard let vault = appState.vault else { return }
-        let url = URL(fileURLWithPath: vault.rootURL.path).appendingPathComponent(result.path)
-        appState.openDocument(at: url)
+        // Route through appState.openSearchResult so semantic results with
+        // a heading path scroll the editor to that exact chunk instead of
+        // just the top of the file.
+        appState.openSearchResult(
+            path: result.path,
+            headingPath: result.headingPath.isEmpty ? nil : result.headingPath
+        )
         isPresented = false
     }
 

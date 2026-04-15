@@ -36,6 +36,14 @@ struct SidebarView: View {
             }
         }
         .frame(minWidth: 200)
+        // Keyboard shortcuts for switching sidebar panels. Cmd+1/2/3/4 is a
+        // muscle-memory convention for sidebar-like affordances on macOS.
+        .onChange(of: appState.requestedSidebarPanel) { _, newValue in
+            if let panel = newValue {
+                selectedPanel = panel
+                appState.requestedSidebarPanel = nil
+            }
+        }
     }
 
     private var fileList: some View {
@@ -130,7 +138,9 @@ struct SidebarView: View {
                             .lineLimit(1)
                     }
                 }
+                Spacer(minLength: 0)
             }
+            .contentShape(Rectangle())
             .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
@@ -169,13 +179,34 @@ struct SidebarView: View {
     }
 
     private var outlineList: some View {
-        List(appState.outline) { heading in
-            HStack {
-                Text(String(repeating: "  ", count: heading.level - 1) + heading.text)
-                    .font(heading.level == 1 ? .headline : heading.level == 2 ? .subheadline : .body)
-                    .lineLimit(1)
+        Group {
+            if appState.outline.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "list.bullet.indent")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text("No headings")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(appState.outline) { heading in
+                    Button {
+                        appState.jumpToHeading(heading)
+                    } label: {
+                        HStack {
+                            Text(String(repeating: "  ", count: heading.level - 1) + heading.text)
+                                .font(heading.level == 1 ? .headline : heading.level == 2 ? .subheadline : .body)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 1)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .padding(.vertical, 1)
         }
     }
 

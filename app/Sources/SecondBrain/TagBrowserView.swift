@@ -115,15 +115,19 @@ struct TagBrowserView: View {
                         Button {
                             appState.openDocument(at: file.url)
                         } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(file.name)
-                                    .font(.body)
-                                    .lineLimit(1)
-                                Text(file.relativePath)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(file.name)
+                                        .font(.body)
+                                        .lineLimit(1)
+                                    Text(file.relativePath)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
                             }
+                            .contentShape(Rectangle())
                             .padding(.vertical, 2)
                         }
                         .buttonStyle(.plain)

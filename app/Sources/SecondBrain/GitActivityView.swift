@@ -73,7 +73,13 @@ struct GitActivityView: View {
             } else {
                 List {
                     ForEach(appState.gitActivity) { change in
-                        changeRow(change)
+                        Button {
+                            appState.openCommitDetail(change.hash)
+                        } label: {
+                            changeRow(change)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .listStyle(.inset)

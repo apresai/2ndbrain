@@ -105,6 +105,52 @@ final class AppState {
     var files: [FileItem] = []
     var outline: [HeadingItem] = []
 
+    // Editor navigation — set by outline clicks, search-result opens, lint
+    // issue clicks, etc. The EditorArea.updateNSView reads this on every
+    // cycle, resolves it to an NSRange, scrolls + flashes, then clears it.
+    var editorScrollTarget: EditorScrollTarget?
+
+    // Request that the editor's NSTextView become first responder on the
+    // next updateNSView tick. Set by openDocument so focus lands in the
+    // editor after opening a file.
+    var pendingFirstResponder: Bool = false
+
+    // A pending request to switch the sidebar to a specific panel (files,
+    // outline, backlinks, tags). Set by Cmd+1/2/3/4 shortcut handlers in
+    // ContentView; consumed and cleared by SidebarView. Kept as an enum
+    // rather than a direct @State binding because menu commands live in
+    // a different view hierarchy than the SidebarView that owns the
+    // picker's State.
+    var requestedSidebarPanel: SidebarPanel?
+
+    // Commit detail modal — loaded lazily via `2nb git show --json <hash>`
+    // when the user clicks a commit in GitActivityView. The modal presents
+    // on showCommitDetail and displays commitDetail (or commitDetailError
+    // if the CLI returned non-zero).
+    var showCommitDetail: Bool = false
+    var commitDetail: CommitDetail?
+    var commitDetailError: String?
+
+    // Invoked from outline row clicks. If the editor is currently in
+    // preview-only mode, switching back to source mode is the caller's
+    // responsibility (Phase A default: we stay in whatever mode is active
+    // and scroll the NSTextView; the EditorArea auto-switches to source
+    // if needed via editorMode binding).
+    func jumpToHeading(_ heading: HeadingItem) {
+        editorScrollTarget = .heading(heading)
+        log.info("jumpToHeading: level=\(heading.level) text=\(heading.text)")
+    }
+
+    func jumpToHeadingPath(_ path: String) {
+        editorScrollTarget = .headingPath(path)
+        log.info("jumpToHeadingPath: \(path)")
+    }
+
+    func jumpToLine(_ line: Int) {
+        editorScrollTarget = .line(line)
+        log.info("jumpToLine: \(line)")
+    }
+
     var validTabIndex: Int? {
         let idx = activeTabIndex
         guard idx >= 0, idx < openDocuments.count else { return nil }
@@ -236,6 +282,7 @@ final class AppState {
         // Check if already open
         if let idx = openDocuments.firstIndex(where: { $0.url == url }) {
             activeTabIndex = idx
+            pendingFirstResponder = true
             return
         }
 
@@ -266,6 +313,10 @@ final class AppState {
             openDocuments.append(tab)
             activeTabIndex = openDocuments.count - 1
             updateOutline()
+            // Request focus into the editor so typing starts immediately
+            // without an extra click. EditorArea.updateNSView reads this
+            // flag on the next cycle and calls makeFirstResponder.
+            pendingFirstResponder = true
             log.info("Opened document: \(url.lastPathComponent) (type=\(doc.docType), id=\(doc.id.prefix(8))\(forceReadOnly ? ", read-only" : ""))")
         } catch {
             // Parse failed — the frontmatter is likely corrupt. Surface any
@@ -1249,6 +1300,80 @@ final class AppState {
         gitDiffPath = relPath
         gitDiffText = ""
         showGitDiff = true
+    }
+
+    /// Opens the commit detail modal for `hash`. Loads the commit lazily
+    /// via `2nb git show --json <hash>`. The modal shows a progress
+    /// indicator while loading; on failure it shows commitDetailError.
+    func openCommitDetail(_ hash: String) {
+        guard let vault else { return }
+        commitDetail = nil
+        commitDetailError = nil
+        showCommitDetail = true
+        log.info("openCommitDetail: hash=\(hash)")
+
+        Task {
+            do {
+                let data = try await runCLI(
+                    ["git", "show", hash, "--json", "--porcelain"],
+                    cwd: vault.rootURL
+                )
+                let detail = try JSONDecoder().decode(CommitDetail.self, from: data)
+                self.commitDetail = detail
+                log.info("commitDetail: loaded \(detail.files.count) files, +\(detail.stats.insertions)/-\(detail.stats.deletions)")
+            } catch {
+                let msg = error.localizedDescription
+                self.commitDetailError = msg
+                log.warning("commitDetail load failed: \(msg)")
+            }
+        }
+    }
+
+    /// Resolves a search result (from `2nb search --json`) to an open
+    /// document + optional editor scroll to its heading path. Called by
+    /// SearchPanelView and Quick Open. If `headingPath` is empty, the
+    /// document opens normally with no scroll.
+    func openSearchResult(path: String, headingPath: String?) {
+        guard let vault else { return }
+        let url = vault.rootURL.appendingPathComponent(path)
+        openDocument(at: url)
+        if let headingPath, !headingPath.isEmpty {
+            jumpToHeadingPath(headingPath)
+        }
+        log.info("openSearchResult: path=\(path) headingPath=\(headingPath ?? "")")
+    }
+
+    /// Resolves a wikilink target `[[target]]`, `[[target#heading]]`, or
+    /// `[[target|alias]]` to a file path in the vault and opens it. The
+    /// target is matched against the existing in-memory file list by
+    /// filename (case-insensitive). Heading component (after `#`), if
+    /// present, sets editorScrollTarget after opening.
+    func openWikilink(_ target: String) {
+        guard let vault else { return }
+
+        // Strip alias (`target|alias` → `target`).
+        let withoutAlias = target.split(separator: "|").first.map(String.init) ?? target
+        // Split on `#` for heading component.
+        let parts = withoutAlias.split(separator: "#", maxSplits: 1).map(String.init)
+        let name = parts[0].trimmingCharacters(in: .whitespaces)
+        let heading = parts.count == 2 ? parts[1].trimmingCharacters(in: .whitespaces) : nil
+
+        // Resolve by filename (without extension, case-insensitive).
+        let match = files.first { file in
+            let stem = (file.name as NSString).deletingPathExtension
+            return stem.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }
+
+        guard let file = match else {
+            log.warning("wikilink target not found: \(name)")
+            return
+        }
+
+        openDocument(at: file.url)
+        if let heading {
+            jumpToHeadingPath(heading)
+        }
+        log.info("openWikilink: target=\(name) heading=\(heading ?? "")")
     }
 
     func loadGitDiff(for relPath: String) async {

@@ -23,6 +23,12 @@ class SyntaxHighlighter {
     private static let hashCommentPattern = try! NSRegularExpression(
         pattern: "#.*$", options: .anchorsMatchLines)
 
+    // Wikilink pattern: [[target]], [[target|alias]], or [[target#heading]]
+    // Non-greedy inside the brackets. Requires both opening and closing
+    // double brackets on the same line (no wrapping).
+    private static let wikilinkPattern = try! NSRegularExpression(
+        pattern: "\\[\\[([^\\[\\]\\n]+?)\\]\\]")
+
     // Common keywords by language family
     private static let cLikeKeywords: Set<String> = [
         "if", "else", "for", "while", "return", "break", "continue", "switch", "case",
@@ -59,7 +65,16 @@ class SyntaxHighlighter {
         // Code block colors will be set below; non-code text is handled by InlineMarkdownRenderer
         if fullRange.length > 0 {
             textStorage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+            // Clear any existing link attributes; we'll re-apply wikilinks below.
+            textStorage.removeAttribute(.link, range: fullRange)
         }
+
+        // Mark wikilinks as clickable links with a wikilink:// scheme.
+        // NSTextView handles link clicks natively; the Coordinator's
+        // textView(_:clickedOnLink:at:) delegate intercepts them and
+        // routes the target through appState.openWikilink. Skips matches
+        // that land inside a fenced code block (second pass below).
+        applyWikilinks(textStorage, fullRange: fullRange)
 
         let matches = fencePattern.matches(in: text as String, range: fullRange)
         var i = 0
@@ -105,6 +120,62 @@ class SyntaxHighlighter {
             for j in i..<matches.count {
                 textStorage.addAttribute(.foregroundColor, value: fenceColor, range: matches[j].range)
             }
+        }
+    }
+
+    /// Applies `.link` attributes to every [[wikilink]] in the text that
+    /// isn't inside a fenced code block. Uses a custom `wikilink://`
+    /// scheme; the editor's click delegate intercepts it. This keeps the
+    /// brackets themselves unstyled (just tinted) so the source remains
+    /// readable while still being clickable.
+    private static func applyWikilinks(_ textStorage: NSTextStorage, fullRange: NSRange) {
+        let text = textStorage.string
+        let nsText = text as NSString
+
+        // Collect code-block ranges so we can skip matches inside them.
+        var codeBlockRanges: [NSRange] = []
+        let fenceMatches = fencePattern.matches(in: text, range: fullRange)
+        var i = 0
+        while i < fenceMatches.count {
+            let open = fenceMatches[i].range
+            var close: NSRange?
+            for j in (i + 1)..<fenceMatches.count {
+                let cand = fenceMatches[j].range
+                if cand.location > NSMaxRange(open) {
+                    close = cand
+                    i = j + 1
+                    break
+                }
+            }
+            if let close {
+                codeBlockRanges.append(NSRange(location: open.location,
+                                                length: NSMaxRange(close) - open.location))
+            } else {
+                i += 1
+            }
+        }
+
+        let linkColor = NSColor.linkColor
+        for match in wikilinkPattern.matches(in: text, range: fullRange) {
+            let range = match.range
+            // Skip matches inside code blocks.
+            let inCode = codeBlockRanges.contains { cb in
+                range.location >= cb.location && NSMaxRange(range) <= NSMaxRange(cb)
+            }
+            if inCode { continue }
+
+            // Extract the inner target (group 1) for the URL payload.
+            guard match.numberOfRanges >= 2 else { continue }
+            let innerRange = match.range(at: 1)
+            let inner = nsText.substring(with: innerRange)
+            let encoded = inner.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? inner
+            guard let url = URL(string: "wikilink://\(encoded)") else { continue }
+
+            textStorage.addAttribute(.link, value: url, range: range)
+            textStorage.addAttribute(.foregroundColor, value: linkColor, range: range)
+            textStorage.addAttribute(.underlineStyle,
+                                      value: NSUnderlineStyle.single.rawValue,
+                                      range: range)
         }
     }
 

@@ -26,6 +26,19 @@ public enum FrontmatterParser {
         return ([:], content)
     }
 
+    /// Returns the length (in UTF-16 code units) of the leading frontmatter
+    /// block in `content`, including the opening and closing `---` delimiters.
+    /// Returns 0 when the content has no frontmatter. Used by LocationResolver
+    /// to offset source locations that were computed against the post-
+    /// frontmatter body, so they land correctly in the full document.
+    public static func frontmatterLength(in content: String) -> Int {
+        let (fm, body) = parse(content)
+        guard !fm.isEmpty else { return 0 }
+        // If parse fell back to returning the raw content as body (malformed),
+        // body.utf16.count == content.utf16.count and the result is 0.
+        return content.utf16.count - body.utf16.count
+    }
+
     public static func serialize(frontmatter: [String: Any], body: String) -> String {
         var result = "---\n"
         if let yaml = try? Yams.dump(object: frontmatter, sortKeys: true) {

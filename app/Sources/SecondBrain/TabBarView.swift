@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct TabBarView: View {
     @Environment(AppState.self) var appState
@@ -12,7 +13,24 @@ struct TabBarView: View {
                         isDirty: tab.isDirty,
                         isActive: index == appState.activeTabIndex,
                         onSelect: { appState.activeTabIndex = index },
-                        onClose: { appState.closeTab(id: tab.id) }
+                        onClose: { appState.closeTab(id: tab.id) },
+                        onCloseOthers: {
+                            // Close every tab except this one. Iterate from
+                            // the end to keep indices stable during removal.
+                            for i in stride(from: appState.openDocuments.count - 1, through: 0, by: -1) {
+                                if appState.openDocuments[i].id != tab.id {
+                                    appState.closeTab(id: appState.openDocuments[i].id)
+                                }
+                            }
+                        },
+                        onCloseAll: {
+                            for i in stride(from: appState.openDocuments.count - 1, through: 0, by: -1) {
+                                appState.closeTab(id: appState.openDocuments[i].id)
+                            }
+                        },
+                        onReveal: {
+                            NSWorkspace.shared.activateFileViewerSelecting([tab.url])
+                        }
                     )
                 }
             }
@@ -31,6 +49,9 @@ struct TabButton: View {
     let isActive: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
+    let onCloseOthers: () -> Void
+    let onCloseAll: () -> Void
+    let onReveal: () -> Void
 
     @State private var isHovering = false
 
@@ -64,7 +85,16 @@ struct TabButton: View {
                     .frame(height: 2)
             }
         }
+        .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
+        .contextMenu {
+            Button("Close") { onClose() }
+            Button("Close Others") { onCloseOthers() }
+                .disabled(false)
+            Button("Close All") { onCloseAll() }
+            Divider()
+            Button("Reveal in Finder") { onReveal() }
+        }
         .onHover { isHovering = $0 }
     }
 }

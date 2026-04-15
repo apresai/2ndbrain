@@ -44,6 +44,13 @@ var gitStatusCmd = &cobra.Command{
 	RunE:  runGitStatus,
 }
 
+var gitShowCmd = &cobra.Command{
+	Use:   "show <hash>",
+	Short: "Show the full details of a commit (message, stats, per-file diffs)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runGitShow,
+}
+
 var gitActivitySince string
 
 func init() {
@@ -52,6 +59,7 @@ func init() {
 	gitCmd.AddCommand(gitActivityCmd)
 	gitCmd.AddCommand(gitDiffCmd)
 	gitCmd.AddCommand(gitStatusCmd)
+	gitCmd.AddCommand(gitShowCmd)
 	rootCmd.AddCommand(gitCmd)
 }
 
@@ -139,6 +147,58 @@ func runGitDiff(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	fmt.Print(diff)
+	return nil
+}
+
+func runGitShow(cmd *cobra.Command, args []string) error {
+	v, err := openVault()
+	if err != nil {
+		return err
+	}
+	defer v.Close()
+
+	if !gitpkg.IsRepo(v.Root) {
+		return printNotAGitRepo(cmd)
+	}
+
+	detail, err := gitpkg.Show(v.Root, args[0])
+	if err != nil {
+		return fmt.Errorf("git show %s: %w", args[0], err)
+	}
+
+	if getFormat(cmd) == output.FormatJSON {
+		data, err := json.Marshal(detail)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	// Human output: header + stats + file list with counts.
+	fmt.Printf("commit %s\n", detail.Hash)
+	fmt.Printf("Author: %s\n", detail.Author)
+	fmt.Printf("Date:   %s\n", detail.Date.Local().Format("2006-01-02 15:04:05 MST"))
+	fmt.Println()
+	fmt.Printf("    %s\n", detail.Subject)
+	if detail.Body != "" {
+		for _, line := range strings.Split(detail.Body, "\n") {
+			fmt.Printf("    %s\n", line)
+		}
+	}
+	fmt.Println()
+	fmt.Printf("%d file(s) changed, %d insertions(+), %d deletions(-)\n",
+		detail.Stats.FilesChanged,
+		detail.Stats.Insertions,
+		detail.Stats.Deletions,
+	)
+	for _, f := range detail.Files {
+		marker := "  "
+		if f.Binary {
+			marker = "BIN"
+		}
+		fmt.Printf("  %s +%d / -%d  %s\n", marker, f.Additions, f.Deletions, f.Path)
+	}
 	return nil
 }
 

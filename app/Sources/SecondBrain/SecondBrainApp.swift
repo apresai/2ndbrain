@@ -51,6 +51,18 @@ struct SecondBrainApp: App {
                     exportObsidianPanel()
                 }
                 .disabled(appState.vault == nil)
+
+                Divider()
+
+                Button("Reveal in Finder") {
+                    if let url = appState.currentDocument?.url {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    } else if let vault = appState.vault {
+                        NSWorkspace.shared.activateFileViewerSelecting([vault.rootURL])
+                    }
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(appState.vault == nil)
             }
 
             CommandMenu("Export") {
@@ -178,6 +190,35 @@ struct SecondBrainApp: App {
                     appState.sidebarVisible.toggle()
                 }
                 .keyboardShortcut("\\", modifiers: .command)
+
+                Divider()
+
+                // Cmd+1/2/3/4 switch sidebar panels. Auto-unhide the
+                // sidebar if it's currently hidden — otherwise the
+                // shortcut would silently no-op.
+                Button("Show Files Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .files
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Show Outline Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .outline
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Button("Show Links Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .backlinks
+                }
+                .keyboardShortcut("3", modifiers: .command)
+
+                Button("Show Tags Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .tags
+                }
+                .keyboardShortcut("4", modifiers: .command)
 
                 Divider()
 

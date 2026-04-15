@@ -182,6 +182,16 @@ struct ContentView: View {
             .environment(appState)
         }
         .sheet(isPresented: Binding(
+            get: { appState.showCommitDetail },
+            set: { appState.showCommitDetail = $0 }
+        )) {
+            CommitDetailView(isPresented: Binding(
+                get: { appState.showCommitDetail },
+                set: { appState.showCommitDetail = $0 }
+            ))
+            .environment(appState)
+        }
+        .sheet(isPresented: Binding(
             get: { appState.showIndexProgress },
             set: { appState.showIndexProgress = $0 }
         )) {
