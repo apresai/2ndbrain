@@ -130,13 +130,12 @@ final class AppState {
     var showCommitDetail: Bool = false
     var commitDetail: CommitDetail?
     var commitDetailError: String?
-    // Guards openCommitDetail against a last-write-wins race: if the user
-    // clicks commit A then commit B in rapid succession, A's Task may
-    // complete after B's and overwrite B's data. The Task captures the
-    // hash it was started for and checks this field before publishing —
-    // only the most recent request is allowed to write. Set on each
-    // openCommitDetail call; never cleared (the next call overwrites it).
-    private var commitDetailRequestedHash: String?
+    // Guards openCommitDetail against last-write-wins races. The running
+    // task is cancelled when another openCommitDetail arrives or when
+    // closeCommitDetail runs; its continuation checks Task.isCancelled
+    // after each await and drops the stale result instead of publishing.
+    // Cancellation prevents stale writes, not the subprocess itself.
+    private var commitDetailTask: Task<Void, Never>?
 
     // Invoked from outline row clicks. If the editor is currently in
     // preview-only mode, switching back to source mode is the caller's
@@ -1313,42 +1312,53 @@ final class AppState {
     /// via `2nb git show --json <hash>`. The modal shows a progress
     /// indicator while loading; on failure it shows commitDetailError.
     ///
-    /// Rapid clicks on different commits are handled by capturing the
-    /// hash in the Task closure and comparing it against
-    /// `commitDetailRequestedHash` before publishing — only the most
-    /// recent request wins, even if an earlier Task's git-show returns
-    /// later.
+    /// Any in-flight commit-detail task is cancelled before the new one
+    /// starts, so rapid clicks on different commits (or close+reopen of
+    /// the same commit) never race. The cancelled task drops its result
+    /// via Task.isCancelled after the runCLI await resumes.
     func openCommitDetail(_ hash: String) {
         guard let vault else { return }
+        commitDetailTask?.cancel()
         commitDetail = nil
         commitDetailError = nil
-        commitDetailRequestedHash = hash
         showCommitDetail = true
         log.info("openCommitDetail: hash=\(hash)")
 
-        Task {
+        commitDetailTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
-                let data = try await runCLI(
+                let data = try await self.runCLI(
                     ["git", "show", hash, "--json", "--porcelain"],
                     cwd: vault.rootURL
                 )
-                let detail = try JSONDecoder().decode(CommitDetail.self, from: data)
-                guard self.commitDetailRequestedHash == hash else {
+                if Task.isCancelled {
                     log.debug("commitDetail: dropping stale result for \(hash)")
                     return
                 }
+                let detail = try JSONDecoder().decode(CommitDetail.self, from: data)
+                if Task.isCancelled { return }
                 self.commitDetail = detail
                 log.info("commitDetail: loaded \(detail.files.count) files, +\(detail.stats.insertions)/-\(detail.stats.deletions)")
             } catch {
-                let msg = error.localizedDescription
-                guard self.commitDetailRequestedHash == hash else {
-                    log.debug("commitDetail: dropping stale error for \(hash): \(msg)")
+                if Task.isCancelled {
+                    log.debug("commitDetail: dropping stale error for \(hash)")
                     return
                 }
+                let msg = error.localizedDescription
                 self.commitDetailError = msg
                 log.warning("commitDetail load failed: \(msg)")
             }
         }
+    }
+
+    /// Dismisses the commit detail modal and cancels any in-flight
+    /// git-show request. Called from the sheet's isPresented setter so
+    /// every dismiss path (Done button, Escape, outside-click) routes
+    /// through here. Safe to call when the modal is already closed.
+    func closeCommitDetail() {
+        commitDetailTask?.cancel()
+        commitDetailTask = nil
+        showCommitDetail = false
     }
 
     /// Resolves a search result (from `2nb search --json`) to an open

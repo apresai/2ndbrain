@@ -183,7 +183,17 @@ struct ContentView: View {
         }
         .sheet(isPresented: Binding(
             get: { appState.showCommitDetail },
-            set: { appState.showCommitDetail = $0 }
+            set: { newValue in
+                if newValue {
+                    appState.showCommitDetail = true
+                } else {
+                    // Any dismissal (Done button, Escape, SwiftUI drag,
+                    // outside-click) flows through this setter. Route
+                    // through closeCommitDetail so the in-flight git-show
+                    // Task gets cancelled before a reopen can race it.
+                    appState.closeCommitDetail()
+                }
+            }
         )) {
             CommitDetailView(isPresented: Binding(
                 get: { appState.showCommitDetail },

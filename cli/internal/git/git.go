@@ -159,7 +159,12 @@ func Show(root, hash string) (*CommitDetail, error) {
 	format := "--format=" + "%H" + fieldSep + "%an" + fieldSep +
 		"%aI" + fieldSep + "%s" + fieldSep + "%b" + headerEnd
 
-	combined, err := runGit(root, "show", "-m", "--first-parent",
+	// core.quotePath=false makes git emit raw UTF-8 in both numstat
+	// paths and patch headers. Without this, non-ASCII filenames come
+	// through as octal-escaped quoted strings (e.g. "a/foo\303\251"),
+	// which breaks both the numstat-column split and header parsing.
+	combined, err := runGit(root, "-c", "core.quotePath=false",
+		"show", "-m", "--first-parent",
 		format, "--numstat", "--patch", hash)
 	if err != nil {
 		return nil, err
@@ -201,7 +206,6 @@ func Show(root, hash string) (*CommitDetail, error) {
 
 	var files []CommitFile
 	var totalIns, totalDel int
-	pathIndex := map[string]int{}
 	for _, line := range strings.Split(numstatSection, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -219,7 +223,6 @@ func Show(root, hash string) (*CommitDetail, error) {
 		}
 		totalIns += add
 		totalDel += del
-		pathIndex[cols[2]] = len(files)
 		files = append(files, CommitFile{
 			Path:      cols[2],
 			Additions: add,
@@ -228,46 +231,33 @@ func Show(root, hash string) (*CommitDetail, error) {
 		})
 	}
 
-	// Parse the patch section: each per-file patch starts with a line
-	// like "diff --git a/<path> b/<path>". Splitting on "\ndiff --git "
-	// gives us individual patch chunks; the first split produces the
-	// first patch (minus the leading "diff --git " prefix).
+	// Parse the patch section by matching chunks to numstat entries in
+	// order. git show --numstat --patch emits both sections in the same
+	// per-file order, so the nth patch chunk corresponds to the nth
+	// numstat entry. We deliberately don't re-parse the "diff --git
+	// a/X b/X" header for the path: that approach fails for paths with
+	// a literal " b/" substring (e.g. a directory named "foo b") and
+	// for quoted non-ASCII paths. Order-based matching is robust to
+	// all these cases since numstat is authoritative on paths.
 	if patchSection != "" {
-		// Ensure the first chunk also starts with "diff --git " for
-		// uniform handling below.
 		chunks := strings.Split("\n"+patchSection, "\ndiff --git ")
+		chunkIdx := 0
 		for _, chunk := range chunks {
 			chunk = strings.TrimSpace(chunk)
 			if chunk == "" {
 				continue
 			}
-			// Extract the "a/<path>" portion from the first line.
-			// Form: "a/<path> b/<path>\n<rest>"
-			firstLineEnd := strings.IndexByte(chunk, '\n')
-			if firstLineEnd == -1 {
-				continue
+			if chunkIdx >= len(files) {
+				// Defensive: shouldn't happen if numstat and patch
+				// agree, but don't panic on unexpected git output.
+				break
 			}
-			firstLine := chunk[:firstLineEnd]
-			// The path spec is "a/<path> b/<path>" — take everything
-			// between "a/" and " b/".
-			aIdx := strings.Index(firstLine, "a/")
-			bIdx := strings.Index(firstLine, " b/")
-			if aIdx == -1 || bIdx == -1 || bIdx <= aIdx {
-				continue
+			if !files[chunkIdx].Binary {
+				// Reconstruct the full patch including the "diff --git "
+				// prefix that was consumed by the split.
+				files[chunkIdx].Diff = "diff --git " + chunk + "\n"
 			}
-			path := firstLine[aIdx+2 : bIdx]
-			idx, ok := pathIndex[path]
-			if !ok {
-				// Numstat didn't report this path (unusual). Skip.
-				continue
-			}
-			if files[idx].Binary {
-				// Binary files have no textual diff; leave Diff empty.
-				continue
-			}
-			// Reconstruct the full patch including the "diff --git "
-			// prefix that was consumed by the split.
-			files[idx].Diff = "diff --git " + chunk + "\n"
+			chunkIdx++
 		}
 	}
 
