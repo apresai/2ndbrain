@@ -198,6 +198,123 @@ public final class DatabaseManager: Sendable {
             }
         }
     }
+
+    /// Fetch all unresolved links (source -> raw target name, no matching document).
+    public func unresolvedLinks() throws -> [(source: String, rawTarget: String)] {
+        try dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT source_id, target_raw FROM links
+                WHERE target_id IS NULL AND resolved = 0
+            """)
+            return rows.compactMap { row in
+                guard let src = row["source_id"] as String?,
+                      let raw = row["target_raw"] as String? else { return nil }
+                return (source: src, rawTarget: raw)
+            }
+        }
+    }
+
+    /// Tags for a single document.
+    public func tagsForDoc(id: String) throws -> [String] {
+        try dbPool.read { db in
+            try String.fetchAll(db, sql: "SELECT tag FROM tags WHERE doc_id = ? ORDER BY tag", arguments: [id])
+        }
+    }
+
+    /// Map of doc_id -> [tag] for every document in the vault. One query instead
+    /// of N, so a global graph with thousands of nodes doesn't pay per-node
+    /// round-trips.
+    public func allTagsByDoc() throws -> [String: [String]] {
+        try dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT doc_id, tag FROM tags ORDER BY doc_id, tag")
+            var map: [String: [String]] = [:]
+            for row in rows {
+                guard let id = row["doc_id"] as String?,
+                      let tag = row["tag"] as String? else { continue }
+                map[id, default: []].append(tag)
+            }
+            return map
+        }
+    }
+
+    /// Total degree (incoming + outgoing resolved links) per document. Nodes
+    /// without any resolved links get 0.
+    public func docDegrees() throws -> [String: Int] {
+        try dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT doc_id, SUM(cnt) AS degree FROM (
+                    SELECT source_id AS doc_id, COUNT(*) AS cnt
+                        FROM links WHERE target_id IS NOT NULL GROUP BY source_id
+                    UNION ALL
+                    SELECT target_id AS doc_id, COUNT(*) AS cnt
+                        FROM links WHERE target_id IS NOT NULL GROUP BY target_id
+                ) GROUP BY doc_id
+            """)
+            var out: [String: Int] = [:]
+            for row in rows {
+                guard let id = row["doc_id"] as String? else { continue }
+                out[id] = row["degree"] as Int? ?? 0
+            }
+            return out
+        }
+    }
+
+    /// BFS traversal up to `depth` hops from `rootID`, following resolved links
+    /// in both directions (undirected). Returns the set of documents reached
+    /// plus every resolved link between those documents.
+    ///
+    /// Cycles are handled by visited-set tracking (LNK-UW-002). A `depth` of 0
+    /// returns only the root. `depth` is clamped to 0...10 to prevent runaway
+    /// traversals on pathologically connected vaults.
+    public func localGraph(rootID: String, depth: Int) throws -> (nodes: [DocumentRecord], edges: [(source: String, target: String)]) {
+        let bounded = max(0, min(depth, 10))
+        return try dbPool.read { db in
+            // BFS in Swift rather than a recursive CTE — the CTE version gets
+            // awkward with undirected traversal (need UNION on both sides) and
+            // the vault sizes we care about fit in memory comfortably.
+            var visited: Set<String> = [rootID]
+            var frontier: Set<String> = [rootID]
+            for _ in 0..<bounded {
+                guard !frontier.isEmpty else { break }
+                let placeholders = frontier.map { _ in "?" }.joined(separator: ", ")
+                let args = StatementArguments(Array(frontier))
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT source_id, target_id FROM links
+                    WHERE target_id IS NOT NULL
+                      AND (source_id IN (\(placeholders)) OR target_id IN (\(placeholders)))
+                """, arguments: args + args)
+                var next: Set<String> = []
+                for row in rows {
+                    if let s = row["source_id"] as String?, !visited.contains(s) {
+                        next.insert(s); visited.insert(s)
+                    }
+                    if let t = row["target_id"] as String?, !visited.contains(t) {
+                        next.insert(t); visited.insert(t)
+                    }
+                }
+                frontier = next
+            }
+
+            let idPlaceholders = visited.map { _ in "?" }.joined(separator: ", ")
+            let idArgs = StatementArguments(Array(visited))
+            let docs = try DocumentRecord.fetchAll(db, sql: """
+                SELECT * FROM documents WHERE id IN (\(idPlaceholders))
+            """, arguments: idArgs)
+
+            let edgeRows = try Row.fetchAll(db, sql: """
+                SELECT source_id, target_id FROM links
+                WHERE target_id IS NOT NULL
+                  AND source_id IN (\(idPlaceholders))
+                  AND target_id IN (\(idPlaceholders))
+            """, arguments: idArgs + idArgs)
+            let edges: [(source: String, target: String)] = edgeRows.compactMap { row in
+                guard let s = row["source_id"] as String?,
+                      let t = row["target_id"] as String? else { return nil }
+                return (source: s, target: t)
+            }
+            return (nodes: docs, edges: edges)
+        }
+    }
 }
 
 /// GRDB record for the documents table.

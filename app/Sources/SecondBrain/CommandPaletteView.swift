@@ -113,7 +113,7 @@ struct CommandPaletteView: View {
             PaletteCommand(title: "Rebuild Index", icon: "arrow.triangle.2.circlepath", shortcut: "") { state in
                 state.rebuildIndex()
             },
-            PaletteCommand(title: "Show Graph View", icon: "point.3.connected.trianglepath.dotted", shortcut: "") { state in
+            PaletteCommand(title: "Graph View", icon: "point.3.connected.trianglepath.dotted", shortcut: "Cmd+Option+G") { state in
                 state.showGraphView = true
             },
             PaletteCommand(title: "Reindex Spotlight", icon: "magnifyingglass", shortcut: "") { state in

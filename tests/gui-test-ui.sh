@@ -160,6 +160,11 @@ else
     fail "View menu: Missing items" "Search=$HAS_SEARCH QuickOpen=$HAS_QUICKOPEN CmdPalette=$HAS_CMDPALETTE Focus=$HAS_FOCUS items=$VIEW_ITEMS"
 fi
 
+# Graph View is exercised by its own dedicated suite (tests/gui-test-graph.sh),
+# which covers sheet open, inspector structure, mode/filter toggles, rebuild,
+# FSEvents-driven refresh, and close/reopen. Don't duplicate the shallow
+# sheet-exists check here.
+
 # Cleanup
 echo ""
 echo "--- Cleanup ---"

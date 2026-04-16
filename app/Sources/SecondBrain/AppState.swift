@@ -19,6 +19,12 @@ final class AppState {
     var focusModeActive = false
     var showGraphView = false
 
+    // Bumped every time FSEvents fires or the index rebuilds. GraphView
+    // observes this counter and rebuilds its model on change; using a token
+    // rather than a boolean means rapid successive changes all get seen
+    // without relying on the view being in-flight to handle each one.
+    var graphNeedsRebuild: Int = 0
+
     // Overlay panels
     var showSearch = false
     var showQuickOpen = false
@@ -230,6 +236,10 @@ final class AppState {
                 for path in paths {
                     self?.reloadIfOpen(path: path)
                 }
+                // Bump the graph rebuild signal so an open GraphView
+                // refreshes against the current index. Cheap token — the
+                // view only rebuilds once per bump, not per file path.
+                self?.graphNeedsRebuild += 1
             }
         }
         watcher.start()
@@ -770,6 +780,9 @@ final class AppState {
 
             isIndexing = false
             embeddingProgress = nil
+            // Nudge any open GraphView to rebuild its model against the
+            // freshly indexed links/tags.
+            graphNeedsRebuild += 1
             await refreshAIStatus()
         }
     }

@@ -199,6 +199,11 @@ cmd_shift_key() {
     sleep 0.5
 }
 
+cmd_opt_key() {
+    osascript -e "tell application \"System Events\" to tell process \"SecondBrain\" to keystroke \"$1\" using {command down, option down}"
+    sleep 0.5
+}
+
 # --- File verification ---
 file_exists() { [ -f "$1" ]; }
 file_contains() { grep -q "$2" "$1" 2>/dev/null; }

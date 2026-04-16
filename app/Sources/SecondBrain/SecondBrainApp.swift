@@ -169,6 +169,12 @@ struct SecondBrainApp: App {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(appState.vault == nil)
 
+                Button("Graph View") {
+                    appState.showGraphView = true
+                }
+                .keyboardShortcut("g", modifiers: [.command, .option])
+                .disabled(appState.vault == nil)
+
                 Divider()
 
                 Button("Focus Mode") {

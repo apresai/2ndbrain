@@ -344,7 +344,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Search panel | SearchPanelView.swift | Vault-wide search with type filters (Cmd+Shift+F) |
 | Quick open | QuickOpenView.swift | Fuzzy filename search (Cmd+P) |
 | Command palette | CommandPaletteView.swift | All commands with fuzzy search (Cmd+Shift+P) |
-| Graph view | GraphView.swift | Interactive force-directed link graph |
+| Graph view | GraphView.swift + Graph/ | Obsidian-style force-directed graph with canvas renderer, inspector panel (mode, filters, forces, color groups), global/local modes, zoom/pan/drag, hover + selection highlighting. Simulation uses Barnes-Hut quadtree for O(n log n) repulsion, scales past 1K nodes |
 | Backlinks panel | BacklinksView.swift | Documents linking to current document |
 | Outline panel | SidebarView.swift | Document heading hierarchy |
 | Properties panel | PropertiesView.swift | Editable frontmatter fields (Cmd+Option+I) |
@@ -393,6 +393,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Cmd+Option+P | Polish Document |
 | Cmd+Shift+M | MCP Server Status |
 | Cmd+Shift+G | Recent Git Activity |
+| Cmd+Option+G | Graph View |
 | Cmd+Shift+F | Search Panel |
 | Cmd+Shift+E | Focus Mode |
 | Cmd+Option+I | Properties Panel |

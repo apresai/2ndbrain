@@ -91,7 +91,19 @@ struct ContentView: View {
         )) {
             GraphView()
                 .environment(appState)
-                .frame(minWidth: 600, minHeight: 400)
+                .frame(minWidth: 900, minHeight: 600, idealHeight: 700)
+                .overlay(alignment: .topLeading) {
+                    Button {
+                        appState.showGraphView = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .padding(8)
+                }
         }
         .sheet(isPresented: $showProperties) {
             PropertiesView(isPresented: $showProperties)
