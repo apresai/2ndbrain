@@ -194,6 +194,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | Command | Description |
 |---------|-------------|
 | `git activity [--since 7d]` | Recent commits that touched vault files |
+| `git show <hash>` | Full commit detail: metadata, stats, per-file diffs |
 | `git diff <path>` | Unified diff of a file against HEAD |
 | `git status` | Uncommitted/untracked files in the vault |
 
@@ -384,7 +385,7 @@ A native SwiftUI + AppKit editor with:
 - **Suggest Links** (Cmd+Shift+L) — click-to-insert AI-suggested wikilinks to semantically related documents
 - **Polish** (Cmd+Option+P) — AI copy-edit the current document with an accept/reject diff preview
 - **MCP Server Status** (Cmd+Shift+M) — see which AI clients are connected and which tools they've invoked, plus a live status-bar indicator
-- **Recent Activity** (Cmd+Shift+G) — for vaults that are git repos, browse recent commits with 1/3/7/30-day window
+- **Recent Activity** (Cmd+Shift+G) — for vaults that are git repos, browse recent commits with 1/3/7/30-day window; click any commit for full detail with per-file diffs
 - **Git diff viewer** — right-click any file in the sidebar → Show Changes vs HEAD
 - **Git sidebar indicators** — orange dot for modified, blue dot for untracked
 - AI setup wizard — guided provider/credentials/model configuration (Tools menu)

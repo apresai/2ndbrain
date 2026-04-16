@@ -166,7 +166,7 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (46)
+### CLI Commands (47)
 
 Commands are organized into groups (Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration).
 
@@ -194,6 +194,7 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `suggest-links` | `<path>`, `--limit` | Suggest semantically related documents to link from a document |
 | `polish` | `<path>`, `--system`, `--max-tokens` | AI copy-edit a document (returns original + polished for diff preview) |
 | `git activity` | `--since 7d`, `--json` | Recent commits that touched vault files (read-only git) |
+| `git show` | `<hash>`, `--json` | Full commit detail: metadata, stats, per-file unified diffs |
 | `git diff` | `<path>`, `--json` | Unified diff of a file against HEAD |
 | `git status` | `--json` | List uncommitted/untracked files in the vault |
 | `ask` | `<question>` | RAG Q&A — search vault, generate answer with sources |
@@ -375,6 +376,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Diff view | DiffView.swift | Reusable Myers LCS unified diff (polish, merge conflict, git diff) |
 | Git sidebar indicators | SidebarView.swift | Orange dot for modified, blue for untracked (when vault is a git repo) |
 | Git activity | GitActivityView.swift | Cmd+Shift+G → recent commits with 1/3/7/30 day window |
+| Commit detail | CommitDetailView.swift | Click commit row → split pane: file list + per-file unified diff |
 | Git diff viewer | GitDiffView.swift | Right-click → Show Changes vs HEAD → raw unified diff |
 
 ### Keyboard Shortcuts
