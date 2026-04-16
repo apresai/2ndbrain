@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.14] - 2026-04-16
+
+### Added
+- Commit detail view: click any commit in Git Activity to see changed files and per-file unified diffs
+- `2nb git show <hash>` CLI command with `--json` support
+- Outline panel click-to-scroll navigation in the editor
+- Syntax highlighting for fenced code blocks in the editor
+- Wikilink parsing and location resolver with heading anchor support
+
+### Fixed
+- `git.Show()` mishandled pathological filenames and git-quoted paths
+- Race condition in commit detail diff loading
+- Sidebar selection reliability after document operations
+- Tab bar dirty-state indicator edge cases
+
+
 ## [0.1.13] - 2026-04-15
 
 ## [0.1.13] - 2026-04-15
