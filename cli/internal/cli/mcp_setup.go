@@ -9,8 +9,10 @@ import (
 var mcpSetupCmd = &cobra.Command{
 	Use:   "mcp-setup",
 	Short: "Show MCP server setup instructions for AI tools",
-	Long:  "Prints configuration snippets for connecting the 2ndbrain MCP server to Claude Code, Claude Desktop, Cursor, Gemini CLI, Amazon Q, and Kiro.",
-	RunE:  runMCPSetup,
+	Long:  "Prints configuration snippets for connecting the 2ndbrain MCP server to Claude Code, Claude Desktop, Cursor, Gemini CLI, Amazon Q, and Kiro. The printed snippets include the active vault path so they're ready to paste.",
+	Example: `  2nb mcp-setup                                     # print all snippets
+  2nb mcp-setup | pbcopy                            # copy to clipboard (macOS)`,
+	RunE: runMCPSetup,
 }
 
 func init() {

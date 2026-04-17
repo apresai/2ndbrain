@@ -37,9 +37,13 @@ type SearchResponse struct {
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search the vault with hybrid BM25 + semantic search",
-	Long:  "Search your knowledge base using keywords and semantic similarity.\nExamples:\n  2nb search \"authentication\"\n  2nb search \"how does auth work\" --type adr",
-	Args:  cobra.MinimumNArgs(1),
-	RunE:  runSearch,
+	Long:  "Search your knowledge base using keywords and semantic similarity. Runs BM25 when AI isn't configured; runs hybrid (BM25 + vector) when embeddings are available. Inline filters like `type:adr` and `tag:auth` work inside the query string.",
+	Example: `  2nb search "authentication"                       # hybrid search
+  2nb search "how does auth work" --type adr        # filter by document type
+  2nb search "retry tag:network"                    # inline tag filter
+  2nb search "database" --bm25-only                 # skip semantic search`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: runSearch,
 }
 
 func init() {

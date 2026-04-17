@@ -16,8 +16,12 @@ var readChunk string
 var readCmd = &cobra.Command{
 	Use:   "read <path>",
 	Short: "Read a document or specific chunk",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runRead,
+	Example: `  2nb read my-note.md
+  2nb read decisions/0001-use-jwt.md --chunk "Decision"
+  2nb read my-note.md --json                        # structured output`,
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeDocPaths,
+	RunE:              runRead,
 }
 
 func init() {

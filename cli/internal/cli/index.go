@@ -19,7 +19,11 @@ import (
 var indexCmd = &cobra.Command{
 	Use:   "index",
 	Short: "Build or rebuild the vault search index",
-	RunE:  runIndex,
+	Long:  "Builds the BM25 keyword index and, if AI is configured, the embedding index for semantic search. Safe to run repeatedly — only changed documents are re-embedded.",
+	Example: `  2nb index                              # build / update the whole vault
+  2nb index --doc my-note.md             # re-index one file (editors use this on save)
+  2nb index --force-reembed              # invalidate all embeddings (use after switching providers)`,
+	RunE: runIndex,
 }
 
 var (
@@ -31,6 +35,7 @@ func init() {
 	indexCmd.GroupID = "ai"
 	indexCmd.Flags().StringVar(&indexDocFlag, "doc", "", "Re-index a single document (relative or absolute path) instead of the whole vault")
 	indexCmd.Flags().BoolVar(&indexForceReembed, "force-reembed", false, "Re-embed every document (use after intentionally switching AI providers)")
+	_ = indexCmd.RegisterFlagCompletionFunc("doc", completeDocPaths)
 	rootCmd.AddCommand(indexCmd)
 }
 

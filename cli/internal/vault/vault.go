@@ -32,7 +32,7 @@ func Open(dir string) (*Vault, error) {
 		return nil, err
 	}
 
-	root := findVaultRoot(absDir)
+	root := FindVaultRoot(absDir)
 	if root == "" {
 		return nil, ErrNotAVault
 	}
@@ -153,7 +153,12 @@ func (v *Vault) AbsPath(relPath string) string {
 	return filepath.Join(v.Root, relPath)
 }
 
-func findVaultRoot(dir string) string {
+// FindVaultRoot walks up from dir until it finds a directory containing
+// a .2ndbrain/ child, and returns that directory (the vault root).
+// Returns "" if no vault is found before reaching the filesystem root.
+// Intended for read-only callers (e.g. shell completion) that need the
+// vault root without paying for a full Open.
+func FindVaultRoot(dir string) string {
 	for {
 		if _, err := os.Stat(filepath.Join(dir, DotDirName)); err == nil {
 			return dir

@@ -1,62 +1,45 @@
 package cli
 
 import (
-	"errors"
-	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
 var initPath string
 
+// initCmd is the deprecated alias for `vault create`. Kept so existing
+// scripts, README examples, and muscle memory still work. Cobra hides
+// commands with a non-empty `Deprecated` field from the default help
+// listing and prints the deprecation message before RunE.
 var initCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Initialize a new 2ndbrain vault",
-	RunE:  runInit,
+	Use:        "init [path]",
+	Short:      "Initialize a new 2ndbrain vault (deprecated: use `vault create`)",
+	Deprecated: "use `2nb vault create <path>` instead",
+	Example:    `  2nb init ~/my-vault`,
+	Args:       cobra.MaximumNArgs(1),
+	RunE:       runInit,
 }
 
 func init() {
-	initCmd.Flags().StringVar(&initPath, "path", ".", "Directory to initialize as a vault")
+	initCmd.Flags().StringVar(&initPath, "path", "", "Directory to initialize as a vault (legacy; prefer the positional argument)")
 	initCmd.GroupID = "start"
 	rootCmd.AddCommand(initCmd)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	v, err := vault.Init(initPath)
-	if err != nil {
-		if errors.Is(err, vault.ErrAlreadyInit) {
-			return fmt.Errorf("vault already initialized at %s", initPath)
-		}
-		return fmt.Errorf("init vault: %w", err)
+	path := ""
+	switch {
+	case len(args) == 1:
+		path = args[0]
+	case initPath != "":
+		path = initPath
+	default:
+		path = "."
 	}
-	defer v.Close()
-	setupFileLogging(v)
-
-	absPath, _ := filepath.Abs(v.Root)
-	if absPath != "" {
-		_ = setActiveVault(absPath)
-	}
-
-	// Write a .gitignore for the personal/local-state files under
-	// .2ndbrain/ so team vaults shared via git don't produce merge
-	// conflicts on config, DBs, or recovery snapshots. Only the
-	// schemas.yaml (shared doc-type definitions) is committable.
-	writeVaultGitignore(v.Root)
-
-	slog.Info("vault initialized", "path", absPath)
-
-	fmt.Fprintf(cmd.ErrOrStderr(), "Initialized 2ndbrain vault at %s\n", v.Root)
-	if !flagPorcelain {
-		fmt.Fprintln(cmd.ErrOrStderr(), "\nNext steps:")
-		fmt.Fprintln(cmd.ErrOrStderr(), "  2nb create \"My First Note\"    Create a document")
-		fmt.Fprintln(cmd.ErrOrStderr(), "  2nb ai setup                  Configure AI search")
-	}
-	return nil
+	return createVaultAt(cmd, path)
 }
 
 // vaultGitignoreMarker identifies the 2nb-owned section of .gitignore

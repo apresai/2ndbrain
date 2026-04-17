@@ -20,7 +20,7 @@ This project uses **2ndbrain** (`2nb`), an AI-native markdown knowledge base wit
 If `vault_root` isn't the directory you expected, either `cd` into the right vault or pass `--vault <path>` on every command. The "active vault" is separate from your current working directory — it's stored in `~/.2ndbrain-active-vault` and survives across sessions. Running `2nb create` from inside `~/dev/obsidian` will still write to whatever vault is active, not to `~/dev/obsidian`, unless you pass `--vault ~/dev/obsidian`.
 
 **If the current directory isn't a 2nb vault**, you have two choices:
-1. Initialize it: `2nb init --path .` (adds a `.2ndbrain/` directory so 2nb can index it).
+1. Initialize it: `2nb vault create .` (adds a `.2ndbrain/` directory so 2nb can index it). The legacy `2nb init` still works but is deprecated.
 2. Treat it as a foreign filesystem: use direct file writes with correct frontmatter (see "Document Format" below) and skip `2nb create` entirely. This is how you'd add notes to an Obsidian vault that you *don't* want to convert to 2nb.
 
 ## Parent-command defaults
@@ -29,6 +29,7 @@ Every command group has a useful default action when called without a subcommand
 
 | Shortcut | Equivalent to | Useful for |
 |---|---|---|
+| `2nb vault` | `2nb vault status` | Vault health: docs, embeddings, portability, AI reachability, stale count |
 | `2nb ai` | `2nb ai status` | "Is my embedding/generation provider ready?" |
 | `2nb models` | `2nb models list` | Browse verified model catalog |
 | `2nb git` | `2nb git status` | Uncommitted files in a git-backed vault |
@@ -78,6 +79,16 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb git activity --since 7d` | Recent commits that touched vault files |
 | `2nb git diff <path>` | Unified diff of a file against HEAD |
 | `2nb git status` | Uncommitted + untracked files in the vault |
+
+### Vault lifecycle
+
+| Command | Purpose |
+|---------|---------|
+| `2nb vault create <path>` | Initialize a new vault at `<path>` and make it active. Writes `.2ndbrain/` + `.gitignore`. Replaces the deprecated `2nb init`. |
+| `2nb vault set <path>` | Set an existing vault as active (no re-init) |
+| `2nb vault list` | Recently used vaults (`*` marks active); reads `~/.2ndbrain-vaults` |
+| `2nb vault status` | Health report: docs, embedding coverage, portability state, AI reachability, stale count |
+| `2nb vault show` | Terse summary (path, source, name, doc count) — pipe `--json` to scripts |
 
 ### Config, AI, MCP, skills
 
@@ -245,7 +256,7 @@ Wikilinks inside fenced code blocks or inline backticks are ignored by the extra
 - **External file edits need a re-index** — if you use `Write` directly instead of `kb_update_meta`, follow up with `2nb index --doc <path>` or expect stale search results.
 - **The polish and suggest-links tools don't write to disk** — they return suggestions. Apply them with a subsequent edit.
 - **`status` transitions are enforced** — if you try to jump `adr` straight from proposed to superseded, `kb_update_meta` will reject it. Go through accepted first.
-- **Foreign vaults** (Obsidian dir with no `.2ndbrain/`) — `2nb create` won't touch them. Use direct file writes with the frontmatter template above, OR run `2nb init --path <dir>` to convert it into a 2nb vault first.
+- **Foreign vaults** (Obsidian dir with no `.2ndbrain/`) — `2nb create` won't touch them. Use direct file writes with the frontmatter template above, OR run `2nb vault create <dir>` to convert it into a 2nb vault first.
 
 ## Vault Structure
 
@@ -265,4 +276,4 @@ vault-root/
     └── document-3.md
 ```
 
-The `.2ndbrain/` directory is the signal that a directory is a 2nb vault. If it's missing, the directory is just markdown files — 2nb won't index or write to it until `2nb init` creates the directory.
+The `.2ndbrain/` directory is the signal that a directory is a 2nb vault. If it's missing, the directory is just markdown files — 2nb won't index or write to it until `2nb vault create` creates the directory.

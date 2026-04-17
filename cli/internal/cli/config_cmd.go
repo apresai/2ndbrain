@@ -25,24 +25,34 @@ var configShowCmd = &cobra.Command{
 }
 
 var configGetCmd = &cobra.Command{
-	Use:   "get <key>",
-	Short: "Get a configuration value",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runConfigGet,
+	Use:               "get <key>",
+	Short:             "Get a configuration value",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeConfigKeys,
+	RunE:              runConfigGet,
 }
 
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
 	Short: "Set a configuration value",
 	Args:  cobra.ExactArgs(2),
-	RunE:  runConfigSet,
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		// Only complete the first positional (the key). The value half
+		// is free-form and depends on the key chosen.
+		if len(args) == 0 {
+			return completeConfigKeys(cmd, args, toComplete)
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	},
+	RunE: runConfigSet,
 }
 
 var configSetKeyCmd = &cobra.Command{
-	Use:   "set-key <provider>",
-	Short: "Store an API key securely in macOS Keychain",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runConfigSetKey,
+	Use:               "set-key <provider>",
+	Short:             "Store an API key securely in macOS Keychain",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeProviders,
+	RunE:              runConfigSetKey,
 }
 
 func init() {
@@ -144,6 +154,25 @@ func runConfigSetKey(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// settableConfigKeys is the source-of-truth list of keys accepted by
+// `config get` / `config set`. Drives both the switch statements below,
+// shell completion (completeConfigKeys), and the "unknown key" error
+// message. Order is presentation order.
+var settableConfigKeys = []string{
+	"ai.provider",
+	"ai.embedding_model",
+	"ai.generation_model",
+	"ai.dimensions",
+	"ai.bedrock.profile",
+	"ai.bedrock.region",
+	"ai.openrouter.api_key_env",
+	"ai.ollama.endpoint",
+}
+
+func unknownConfigKeyError(key string) error {
+	return fmt.Errorf("unknown config key: %q\n\nValid keys:\n  %s", key, strings.Join(settableConfigKeys, "\n  "))
+}
+
 func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 	switch key {
 	case "ai.provider":
@@ -163,7 +192,7 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 	case "ai.ollama.endpoint":
 		return cfg.Ollama.Endpoint, nil
 	default:
-		return "", fmt.Errorf("unknown config key: %q\n\nValid keys:\n  ai.provider, ai.embedding_model, ai.generation_model,\n  ai.dimensions, ai.bedrock.profile, ai.bedrock.region,\n  ai.openrouter.api_key_env, ai.ollama.endpoint", key)
+		return "", unknownConfigKeyError(key)
 	}
 }
 
@@ -190,7 +219,7 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 	case "ai.ollama.endpoint":
 		cfg.Ollama.Endpoint = value
 	default:
-		return fmt.Errorf("unknown config key: %q\n\nValid keys:\n  ai.provider, ai.embedding_model, ai.generation_model,\n  ai.dimensions, ai.bedrock.profile, ai.bedrock.region,\n  ai.openrouter.api_key_env, ai.ollama.endpoint", key)
+		return unknownConfigKeyError(key)
 	}
 	return nil
 }

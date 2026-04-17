@@ -29,9 +29,12 @@ type AskResponse struct {
 var askCmd = &cobra.Command{
 	Use:   "ask <question>",
 	Short: "Ask a question about your knowledge base (RAG)",
-	Long:  "Uses hybrid search to find relevant documents, then generates an answer using the configured AI provider.",
-	Args:  cobra.MinimumNArgs(1),
-	RunE:  runAsk,
+	Long:  "Uses hybrid search to find relevant documents, then generates an answer using the configured AI provider. Requires `2nb ai setup` first.",
+	Example: `  2nb ask "how does auth work?"
+  2nb ask "what did we decide about the database?"
+  2nb ask "summarize runbook:deploy-rotation"`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: runAsk,
 }
 
 func init() {

@@ -104,8 +104,8 @@ release:
     ### Getting Started
 
     ```bash
-    # Initialize a vault
-    2nb init --path ~/my-vault
+    # Create a vault
+    2nb vault create ~/my-vault
 
     # Index documents for search
     2nb index
@@ -144,6 +144,11 @@ brews:
     install: |
       bin.install "2nb"
 
+      # Generate and install shell completions so tab-complete
+      # and dynamic value suggestions work out of the box for
+      # Homebrew users.
+      generate_completions_from_executable(bin/"2nb", "completion")
+
     test: |
       system "#{bin}/2nb", "--help"
 
@@ -151,13 +156,16 @@ brews:
       To get started:
 
         # Initialize a new vault
-        2nb init --path ~/my-vault
+        2nb vault create ~/my-vault
 
         # Or open an existing Obsidian vault
         2nb import-obsidian ~/my-obsidian-vault
 
         # Set up local AI with Ollama
         2nb ai setup
+
+      Shell completions are installed automatically. Restart your shell
+      (or `source ~/.zshrc`) to pick them up.
 
       For full documentation:
       https://github.com/apresai/2ndbrain

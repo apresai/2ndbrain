@@ -21,7 +21,11 @@ var (
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all documents in the vault with optional filters",
-	RunE:  runList,
+	Example: `  2nb list
+  2nb list --type adr --status accepted
+  2nb list --tag auth --sort modified --limit 10
+  2nb list --json                                   # machine-readable`,
+	RunE: runList,
 }
 
 func init() {
@@ -30,6 +34,9 @@ func init() {
 	listCmd.Flags().StringVar(&listTag, "tag", "", "Filter by tag")
 	listCmd.Flags().IntVar(&listLimit, "limit", 100, "Maximum results")
 	listCmd.Flags().StringVar(&listSort, "sort", "modified", "Sort by: modified, created, title, path")
+	_ = listCmd.RegisterFlagCompletionFunc("type", completeSchemaTypes)
+	_ = listCmd.RegisterFlagCompletionFunc("status", completeSchemaStatuses)
+	_ = listCmd.RegisterFlagCompletionFunc("sort", completeSortFields)
 	listCmd.GroupID = "docs"
 	rootCmd.AddCommand(listCmd)
 }

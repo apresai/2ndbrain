@@ -2,6 +2,11 @@ package ai
 
 import "context"
 
+// KnownProviders is the canonical list of AI providers 2nb supports.
+// Used by shell completion, wizard defaults, and test assertions — when
+// adding a new provider, append it here so every site stays in sync.
+var KnownProviders = []string{"bedrock", "openrouter", "ollama"}
+
 // EmbeddingProvider generates vector embeddings from text.
 type EmbeddingProvider interface {
 	Name() string

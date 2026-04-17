@@ -12,10 +12,11 @@ import (
 var deleteForce bool
 
 var deleteCmd = &cobra.Command{
-	Use:   "delete <path>",
-	Short: "Delete a document from the vault and index",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runDelete,
+	Use:               "delete <path>",
+	Short:             "Delete a document from the vault and index",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeDocPaths,
+	RunE:              runDelete,
 }
 
 func init() {

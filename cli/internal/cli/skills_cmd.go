@@ -28,22 +28,28 @@ var skillsInstallCmd = &cobra.Command{
 	Use:   "install [agent]",
 	Short: "Install 2ndbrain skill for an AI coding agent",
 	Long:  "Install a SKILL.md file that teaches an AI coding agent about this vault's CLI, MCP tools, and document format.\n\nBy default installs at project level (vault root). Use --user to install globally in your home directory.",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runSkillsInstall,
+	Example: `  2nb skills install --all                          # install for every supported agent
+  2nb skills install claude-code                    # install for Claude Code only
+  2nb skills install cursor --user                  # install globally for all projects`,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeAgentSlugs,
+	RunE:              runSkillsInstall,
 }
 
 var skillsUninstallCmd = &cobra.Command{
-	Use:   "uninstall [agent]",
-	Short: "Remove 2ndbrain skill for an AI coding agent",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runSkillsUninstall,
+	Use:               "uninstall [agent]",
+	Short:             "Remove 2ndbrain skill for an AI coding agent",
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeAgentSlugs,
+	RunE:              runSkillsUninstall,
 }
 
 var skillsShowCmd = &cobra.Command{
-	Use:   "show <agent>",
-	Short: "Preview the skill content for an agent",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runSkillsShow,
+	Use:               "show <agent>",
+	Short:             "Preview the skill content for an agent",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeAgentSlugs,
+	RunE:              runSkillsShow,
 }
 
 func init() {

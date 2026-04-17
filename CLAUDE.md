@@ -172,8 +172,13 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 
 | Command | Flags | Purpose |
 |---------|-------|---------|
-| `init` | `--path` | Initialize a new vault |
-| `vault` | | Show or set the active vault |
+| `init` | `[path]`, `--path` | **Deprecated alias** for `vault create`; kept for back-compat |
+| `vault` | `[path]` | Health report for the active vault (same as `vault status`); legacy positional path acts like `vault set` |
+| `vault status` | | Unified health report: vault info, index coverage, portability, AI reachability, stale docs. Mirrors the macOS editor's Vault Status panel |
+| `vault show` | | Terse vault summary (path, source, name, doc count); handy for scripting via `--json` |
+| `vault create` | `<path>` | Initialize a new vault at `<path>` and make it active (replaces `init`) |
+| `vault set` | `<path>` | Set an existing vault as active |
+| `vault list` | | List recently used vaults (`*` marks the active one); reads `~/.2ndbrain-vaults` |
 | `create` | `--type`, `--title` | Create document from template (adr/runbook/note/postmortem) |
 | `read` | `--chunk` | Read full document or specific section |
 | `meta` | `--set key=value` | View or update frontmatter with schema validation |
@@ -220,6 +225,10 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `config get` | `<key>` | Read a config value (e.g. `ai.provider`, `ai.similarity_threshold`) |
 | `config set` | `<key> <value>` | Write a config value |
 | `config set-key` | `<provider>` | Store API key in macOS Keychain |
+| `completion` | `zsh|bash|fish|powershell` | Emit shell completion script to stdout |
+| `completion install` | `--dir <path>` | Install zsh completion to `~/.zsh/completions/_2nb` (or `--dir`); prints the `.zshrc` snippet to activate |
+
+**Shell completion:** subcommands, flags, and most values tab-complete (vault paths, doc `.md` paths, schema types/statuses, agent slugs, model IDs, AI providers). Run `2nb completion install` once; completions dispatch to the built binary so they stay fresh as commands evolve. Homebrew installs the completion scripts automatically via GoReleaser — for non-brew installs use `completion install`.
 
 **Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`
 

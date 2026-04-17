@@ -14,14 +14,16 @@ import (
 var metaSet []string
 
 var metaCmd = &cobra.Command{
-	Use:   "meta <path>",
-	Short: "View or update document frontmatter",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runMeta,
+	Use:               "meta <path>",
+	Short:             "View or update document frontmatter",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeDocPaths,
+	RunE:              runMeta,
 }
 
 func init() {
 	metaCmd.Flags().StringArrayVar(&metaSet, "set", nil, "Set a frontmatter field (key=value)")
+	_ = metaCmd.RegisterFlagCompletionFunc("set", completeMetaSetKeys)
 	metaCmd.GroupID = "docs"
 	rootCmd.AddCommand(metaCmd)
 }

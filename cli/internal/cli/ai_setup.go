@@ -24,13 +24,19 @@ var aiSetupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Guided AI provider setup wizard",
 	Long:  "Interactive wizard to configure Bedrock, OpenRouter, or Ollama. Validates credentials, helps pick models, and tests connectivity. Use flags to skip prompts.",
-	RunE:  runAISetup,
+	Example: `  2nb ai setup                                      # interactive
+  2nb ai setup --provider ollama                    # skip provider prompt
+  2nb ai setup --provider bedrock --embedding-model amazon.titan-embed-text-v2:0`,
+	RunE: runAISetup,
 }
 
 func init() {
 	aiSetupCmd.Flags().StringVar(&setupProvider, "provider", "", "AI provider: bedrock, openrouter, ollama")
 	aiSetupCmd.Flags().StringVar(&setupEmbeddingModel, "embedding-model", "", "Embedding model ID")
 	aiSetupCmd.Flags().StringVar(&setupGenerationModel, "generation-model", "", "Generation model ID")
+	_ = aiSetupCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = aiSetupCmd.RegisterFlagCompletionFunc("embedding-model", completeModelIDs)
+	_ = aiSetupCmd.RegisterFlagCompletionFunc("generation-model", completeModelIDs)
 	aiCmd.AddCommand(aiSetupCmd)
 }
 

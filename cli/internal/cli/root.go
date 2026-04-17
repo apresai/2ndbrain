@@ -31,8 +31,22 @@ const (
 var rootCmd = &cobra.Command{
 	Use:   "2nb",
 	Short: "2ndbrain — AI-native markdown knowledge base",
-	Long:  "A CLI for managing markdown knowledge bases with hybrid search, MCP server, and structured metadata.",
-	RunE:  runRoot,
+	Long: `2ndbrain is a CLI and MCP server for markdown knowledge bases with
+hybrid (BM25 + semantic) search, structured metadata, and a link graph.
+
+Quick start:
+  1. Create a vault:     2nb vault create ~/my-vault
+  2. Add a note:         2nb create "My First Note"
+  3. Build the index:    2nb index
+  4. Configure AI:       2nb ai setup
+  5. Search & ask:       2nb search "query" / 2nb ask "question"
+  6. Expose to agents:   2nb skills install --all  ·  2nb mcp-setup`,
+	Example: `  2nb vault create ~/notes          # create a new vault
+  2nb create "Project Kickoff"      # add a note
+  2nb search "authentication"       # keyword + semantic search
+  2nb ask "what did we decide?"     # RAG Q&A
+  2nb mcp-server                    # start MCP for Claude Code, Cursor, etc.`,
+	RunE: runRoot,
 }
 
 func init() {
@@ -45,6 +59,12 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose logging (debug level)")
 
 	rootCmd.Version = Version
+
+	// Our custom `completion` command (in completion.go) owns the
+	// completion UX — disable Cobra's auto-generated one so the
+	// `install` subcommand and the shell-specific emitters live under
+	// a single tree.
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
 	// Command groups — registered before any AddCommand calls.
 	rootCmd.AddGroup(
@@ -141,19 +161,18 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(cmd.ErrOrStderr(), "2ndbrain — AI-native markdown knowledge base.")
 		fmt.Fprintln(cmd.ErrOrStderr())
 		fmt.Fprintln(cmd.ErrOrStderr(), "Get started:")
-		fmt.Fprintln(cmd.ErrOrStderr(), "  1. Create a vault:  2nb init ~/my-vault")
-		fmt.Fprintln(cmd.ErrOrStderr(), "  2. Add a note:      2nb create \"My First Note\"")
-		fmt.Fprintln(cmd.ErrOrStderr(), "  3. Set up AI:       2nb ai setup")
-		fmt.Fprintln(cmd.ErrOrStderr(), "  4. Search & ask:    2nb search \"query\" / 2nb ask \"question\"")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  1. Create a vault:   2nb vault create ~/my-vault")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  2. Add a note:       2nb create \"My First Note\"")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  3. Configure AI:     2nb ai setup")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  4. Search & ask:     2nb search \"query\"  /  2nb ask \"question\"")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  5. Wire up agents:   2nb skills install --all  /  2nb mcp-setup")
 		fmt.Fprintln(cmd.ErrOrStderr())
-		fmt.Fprintln(cmd.ErrOrStderr(), "Run `2nb --help` for the full command list.")
+		fmt.Fprintln(cmd.ErrOrStderr(), "Run `2nb --help` for the full command list or `2nb vault list` for recent vaults.")
 		return nil
 	}
 	defer v.Close()
 
-	// Vault exists — show brief status, then grouped help.
-	var count int
-	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents").Scan(&count)
+	count, embedded, _ := v.DB.EmbeddingCounts()
 
 	aiStatus := "not configured"
 	if p := v.Config.AI.Provider; p != "" {
@@ -163,8 +182,26 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(), "Vault: %s (%d docs, AI: %s)\n\n", v.Root, count, aiStatus)
+	label, hint := nextStepHint(count, embedded, v.Config.AI.Provider)
+	fmt.Fprintf(cmd.ErrOrStderr(), "Vault: %s (%d docs, AI: %s)\n", v.Root, count, aiStatus)
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s\n\n", label, hint)
 	return cmd.Help()
+}
+
+// nextStepHint returns a label ("Next" or "Try") and a one-line hint
+// matched to the vault's current state, so running `2nb` in a vault
+// always surfaces the single most useful next command.
+func nextStepHint(docCount, embeddedCount int, provider string) (label, hint string) {
+	switch {
+	case docCount == 0:
+		return "Next", `2nb create "My First Note"    (add your first document)`
+	case provider == "":
+		return "Next", "2nb ai setup                  (enable semantic search & ask)"
+	case embeddedCount < docCount:
+		return "Next", "2nb index                     (embed your documents for semantic search)"
+	default:
+		return "Try", `2nb search "query"  or  2nb ask "your question"`
+	}
 }
 
 // openVault resolves the vault path using this priority:

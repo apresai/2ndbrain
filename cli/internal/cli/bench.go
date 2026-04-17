@@ -30,17 +30,19 @@ var benchCmd = &cobra.Command{
 }
 
 var benchFavCmd = &cobra.Command{
-	Use:   "fav <model-id>",
-	Short: "Add a model to benchmark favorites",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runBenchFav,
+	Use:               "fav <model-id>",
+	Short:             "Add a model to benchmark favorites",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeModelIDs,
+	RunE:              runBenchFav,
 }
 
 var benchUnfavCmd = &cobra.Command{
-	Use:   "unfav <model-id>",
-	Short: "Remove a model from benchmark favorites",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runBenchUnfav,
+	Use:               "unfav <model-id>",
+	Short:             "Remove a model from benchmark favorites",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeModelIDs,
+	RunE:              runBenchUnfav,
 }
 
 var benchFavsCmd = &cobra.Command{
@@ -66,6 +68,9 @@ func init() {
 	benchCmd.Flags().StringVar(&benchProbeFlag, "probe", "", "Run only a specific probe: embed, generate, search, rag")
 	benchCmd.Flags().StringVar(&benchProviderFlag, "provider", "", "Provider override (auto-detected if omitted)")
 	benchHistoryCmd.Flags().IntVar(&benchHistoryLimit, "limit", 20, "Number of runs to show")
+	_ = benchCmd.RegisterFlagCompletionFunc("model", completeModelIDs)
+	_ = benchCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = benchCmd.RegisterFlagCompletionFunc("probe", completeBenchProbes)
 
 	benchCmd.AddCommand(benchFavCmd)
 	benchCmd.AddCommand(benchUnfavCmd)

@@ -25,15 +25,18 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 ## Quick Start
 
 ```bash
-# Initialize a vault
-2nb init --path ~/vault
+# Create a vault (and set it active)
+2nb vault create ~/vault
 
 # Create documents
 2nb create "Use JWT for Authentication" --type adr
 2nb create "Debug Auth Failures" --type runbook
 2nb create "My Notes on Go"
 
-# Index with AI embeddings
+# Configure AI for semantic search & ask
+2nb ai setup
+
+# Index with AI embeddings (safe to run repeatedly)
 2nb index
 
 # Search (hybrid BM25 + semantic)
@@ -42,7 +45,17 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 
 # Ask questions (RAG with source citations)
 2nb ask "What authentication approach did we choose and why?"
+
+# Check vault health any time
+2nb vault
+
+# One-time: enable shell tab-completion (zsh)
+2nb completion install
 ```
+
+> The legacy `2nb init` command still works (it prints a deprecation notice). Prefer `2nb vault create <path>`.
+>
+> Homebrew installs shell completions automatically. For manual installs, `2nb completion install` writes the zsh script to `~/.zsh/completions/_2nb` and prints the `.zshrc` snippet to activate it.
 
 ## Features
 
@@ -276,7 +289,7 @@ tar czf vault.tar.gz \
   my-vault/
 ```
 
-Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets the vault's as-embedded state and avoids re-embedding from scratch. For git-shared team vaults, `2nb init` writes a `.gitignore` that excludes personal/local state (config, DBs, logs, recovery) and commits only `schemas.yaml`. Missing or corrupt `config.yaml` / `index.db` self-heal on next open with a one-line stderr warning — the vault never bricks.
+Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets the vault's as-embedded state and avoids re-embedding from scratch. For git-shared team vaults, `2nb vault create` writes a `.gitignore` that excludes personal/local state (config, DBs, logs, recovery) and commits only `schemas.yaml`. Missing or corrupt `config.yaml` / `index.db` self-heal on next open with a one-line stderr warning — the vault never bricks.
 
 > **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`). If you were parsing a raw array/object, extract `.results` / `.answer`.
 

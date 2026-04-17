@@ -54,11 +54,12 @@ var modelsListCmd = &cobra.Command{
 }
 
 var modelsTestCmd = &cobra.Command{
-	Use:   "test <model-id>",
-	Short: "Test if a model works with 2nb",
-	Long:  "Sends a quick probe (embed or generate) to verify a model is callable. Useful for testing unverified models before switching.",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runModelsTest,
+	Use:               "test <model-id>",
+	Short:             "Test if a model works with 2nb",
+	Long:              "Sends a quick probe (embed or generate) to verify a model is callable. Useful for testing unverified models before switching.",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeModelIDs,
+	RunE:              runModelsTest,
 }
 
 var modelsAddCmd = &cobra.Command{
@@ -73,10 +74,11 @@ add models 2nb doesn't ship yet without editing source.`,
 }
 
 var modelsRemoveCmd = &cobra.Command{
-	Use:   "remove <model-id>",
-	Short: "Remove a model from your personal catalog",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runModelsRemove,
+	Use:               "remove <model-id>",
+	Short:             "Remove a model from your personal catalog",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeModelIDs,
+	RunE:              runModelsRemove,
 }
 
 func init() {
@@ -85,9 +87,13 @@ func init() {
 	modelsListCmd.Flags().BoolVar(&modelsDiscover, "discover", false, "Query vendor APIs for full model catalogs")
 	modelsListCmd.Flags().BoolVar(&modelsCheckStatus, "status", false, "Probe provider reachability and credentials")
 	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama")
+	_ = modelsListCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 
 	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama (auto-detected if omitted)")
 	modelsTestCmd.Flags().StringVar(&testModelType, "type", "", "Model type: embedding or generation (auto-detected if omitted)")
+	_ = modelsTestCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = modelsTestCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 
 	modelsAddCmd.Flags().StringVar(&addProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
 	modelsAddCmd.Flags().StringVar(&addType, "type", "", "Type: embedding or generation (required)")
@@ -100,10 +106,15 @@ func init() {
 	modelsAddCmd.Flags().StringVar(&addScope, "scope", "global", "Scope: global (~/.config/2nb/models.yaml) or vault (.2ndbrain/models.yaml)")
 	_ = modelsAddCmd.MarkFlagRequired("provider")
 	_ = modelsAddCmd.MarkFlagRequired("type")
+	_ = modelsAddCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = modelsAddCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
+	_ = modelsAddCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsRemoveCmd.Flags().StringVar(&removeProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
 	modelsRemoveCmd.Flags().StringVar(&removeScope, "scope", "global", "Scope: global or vault")
 	_ = modelsRemoveCmd.MarkFlagRequired("provider")
+	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsCmd.AddCommand(modelsListCmd)
 	modelsCmd.AddCommand(modelsTestCmd)

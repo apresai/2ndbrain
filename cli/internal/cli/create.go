@@ -40,15 +40,20 @@ var (
 var createCmd = &cobra.Command{
 	Use:   "create [title]",
 	Short: "Create a new document from a template",
-	Long:  "Create a new document. Title can be a positional argument or --title flag.\nExamples:\n  2nb create \"My New Note\"\n  2nb create --type adr \"Use JWT for Auth\"",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runCreate,
+	Long:  "Create a new document. Title can be a positional argument or --title flag. Document types come from the vault's schemas.yaml — the built-in types are adr, runbook, note, postmortem, prd, prfaq.",
+	Example: `  2nb create "My New Note"                         # default type: note
+  2nb create --type adr "Use JWT for Auth"         # architecture decision record
+  2nb create --type runbook "Deploy Rotation"      # ops runbook
+  2nb create --type prd "Search Ranking v2"        # product requirements doc`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runCreate,
 }
 
 func init() {
 	createCmd.Flags().StringVar(&createType, "type", "note", "Document type (adr, runbook, note, postmortem, prd, prfaq)")
 	createCmd.Flags().StringVar(&createTitle, "title", "", "Document title")
 	createCmd.Flags().BoolVar(&createAllowDuplicate, "allow-duplicate", false, "Allow creating a document with duplicate content")
+	_ = createCmd.RegisterFlagCompletionFunc("type", completeSchemaTypes)
 	createCmd.GroupID = "docs"
 	rootCmd.AddCommand(createCmd)
 }
