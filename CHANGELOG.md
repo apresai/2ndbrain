@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.15] - 2026-04-17
+
+### Added
+- Obsidian-style force-directed document graph view with canvas renderer, inspector panel, zoom/pan/drag, hover and selection highlighting, and Barnes-Hut quadtree simulation (O(n log n) at scale)
+- Graph inspector panel with mode, filter, force, and color-group controls; global/local view modes
+- Vault Status panel (Vault menu) — unified health view showing index state, embedding portability, stale docs, and provider reachability with Rebuild Index and Re-embed All actions
+- AI Test Connection panel (AI menu) — live model probe with latency display and link to AI Setup on failure
+
+### Changed
+- Menu bar reorganized into Notes, Vault, and AI menus; File menu renamed to Notes
+- Preview mode is now read-only; removed the editable preview round-trip
+
+### Removed
+- Editable preview (Turndown.js contenteditable round-trip) — corrupted markdown containing Mermaid diagrams and produced WebKit rendering artifacts
+
+
 ## [0.1.14] - 2026-04-16
 
 ### Added
