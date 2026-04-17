@@ -68,16 +68,23 @@ struct PreferencesView: View {
             }
 
             Section("Autosave") {
-                Picker("Autosave Interval", selection: Binding(
-                    get: { appState.autosaveIntervalSeconds },
-                    set: { appState.setAutosaveInterval($0) }
-                )) {
-                    Text("Off").tag(0)
-                    Text("Every 15 seconds").tag(15)
-                    Text("Every 30 seconds").tag(30)
-                    Text("Every 60 seconds").tag(60)
+                Toggle("Enable autosave", isOn: Binding(
+                    get: { appState.autosaveIntervalSeconds > 0 },
+                    set: { isOn in
+                        appState.setAutosaveInterval(isOn ? 30 : 0)
+                    }
+                ))
+                if appState.autosaveIntervalSeconds > 0 {
+                    Picker("Save every", selection: Binding(
+                        get: { appState.autosaveIntervalSeconds },
+                        set: { appState.setAutosaveInterval($0) }
+                    )) {
+                        Text("15 seconds").tag(15)
+                        Text("30 seconds").tag(30)
+                        Text("60 seconds").tag(60)
+                    }
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
             }
         }
         .formStyle(.grouped)

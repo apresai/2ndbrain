@@ -78,6 +78,7 @@ final class AppState {
 
     // AI state
     var aiStatus: AIStatusInfo?
+    var showAITest: Bool = false
 
     // Portability warnings from the most recent CLI search/ask. When
     // non-empty, the vault is in a degraded state (dimension mismatch,
@@ -90,6 +91,9 @@ final class AppState {
     var indexProgress: IndexProgress?
     var showIndexProgress = false
     var pendingFindSimilarQuery: String?
+
+    // Vault Status panel
+    var showVaultStatus: Bool = false
 
     // Tools panels
     var showLintResults = false
@@ -668,8 +672,14 @@ final class AppState {
         }
     }
 
-    func rebuildIndex() {
+    // When true, the next startIndex() pass runs `2nb index --force-reembed`
+    // to invalidate all stored embeddings. Set by VaultStatusView's Re-embed
+    // button and cleared once the run begins.
+    var pendingForceReembed: Bool = false
+
+    func rebuildIndex(forceReembed: Bool = false) {
         guard vault != nil else { return }
+        pendingForceReembed = forceReembed
         indexProgress = IndexProgress(phase: .ready)
         showIndexProgress = true
     }
@@ -680,14 +690,17 @@ final class AppState {
         indexError = nil
         embeddingProgress = nil
         indexProgress = IndexProgress(phase: .indexingFiles)
-        log.info("Index rebuild started for vault: \(vault.rootURL.lastPathComponent)")
+        let forceReembed = pendingForceReembed
+        pendingForceReembed = false
+        log.info("Index rebuild started for vault: \(vault.rootURL.lastPathComponent) forceReembed=\(forceReembed)")
         let startTime = CFAbsoluteTimeGetCurrent()
 
         Task {
             do {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-                process.arguments = ["index"]
+                let subArgs = forceReembed ? ["index", "--force-reembed"] : ["index"]
+                process.arguments = CLIPath.args(subArgs, vault: vault.rootURL)
                 process.currentDirectoryURL = vault.rootURL
                 let stderrPipe = Pipe()
                 let stdoutPipe = Pipe()
@@ -1572,13 +1585,14 @@ final class AppState {
 
     // MARK: - CLI Execution
 
-    private func runCLI(_ args: [String], cwd: URL) async throws -> Data {
-        let cmd = "2nb " + args.joined(separator: " ")
+    func runCLI(_ args: [String], cwd: URL) async throws -> Data {
+        let fullArgs = CLIPath.args(args, vault: cwd)
+        let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.debug("CLI exec: \(cmd)")
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-            process.arguments = args
+            process.arguments = fullArgs
             process.currentDirectoryURL = cwd
             let stdout = Pipe()
             let stderr = Pipe()
@@ -1611,12 +1625,13 @@ final class AppState {
     /// Like runCLI but returns stdout regardless of exit code.
     /// Needed for `2nb lint` which exits 2 on validation errors but still emits valid JSON.
     private func runCLIAllowingNonZero(_ args: [String], cwd: URL) async throws -> Data {
-        let cmd = "2nb " + args.joined(separator: " ")
+        let fullArgs = CLIPath.args(args, vault: cwd)
+        let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.debug("CLI exec (non-zero ok): \(cmd)")
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-            process.arguments = args
+            process.arguments = fullArgs
             process.currentDirectoryURL = cwd
             let stdout = Pipe()
             process.standardOutput = stdout

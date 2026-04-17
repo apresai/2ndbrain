@@ -50,6 +50,7 @@ struct StatusBarView: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .help("Dismiss")
                 }
             } else if appState.isIndexing {
                 HStack(spacing: 4) {
@@ -80,6 +81,7 @@ struct StatusBarView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(appState.vault == nil)
+                .help("AI status — click for details")
                 .popover(isPresented: $showAIPopover, arrowEdge: .top) {
                     aiPopoverContent
                         .frame(width: 280)
@@ -104,9 +106,15 @@ struct StatusBarView: View {
             }
 
             if let vault = appState.vault {
-                Text(vault.rootURL.lastPathComponent)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                Button {
+                    appState.showVaultStatus = true
+                } label: {
+                    Text(vault.rootURL.lastPathComponent)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Vault Status — click for index, embeddings, and stale docs")
             }
         }
         .padding(.horizontal, 12)

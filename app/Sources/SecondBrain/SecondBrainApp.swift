@@ -4,6 +4,7 @@ import os
 
 @main
 struct SecondBrainApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState()
     var body: some Scene {
         WindowGroup {
@@ -23,7 +24,64 @@ struct SecondBrainApp: App {
         }
 
         .commands {
+            // Notes menu (renamed from File via AppDelegate). Only note-scoped
+            // operations live here; vault operations moved to the Vault menu.
             CommandGroup(replacing: .newItem) {
+                Button("New Note...") {
+                    appState.showTemplatePicker = true
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(appState.vault == nil)
+
+                Button("Duplicate Note") {
+                    if let url = appState.currentDocument?.url {
+                        appState.duplicateDocument(at: url)
+                    }
+                }
+                .disabled(appState.currentDocument == nil)
+
+                Divider()
+
+                Menu("Export") {
+                    Button("Export as PDF...") {
+                        exportCurrentDocument(format: .pdf)
+                    }
+                    .keyboardShortcut("x", modifiers: [.command, .shift])
+                    .disabled(appState.currentDocument == nil)
+
+                    Button("Export as HTML...") {
+                        exportCurrentDocument(format: .html)
+                    }
+                    .disabled(appState.currentDocument == nil)
+
+                    Button("Export as Markdown...") {
+                        exportCurrentDocument(format: .markdown)
+                    }
+                    .disabled(appState.currentDocument == nil)
+                }
+
+                Divider()
+
+                Button("Reveal Note in Finder") {
+                    if let url = appState.currentDocument?.url {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(appState.currentDocument == nil)
+            }
+
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    appState.saveCurrentDocument()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(appState.currentDocument == nil)
+            }
+
+            // Vault menu — all vault-scoped operations (create, open, health,
+            // import/export) in one place. Split out from File/Tools.
+            CommandMenu("Vault") {
                 Button("New Vault...") {
                     newVaultPanel()
                 }
@@ -35,10 +93,28 @@ struct SecondBrainApp: App {
 
                 Divider()
 
-                Button("New Document...") {
-                    appState.showTemplatePicker = true
+                Button("Reveal Vault in Finder") {
+                    if let vault = appState.vault {
+                        NSWorkspace.shared.activateFileViewerSelecting([vault.rootURL])
+                    }
                 }
-                .keyboardShortcut("n", modifiers: .command)
+                .disabled(appState.vault == nil)
+
+                Button("Vault Status...") {
+                    appState.showVaultStatus = true
+                }
+                .disabled(appState.vault == nil)
+
+                Divider()
+
+                Button("Rebuild Index") {
+                    appState.rebuildIndex()
+                }
+                .disabled(appState.vault == nil || appState.isIndexing)
+
+                Button("Validate Vault...") {
+                    appState.showLintResults = true
+                }
                 .disabled(appState.vault == nil)
 
                 Divider()
@@ -51,84 +127,46 @@ struct SecondBrainApp: App {
                     exportObsidianPanel()
                 }
                 .disabled(appState.vault == nil)
+            }
+
+            // View menu — merged into the system View menu via
+            // CommandGroup(after:) rather than CommandMenu, which would create
+            // a duplicate View menu in the menu bar.
+            CommandGroup(after: .toolbar) {
+                Button("Toggle Sidebar") {
+                    appState.sidebarVisible.toggle()
+                }
+                .keyboardShortcut("\\", modifiers: .command)
+
+                // Cmd+1/2/3/4 switch sidebar panels. Auto-unhide the
+                // sidebar if it's currently hidden — otherwise the
+                // shortcut would silently no-op.
+                Button("Show Files Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .files
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Show Outline Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .outline
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Button("Show Links Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .backlinks
+                }
+                .keyboardShortcut("3", modifiers: .command)
+
+                Button("Show Tags Panel") {
+                    appState.sidebarVisible = true
+                    appState.requestedSidebarPanel = .tags
+                }
+                .keyboardShortcut("4", modifiers: .command)
 
                 Divider()
 
-                Button("Reveal in Finder") {
-                    if let url = appState.currentDocument?.url {
-                        NSWorkspace.shared.activateFileViewerSelecting([url])
-                    } else if let vault = appState.vault {
-                        NSWorkspace.shared.activateFileViewerSelecting([vault.rootURL])
-                    }
-                }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(appState.vault == nil)
-            }
-
-            CommandMenu("Export") {
-                Button("Export as PDF...") {
-                    exportCurrentDocument(format: .pdf)
-                }
-                .keyboardShortcut("x", modifiers: [.command, .shift])
-                .disabled(appState.currentDocument == nil)
-
-                Button("Export as HTML...") {
-                    exportCurrentDocument(format: .html)
-                }
-                .disabled(appState.currentDocument == nil)
-
-                Button("Export as Markdown...") {
-                    exportCurrentDocument(format: .markdown)
-                }
-                .disabled(appState.currentDocument == nil)
-            }
-
-            CommandGroup(replacing: .saveItem) {
-                Button("Save") {
-                    appState.saveCurrentDocument()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(appState.currentDocument == nil)
-            }
-
-            CommandMenu("Tools") {
-                Button("Set Up AI...") {
-                    appState.showAISetupWizard = true
-                }
-                .disabled(appState.vault == nil)
-
-                Button("Rebuild Index") {
-                    appState.rebuildIndex()
-                }
-                .disabled(appState.vault == nil || appState.isIndexing)
-
-                Divider()
-
-                Button("Install AI Agent Skills...") {
-                    appState.showSkillsInstall = true
-                }
-                .disabled(appState.vault == nil)
-
-                Button("Connect AI Tools (MCP)...") {
-                    appState.showMCPSetup = true
-                }
-                .disabled(appState.vault == nil)
-
-                Button("MCP Server Status...") {
-                    appState.showMCPStatus = true
-                }
-                .keyboardShortcut("m", modifiers: [.command, .shift])
-                .disabled(appState.vault == nil)
-
-                Divider()
-
-                Button("Validate Knowledge Base...") {
-                    appState.showLintResults = true
-                }
-                .disabled(appState.vault == nil)
-            }
-
-            CommandMenu("View") {
                 Button("Search Vault") {
                     appState.showSearch.toggle()
                 }
@@ -143,23 +181,6 @@ struct SecondBrainApp: App {
                     appState.showCommandPalette.toggle()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
-
-                Button("Ask AI") {
-                    appState.showAskAI.toggle()
-                }
-                .keyboardShortcut("a", modifiers: [.command, .shift])
-
-                Button("Suggest Links") {
-                    appState.openSuggestLinks()
-                }
-                .keyboardShortcut("l", modifiers: [.command, .shift])
-                .disabled(appState.currentDocument == nil)
-
-                Button("Polish Document") {
-                    appState.openPolish()
-                }
-                .keyboardShortcut("p", modifiers: [.command, .option])
-                .disabled(appState.currentDocument == nil)
 
                 Divider()
 
@@ -192,56 +213,74 @@ struct SecondBrainApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
 
-                Button("Toggle Sidebar") {
-                    appState.sidebarVisible.toggle()
-                }
-                .keyboardShortcut("\\", modifiers: .command)
-
                 Divider()
 
-                // Cmd+1/2/3/4 switch sidebar panels. Auto-unhide the
-                // sidebar if it's currently hidden — otherwise the
-                // shortcut would silently no-op.
-                Button("Show Files Panel") {
-                    appState.sidebarVisible = true
-                    appState.requestedSidebarPanel = .files
-                }
-                .keyboardShortcut("1", modifiers: .command)
-
-                Button("Show Outline Panel") {
-                    appState.sidebarVisible = true
-                    appState.requestedSidebarPanel = .outline
-                }
-                .keyboardShortcut("2", modifiers: .command)
-
-                Button("Show Links Panel") {
-                    appState.sidebarVisible = true
-                    appState.requestedSidebarPanel = .backlinks
-                }
-                .keyboardShortcut("3", modifiers: .command)
-
-                Button("Show Tags Panel") {
-                    appState.sidebarVisible = true
-                    appState.requestedSidebarPanel = .tags
-                }
-                .keyboardShortcut("4", modifiers: .command)
-
-                Divider()
-
-                Button("Increase Font Size") {
+                Button("Zoom In") {
                     appState.increaseFontSize()
                 }
                 .keyboardShortcut("=", modifiers: .command)
 
-                Button("Decrease Font Size") {
+                Button("Zoom Out") {
                     appState.decreaseFontSize()
                 }
                 .keyboardShortcut("-", modifiers: .command)
 
-                Button("Reset Font Size") {
+                Button("Actual Size") {
                     appState.resetFontSize()
                 }
                 .keyboardShortcut("0", modifiers: .command)
+            }
+
+            // AI menu — all AI-related actions (ask, suggest, polish, setup,
+            // test, skills, MCP). Replaces the previous Tools menu.
+            CommandMenu("AI") {
+                Button("Ask AI...") {
+                    appState.showAskAI.toggle()
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .disabled(appState.vault == nil)
+
+                Button("Suggest Links") {
+                    appState.openSuggestLinks()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(appState.currentDocument == nil)
+
+                Button("Polish Document") {
+                    appState.openPolish()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .option])
+                .disabled(appState.currentDocument == nil)
+
+                Divider()
+
+                Button("AI Setup...") {
+                    appState.showAISetupWizard = true
+                }
+                .disabled(appState.vault == nil)
+
+                Button("Test AI Connection...") {
+                    appState.showAITest = true
+                }
+                .disabled(appState.vault == nil)
+
+                Divider()
+
+                Button("AI Agent Skills...") {
+                    appState.showSkillsInstall = true
+                }
+                .disabled(appState.vault == nil)
+
+                Button("MCP Server Configuration...") {
+                    appState.showMCPSetup = true
+                }
+                .disabled(appState.vault == nil)
+
+                Button("MCP Server Status...") {
+                    appState.showMCPStatus = true
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(appState.vault == nil)
             }
         }
     }
@@ -329,8 +368,12 @@ struct SecondBrainApp: App {
     private func runCLICommand(_ args: [String], cwd: URL? = nil, completion: @escaping @MainActor (Bool) -> Void) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-        process.arguments = args
-        if let cwd { process.currentDirectoryURL = cwd }
+        if let cwd {
+            process.arguments = CLIPath.args(args, vault: cwd)
+            process.currentDirectoryURL = cwd
+        } else {
+            process.arguments = args
+        }
 
         process.terminationHandler = { proc in
             let success = proc.terminationStatus == 0

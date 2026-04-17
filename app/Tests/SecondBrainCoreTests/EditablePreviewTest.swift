@@ -1,8 +1,8 @@
 import XCTest
 import SecondBrainCore
 
-final class EditablePreviewTests: XCTestCase {
-    func testEditableHTMLGenerated() throws {
+final class ReadOnlyPreviewTests: XCTestCase {
+    func testPreviewIsReadOnly() throws {
         let md = """
         # Hello World
 
@@ -18,14 +18,11 @@ final class EditablePreviewTests: XCTestCase {
         ```
         """
 
-        let html = MarkdownRenderer.renderHTML(md, editable: true)
-        XCTAssertTrue(html.contains("contenteditable=\"true\""), "Body should be contenteditable")
-        XCTAssertTrue(html.contains("TurndownService"), "Should include Turndown.js")
-        XCTAssertTrue(html.contains("messageHandlers"), "Should include WKScriptMessageHandler bridge")
-        XCTAssertTrue(html.contains("contentChanged"), "Should post contentChanged messages")
-
-        let readOnlyHTML = MarkdownRenderer.renderHTML(md)
-        XCTAssertFalse(readOnlyHTML.contains("contenteditable=\"true\""), "Read-only should not be contenteditable=true")
-        XCTAssertFalse(readOnlyHTML.contains("TurndownService"), "Read-only should not include Turndown")
+        let html = MarkdownRenderer.renderHTML(md)
+        XCTAssertFalse(html.contains("contenteditable=\"true\""), "Preview must never be contenteditable — would re-introduce WYSIWYG gibberish bug")
+        XCTAssertFalse(html.contains("TurndownService"), "Turndown bridge must not be injected")
+        XCTAssertFalse(html.contains("contentChanged"), "No HTML→markdown message bridge")
+        XCTAssertTrue(html.contains("<h1>Hello World</h1>"), "Should render heading")
+        XCTAssertTrue(html.contains("<strong>bold</strong>"), "Should render bold")
     }
 }

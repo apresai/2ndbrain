@@ -59,7 +59,7 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 - **Schema validation** — Typed frontmatter, enum constraints, status state machines
 - **Wikilinks** — `[[target#heading|alias]]` with link resolution and graph traversal
 - **Document templates** — ADR, runbook, prd, prfaq, postmortem, note with enforced schemas
-- **Native macOS editor** — SwiftUI + AppKit with live preview, editable preview (WYSIWYG via Turndown), tabs, search, graph view, autosave, crash recovery
+- **Native macOS editor** — SwiftUI + AppKit with Source/Split/Preview modes, tabs, search, graph view, autosave, crash recovery
 - **Local-first** — All data on disk as plain markdown. Obsidian-compatible.
 
 ## AI Providers
@@ -375,26 +375,31 @@ Supported agents: Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Ro
 
 A native SwiftUI + AppKit editor with:
 
-- Markdown editing with Source / Split / Preview mode toggle (editable preview via Turndown.js ↔ WKWebView bridge)
-- 30-second autosave (Off / 15s / 30s / 60s in Preferences), low-disk warning, filename collision suffixing, pre-write crash snapshots
+- Markdown editing with Source / Split / Preview mode toggle (Preview is read-only — use Source or Split for editing)
+- Autosave toggle with 15s / 30s / 60s intervals in Preferences, low-disk warning, filename collision suffixing, pre-write crash snapshots
 - Merge conflict dialog — when a file changes externally while a tab is dirty, a 2-pane diff window shows On Disk vs Ancestor and Yours vs Ancestor
 - Configurable editor font family and size (Preferences via Cmd+,, zoom with Cmd+=/Cmd+-/Cmd+0)
+- Window toolbar (visible once a vault is open): New Note, Search, Quick Open
+- Editor toolbar (visible when a document is open): Save, Polish, Suggest Links, Share, Source/Split/Preview mode picker
 - Quick Open (Cmd+P), Command Palette (Cmd+Shift+P)
 - Search panel with semantic search toggle (Cmd+Shift+F)
 - Ask AI panel for RAG Q&A (Cmd+Shift+A)
 - **Suggest Links** (Cmd+Shift+L) — click-to-insert AI-suggested wikilinks to semantically related documents
 - **Polish** (Cmd+Option+P) — AI copy-edit the current document with an accept/reject diff preview
+- **Vault Status** — unified health panel (Vault menu) showing index state, embedding portability, stale docs, and provider reachability with Rebuild Index + Re-embed All buttons
+- **Test AI Connection** — standalone probe (AI menu) that runs `2nb models test` against both embedding and generation models with live latency
 - **MCP Server Status** (Cmd+Shift+M) — see which AI clients are connected and which tools they've invoked, plus a live status-bar indicator
 - **Recent Activity** (Cmd+Shift+G) — for vaults that are git repos, browse recent commits with 1/3/7/30-day window; click any commit for full detail with per-file diffs
 - **Git diff viewer** — right-click any file in the sidebar → Show Changes vs HEAD
 - **Git sidebar indicators** — orange dot for modified, blue dot for untracked
-- AI setup wizard — guided provider/credentials/model configuration (Tools menu)
+- AI setup wizard — guided provider/credentials/model configuration (AI menu)
 - Interactive AI status popover with staleness indicator and index rebuild
+- Clickable vault name in status bar — opens Vault Status panel
 - Status bar shows document type, status, word count, chunk count, token estimate, AI dot, MCP dot
 - Index rebuild dialog with confirmation, progress bars, and stats summary
 - Tag drill-down navigation — click a tag to see filtered files, back button to return
-- Export as PDF, HTML, or Markdown (Export menu, Cmd+Shift+X for PDF)
-- Tools menu: Install AI Agent Skills, Connect AI Tools (MCP), MCP Server Status, Validate Knowledge Base, Rebuild Index
+- Export as PDF, HTML, or Markdown (Notes > Export submenu, Cmd+Shift+X for PDF)
+- Menu taxonomy: **Notes** (file operations), **Vault** (vault operations + health), **View** (panels, search, zoom), **AI** (Ask AI, Suggest Links, Polish, Setup, Test, Skills, MCP)
 - Interactive link graph visualization
 - Wikilink autocomplete, backlinks panel, outline view
 - Tabs with dirty indicators, focus mode with hover-to-reveal toolbar

@@ -125,7 +125,7 @@ public final class VaultManager: @unchecked Sendable {
     public func runIndex() throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-        process.arguments = ["index"]
+        process.arguments = CLIPath.args(["index"], vault: rootURL)
         process.currentDirectoryURL = rootURL
         try process.run()
         process.waitUntilExit()
@@ -135,7 +135,7 @@ public final class VaultManager: @unchecked Sendable {
     public func runLint() throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-        process.arguments = ["lint", "--json"]
+        process.arguments = CLIPath.args(["lint", "--json"], vault: rootURL)
         process.currentDirectoryURL = rootURL
         let pipe = Pipe()
         process.standardOutput = pipe

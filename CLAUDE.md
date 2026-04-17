@@ -130,7 +130,7 @@ Test scripts live in `tests/`:
 
 ### Key patterns for GUI tests
 
-- **NSAlert dialogs** (New Document): Type in text field, navigate popup via accessibility, press Return
+- **NSAlert dialogs** (New Note): Type in text field, navigate popup via accessibility, press Return
 - **SwiftUI overlays** (Quick Open, Search, Command Palette): Rely on menu shortcuts (not `.onKeyPress`) since NSTextView steals focus. `makeFirstResponder(nil)` + `@FocusState` ensures overlay TextFields get focus.
 - **Sidebar clicks**: Use AppleScript `click at {x, y}` coordinates
 - **Screenshots**: Saved to `/tmp/sb-gui-tests/` for debugging failures
@@ -327,13 +327,12 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Vault opening | SecondBrainApp.swift | Open existing vault via folder picker (Cmd+Shift+O) |
 | Document editing | EditorArea.swift | NSTextView with configurable font, debounced sync, read-only mode for >100 MB files |
 | Editor mode toggle | EditorArea.swift | Source / Split / Preview segmented control in toolbar |
-| Editable preview | EditorArea.swift | WKWebView ↔ Turndown.js bridge for WYSIWYG editing in preview mode |
-| Live preview | EditorArea.swift | HTML preview via WKWebView (split or full-width) |
+| Live preview | EditorArea.swift | Read-only HTML preview via WKWebView (split or full-width). Removed in 0.1.15: contenteditable + Turndown.js round-trip corrupted markdown with Mermaid SVGs and WebKit artifacts |
 | Document templates | AppState.swift | Create from ADR, Runbook, Note, Postmortem, PRD, PR/FAQ templates |
 | Document duplication | SidebarView.swift | Context menu Duplicate with fresh UUID and "(copy)" title |
 | Drag to open | ContentView.swift | Drop `.md` files from Finder to open in new tabs |
 | Document deletion | SidebarView.swift | Context menu delete with confirmation |
-| 30s autosave | AppState.swift | Scheduled autosave with Off/15/30/60 preference |
+| 30s autosave | AppState.swift + PreferencesView.swift | Toggle "Enable autosave" + 15/30/60s interval picker in Preferences |
 | Low disk warning | AppState.swift | NSAlert when volume available capacity < 50 MB before save |
 | Filename collision suffix | AppState.swift | `uniqueFilename` appends -1, -2, ... on create/duplicate |
 | Pre-write crash snapshot | CrashJournal.swift | Sync `.recovery.md` snapshot before every write |
@@ -356,8 +355,12 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | MCP status indicator | StatusBarView.swift | Green dot + client count, polls `2nb mcp status --json` every 5s |
 | Index rebuild | IndexProgressView.swift | Confirmation dialog → progress bars → stats summary |
 | Lint validation | LintResultsView.swift | Shell out to `2nb lint --json`, clickable issues |
-| Skills install | SkillsInstallView.swift | Install SKILL.md for 8 AI agents (Tools menu) |
-| MCP setup | MCPSetupView.swift | Show MCP config snippets for 6 AI tools (Tools menu) |
+| Skills install | SkillsInstallView.swift | Install SKILL.md for 8 AI agents (AI menu) |
+| MCP setup | MCPSetupView.swift | Show MCP config snippets for 6 AI tools (AI menu) |
+| Vault Status panel | VaultStatusView.swift | Unified health panel (Vault menu > Vault Status…) — vault info, index state, embedding portability, stale docs, provider reachability. Rebuild Index + Re-embed All buttons |
+| AI Test Connection | AITestView.swift | Standalone model probe (AI menu > Test AI Connection…) — shells out to `2nb models test` for embed + gen models, shows latency + ok/fail, offers Open AI Setup on failure |
+| Window toolbar | ContentView.swift | New Note / Search / Quick Open buttons visible whenever a vault is open (before any doc is selected) |
+| File→Notes menu rename | AppDelegate.swift | AppKit hook renames the File menu to "Notes"; observer reapplies on NSMenu.didBeginTrackingNotification + applicationDidBecomeActive |
 | AI setup wizard | AISetupWizardView.swift | 4-step provider/credentials/models/test wizard |
 | Obsidian import | SecondBrainApp.swift | Import via CLI with folder picker |
 | Obsidian export | SecondBrainApp.swift | Export via CLI with folder picker |
@@ -383,7 +386,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 
 | Shortcut | Action |
 |----------|--------|
-| Cmd+N | New Document |
+| Cmd+N | New Note |
 | Cmd+S | Save |
 | Cmd+Shift+O | Open Vault |
 | Cmd+P | Quick Open |

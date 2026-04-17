@@ -56,17 +56,17 @@ end tell
 ' 2>/dev/null || echo "no"
 }
 
-# --- Test 1: Tools menu contains Rebuild Index (IDX-EV-001) ---
+# --- Test 1: Vault menu contains Rebuild Index (IDX-EV-001) ---
 echo ""
-echo "--- IDX-EV-001: Tools menu has Rebuild Index ---"
+echo "--- IDX-EV-001: Vault menu has Rebuild Index ---"
 HAS_REBUILD=$(osascript -e '
 tell application "System Events"
     tell process "SecondBrain"
         set frontmost to true
         try
-            click menu bar item "Tools" of menu bar 1
+            click menu bar item "Vault" of menu bar 1
             delay 0.5
-            set menuItems to name of every menu item of menu 1 of menu bar item "Tools" of menu bar 1
+            set menuItems to name of every menu item of menu 1 of menu bar item "Vault" of menu bar 1
             key code 53
             if menuItems contains "Rebuild Index" then
                 return "yes"
@@ -79,15 +79,15 @@ tell application "System Events"
 end tell
 ' 2>/dev/null || echo "no")
 if [ "$HAS_REBUILD" = "yes" ]; then
-    pass "IDX-EV-001: Tools menu contains Rebuild Index"
+    pass "IDX-EV-001: Vault menu contains Rebuild Index"
 else
-    fail "IDX-EV-001: Tools menu missing Rebuild Index" "not found"
+    fail "IDX-EV-001: Vault menu missing Rebuild Index" "not found"
 fi
 
 # --- Test 2: Clicking Rebuild Index opens confirmation dialog (IDX-EV-002) ---
 echo ""
 echo "--- IDX-EV-002: Rebuild Index opens confirmation dialog ---"
-click_menu_item "Tools" "Rebuild Index"
+click_menu_item "Vault" "Rebuild Index"
 sleep 1
 screenshot "idx-02-dialog"
 
@@ -115,7 +115,7 @@ fi
 # --- Test 4: Reopen dialog and run index with Return (IDX-EV-004) ---
 echo ""
 echo "--- IDX-EV-004: Return starts index rebuild ---"
-click_menu_item "Tools" "Rebuild Index"
+click_menu_item "Vault" "Rebuild Index"
 sleep 1
 screenshot "idx-04a-ready"
 

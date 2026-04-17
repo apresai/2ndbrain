@@ -30,13 +30,40 @@ struct ContentView: View {
     }
 
     var body: some View {
+        overlayStack
+            .onChange(of: anyOverlayVisible) { _, visible in
+                if visible {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                }
+            }
+            .modifier(PrimarySheetsModifier(appState: appState, showProperties: $showProperties))
+            .modifier(SecondarySheetsModifier(appState: appState))
+            .alert("Crash Recovery", isPresented: Binding(
+                get: { appState.showRecoveryDialog },
+                set: { appState.showRecoveryDialog = $0 }
+            )) {
+                Button("Recover All") {
+                    for entry in appState.recoveryEntries {
+                        appState.recoverDocument(entry)
+                    }
+                    appState.showRecoveryDialog = false
+                }
+                Button("Discard", role: .destructive) {
+                    appState.dismissRecovery()
+                }
+            } message: {
+                Text("\(appState.recoveryEntries.count) document(s) have unsaved changes from a previous session.")
+            }
+    }
+
+    @ViewBuilder
+    private var overlayStack: some View {
         ZStack {
             mainContent
                 .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                     handleFileDrop(providers: providers)
                 }
 
-            // Modal overlays
             if appState.showSearch {
                 overlayBackground { appState.showSearch = false }
                 SearchPanelView(isPresented: Binding(
@@ -79,165 +106,6 @@ struct ContentView: View {
                     set: { appState.showAISetupWizard = $0 }
                 ))
             }
-        }
-        .onChange(of: anyOverlayVisible) { _, visible in
-            if visible {
-                NSApp.keyWindow?.makeFirstResponder(nil)
-            }
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showGraphView },
-            set: { appState.showGraphView = $0 }
-        )) {
-            GraphView()
-                .environment(appState)
-                .frame(minWidth: 900, minHeight: 600, idealHeight: 700)
-                .overlay(alignment: .topLeading) {
-                    Button {
-                        appState.showGraphView = false
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
-                    .padding(8)
-                }
-        }
-        .sheet(isPresented: $showProperties) {
-            PropertiesView(isPresented: $showProperties)
-                .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showLintResults },
-            set: { appState.showLintResults = $0 }
-        )) {
-            LintResultsView(isPresented: Binding(
-                get: { appState.showLintResults },
-                set: { appState.showLintResults = $0 }
-            ))
-            .environment(appState)
-            .onAppear { Task { await appState.runLint() } }
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showSkillsInstall },
-            set: { appState.showSkillsInstall = $0 }
-        )) {
-            SkillsInstallView(isPresented: Binding(
-                get: { appState.showSkillsInstall },
-                set: { appState.showSkillsInstall = $0 }
-            ))
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showMCPSetup },
-            set: { appState.showMCPSetup = $0 }
-        )) {
-            MCPSetupView(isPresented: Binding(
-                get: { appState.showMCPSetup },
-                set: { appState.showMCPSetup = $0 }
-            ))
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showMCPStatus },
-            set: { appState.showMCPStatus = $0 }
-        )) {
-            MCPStatusView(isPresented: Binding(
-                get: { appState.showMCPStatus },
-                set: { appState.showMCPStatus = $0 }
-            ))
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showSuggestLinks },
-            set: { appState.showSuggestLinks = $0 }
-        )) {
-            SuggestLinksView(isPresented: Binding(
-                get: { appState.showSuggestLinks },
-                set: { appState.showSuggestLinks = $0 }
-            ))
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showPolish },
-            set: { appState.showPolish = $0 }
-        )) {
-            PolishView(isPresented: Binding(
-                get: { appState.showPolish },
-                set: { appState.showPolish = $0 }
-            ))
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showGitActivity },
-            set: { appState.showGitActivity = $0 }
-        )) {
-            GitActivityView(isPresented: Binding(
-                get: { appState.showGitActivity },
-                set: { appState.showGitActivity = $0 }
-            ))
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showGitDiff },
-            set: { appState.showGitDiff = $0 }
-        )) {
-            GitDiffView(
-                isPresented: Binding(
-                    get: { appState.showGitDiff },
-                    set: { appState.showGitDiff = $0 }
-                ),
-                relPath: appState.gitDiffPath
-            )
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showCommitDetail },
-            set: { newValue in
-                if newValue {
-                    appState.showCommitDetail = true
-                } else {
-                    // Any dismissal (Done button, Escape, SwiftUI drag,
-                    // outside-click) flows through this setter. Route
-                    // through closeCommitDetail so the in-flight git-show
-                    // Task gets cancelled before a reopen can race it.
-                    appState.closeCommitDetail()
-                }
-            }
-        )) {
-            CommitDetailView(isPresented: Binding(
-                get: { appState.showCommitDetail },
-                set: { appState.showCommitDetail = $0 }
-            ))
-            .environment(appState)
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showIndexProgress },
-            set: { appState.showIndexProgress = $0 }
-        )) {
-            IndexProgressView(isPresented: Binding(
-                get: { appState.showIndexProgress },
-                set: { appState.showIndexProgress = $0 }
-            ))
-            .environment(appState)
-        }
-        .alert("Crash Recovery", isPresented: Binding(
-            get: { appState.showRecoveryDialog },
-            set: { appState.showRecoveryDialog = $0 }
-        )) {
-            Button("Recover All") {
-                for entry in appState.recoveryEntries {
-                    appState.recoverDocument(entry)
-                }
-                appState.showRecoveryDialog = false
-            }
-            Button("Discard", role: .destructive) {
-                appState.dismissRecovery()
-            }
-        } message: {
-            Text("\(appState.recoveryEntries.count) document(s) have unsaved changes from a previous session.")
         }
     }
 
@@ -285,14 +153,43 @@ struct ContentView: View {
             NavigationSplitView {
                 SidebarView()
             } detail: {
-                if appState.openDocuments.isEmpty {
-                    WelcomeView()
-                } else {
-                    VStack(spacing: 0) {
-                        TabBarView()
-                        BreadcrumbBar()
-                        EditorArea()
-                        StatusBarView()
+                Group {
+                    if appState.openDocuments.isEmpty {
+                        WelcomeView()
+                    } else {
+                        VStack(spacing: 0) {
+                            TabBarView()
+                            BreadcrumbBar()
+                            EditorArea()
+                            StatusBarView()
+                        }
+                    }
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .navigation) {
+                        Button {
+                            appState.showTemplatePicker = true
+                        } label: {
+                            Label("New Note", systemImage: "doc.badge.plus")
+                        }
+                        .disabled(appState.vault == nil)
+                        .help("New Note (⌘N)")
+
+                        Button {
+                            appState.showSearch.toggle()
+                        } label: {
+                            Label("Search", systemImage: "magnifyingglass")
+                        }
+                        .disabled(appState.vault == nil)
+                        .help("Search Vault (⌘⇧F)")
+
+                        Button {
+                            appState.showQuickOpen.toggle()
+                        } label: {
+                            Label("Quick Open", systemImage: "square.on.square")
+                        }
+                        .disabled(appState.vault == nil)
+                        .help("Quick Open (⌘P)")
                     }
                 }
             }
@@ -336,6 +233,15 @@ struct WelcomeView: View {
             } else {
                 Text("Select a document from the sidebar or create a new one.")
                     .foregroundStyle(.tertiary)
+                Button {
+                    appState.showTemplatePicker = true
+                } label: {
+                    Label("New Note", systemImage: "doc.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut("n", modifiers: .command)
+                .padding(.top, 8)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -350,5 +256,186 @@ struct WelcomeView: View {
             appState.openVault(at: url)
             UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
         }
+    }
+}
+
+// MARK: - Sheet Modifiers
+//
+// SwiftUI's body type-checker struggles with long chains of .sheet(). Splitting
+// the sheets across two ViewModifier structs keeps each sub-expression small
+// enough to compile.
+
+private struct PrimarySheetsModifier: ViewModifier {
+    @Bindable var appState: AppState
+    @Binding var showProperties: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: Binding(
+                get: { appState.showGraphView },
+                set: { appState.showGraphView = $0 }
+            )) {
+                GraphView()
+                    .environment(appState)
+                    .frame(minWidth: 900, minHeight: 600, idealHeight: 700)
+                    .overlay(alignment: .topLeading) {
+                        Button {
+                            appState.showGraphView = false
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(.cancelAction)
+                        .padding(8)
+                    }
+            }
+            .sheet(isPresented: $showProperties) {
+                PropertiesView(isPresented: $showProperties)
+                    .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showLintResults },
+                set: { appState.showLintResults = $0 }
+            )) {
+                LintResultsView(isPresented: Binding(
+                    get: { appState.showLintResults },
+                    set: { appState.showLintResults = $0 }
+                ))
+                .environment(appState)
+                .onAppear { Task { await appState.runLint() } }
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showSkillsInstall },
+                set: { appState.showSkillsInstall = $0 }
+            )) {
+                SkillsInstallView(isPresented: Binding(
+                    get: { appState.showSkillsInstall },
+                    set: { appState.showSkillsInstall = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showMCPSetup },
+                set: { appState.showMCPSetup = $0 }
+            )) {
+                MCPSetupView(isPresented: Binding(
+                    get: { appState.showMCPSetup },
+                    set: { appState.showMCPSetup = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showMCPStatus },
+                set: { appState.showMCPStatus = $0 }
+            )) {
+                MCPStatusView(isPresented: Binding(
+                    get: { appState.showMCPStatus },
+                    set: { appState.showMCPStatus = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showSuggestLinks },
+                set: { appState.showSuggestLinks = $0 }
+            )) {
+                SuggestLinksView(isPresented: Binding(
+                    get: { appState.showSuggestLinks },
+                    set: { appState.showSuggestLinks = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showPolish },
+                set: { appState.showPolish = $0 }
+            )) {
+                PolishView(isPresented: Binding(
+                    get: { appState.showPolish },
+                    set: { appState.showPolish = $0 }
+                ))
+                .environment(appState)
+            }
+    }
+}
+
+private struct SecondarySheetsModifier: ViewModifier {
+    @Bindable var appState: AppState
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: Binding(
+                get: { appState.showGitActivity },
+                set: { appState.showGitActivity = $0 }
+            )) {
+                GitActivityView(isPresented: Binding(
+                    get: { appState.showGitActivity },
+                    set: { appState.showGitActivity = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showGitDiff },
+                set: { appState.showGitDiff = $0 }
+            )) {
+                GitDiffView(
+                    isPresented: Binding(
+                        get: { appState.showGitDiff },
+                        set: { appState.showGitDiff = $0 }
+                    ),
+                    relPath: appState.gitDiffPath
+                )
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showVaultStatus },
+                set: { appState.showVaultStatus = $0 }
+            )) {
+                VaultStatusView(isPresented: Binding(
+                    get: { appState.showVaultStatus },
+                    set: { appState.showVaultStatus = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showAITest },
+                set: { appState.showAITest = $0 }
+            )) {
+                AITestView(isPresented: Binding(
+                    get: { appState.showAITest },
+                    set: { appState.showAITest = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showCommitDetail },
+                set: { newValue in
+                    if newValue {
+                        appState.showCommitDetail = true
+                    } else {
+                        // Any dismissal (Done button, Escape, SwiftUI drag,
+                        // outside-click) flows through this setter. Route
+                        // through closeCommitDetail so the in-flight git-show
+                        // Task gets cancelled before a reopen can race it.
+                        appState.closeCommitDetail()
+                    }
+                }
+            )) {
+                CommitDetailView(isPresented: Binding(
+                    get: { appState.showCommitDetail },
+                    set: { appState.showCommitDetail = $0 }
+                ))
+                .environment(appState)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.showIndexProgress },
+                set: { appState.showIndexProgress = $0 }
+            )) {
+                IndexProgressView(isPresented: Binding(
+                    get: { appState.showIndexProgress },
+                    set: { appState.showIndexProgress = $0 }
+                ))
+                .environment(appState)
+            }
     }
 }

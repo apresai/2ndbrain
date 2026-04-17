@@ -72,16 +72,37 @@ sleep 1
 screenshot "ui-04-two-tabs"
 pass "DOC-UB-002: Two documents open in tabs"
 
-# --- Test 5: File menu items present ---
+# --- Test 5: Notes and Vault menus present (post-menu-reorganization) ---
 echo ""
-echo "--- File menu completeness ---"
-MENU_ITEMS=$(osascript <<'EOF'
+echo "--- Notes + Vault menu completeness ---"
+NOTES_ITEMS=$(osascript <<'EOF'
 tell application "System Events"
     tell process "SecondBrain"
         set frontmost to true
         delay 0.5
         tell menu bar 1
-            tell menu bar item "File"
+            tell menu bar item "Notes"
+                click
+                delay 0.5
+                tell menu 1
+                    return name of every menu item
+                end tell
+            end tell
+        end tell
+    end tell
+end tell
+EOF
+)
+press_escape
+sleep 0.3
+
+VAULT_ITEMS=$(osascript <<'EOF'
+tell application "System Events"
+    tell process "SecondBrain"
+        set frontmost to true
+        delay 0.5
+        tell menu bar 1
+            tell menu bar item "Vault"
                 click
                 delay 0.5
                 tell menu 1
@@ -98,15 +119,15 @@ sleep 0.3
 
 HAS_NEW_VAULT=false
 HAS_OPEN_VAULT=false
-HAS_NEW_DOC=false
-[[ "$MENU_ITEMS" == *"New Vault"* ]] && HAS_NEW_VAULT=true
-[[ "$MENU_ITEMS" == *"Open Vault"* ]] && HAS_OPEN_VAULT=true
-[[ "$MENU_ITEMS" == *"New Document"* ]] && HAS_NEW_DOC=true
+HAS_NEW_NOTE=false
+[[ "$VAULT_ITEMS" == *"New Vault"* ]] && HAS_NEW_VAULT=true
+[[ "$VAULT_ITEMS" == *"Open Vault"* ]] && HAS_OPEN_VAULT=true
+[[ "$NOTES_ITEMS" == *"New Note"* ]] && HAS_NEW_NOTE=true
 
-if $HAS_NEW_VAULT && $HAS_OPEN_VAULT && $HAS_NEW_DOC; then
-    pass "File menu: All required items present"
+if $HAS_NEW_VAULT && $HAS_OPEN_VAULT && $HAS_NEW_NOTE; then
+    pass "Menus: Notes has New Note; Vault has New/Open Vault"
 else
-    fail "File menu: Missing items" "NewVault=$HAS_NEW_VAULT OpenVault=$HAS_OPEN_VAULT NewDoc=$HAS_NEW_DOC"
+    fail "Menus: Missing items" "NewVault=$HAS_NEW_VAULT OpenVault=$HAS_OPEN_VAULT NewNote=$HAS_NEW_NOTE"
 fi
 
 # --- Test 6: View menu items present ---

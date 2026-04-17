@@ -22,33 +22,34 @@ struct EditorArea: View {
                             .frame(minWidth: 300)
                     }
                 case .preview:
-                    MarkdownPreviewView(
-                        html: { editablePreviewHTML },
-                        editable: true,
-                        onContentChanged: { newBody in
-                            appState.updateBodyOfCurrentDocument(newBody)
-                        },
-                        appState: appState
-                    )
+                    MarkdownPreviewView(html: { previewHTML }, appState: appState)
                 }
             }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        appState.showTemplatePicker = true
-                    } label: {
-                        Label("New", systemImage: "doc.badge.plus")
-                    }
-                    .disabled(appState.vault == nil)
-                    .help("New Document")
-
                     Button {
                         appState.saveCurrentDocument()
                     } label: {
                         Label("Save", systemImage: "square.and.arrow.down")
                     }
                     .disabled(appState.currentDocument?.isDirty != true)
-                    .help("Save Document")
+                    .help("Save (⌘S)")
+
+                    Button {
+                        appState.openPolish()
+                    } label: {
+                        Label("Polish", systemImage: "sparkles")
+                    }
+                    .disabled(appState.currentDocument == nil)
+                    .help("Polish with AI (⌘⌥P)")
+
+                    Button {
+                        appState.openSuggestLinks()
+                    } label: {
+                        Label("Suggest Links", systemImage: "link.badge.plus")
+                    }
+                    .disabled(appState.currentDocument == nil)
+                    .help("Suggest Links (⌘⇧L)")
 
                     Button {
                         guard let url = appState.currentDocument?.url,
@@ -109,13 +110,10 @@ struct EditorArea: View {
 
     private var validTabIndex: Int? { appState.validTabIndex }
 
-    private var previewHTML: String { renderedPreviewHTML(editable: false) }
-    private var editablePreviewHTML: String { renderedPreviewHTML(editable: true) }
-
-    private func renderedPreviewHTML(editable: Bool) -> String {
+    private var previewHTML: String {
         guard let idx = validTabIndex else { return "" }
         let (_, body) = FrontmatterParser.parse(appState.openDocuments[idx].content)
-        return injectFontOverrides(MarkdownRenderer.renderHTML(body, editable: editable))
+        return injectFontOverrides(MarkdownRenderer.renderHTML(body))
     }
 
     private func injectFontOverrides(_ html: String) -> String {
@@ -644,31 +642,20 @@ class LineNumberRulerView: NSRulerView {
 
 struct MarkdownPreviewView: NSViewRepresentable {
     let html: () -> String
-    var editable: Bool = false
-    var onContentChanged: ((String) -> Void)? = nil
     var appState: AppState
 
     func makeNSView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        if editable {
-            config.userContentController.add(context.coordinator, name: "contentChanged")
-        }
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         webView.navigationDelegate = context.coordinator
         let initialHTML = html()
         webView.loadHTMLString(initialHTML, baseURL: nil)
         context.coordinator.lastHTML = initialHTML
-        context.coordinator.onContentChanged = onContentChanged
         context.coordinator.appState = appState
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.onContentChanged = onContentChanged
         context.coordinator.appState = appState
-        // In editable mode the WKWebView owns state — reloading would destroy
-        // cursor and undo history. Content flows one-way via the JS bridge.
-        if editable { return }
         let currentHTML = html()
         guard context.coordinator.lastHTML != currentHTML else { return }
         context.coordinator.lastHTML = currentHTML
@@ -677,19 +664,9 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
     func makeCoordinator() -> PreviewCoordinator { PreviewCoordinator() }
 
-    class PreviewCoordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    class PreviewCoordinator: NSObject, WKNavigationDelegate {
         var lastHTML = ""
-        var onContentChanged: ((String) -> Void)?
         weak var appState: AppState?
-
-        func userContentController(
-            _ userContentController: WKUserContentController,
-            didReceive message: WKScriptMessage
-        ) {
-            guard message.name == "contentChanged",
-                  let markdown = message.body as? String else { return }
-            onContentChanged?(markdown)
-        }
 
         // Route link clicks in the preview webview:
         // - wikilink:// → appState.openWikilink (stay in app)

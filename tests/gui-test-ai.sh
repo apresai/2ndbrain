@@ -25,21 +25,23 @@ sleep 0.5
 screenshot "ai-02-closed"
 pass "AI-EV-002: Escape closed Ask AI panel"
 
-# --- Test 3: View menu contains Ask AI (AI-EV-003) ---
+# --- Test 3: AI menu contains Ask AI (AI-EV-003) ---
 echo ""
-echo "--- AI-EV-003: View menu has Ask AI ---"
+echo "--- AI-EV-003: AI menu has Ask AI ---"
 HAS_ASK_AI=$(osascript -e '
 tell application "System Events"
     tell process "SecondBrain"
         set frontmost to true
         try
-            click menu bar item "View" of menu bar 1
+            click menu bar item "AI" of menu bar 1
             delay 0.5
-            set menuItems to name of every menu item of menu 1 of menu bar item "View" of menu bar 1
+            set menuItems to name of every menu item of menu 1 of menu bar item "AI" of menu bar 1
             key code 53
-            if menuItems contains "Ask AI" then
-                return "yes"
-            end if
+            repeat with m in menuItems
+                if (m as string) starts with "Ask AI" then
+                    return "yes"
+                end if
+            end repeat
         on error
             return "no"
         end try
@@ -48,9 +50,9 @@ tell application "System Events"
 end tell
 ' 2>/dev/null || echo "no")
 if [ "$HAS_ASK_AI" = "yes" ]; then
-    pass "AI-EV-003: View menu contains Ask AI"
+    pass "AI-EV-003: AI menu contains Ask AI"
 else
-    fail "AI-EV-003: View menu missing Ask AI" "menu item not found"
+    fail "AI-EV-003: AI menu missing Ask AI" "menu item not found"
 fi
 
 # --- Test 4: Command Palette has Ask AI (AI-EV-004) ---
