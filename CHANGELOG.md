@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.1.16] - 2026-04-17
+
+### Added
+- `models add` command to add custom models to a user-maintained catalog (`~/.config/2nb/models.yaml` or per-vault `.2ndbrain/models.yaml`); entries appear in `models list` as `tier=user_verified` and in the AI setup wizard's Custom mode picker
+- `models remove` command to remove models from the user catalog by model ID, provider, and scope
+- User catalog layer merged into `BuildModelList`, supporting both global and per-vault scopes with conflict resolution
+
+
 ## [0.1.15] - 2026-04-17
 
 ### Added
