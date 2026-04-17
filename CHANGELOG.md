@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.0] - 2026-04-17
+
+### Added
+- **`vault` parent command** with five subcommands: `status`, `show`, `create`, `set`, `list`. Bare `2nb vault` prints a unified health report (docs, embedding coverage, portability, AI reachability, stale-doc count) mirroring the macOS editor's Vault Status panel.
+- **`vault create`** initializes a new vault and activates it. Replaces `2nb init` (kept as a hidden deprecated alias).
+- **`vault list`** shows recently-used vaults from `~/.2ndbrain-vaults`, with `*` marking the active one; stale paths are pruned on read.
+- **State-aware next-step hint on bare `2nb`** — prints one of "create a note / ai setup / index / search" based on current vault state.
+- **`2nb completion` command tree** — emitters for zsh / bash / fish / powershell plus a `completion install` subcommand that writes `~/.zsh/completions/_2nb` and prints the rc snippet to activate it.
+- **Dynamic shell completion** on 15+ commands via Cobra `ValidArgsFunction` / `RegisterFlagCompletionFunc`: vault paths, markdown files (from the index), schema types/statuses, agent slugs, model IDs (filtered by `--provider`), AI providers, config keys, sort fields, bench probes, catalog scopes.
+- **Homebrew auto-installs completions** — `brew install apresai/tap/twonb` now ships zsh/bash/fish completions via GoReleaser's `generate_completions_from_executable`.
+- **Cobra `Example:` blocks** on `create`, `index`, `search`, `ask`, `list`, `read`, `ai setup`, `mcp-setup`, `skills install`, and the full `vault` subtree so `--help` shows real invocations.
+- `ai.KnownProviders` and `settableConfigKeys` as canonical lists so provider names and config keys stay in sync across switch statements, error messages, and completion.
+- `vault.FindVaultRoot` exported for read-only callers (e.g. completion) that need the vault root without paying a full `vault.Open`.
+
+### Changed
+- `2nb init` is a hidden deprecated alias that delegates to `vault create`; existing scripts keep working with a deprecation notice.
+- Root `--help` gains a Quick Start block and an Examples section.
+- `2nb` with no args uses `EmbeddingCounts()` in a single query instead of two separate `COUNT`s.
+- `vault status` probes embedder and generator reachability concurrently, halving worst-case latency.
+- `config get` / `config set` error message now reads from the canonical key list, so it stays accurate when keys are added.
+
+### Fixed
+- Shell completion for `config set`/`get` now suggests the keys the commands actually accept (`ai.bedrock.profile`, `ai.openrouter.api_key_env`, `ai.ollama.endpoint`, and so on) — previously the completion list had drifted from `setConfigValue`.
+- Schema completers (`create --type`, `list --type`, `--status`, `meta --set`) bypass the full vault open and read `schemas.yaml` directly, so tab presses never run SQLite migrations or emit config-self-heal stderr.
+
 ## [0.1.16] - 2026-04-17
 
 ### Added
@@ -208,29 +233,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
 ## [0.1.1] - 2026-04-06
-
-## [0.2.0] - 2026-04-06
-
-### Added
-- **Editor**: Syntax highlighting, typewriter mode, inline Markdown preview, Mermaid diagrams, and KaTeX math rendering
-- **Editor**: Slash command menu (`/`) for quick block insertion
-- **Editor**: Template picker for structured document creation
-- **Editor**: Tag browser panel
-- **Editor**: Document export (PDF and other formats)
-- **CLI**: `2nb vault` command for vault management operations
-- **CLI**: `mcp-setup` command for guided MCP configuration
-- **Document types**: PRD and PRFAQ with status machines and templates
-- **AI**: Inline embeddings generated at index time using content hashing to skip unchanged documents
-- **MCP**: Additional tools (`kb_structure`, `kb_delete`, `kb_index`)
-- MIT license and contributor guide
-
-### Fixed
-- Inline rendering toggle now correctly persists state
-- PDF export reliability on documents with complex content
-- Offline resilience when AI provider is unreachable
-- `import-obsidian` no longer modifies source vault files
-- Model registry deduplication by `(provider, id)` eliminates duplicate entries in `models list`
-
 
 ## [0.1.0] - 2026-04-04
 
