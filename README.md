@@ -185,8 +185,10 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ai setup` | Multi-provider setup wizard (easy mode or custom) |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
 | `ai embed <text>` | Generate embedding vector (debug) |
-| `models list [--discover] [--status] [--provider]` | Verified model catalog + vendor discovery |
+| `models list [--discover] [--status] [--provider]` | Verified model catalog + user catalog + vendor discovery |
 | `models test <model-id>` | Smoke-test any model (embed or generate probe) |
+| `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (layered into `models list`) |
+| `models remove <id> --provider [--scope global\|vault]` | Remove a model from your user catalog |
 | `models bench` | Benchmark favorites with persistent history |
 | `models bench fav <model-id>` | Add model to benchmark favorites |
 | `models bench compare` | Side-by-side latency leaderboard |

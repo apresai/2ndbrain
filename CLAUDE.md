@@ -204,6 +204,8 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `ai local` | | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
 | `models list` | `--type`, `--free`, `--discover`, `--status`, `--provider` | List verified model catalog, optionally discover vendor models |
 | `models test` | `<model-id>`, `--provider`, `--type` | Smoke-test a model (embed or generate probe) |
+| `models add` | `<model-id>`, `--provider`, `--type`, `--scope`, `--name`, `--dimensions`, `--context-length`, `--price-in`, `--price-out`, `--notes` | Add a model to the user catalog (global `~/.config/2nb/models.yaml` or per-vault `.2ndbrain/models.yaml`). Entries are layered into `models list` as `tier=user_verified` and appear in the wizard's Custom-mode picker |
+| `models remove` | `<model-id>`, `--provider`, `--scope` | Remove a model from the user catalog |
 | `models bench` | `--model`, `--probe`, `--provider` | Benchmark models against vault with persistent history |
 | `models bench fav` | `<model-id>` | Add model to benchmark favorites |
 | `models bench unfav` | `<model-id>` | Remove model from benchmark favorites |
