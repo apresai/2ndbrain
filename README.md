@@ -51,6 +51,8 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 - **MCP server** — 16 tools for Claude Code, Cursor, and any MCP client, with live status sidecar files and an observability panel
 - **Suggest Links** — AI finds semantically related documents in your vault and proposes wikilinks to insert
 - **Polish** — AI copy-editor fixes spelling, grammar, and awkward phrasing with a diff preview (Accept / Open in new tab / Reject)
+- **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Rebuild Index and Re-embed All
+- **AI connection testing** — one-click probe of your configured embedding and generation models with live latency
 - **Incremental re-embed on save** — embeddings rebuild only for the document whose content hash changed
 - **Git integration (read-only)** — sidebar dots for uncommitted/untracked files, Recent Activity panel, Show Changes vs HEAD, MCP tools for AI clients
 - **Merge conflict resolution** — FSEvents-backed 3-way diff dialog when a tab's file changes externally while dirty
@@ -164,7 +166,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `create <title> [--type adr\|runbook\|note\|postmortem]` | Create document from template |
+| `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note]` | Create document from template |
 | `read <path> [--chunk <heading>]` | Read document or specific section |
 | `meta <path> [--set key=value]` | View or update frontmatter |
 | `delete <path> [--force]` | Delete document from vault and index |
