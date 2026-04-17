@@ -25,6 +25,21 @@ var (
 	testModelType string
 )
 
+var (
+	addProvider    string
+	addType        string
+	addName        string
+	addDimensions  int
+	addContextLen  int
+	addPriceIn     float64
+	addPriceOut    float64
+	addNotes       string
+	addScope       string
+
+	removeProvider string
+	removeScope    string
+)
+
 var modelsCmd = &cobra.Command{
 	Use:   "models",
 	Short: "Manage AI models",
@@ -46,6 +61,24 @@ var modelsTestCmd = &cobra.Command{
 	RunE:  runModelsTest,
 }
 
+var modelsAddCmd = &cobra.Command{
+	Use:   "add <model-id>",
+	Short: "Add a model to your personal catalog",
+	Long: `Adds a model to the user catalog at ~/.config/2nb/models.yaml (global)
+or <vault>/.2ndbrain/models.yaml (vault). Subsequent calls to 2nb models list
+will include the entry alongside the built-in verified catalog. Use this to
+add models 2nb doesn't ship yet without editing source.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runModelsAdd,
+}
+
+var modelsRemoveCmd = &cobra.Command{
+	Use:   "remove <model-id>",
+	Short: "Remove a model from your personal catalog",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runModelsRemove,
+}
+
 func init() {
 	modelsListCmd.Flags().StringVar(&modelsTypeFilt, "type", "", "Filter by type: embed or generation")
 	modelsListCmd.Flags().BoolVar(&modelsFreeOnly, "free", false, "Show only free models")
@@ -56,8 +89,26 @@ func init() {
 	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama (auto-detected if omitted)")
 	modelsTestCmd.Flags().StringVar(&testModelType, "type", "", "Model type: embedding or generation (auto-detected if omitted)")
 
+	modelsAddCmd.Flags().StringVar(&addProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsAddCmd.Flags().StringVar(&addType, "type", "", "Type: embedding or generation (required)")
+	modelsAddCmd.Flags().StringVar(&addName, "name", "", "Human-readable name")
+	modelsAddCmd.Flags().IntVar(&addDimensions, "dimensions", 0, "Embedding dimensions (embedding models only)")
+	modelsAddCmd.Flags().IntVar(&addContextLen, "context-length", 0, "Max context length in tokens")
+	modelsAddCmd.Flags().Float64Var(&addPriceIn, "price-in", 0, "Input price per million tokens (USD)")
+	modelsAddCmd.Flags().Float64Var(&addPriceOut, "price-out", 0, "Output price per million tokens (USD)")
+	modelsAddCmd.Flags().StringVar(&addNotes, "notes", "", "Freeform notes")
+	modelsAddCmd.Flags().StringVar(&addScope, "scope", "global", "Scope: global (~/.config/2nb/models.yaml) or vault (.2ndbrain/models.yaml)")
+	_ = modelsAddCmd.MarkFlagRequired("provider")
+	_ = modelsAddCmd.MarkFlagRequired("type")
+
+	modelsRemoveCmd.Flags().StringVar(&removeProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsRemoveCmd.Flags().StringVar(&removeScope, "scope", "global", "Scope: global or vault")
+	_ = modelsRemoveCmd.MarkFlagRequired("provider")
+
 	modelsCmd.AddCommand(modelsListCmd)
 	modelsCmd.AddCommand(modelsTestCmd)
+	modelsCmd.AddCommand(modelsAddCmd)
+	modelsCmd.AddCommand(modelsRemoveCmd)
 	modelsCmd.GroupID = "ai"
 	rootCmd.AddCommand(modelsCmd)
 }
@@ -74,6 +125,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 		Config:      v.Config.AI,
 		Discover:    modelsDiscover,
 		CheckStatus: modelsCheckStatus,
+		VaultRoot:   v.Root,
 	})
 	if err != nil {
 		return err
@@ -245,4 +297,72 @@ func formatContext(tokens int) string {
 		return fmt.Sprintf("%dK", tokens/1000)
 	}
 	return fmt.Sprintf("%d", tokens)
+}
+
+// runModelsAdd persists a user-defined model entry to the global or per-vault
+// catalog. The vault scope requires an open vault; global works from anywhere.
+func runModelsAdd(cmd *cobra.Command, args []string) error {
+	modelID := args[0]
+	scope, vaultRoot, err := resolveCatalogScope(addScope)
+	if err != nil {
+		return err
+	}
+
+	if addType != "embedding" && addType != "generation" {
+		return fmt.Errorf("--type must be embedding or generation, got %q", addType)
+	}
+
+	entry := ai.ModelInfo{
+		ID:          modelID,
+		Name:        addName,
+		Provider:    addProvider,
+		Type:        addType,
+		Dimensions:  addDimensions,
+		ContextLen:  addContextLen,
+		PriceIn:     addPriceIn,
+		PriceOut:    addPriceOut,
+		Notes:       addNotes,
+		Tier:        ai.TierUserVerified,
+		PriceSource: "user",
+	}
+	if entry.Name == "" {
+		entry.Name = modelID
+	}
+
+	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+		return fmt.Errorf("save: %w", err)
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Added %s/%s to %s catalog\n", entry.Provider, entry.ID, scope)
+	return nil
+}
+
+func runModelsRemove(cmd *cobra.Command, args []string) error {
+	modelID := args[0]
+	scope, vaultRoot, err := resolveCatalogScope(removeScope)
+	if err != nil {
+		return err
+	}
+	if err := ai.RemoveUserCatalogEntry(scope, vaultRoot, removeProvider, modelID); err != nil {
+		return fmt.Errorf("remove: %w", err)
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s/%s from %s catalog\n", removeProvider, modelID, scope)
+	return nil
+}
+
+// resolveCatalogScope parses the --scope flag and, for vault scope, resolves
+// the vault root. Global scope works without an open vault.
+func resolveCatalogScope(scope string) (ai.UserCatalogScope, string, error) {
+	switch ai.UserCatalogScope(scope) {
+	case ai.ScopeGlobal:
+		return ai.ScopeGlobal, "", nil
+	case ai.ScopeVault:
+		v, err := openVault()
+		if err != nil {
+			return "", "", fmt.Errorf("vault scope: %w", err)
+		}
+		defer v.Close()
+		return ai.ScopeVault, v.Root, nil
+	default:
+		return "", "", fmt.Errorf("--scope must be %q or %q, got %q", ai.ScopeGlobal, ai.ScopeVault, scope)
+	}
 }

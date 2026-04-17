@@ -13,6 +13,9 @@ type MergedListOptions struct {
 	Config      AIConfig // current vault config
 	Discover    bool     // include vendor-discovered models
 	CheckStatus bool     // probe reachability and credentials
+	// VaultRoot, if set, loads the per-vault user catalog from
+	// <VaultRoot>/.2ndbrain/models.yaml in addition to the global one.
+	VaultRoot string
 }
 
 // MergedModelList is the output of BuildModelList.
@@ -21,11 +24,25 @@ type MergedModelList struct {
 	Unverified []ModelInfo `json:"unverified,omitempty"`
 }
 
-// BuildModelList produces a unified model catalog by merging the built-in
-// catalog with optional vendor discovery and status checks.
+// BuildModelList produces a unified model catalog by merging these layers
+// (lowest to highest precedence):
+//
+//  1. BuiltinCatalog() — hand-curated verified models in Go source
+//  2. User catalog (global ~/.config/2nb/models.yaml)
+//  3. User catalog (per-vault .2ndbrain/models.yaml)
+//  4. Live vendor discovery (only if Discover=true and entry not already present)
+//
+// User-catalog entries with matching (provider, id) overlay scalar fields
+// onto builtin entries but never demote the Tier (see elevateTier). Entries
+// unique to the user catalog are appended as TierUserVerified.
 func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelList, error) {
 	catalog := BuiltinCatalog()
 	result := &MergedModelList{}
+
+	// Layer 2+3: overlay user catalog (global merged with per-vault).
+	if user := LoadUserCatalog(opts.VaultRoot); len(user) > 0 {
+		catalog = overlay(catalog, user)
+	}
 
 	// Mark active models based on current config.
 	for i := range catalog {
@@ -39,12 +56,12 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 
 	result.Verified = catalog
 
-	// Vendor discovery: query live APIs and add unverified models.
+	// Layer 4: vendor discovery. Only add entries not already in the merged catalog.
 	if opts.Discover {
 		vendorModels := discoverVendorModels(ctx, opts.Config)
 		idx := catalogIndex(catalog)
 		for _, m := range vendorModels {
-			if !idx[m.Provider+"\x00"+m.ID] {
+			if !idx[catalogKey(m.Provider, m.ID)] {
 				result.Unverified = append(result.Unverified, m)
 			}
 		}

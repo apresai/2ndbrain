@@ -161,11 +161,18 @@ func configHint(provider, modelType, modelID string) string {
 	return fmt.Sprintf("2nb config set ai.provider %s && 2nb config set %s %s", provider, field, modelID)
 }
 
-// catalogIndex returns a set of "provider\x00id" keys for fast deduplication.
+// catalogKey is the composite identity key for a ModelInfo: provider + id
+// separated by NUL so neither field can spoof the other. Shared by catalogIndex
+// and the user-catalog overlay logic.
+func catalogKey(provider, id string) string {
+	return provider + "\x00" + id
+}
+
+// catalogIndex returns a set of catalogKey(provider, id) entries for fast deduplication.
 func catalogIndex(catalog []ModelInfo) map[string]bool {
 	idx := make(map[string]bool, len(catalog))
 	for _, m := range catalog {
-		idx[m.Provider+"\x00"+m.ID] = true
+		idx[catalogKey(m.Provider, m.ID)] = true
 	}
 	return idx
 }

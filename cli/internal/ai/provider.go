@@ -32,38 +32,50 @@ type ModelTier string
 const (
 	// TierVerified means 2nb has tested this model's invoke format and it works.
 	TierVerified ModelTier = "verified"
+	// TierUserVerified means the user's own catalog (or a passing `models test --save`)
+	// has recorded that this model works for them. Sits between builtin-verified
+	// and unverified so users can trust their own runtime additions.
+	TierUserVerified ModelTier = "user_verified"
 	// TierUnverified means the vendor API lists this model but 2nb hasn't built/tested a harness for it.
 	TierUnverified ModelTier = "unverified"
 )
 
-// ModelInfo describes an available model.
+// ModelInfo describes an available model. Both json and yaml tags are set:
+// JSON is used for CLI --json output and vendor API payloads; YAML is used
+// for the user catalog file at ~/.config/2nb/models.yaml.
 type ModelInfo struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Provider   string  `json:"provider"`
-	Type       string  `json:"type"` // "embedding" or "generation"
-	Dimensions int     `json:"dimensions,omitempty"`
-	ContextLen int     `json:"context_length,omitempty"`
-	PriceIn    float64 `json:"price_input_per_million"` // per 1M tokens, 0 = free
-	PriceOut   float64 `json:"price_output_per_million"`
-	Local      bool    `json:"local"`
+	ID         string  `json:"id" yaml:"id"`
+	Name       string  `json:"name" yaml:"name,omitempty"`
+	Provider   string  `json:"provider" yaml:"provider"`
+	Type       string  `json:"type" yaml:"type"` // "embedding" or "generation"
+	Dimensions int     `json:"dimensions,omitempty" yaml:"dimensions,omitempty"`
+	ContextLen int     `json:"context_length,omitempty" yaml:"context_length,omitempty"`
+	PriceIn    float64 `json:"price_input_per_million" yaml:"price_input_per_million,omitempty"`
+	PriceOut   float64 `json:"price_output_per_million" yaml:"price_output_per_million,omitempty"`
+	Local      bool    `json:"local" yaml:"local,omitempty"`
 
 	// Tier indicates whether 2nb has a verified harness for this model.
-	Tier ModelTier `json:"tier,omitempty"`
+	Tier ModelTier `json:"tier,omitempty" yaml:"tier,omitempty"`
 	// Active is true when this model is currently configured.
-	Active bool `json:"active,omitempty"`
+	Active bool `json:"active,omitempty" yaml:"-"`
 	// Reachable indicates provider connectivity: nil=unchecked, true/false=probed.
-	Reachable *bool `json:"reachable,omitempty"`
+	Reachable *bool `json:"reachable,omitempty" yaml:"-"`
 	// CredsOK indicates credential availability: nil=N/A or unchecked.
-	CredsOK *bool `json:"credentials,omitempty"`
+	CredsOK *bool `json:"credentials,omitempty" yaml:"-"`
 	// ConfigHint shows how to switch to this model.
-	ConfigHint string `json:"config_hint,omitempty"`
+	ConfigHint string `json:"config_hint,omitempty" yaml:"config_hint,omitempty"`
 	// RateLimitRPS is the known rate limit in requests per second (0=unknown).
-	RateLimitRPS float64 `json:"rate_limit_rps,omitempty"`
+	RateLimitRPS float64 `json:"rate_limit_rps,omitempty" yaml:"rate_limit_rps,omitempty"`
 	// RateLimitTPM is the known rate limit in tokens per minute (0=unknown).
-	RateLimitTPM int `json:"rate_limit_tpm,omitempty"`
+	RateLimitTPM int `json:"rate_limit_tpm,omitempty" yaml:"rate_limit_tpm,omitempty"`
 	// Notes contains caveats like "different invoke format — not yet supported".
-	Notes string `json:"notes,omitempty"`
+	Notes string `json:"notes,omitempty" yaml:"notes,omitempty"`
+	// PriceSource records which layer supplied the pricing: "builtin", "bundled",
+	// "user", "vendor". Empty when price fields are zero/unknown.
+	PriceSource string `json:"price_source,omitempty" yaml:"price_source,omitempty"`
+	// TestedAt is an ISO-8601 timestamp recorded when the model last passed
+	// `2nb models test`. Present only on user-catalog entries.
+	TestedAt string `json:"tested_at,omitempty" yaml:"tested_at,omitempty"`
 }
 
 // DefaultGenOpts returns sensible defaults for generation.
