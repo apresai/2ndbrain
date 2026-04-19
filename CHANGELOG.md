@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.1] - 2026-04-19
+
+## [0.2.1] - 2026-04-19
+
+### Fixed
+- Skills Install dialog now shows a persistent Close button in every installation state
+
+
 ## [0.2.0] - 2026-04-17
 
 ### Added
