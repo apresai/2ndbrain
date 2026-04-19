@@ -65,27 +65,25 @@ struct SkillsInstallView: View {
 
             // Footer
             HStack {
-                Spacer()
                 if appState.isInstallingSkills {
                     ProgressView()
                         .controlSize(.small)
                     Text("Installing...")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                } else if appState.skillsInstallResult != nil {
-                    Button("Done") {
-                        appState.skillsInstallResult = nil
-                        isPresented = false
-                    }
-                    .buttonStyle(.borderedProminent)
-                } else {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
+                }
+                Spacer()
+                Button("Close") {
+                    appState.skillsInstallResult = nil
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+                if appState.skillsInstallResult == nil {
                     Button("Install All") {
                         Task { await appState.installSkills() }
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(appState.isInstallingSkills)
                 }
             }
             .padding(12)
