@@ -33,6 +33,7 @@ var (
 	addContextLen  int
 	addPriceIn     float64
 	addPriceOut    float64
+	addThreshold   float64
 	addNotes       string
 	addScope       string
 
@@ -103,6 +104,7 @@ func init() {
 	modelsAddCmd.Flags().Float64Var(&addPriceIn, "price-in", 0, "Input price per million tokens (USD)")
 	modelsAddCmd.Flags().Float64Var(&addPriceOut, "price-out", 0, "Output price per million tokens (USD)")
 	modelsAddCmd.Flags().StringVar(&addNotes, "notes", "", "Freeform notes")
+	modelsAddCmd.Flags().Float64Var(&addThreshold, "similarity-threshold", 0, "Recommended min cosine for semantic search (embedding models only, 0..1)")
 	modelsAddCmd.Flags().StringVar(&addScope, "scope", "global", "Scope: global (~/.config/2nb/models.yaml) or vault (.2ndbrain/models.yaml)")
 	_ = modelsAddCmd.MarkFlagRequired("provider")
 	_ = modelsAddCmd.MarkFlagRequired("type")
@@ -207,9 +209,9 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 
 func printModelHeader(w *tabwriter.Writer, showStatus bool) {
 	if showStatus {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tSTATUS")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tSTATUS")
 	} else {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD")
 	}
 }
 
@@ -226,14 +228,21 @@ func printModelRow(w *tabwriter.Writer, m ai.ModelInfo, showStatus bool) {
 	if m.ContextLen > 0 {
 		ctxLen = formatContext(m.ContextLen)
 	}
+	// THRESHOLD column is meaningful only for embedding models. Generation
+	// models show "-" so the column still aligns. "-" also covers embedding
+	// models without a catalog recommendation.
+	threshold := "-"
+	if m.Type == "embedding" && m.RecommendedSimilarityThreshold > 0 {
+		threshold = fmt.Sprintf("%.2f", m.RecommendedSimilarityThreshold)
+	}
 
 	if showStatus {
 		status := statusLabel(m)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, status)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, price, ctxLen, threshold, status)
 	} else {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, price, ctxLen, threshold)
 	}
 }
 
@@ -322,19 +331,28 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	if addType != "embedding" && addType != "generation" {
 		return fmt.Errorf("--type must be embedding or generation, got %q", addType)
 	}
+	if addThreshold != 0 {
+		if addThreshold < 0 || addThreshold > 1 {
+			return fmt.Errorf("--similarity-threshold must be between 0 and 1, got %g", addThreshold)
+		}
+		if addType != "embedding" {
+			return fmt.Errorf("--similarity-threshold is only meaningful for embedding models")
+		}
+	}
 
 	entry := ai.ModelInfo{
-		ID:          modelID,
-		Name:        addName,
-		Provider:    addProvider,
-		Type:        addType,
-		Dimensions:  addDimensions,
-		ContextLen:  addContextLen,
-		PriceIn:     addPriceIn,
-		PriceOut:    addPriceOut,
-		Notes:       addNotes,
-		Tier:        ai.TierUserVerified,
-		PriceSource: "user",
+		ID:                             modelID,
+		Name:                           addName,
+		Provider:                       addProvider,
+		Type:                           addType,
+		Dimensions:                     addDimensions,
+		ContextLen:                     addContextLen,
+		PriceIn:                        addPriceIn,
+		PriceOut:                       addPriceOut,
+		Notes:                          addNotes,
+		Tier:                           ai.TierUserVerified,
+		PriceSource:                    "user",
+		RecommendedSimilarityThreshold: addThreshold,
 	}
 	if entry.Name == "" {
 		entry.Name = modelID

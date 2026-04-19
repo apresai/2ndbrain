@@ -55,6 +55,14 @@ type ModelInfo struct {
 	Type       string  `json:"type" yaml:"type"` // "embedding" or "generation"
 	Dimensions int     `json:"dimensions,omitempty" yaml:"dimensions,omitempty"`
 	ContextLen int     `json:"context_length,omitempty" yaml:"context_length,omitempty"`
+	// RecommendedSimilarityThreshold is the suggested minimum cosine similarity
+	// for semantic search with this embedding model. Used when the vault's
+	// ai.similarity_threshold isn't explicitly set. Different embedding models
+	// have different baseline similarity distributions: Nova-2 clusters tight
+	// (random-pair cosine ~0.55–0.64), while smaller-dim models spread wider.
+	// Only meaningful for Type="embedding". Zero means "no model recommendation,
+	// fall back to ai.DefaultSimilarityThreshold".
+	RecommendedSimilarityThreshold float64 `json:"recommended_similarity_threshold,omitempty" yaml:"recommended_similarity_threshold,omitempty"`
 	PriceIn    float64 `json:"price_input_per_million" yaml:"price_input_per_million,omitempty"`
 	PriceOut   float64 `json:"price_output_per_million" yaml:"price_output_per_million,omitempty"`
 	Local      bool    `json:"local" yaml:"local,omitempty"`

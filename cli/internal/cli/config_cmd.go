@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -163,6 +164,7 @@ var settableConfigKeys = []string{
 	"ai.embedding_model",
 	"ai.generation_model",
 	"ai.dimensions",
+	"ai.similarity_threshold",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
 	"ai.openrouter.api_key_env",
@@ -183,6 +185,8 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return cfg.GenerationModel, nil
 	case "ai.dimensions":
 		return fmt.Sprintf("%d", cfg.Dimensions), nil
+	case "ai.similarity_threshold":
+		return strconv.FormatFloat(cfg.SimilarityThreshold, 'g', -1, 64), nil
 	case "ai.bedrock.profile":
 		return cfg.Bedrock.Profile, nil
 	case "ai.bedrock.region":
@@ -210,6 +214,15 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("dimensions must be a number")
 		}
 		cfg.Dimensions = d
+	case "ai.similarity_threshold":
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("similarity_threshold must be a float between 0 and 1 (got %q)", value)
+		}
+		if f < 0 || f > 1 {
+			return fmt.Errorf("similarity_threshold must be between 0 and 1 (got %g)", f)
+		}
+		cfg.SimilarityThreshold = f
 	case "ai.bedrock.profile":
 		cfg.Bedrock.Profile = value
 	case "ai.bedrock.region":

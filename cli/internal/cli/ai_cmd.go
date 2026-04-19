@@ -48,6 +48,9 @@ type AIStatus struct {
 	EmbeddingCount int    `json:"embedding_count"`
 	DocumentCount  int    `json:"document_count"`
 
+	SimilarityThreshold       float64                    `json:"similarity_threshold"`
+	SimilarityThresholdSource ai.ResolvedThresholdSource `json:"similarity_threshold_source"`
+
 	// Portability fields — observed DB state (source of truth) plus
 	// a derived status that callers can render without re-implementing
 	// the decision table. These are the vault's self-describing answer
@@ -71,11 +74,14 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
+	threshold, thresholdSource := cfg.ResolveSimilarityThresholdFull(v.Root)
 	status := AIStatus{
-		Provider:       cfg.Provider,
-		EmbeddingModel: cfg.EmbeddingModel,
-		GenModel:       cfg.GenerationModel,
-		Dimensions:     cfg.Dimensions,
+		Provider:                  cfg.Provider,
+		EmbeddingModel:            cfg.EmbeddingModel,
+		GenModel:                  cfg.GenerationModel,
+		Dimensions:                cfg.Dimensions,
+		SimilarityThreshold:       threshold,
+		SimilarityThresholdSource: thresholdSource,
 	}
 
 	// Check provider availability
@@ -142,6 +148,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Generation ready: %v\n", status.GenAvailable)
 	fmt.Printf("Documents:        %d\n", status.DocumentCount)
 	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.DocumentCount)
+	fmt.Printf("Search threshold: %g (%s)\n", status.SimilarityThreshold, status.SimilarityThresholdSource)
 
 	// Vault embedding state (portability) — the authoritative "is this
 	// vault ready to use here?" section. Always shown so the user never

@@ -71,11 +71,12 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	// Search for relevant context. Apply the vault's similarity threshold
 	// so RAG doesn't ingest low-cosine neighbors as if they were context.
+	threshold, _ := cfg.ResolveSimilarityThresholdFull(v.Root)
 	engine := search.NewEngine(v.DB.Conn())
 	opts := search.Options{
 		Query:          question,
 		Limit:          5,
-		MinVectorScore: cfg.ResolveSimilarityThreshold(),
+		MinVectorScore: threshold,
 	}
 
 	var results []search.Result

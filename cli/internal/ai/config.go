@@ -40,14 +40,16 @@ type OpenRouterConfig struct {
 // through, lower it (to ~0.15) if legitimate matches are being cut.
 const DefaultSimilarityThreshold = 0.20
 
-// DefaultAIConfig returns sensible defaults.
+// DefaultAIConfig returns sensible defaults. SimilarityThreshold is left at
+// zero so ResolveSimilarityThresholdFull falls through to the active
+// embedding model's RecommendedSimilarityThreshold (e.g., Nova-2 → 0.65)
+// instead of permanently shadowing it with the conservative global default.
 func DefaultAIConfig() AIConfig {
 	return AIConfig{
-		Provider:            "bedrock",
-		EmbeddingModel:      "amazon.nova-2-multimodal-embeddings-v1:0",
-		GenerationModel:     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-		Dimensions:          1024,
-		SimilarityThreshold: DefaultSimilarityThreshold,
+		Provider:        "bedrock",
+		EmbeddingModel:  "amazon.nova-2-multimodal-embeddings-v1:0",
+		GenerationModel: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		Dimensions:      1024,
 		Ollama: OllamaConfig{
 			Endpoint: "http://localhost:11434",
 		},
@@ -61,12 +63,70 @@ func DefaultAIConfig() AIConfig {
 	}
 }
 
-// ResolveSimilarityThreshold returns the configured threshold, falling back to
-// the default when the value hasn't been set (zero-valued config from an old
-// vault or unset field). Pass the result to search.VectorSearchThreshold.
-func (c AIConfig) ResolveSimilarityThreshold() float64 {
-	if c.SimilarityThreshold <= 0 {
-		return DefaultSimilarityThreshold
+// ResolvedThresholdSource labels where ResolveSimilarityThreshold picked its
+// value from — useful for surfacing the reason in `2nb ai status` so a user
+// who can't figure out why search is noisy/empty can trace the setting.
+type ResolvedThresholdSource string
+
+const (
+	ThresholdSourceVaultConfig     ResolvedThresholdSource = "vault config"
+	ThresholdSourceUserCalibration ResolvedThresholdSource = "user calibration"
+	ThresholdSourceModel           ResolvedThresholdSource = "model recommendation"
+	ThresholdSourceDefault         ResolvedThresholdSource = "default"
+)
+
+// ResolveSimilarityThresholdFull returns the active minimum cosine similarity
+// for semantic search along with the provenance of the chosen value:
+//
+//  1. Vault config (ai.similarity_threshold > 0)     → ThresholdSourceVaultConfig
+//  2. User catalog (global or per-vault models.yaml) → ThresholdSourceUserCalibration
+//  3. Builtin catalog recommendation                  → ThresholdSourceModel
+//  4. DefaultSimilarityThreshold                      → ThresholdSourceDefault
+//
+// Pass vaultRoot="" when there's no open vault; the user-catalog layer is
+// skipped in that case.
+func (c AIConfig) ResolveSimilarityThresholdFull(vaultRoot string) (float64, ResolvedThresholdSource) {
+	if c.SimilarityThreshold > 0 {
+		return c.SimilarityThreshold, ThresholdSourceVaultConfig
 	}
-	return c.SimilarityThreshold
+	if vaultRoot != "" {
+		if t := userCatalogSimilarityThreshold(vaultRoot, c.Provider, c.EmbeddingModel); t > 0 {
+			return t, ThresholdSourceUserCalibration
+		}
+	}
+	if t := RecommendedSimilarityThresholdFor(c.Provider, c.EmbeddingModel); t > 0 {
+		return t, ThresholdSourceModel
+	}
+	return DefaultSimilarityThreshold, ThresholdSourceDefault
+}
+
+// RecommendedSimilarityThresholdFor returns the builtin catalog's recommended
+// threshold for (provider, modelID). Returns 0 when the model isn't in the
+// catalog or has no recommendation. User-added catalog entries are NOT
+// consulted here — use ResolveSimilarityThresholdFull for that.
+func RecommendedSimilarityThresholdFor(provider, modelID string) float64 {
+	if provider == "" || modelID == "" {
+		return 0
+	}
+	for _, m := range BuiltinCatalog() {
+		if m.Type == "embedding" && m.Provider == provider && m.ID == modelID {
+			return m.RecommendedSimilarityThreshold
+		}
+	}
+	return 0
+}
+
+// userCatalogSimilarityThreshold scans the user catalog (global + per-vault)
+// for an entry matching the active embedding model. Zero means "not set by
+// the user" — callers fall through to the builtin catalog.
+func userCatalogSimilarityThreshold(vaultRoot, provider, modelID string) float64 {
+	if provider == "" || modelID == "" {
+		return 0
+	}
+	for _, m := range LoadUserCatalog(vaultRoot) {
+		if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && m.RecommendedSimilarityThreshold > 0 {
+			return m.RecommendedSimilarityThreshold
+		}
+	}
+	return 0
 }

@@ -97,7 +97,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	engine := search.NewEngine(v.DB.Conn())
 	threshold := searchThreshold
 	if threshold == 0 {
-		threshold = v.Config.AI.ResolveSimilarityThreshold()
+		threshold, _ = v.Config.AI.ResolveSimilarityThresholdFull(v.Root)
 	}
 	opts := search.Options{
 		Query:          strings.TrimSpace(query),

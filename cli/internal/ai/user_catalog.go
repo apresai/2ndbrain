@@ -123,6 +123,12 @@ func vaultCatalogPath(vaultRoot string) string {
 	return filepath.Join(vaultRoot, dotDirName, userCatalogFileName)
 }
 
+// CatalogPathForScope is the exported form of catalogPathForScope, used by
+// CLI code that wants to tell the user exactly which file was written.
+func CatalogPathForScope(scope UserCatalogScope, vaultRoot string) (string, error) {
+	return catalogPathForScope(scope, vaultRoot)
+}
+
 func catalogPathForScope(scope UserCatalogScope, vaultRoot string) (string, error) {
 	switch scope {
 	case ScopeGlobal:
@@ -247,6 +253,13 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 	}
 	if top.TestedAt != "" {
 		out.TestedAt = top.TestedAt
+	}
+	// RecommendedSimilarityThreshold: any positive overlay value wins. Zero
+	// means "not set in the overlay" — preserve the builtin value. Users who
+	// want to reset to the global default can set ai.similarity_threshold on
+	// the vault config instead (explicit override beats catalog).
+	if top.RecommendedSimilarityThreshold > 0 {
+		out.RecommendedSimilarityThreshold = top.RecommendedSimilarityThreshold
 	}
 	out.Tier = elevateTier(out.Tier, top.Tier)
 	if top.Local {

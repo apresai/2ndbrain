@@ -103,9 +103,10 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 	// docs it already links to. Apply the vault's similarity threshold so we
 	// don't suggest links to docs that happen to be the nearest neighbors
 	// but aren't actually related.
+	threshold, _ := cfg.ResolveSimilarityThresholdFull(v.Root)
 	scored := search.VectorSearchThreshold(
 		queryVecs[0], docIDs, embeddings, suggestLinksLimit*3,
-		cfg.ResolveSimilarityThreshold(),
+		threshold,
 	)
 
 	// Resolve the source doc ID and its outgoing links for exclusion.

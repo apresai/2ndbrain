@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -20,6 +21,21 @@ import (
 
 type handlers struct {
 	vault *vault.Vault
+
+	// threshOnce caches the resolved similarity threshold for this MCP
+	// session. ResolveSimilarityThresholdFull re-reads two YAML files from
+	// disk (global + per-vault user catalogs), which would otherwise happen
+	// on every kb_search / kb_ask / kb_suggest_links invocation. MCP
+	// sessions are long-lived, so cache once at first use.
+	threshOnce sync.Once
+	thresh     float64
+}
+
+func (h *handlers) threshold() float64 {
+	h.threshOnce.Do(func() {
+		h.thresh, _ = h.vault.Config.AI.ResolveSimilarityThresholdFull(h.vault.Root)
+	})
+	return h.thresh
 }
 
 func (h *handlers) handleKBInfo(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -152,7 +168,7 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 		Status:         status,
 		Tag:            tag,
 		Limit:          limit,
-		MinVectorScore: cfg.ResolveSimilarityThreshold(),
+		MinVectorScore: h.threshold(),
 	}
 
 	// Try hybrid search if provider is available
@@ -221,7 +237,7 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 	opts := search.Options{
 		Query:          question,
 		Limit:          5,
-		MinVectorScore: cfg.ResolveSimilarityThreshold(),
+		MinVectorScore: h.threshold(),
 	}
 
 	var results []search.Result
@@ -729,7 +745,7 @@ func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.Call
 		return mcplib.NewToolResultError(fmt.Sprintf("load embeddings: %v", err)), nil
 	}
 
-	scored := search.VectorSearchThreshold(queryVecs[0], docIDs, embeddings, limit*3, cfg.ResolveSimilarityThreshold())
+	scored := search.VectorSearchThreshold(queryVecs[0], docIDs, embeddings, limit*3, h.threshold())
 
 	var sourceID string
 	if dbDoc, err := h.vault.DB.GetDocumentByPath(path); err == nil && dbDoc != nil {

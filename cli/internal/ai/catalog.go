@@ -9,18 +9,25 @@ func BuiltinCatalog() []ModelInfo {
 	var models []ModelInfo
 
 	// --- Bedrock Embedding (Nova Embeddings v2 format) ---
+	// RecommendedSimilarityThreshold=0.65: Nova-2 clusters tight — on real
+	// vaults, unrelated-pair cosine sits at ~0.55–0.64, so the conservative
+	// global default of 0.20 lets noise dominate semantic search. 0.65 is
+	// calibrated against a real 22-doc mixed-topic vault. Bump to 0.70+ if
+	// a vault still surfaces off-topic neighbors; drop to ~0.55 if legit
+	// matches get cut.
 	models = append(models, ModelInfo{
-		ID:         "amazon.nova-2-multimodal-embeddings-v1:0",
-		Name:       "Amazon Nova Embeddings v2",
-		Provider:   "bedrock",
-		Type:       "embedding",
-		Dimensions: 1024,
-		ContextLen: 2048,
-		PriceIn:    0.135,
-		PriceOut:   0,
-		Local:      false,
-		Tier:       TierVerified,
-		ConfigHint: configHint("bedrock", "embedding", "amazon.nova-2-multimodal-embeddings-v1:0"),
+		ID:                             "amazon.nova-2-multimodal-embeddings-v1:0",
+		Name:                           "Amazon Nova Embeddings v2",
+		Provider:                       "bedrock",
+		Type:                           "embedding",
+		Dimensions:                     1024,
+		ContextLen:                     2048,
+		PriceIn:                        0.135,
+		PriceOut:                       0,
+		Local:                          false,
+		Tier:                           TierVerified,
+		ConfigHint:                     configHint("bedrock", "embedding", "amazon.nova-2-multimodal-embeddings-v1:0"),
+		RecommendedSimilarityThreshold: 0.65,
 	})
 
 	// --- Bedrock Generation (Converse API — works across all Bedrock models) ---
@@ -56,18 +63,22 @@ func BuiltinCatalog() []ModelInfo {
 	}
 
 	// --- OpenRouter Embedding (OpenAI-compatible embeddings API) ---
+	// Threshold 0.60: vision-language embedder trained contrastively at 1024d.
+	// Estimated from training objective + dimensionality — not measured on a
+	// real vault. Users should run `2nb models calibrate` to refine.
 	models = append(models, ModelInfo{
-		ID:         "nvidia/llama-nemotron-embed-vl-1b-v2:free",
-		Name:       "Nemotron Embed VL 1B v2",
-		Provider:   "openrouter",
-		Type:       "embedding",
-		Dimensions: 1024,
-		ContextLen: 4096,
-		PriceIn:    0,
-		PriceOut:   0,
-		Local:      false,
-		Tier:       TierVerified,
-		ConfigHint: configHint("openrouter", "embedding", "nvidia/llama-nemotron-embed-vl-1b-v2:free"),
+		ID:                             "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+		Name:                           "Nemotron Embed VL 1B v2",
+		Provider:                       "openrouter",
+		Type:                           "embedding",
+		Dimensions:                     1024,
+		ContextLen:                     4096,
+		PriceIn:                        0,
+		PriceOut:                       0,
+		Local:                          false,
+		Tier:                           TierVerified,
+		ConfigHint:                     configHint("openrouter", "embedding", "nvidia/llama-nemotron-embed-vl-1b-v2:free"),
+		RecommendedSimilarityThreshold: 0.60,
 	})
 
 	// --- OpenRouter Generation (OpenAI-compatible chat completions) ---
@@ -103,25 +114,40 @@ func BuiltinCatalog() []ModelInfo {
 	}
 
 	// --- Ollama Embedding (local) ---
+	// Thresholds are calibration-informed estimates from each model's training
+	// objective and typical unrelated-pair cosine reported in the MTEB
+	// benchmark. Smaller-dim models (all-minilm at 384d) spread wider — low
+	// threshold is meaningful. Larger 1024d models trained with contrastive
+	// or Matryoshka losses cluster tighter. Users should run
+	// `2nb models calibrate` to tune for their own vault.
 	for _, m := range []struct {
-		id   string
-		dims int
+		id        string
+		dims      int
+		threshold float64
+		notes     string
 	}{
-		{"nomic-embed-text", 768},
-		{"mxbai-embed-large", 1024},
-		{"snowflake-arctic-embed", 1024},
-		{"all-minilm", 384},
-		{"bge-m3", 1024},
+		// 768d Matryoshka: moderate spread, ~0.35–0.45 random-pair cosine typical.
+		{"nomic-embed-text", 768, 0.50, ""},
+		// 1024d contrastive + Matryoshka (Mixedbread): tighter than nomic.
+		{"mxbai-embed-large", 1024, 0.55, ""},
+		// 1024d retrieval-tuned (Snowflake Arctic).
+		{"snowflake-arctic-embed", 1024, 0.55, ""},
+		// 384d MiniLM: small/wide-spread; lower threshold is meaningful.
+		{"all-minilm", 384, 0.35, ""},
+		// 1024d multi-granularity (BGE M3); dense channel similar to other 1024d.
+		{"bge-m3", 1024, 0.55, ""},
 	} {
 		models = append(models, ModelInfo{
-			ID:         m.id,
-			Name:       m.id,
-			Provider:   "ollama",
-			Type:       "embedding",
-			Dimensions: m.dims,
-			Local:      true,
-			Tier:       TierVerified,
-			ConfigHint: configHint("ollama", "embedding", m.id),
+			ID:                             m.id,
+			Name:                           m.id,
+			Provider:                       "ollama",
+			Type:                           "embedding",
+			Dimensions:                     m.dims,
+			Local:                          true,
+			Tier:                           TierVerified,
+			ConfigHint:                     configHint("ollama", "embedding", m.id),
+			RecommendedSimilarityThreshold: m.threshold,
+			Notes:                          m.notes,
 		})
 	}
 
