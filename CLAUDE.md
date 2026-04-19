@@ -273,7 +273,7 @@ tar czf vault.tar.gz \
   my-vault/
 ```
 
-`.2ndbrain/config.yaml` and `.2ndbrain/index.db` *should* be in the tarball for single-user sharing — config keeps the receiver's first `ai status` meaningful, and the DB carries the embeddings (without which every semantic search would re-embed from scratch). For git-shared team vaults, `2nb init` writes a `.gitignore` that excludes `config.yaml`, `index.db` (+ WAL files), `bench.db`, `logs/`, `recovery/`, `mcp/`, and `*.bak` — only `schemas.yaml` (shared doc-type definitions) is committable.
+`.2ndbrain/config.yaml` and `.2ndbrain/index.db` *should* be in the tarball for single-user sharing — config keeps the receiver's first `ai status` meaningful, and the DB carries the embeddings (without which every semantic search would re-embed from scratch). For git-shared team vaults, `2nb vault create` writes a `.gitignore` that excludes `config.yaml`, `index.db` (+ WAL files), `bench.db`, `logs/`, `recovery/`, `mcp/`, and `*.bak` — only `schemas.yaml` (shared doc-type definitions) is committable.
 
 **Privacy caveat:** embeddings are a lossy representation of the source text. Shipping a vault with embeddings is functionally equivalent to shipping the (approximate) content — useful for trusted sharing, not for publishing to strangers. A `--strip-embeddings` export mode is future work.
 

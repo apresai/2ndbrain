@@ -7,8 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 )
 
 type Document struct {
@@ -137,8 +141,13 @@ func NewDocument(title, docType, templateBody string) *Document {
 }
 
 func (d *Document) Serialize() ([]byte, error) {
-	d.Frontmatter["modified"] = time.Now().UTC().Format(time.RFC3339)
-	return SerializeDocument(d.Frontmatter, d.Body)
+	// Clone frontmatter to avoid mutating the receiver as a side effect.
+	fm := make(map[string]any, len(d.Frontmatter))
+	for k, v := range d.Frontmatter {
+		fm[k] = v
+	}
+	fm["modified"] = time.Now().UTC().Format(time.RFC3339)
+	return SerializeDocument(fm, d.Body)
 }
 
 func (d *Document) SetMeta(key string, value any) {
@@ -218,14 +227,30 @@ func extractTags(meta map[string]any) []string {
 }
 
 func slugify(s string) string {
+	// Unicode decomposition + strip combining marks: "Café" → "Cafe",
+	// "naïve" → "naive", "résumé" → "resume". CJK/emoji don't decompose
+	// into ASCII, so they fall through to the rune loop and are dropped —
+	// callers get an empty slug and the UUID fallback takes over (see
+	// uniqueFilename).
+	if decomposed, _, err := transform.String(
+		transform.Chain(
+			norm.NFD,
+			runes.Remove(runes.In(unicode.Mn)),
+			norm.NFC,
+		),
+		s,
+	); err == nil {
+		s = decomposed
+	}
+
 	result := make([]byte, 0, len(s))
-	for i := range len(s) {
+	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
 			result = append(result, c)
 		case c >= 'A' && c <= 'Z':
-			result = append(result, c+32) // lowercase
+			result = append(result, c+32)
 		case c == ' ' || c == '-' || c == '_':
 			if len(result) > 0 && result[len(result)-1] != '-' {
 				result = append(result, '-')

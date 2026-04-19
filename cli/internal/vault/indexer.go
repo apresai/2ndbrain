@@ -22,8 +22,12 @@ type IndexStats struct {
 func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 	stats := &IndexStats{}
 
-	// Purge documents whose files no longer exist on disk
-	purgeStale(v)
+	// Purge documents whose files no longer exist on disk. A failure here
+	// shouldn't abort the index (partial purge is better than no index),
+	// but the caller should see the error if the initial SELECT failed.
+	if err := purgeStale(v); err != nil {
+		return nil, fmt.Errorf("purge stale: %w", err)
+	}
 
 	err := filepath.Walk(v.Root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -112,40 +116,52 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 		return fmt.Errorf("document %s has no id in frontmatter", relPath)
 	}
 
+	// Wrap all DB operations in a single transaction so a partial
+	// failure (e.g., kill mid-index) doesn't leave orphaned chunks,
+	// stale FTS5 entries, or inconsistent tags/links.
+	tx, err := db.Conn().Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Upsert document
-	if err := db.UpsertDocument(doc); err != nil {
+	if err := db.UpsertDocumentTx(tx, doc); err != nil {
 		return fmt.Errorf("upsert document: %w", err)
 	}
 
 	// Delete old chunks for this doc then insert new ones
-	if err := db.DeleteChunksByDoc(doc.ID); err != nil {
+	if _, err := tx.Exec("DELETE FROM chunks WHERE doc_id = ?", doc.ID); err != nil {
 		return fmt.Errorf("delete old chunks: %w", err)
 	}
 
 	chunks := document.ChunkDocument(doc)
-	if err := db.UpsertChunks(chunks); err != nil {
+	if err := db.UpsertChunksTx(tx, chunks); err != nil {
 		return fmt.Errorf("upsert chunks: %w", err)
 	}
 
 	// Tags
-	if err := db.UpsertTags(doc.ID, doc.Tags); err != nil {
+	if err := db.UpsertTagsTx(tx, doc.ID, doc.Tags); err != nil {
 		return fmt.Errorf("upsert tags: %w", err)
 	}
 
 	// Links
 	links := document.ExtractWikiLinks(doc.Body)
-	if err := db.UpsertLinks(doc.ID, links); err != nil {
+	if err := db.UpsertLinksTx(tx, doc.ID, links); err != nil {
 		return fmt.Errorf("upsert links: %w", err)
 	}
 
-	return nil
+	return tx.Commit()
 }
 
 // purgeStale removes index entries for files that no longer exist on disk.
-func purgeStale(v *Vault) {
+// Returns an error only when the initial SELECT fails (the index state is
+// unknown at that point); per-document scan or delete errors are logged and
+// skipped so a single bad row doesn't block the pass.
+func purgeStale(v *Vault) error {
 	rows, err := v.DB.Conn().Query("SELECT id, path FROM documents")
 	if err != nil {
-		return
+		return fmt.Errorf("query documents: %w", err)
 	}
 	defer rows.Close()
 
@@ -153,6 +169,7 @@ func purgeStale(v *Vault) {
 	for rows.Next() {
 		var id, path string
 		if err := rows.Scan(&id, &path); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: purgeStale scan: %v\n", err)
 			continue
 		}
 		absPath := filepath.Join(v.Root, path)
@@ -162,12 +179,22 @@ func purgeStale(v *Vault) {
 	}
 
 	for _, id := range stale {
-		v.DB.DeleteDocument(id)
+		if err := v.DB.DeleteDocument(id); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: purgeStale delete %s: %v\n", id, err)
+			continue
+		}
 		fmt.Fprintf(os.Stderr, "  purged stale: %s\n", id)
 	}
+	return nil
 }
 
+// countRows returns the row count for a known table. The table parameter
+// must be one of the whitelisted names to prevent SQL injection.
 func countRows(db *store.DB, table string) int {
+	allowed := map[string]bool{"chunks": true, "links": true, "documents": true, "tags": true}
+	if !allowed[table] {
+		return 0
+	}
 	var count int
 	row := db.Conn().QueryRow("SELECT COUNT(*) FROM " + table)
 	row.Scan(&count)

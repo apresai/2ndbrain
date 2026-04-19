@@ -18,6 +18,66 @@ func TestParseFrontmatter_Unix(t *testing.T) {
 	}
 }
 
+func TestParseFrontmatter_CRLF(t *testing.T) {
+	// Pure CRLF: Windows-authored file. Opening is 5 bytes, closing is 7.
+	content := []byte("---\r\ntitle: Hello\r\n---\r\nBody\r\n")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["title"] != "Hello" {
+		t.Errorf("title = %v, want Hello", meta["title"])
+	}
+	if body != "Body\r\n" {
+		t.Errorf("body = %q, want %q", body, "Body\r\n")
+	}
+}
+
+func TestParseFrontmatter_CRLFOpenLFClose(t *testing.T) {
+	// Mixed: CRLF open, LF close. The skip-4-bytes bug used to leave a
+	// stray "\n" in the YAML; verify the fix eats the full opening.
+	content := []byte("---\r\ntitle: Hello\n---\nBody\n")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["title"] != "Hello" {
+		t.Errorf("title = %v, want Hello", meta["title"])
+	}
+	if body != "Body\n" {
+		t.Errorf("body = %q, want %q", body, "Body\n")
+	}
+}
+
+func TestParseFrontmatter_LFOpenCRLFClose(t *testing.T) {
+	content := []byte("---\ntitle: Hello\r\n---\r\nBody\r\n")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["title"] != "Hello" {
+		t.Errorf("title = %v, want Hello", meta["title"])
+	}
+	if body != "Body\r\n" {
+		t.Errorf("body = %q, want %q", body, "Body\r\n")
+	}
+}
+
+func TestParseFrontmatter_EOFClose(t *testing.T) {
+	// Frontmatter ending at EOF with just "---", no body.
+	content := []byte("---\ntitle: Hello\n---")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["title"] != "Hello" {
+		t.Errorf("title = %v, want Hello", meta["title"])
+	}
+	if body != "" {
+		t.Errorf("body = %q, want empty", body)
+	}
+}
+
 func TestParseFrontmatter_NoFrontmatter(t *testing.T) {
 	content := []byte("Just text\n")
 	meta, body, err := ParseFrontmatter(content)

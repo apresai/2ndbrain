@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,6 +14,28 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
+
+// bedrockAvailableProbe runs the control-plane ListFoundationModels call.
+// This is free, doesn't consume embedding/generation tokens, and exercises
+// both credentials and Bedrock enablement in the configured region. Used
+// by BedrockEmbedder.Available and BedrockGenerator.Available.
+//
+// The probe verifies the provider is reachable and credentials are valid,
+// but NOT that the user's configured model is callable — a typo'd model ID
+// still lets Available() return true and fails at first real Embed/Generate.
+// For full per-model validation, use `2nb models test`.
+func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) bool {
+	if ctrl == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := ctrl.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{}); err != nil {
+		slog.Debug("bedrock probe failed", "err", err)
+		return false
+	}
+	return true
+}
 
 // loadBedrockAWSConfig builds an AWS config from BedrockConfig settings.
 func loadBedrockAWSConfig(ctx context.Context, cfg BedrockConfig) (aws.Config, error) {
@@ -27,11 +50,12 @@ func loadBedrockAWSConfig(ctx context.Context, cfg BedrockConfig) (aws.Config, e
 
 // BedrockEmbedder implements EmbeddingProvider using Amazon Bedrock.
 type BedrockEmbedder struct {
-	client    *bedrockruntime.Client
-	model     string
-	dims      int
-	region    string
-	available *bool // cached availability (H1 fix)
+	client *bedrockruntime.Client
+	ctrl   *bedrock.Client // control plane for lightweight Available() probe
+	model  string
+	dims   int
+	region string
+	avail  availableCache
 }
 
 // NewBedrockEmbedder creates a Bedrock embedding provider.
@@ -43,25 +67,23 @@ func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, di
 
 	return &BedrockEmbedder{
 		client: bedrockruntime.NewFromConfig(awsCfg),
+		ctrl:   bedrock.NewFromConfig(awsCfg),
 		model:  model,
 		dims:   dims,
 		region: cfg.Region,
 	}, nil
 }
 
-func (b *BedrockEmbedder) Name() string      { return "bedrock" }
-func (b *BedrockEmbedder) Dimensions() int    { return b.dims }
+func (b *BedrockEmbedder) Name() string    { return "bedrock" }
+func (b *BedrockEmbedder) Dimensions() int { return b.dims }
 
 func (b *BedrockEmbedder) Available(ctx context.Context) bool {
-	if b.available != nil {
-		return *b.available
+	if v, hit := b.avail.get(); hit {
+		return v
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	_, err := b.Embed(ctx, []string{"test"})
-	result := err == nil
-	b.available = &result
-	return result
+	ok := bedrockAvailableProbe(ctx, b.ctrl)
+	b.avail.set(ok)
+	return ok
 }
 
 // novaEmbedRequest is the request body for Nova Embeddings v2.
@@ -146,10 +168,11 @@ func (b *BedrockEmbedder) ListModels(_ context.Context) ([]ModelInfo, error) {
 
 // BedrockGenerator implements GenerationProvider using Amazon Bedrock.
 type BedrockGenerator struct {
-	client    *bedrockruntime.Client
-	model     string
-	region    string
-	available *bool // cached availability (H1 fix)
+	client *bedrockruntime.Client
+	ctrl   *bedrock.Client
+	model  string
+	region string
+	avail  availableCache
 }
 
 // NewBedrockGenerator creates a Bedrock generation provider.
@@ -161,6 +184,7 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 
 	return &BedrockGenerator{
 		client: bedrockruntime.NewFromConfig(awsCfg),
+		ctrl:   bedrock.NewFromConfig(awsCfg),
 		model:  model,
 		region: cfg.Region,
 	}, nil
@@ -169,15 +193,12 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 func (b *BedrockGenerator) Name() string { return "bedrock" }
 
 func (b *BedrockGenerator) Available(ctx context.Context) bool {
-	if b.available != nil {
-		return *b.available
+	if v, hit := b.avail.get(); hit {
+		return v
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	_, err := b.Generate(ctx, "hi", GenOpts{MaxTokens: 1, Temperature: 0})
-	result := err == nil
-	b.available = &result
-	return result
+	ok := bedrockAvailableProbe(ctx, b.ctrl)
+	b.avail.set(ok)
+	return ok
 }
 
 func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts GenOpts) (string, error) {

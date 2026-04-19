@@ -22,12 +22,21 @@ func IsSensitiveKey(key string) bool {
 func ParseFrontmatter(content []byte) (meta map[string]any, body string, err error) {
 	s := string(content)
 
-	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
+	// Length of the opening delimiter depends on which line ending the file
+	// uses. Skipping a fixed 4 bytes for a "---\r\n" opening leaves a stray
+	// "\n" at the start of the YAML region — harmless today (YAML tolerates
+	// leading whitespace) but throws off every offset downstream.
+	var openLen int
+	switch {
+	case strings.HasPrefix(s, "---\r\n"):
+		openLen = 5
+	case strings.HasPrefix(s, "---\n"):
+		openLen = 4
+	default:
 		return nil, s, nil
 	}
 
-	// Find closing ---
-	rest := s[4:] // skip opening "---\n"
+	rest := s[openLen:]
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
 		// Try \r\n

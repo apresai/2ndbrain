@@ -111,13 +111,14 @@ func getNode(db *sql.DB, docID string, depth int) (*Node, error) {
 }
 
 func getNeighbors(db *sql.DB, docID string) ([]string, []Edge, error) {
-	// Forward links (outgoing)
+	// Forward links (outgoing) and backlinks (incoming) with a direction marker.
+	// The 'forward' column lets us set Source/Target correctly.
 	rows, err := db.Query(`
-		SELECT l.target_id, l.target_raw
+		SELECT l.target_id, l.target_raw, 1 AS forward
 		FROM links l
 		WHERE l.source_id = ? AND l.target_id IS NOT NULL
 		UNION
-		SELECT l.source_id, l.target_raw
+		SELECT l.source_id, l.target_raw, 0 AS forward
 		FROM links l
 		WHERE l.target_id = ?
 	`, docID, docID)
@@ -132,7 +133,8 @@ func getNeighbors(db *sql.DB, docID string) ([]string, []Edge, error) {
 
 	for rows.Next() {
 		var neighborID, label string
-		if err := rows.Scan(&neighborID, &label); err != nil {
+		var forward int
+		if err := rows.Scan(&neighborID, &label, &forward); err != nil {
 			continue
 		}
 		if seen[neighborID] {
@@ -140,7 +142,11 @@ func getNeighbors(db *sql.DB, docID string) ([]string, []Edge, error) {
 		}
 		seen[neighborID] = true
 		neighbors = append(neighbors, neighborID)
-		edges = append(edges, Edge{Source: docID, Target: neighborID, Label: label})
+		if forward == 1 {
+			edges = append(edges, Edge{Source: docID, Target: neighborID, Label: label})
+		} else {
+			edges = append(edges, Edge{Source: neighborID, Target: docID, Label: label})
+		}
 	}
 
 	return neighbors, edges, rows.Err()

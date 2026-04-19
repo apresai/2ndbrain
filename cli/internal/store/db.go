@@ -3,8 +3,10 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -69,18 +71,30 @@ func (db *DB) migrate() error {
 		if _, err := db.conn.Exec("BEGIN EXCLUSIVE"); err != nil {
 			return fmt.Errorf("migrate lock: %w", err)
 		}
-		// Re-read version inside the lock
-		db.conn.QueryRow("SELECT version FROM schema_version").Scan(&version)
-		if version < 2 {
-			if _, err := db.conn.Exec(schemaV2); err != nil {
-				db.conn.Exec("ROLLBACK")
-				// Treat duplicate column as success (another process already migrated)
-				if !isDuplicateColumn(err) {
-					return fmt.Errorf("migrate v1→v2: %w", err)
-				}
+
+		// Compute migration outcome inside the transaction. ROLLBACK and
+		// COMMIT are driven by whether migrateErr is set — emitting both
+		// (old code) leaves SQLite in "no active transaction" state and the
+		// subsequent COMMIT fails, which used to surface as a spurious error
+		// on the duplicate-column success path.
+		var migrateErr error
+		if err := db.conn.QueryRow("SELECT version FROM schema_version").Scan(&version); err != nil {
+			migrateErr = fmt.Errorf("migrate re-read version: %w", err)
+		} else if version < 2 {
+			if _, err := db.conn.Exec(schemaV2); err != nil && !isDuplicateColumn(err) {
+				migrateErr = fmt.Errorf("migrate v1→v2: %w", err)
 			}
 		}
-		db.conn.Exec("COMMIT")
+
+		if migrateErr != nil {
+			if _, rbErr := db.conn.Exec("ROLLBACK"); rbErr != nil {
+				slog.Warn("migrate rollback failed", "err", rbErr)
+			}
+			return migrateErr
+		}
+		if _, err := db.conn.Exec("COMMIT"); err != nil {
+			return fmt.Errorf("migrate commit: %w", err)
+		}
 	}
 
 	// Refuse to open a vault produced by a newer 2nb. Older binaries
@@ -95,5 +109,5 @@ func (db *DB) migrate() error {
 }
 
 func isDuplicateColumn(err error) bool {
-	return err != nil && fmt.Sprintf("%v", err) == "duplicate column name: embedding"
+	return err != nil && strings.Contains(err.Error(), "duplicate column name:")
 }

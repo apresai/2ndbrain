@@ -1,15 +1,30 @@
 package mcp
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/vault"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+// withTimeout wraps a tool handler so a slow upstream (Bedrock, OpenRouter)
+// can't hang the MCP client indefinitely. Budgets are per-tool: read-only
+// graph/metadata calls get a tight bound; generation/index calls get room
+// for real work. The MCP library doesn't expose a per-tool deadline knob,
+// so we enforce it at registration time.
+func withTimeout(d time.Duration, inner server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return inner(ctx, req)
+	}
+}
 
 func Start(v *vault.Vault, version string) error {
 	s := server.NewMCPServer(
@@ -37,22 +52,32 @@ func Start(v *vault.Vault, version string) error {
 		s.AddTool(tool, handler)
 	}
 
-	addTool(kbInfoTool(), h.handleKBInfo)
-	addTool(kbSearchTool(), h.handleKBSearch)
-	addTool(kbAskTool(), h.handleKBAsk)
-	addTool(kbReadTool(), h.handleKBRead)
-	addTool(kbListTool(), h.handleKBList)
-	addTool(kbCreateTool(), h.handleKBCreate)
-	addTool(kbUpdateMetaTool(), h.handleKBUpdateMeta)
-	addTool(kbRelatedTool(), h.handleKBRelated)
-	addTool(kbStructureTool(), h.handleKBStructure)
-	addTool(kbDeleteTool(), h.handleKBDelete)
-	addTool(kbIndexTool(), h.handleKBIndex)
-	addTool(kbSuggestLinksTool(), h.handleKBSuggestLinks)
-	addTool(kbPolishTool(), h.handleKBPolish)
-	addTool(kbGitActivityTool(), h.handleKBGitActivity)
-	addTool(kbGitDiffTool(), h.handleKBGitDiff)
-	addTool(kbGitStatusTool(), h.handleKBGitStatus)
+	// Per-tool timeouts. Cheap metadata/graph calls: 10s. Search + suggest:
+	// 60s (includes one embed call). Generation-bound tools: 120s. Create:
+	// 30s (may embed the new doc). Full reindex: 300s.
+	const (
+		tCheap = 10 * time.Second
+		tCreate = 30 * time.Second
+		tSearch = 60 * time.Second
+		tGenerate = 120 * time.Second
+		tIndex = 300 * time.Second
+	)
+	addTool(kbInfoTool(), withTimeout(tCheap, h.handleKBInfo))
+	addTool(kbSearchTool(), withTimeout(tSearch, h.handleKBSearch))
+	addTool(kbAskTool(), withTimeout(tGenerate, h.handleKBAsk))
+	addTool(kbReadTool(), withTimeout(tCheap, h.handleKBRead))
+	addTool(kbListTool(), withTimeout(tCheap, h.handleKBList))
+	addTool(kbCreateTool(), withTimeout(tCreate, h.handleKBCreate))
+	addTool(kbUpdateMetaTool(), withTimeout(tCheap, h.handleKBUpdateMeta))
+	addTool(kbRelatedTool(), withTimeout(tCheap, h.handleKBRelated))
+	addTool(kbStructureTool(), withTimeout(tCheap, h.handleKBStructure))
+	addTool(kbDeleteTool(), withTimeout(tCheap, h.handleKBDelete))
+	addTool(kbIndexTool(), withTimeout(tIndex, h.handleKBIndex))
+	addTool(kbSuggestLinksTool(), withTimeout(tSearch, h.handleKBSuggestLinks))
+	addTool(kbPolishTool(), withTimeout(tGenerate, h.handleKBPolish))
+	addTool(kbGitActivityTool(), withTimeout(tCheap, h.handleKBGitActivity))
+	addTool(kbGitDiffTool(), withTimeout(tCheap, h.handleKBGitDiff))
+	addTool(kbGitStatusTool(), withTimeout(tCheap, h.handleKBGitStatus))
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,13 @@ type handlers struct {
 	// sessions are long-lived, so cache once at first use.
 	threshOnce sync.Once
 	thresh     float64
+
+	// Embedding cache: avoids re-reading ALL embeddings from SQLite on
+	// every search/ask call. Invalidated when kb_index runs.
+	embedMu     sync.RWMutex
+	cachedIDs   []string
+	cachedVecs  [][]float32
+	embedLoaded bool
 }
 
 func (h *handlers) threshold() float64 {
@@ -36,6 +44,41 @@ func (h *handlers) threshold() float64 {
 		h.thresh, _ = h.vault.Config.AI.ResolveSimilarityThresholdFull(h.vault.Root)
 	})
 	return h.thresh
+}
+
+// getCachedEmbeddings returns the cached embedding vectors, loading them from
+// the database on first call. Call invalidateEmbeddings() after index updates.
+func (h *handlers) getCachedEmbeddings() ([]string, [][]float32, error) {
+	h.embedMu.RLock()
+	if h.embedLoaded {
+		ids, vecs := h.cachedIDs, h.cachedVecs
+		h.embedMu.RUnlock()
+		return ids, vecs, nil
+	}
+	h.embedMu.RUnlock()
+
+	h.embedMu.Lock()
+	defer h.embedMu.Unlock()
+	// Double-check after acquiring write lock
+	if h.embedLoaded {
+		return h.cachedIDs, h.cachedVecs, nil
+	}
+	ids, vecs, err := h.vault.DB.AllEmbeddings()
+	if err != nil {
+		return nil, nil, err
+	}
+	h.cachedIDs = ids
+	h.cachedVecs = vecs
+	h.embedLoaded = true
+	return ids, vecs, nil
+}
+
+func (h *handlers) invalidateEmbeddings() {
+	h.embedMu.Lock()
+	defer h.embedMu.Unlock()
+	h.cachedIDs = nil
+	h.cachedVecs = nil
+	h.embedLoaded = false
 }
 
 func (h *handlers) handleKBInfo(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -111,6 +154,9 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 		return mcplib.NewToolResultError(fmt.Sprintf("index failed: %v", err)), nil
 	}
 
+	// Invalidate embedding cache so the next search picks up new vectors.
+	h.invalidateEmbeddings()
+
 	// Generate embeddings if a provider is available
 	embedded := 0
 	cfg := h.vault.Config.AI
@@ -118,7 +164,24 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 	if embErr == nil && embedder.Available(ctx) {
 		model := cfg.EmbeddingModel
 		docs, _ := h.vault.DB.DocumentsNeedingEmbedding(model)
-		for _, doc := range docs {
+		throttle := ai.ThrottleDelay(ai.ProviderRPSDefault(cfg.Provider))
+	embedLoop:
+		for i, doc := range docs {
+			if i > 0 && throttle > 0 {
+				select {
+				case <-ctx.Done():
+					// Caller (MCP client) timed out — stop embedding and
+					// return what we got so far rather than block further.
+					// Reassigning `i` doesn't exit a range loop; use a labeled
+					// break so the doc list stops being processed immediately.
+					slog.Warn("kb_index embedding aborted by ctx",
+						"embedded", embedded,
+						"remaining", len(docs)-i,
+						"err", ctx.Err())
+					break embedLoop
+				case <-time.After(throttle):
+				}
+			}
 			absPath := h.vault.AbsPath(doc.Path)
 			content, err := os.ReadFile(absPath)
 			if err != nil {
@@ -137,6 +200,8 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 				embedded++
 			}
 		}
+		// Invalidate again after embedding to include newly generated vectors.
+		h.invalidateEmbeddings()
 	}
 
 	result := map[string]any{
@@ -179,9 +244,12 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 	embCount, _ := h.vault.DB.EmbeddingCount()
 
 	if embErr == nil && embedder.Available(ctx) && embCount > 0 && query != "" {
-		queryVecs, err := embedder.Embed(ctx, []string{query})
+		// Apply timeout to embedding call to prevent indefinite hangs
+		embedCtx, embedCancel := context.WithTimeout(ctx, 60*time.Second)
+		defer embedCancel()
+		queryVecs, err := embedder.Embed(embedCtx, []string{query})
 		if err == nil && len(queryVecs) > 0 {
-			docIDs, embeddings, err := h.vault.DB.AllEmbeddings()
+			docIDs, embeddings, err := h.getCachedEmbeddings()
 			if err == nil {
 				results, mode, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
 				if err != nil {
@@ -245,9 +313,12 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 	embCount, _ := h.vault.DB.EmbeddingCount()
 
 	if embErr == nil && embedder.Available(ctx) && embCount > 0 {
-		queryVecs, err := embedder.Embed(ctx, []string{question})
+		// Apply timeout to embedding call
+		embedCtx, embedCancel := context.WithTimeout(ctx, 60*time.Second)
+		defer embedCancel()
+		queryVecs, err := embedder.Embed(embedCtx, []string{question})
 		if err == nil && len(queryVecs) > 0 {
-			docIDs, embeddings, _ := h.vault.DB.AllEmbeddings()
+			docIDs, embeddings, _ := h.getCachedEmbeddings()
 			results, _, _ = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
 		}
 	}
@@ -376,13 +447,14 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 		return mcplib.NewToolResultError(fmt.Sprintf("create failed: %v", err)), nil
 	}
 
+	// Delegate to the shared indexer — keeps chunks/tags/links + link
+	// resolution + transactional semantics identical to `2nb index` and
+	// editor-triggered saves, so kb_create doesn't drift from the canonical
+	// indexing path.
+	if err := vault.IndexSingleFile(h.vault, writePath); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("index new doc: %v", err)), nil
+	}
 	doc.Path = h.vault.RelPath(writePath)
-
-	// Index
-	h.vault.DB.UpsertDocument(doc)
-	chunks := document.ChunkDocument(doc)
-	h.vault.DB.UpsertChunks(chunks)
-	h.vault.DB.UpsertTags(doc.ID, doc.Tags)
 
 	// Embed inline if provider available
 	cfg := h.vault.Config.AI
@@ -391,6 +463,7 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 		if vecs, err := embedder.Embed(ctx, []string{doc.Body}); err == nil {
 			h.vault.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash)
 		}
+		h.invalidateEmbeddings()
 	}
 
 	result := map[string]any{
@@ -740,7 +813,7 @@ func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.Call
 		return mcplib.NewToolResultError(fmt.Sprintf("embed source: %v", err)), nil
 	}
 
-	docIDs, embeddings, err := h.vault.DB.AllEmbeddings()
+	docIDs, embeddings, err := h.getCachedEmbeddings()
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("load embeddings: %v", err)), nil
 	}

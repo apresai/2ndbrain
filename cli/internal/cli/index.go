@@ -222,9 +222,11 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 	var totalChars int
 	embedded := 0
 
+	throttle := ai.ThrottleDelay(ai.ProviderRPSDefault(cfg.Provider))
+
 	for i, doc := range docs {
-		if i > 0 && cfg.Provider == "openrouter" {
-			time.Sleep(100 * time.Millisecond) // throttle to ~10 rps, well under 20 rpm free limit
+		if i > 0 && throttle > 0 {
+			time.Sleep(throttle)
 		}
 
 		absPath := filepath.Join(v.Root, doc.Path)

@@ -115,6 +115,14 @@ func TestSlugify(t *testing.T) {
 		{"Use JWT for Auth!", "use-jwt-for-auth"},
 		{"", ""},
 		{"  spaces  ", "spaces-"},
+		// Accented Latin decomposes to ASCII after NFD + combining-mark strip.
+		{"Café", "cafe"},
+		{"Naïve", "naive"},
+		{"Résumé — Draft", "resume-draft"},
+		// CJK and emoji don't decompose to ASCII; empty slug triggers the
+		// UUID fallback in uniqueFilename.
+		{"会議の議事録", ""},
+		{"🚀 Launch Plan", "launch-plan"},
 	}
 	for _, tc := range tests {
 		got := slugify(tc.input)

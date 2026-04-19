@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -17,12 +18,12 @@ const (
 
 // OpenRouterEmbedder implements EmbeddingProvider using OpenRouter's OpenAI-compatible API.
 type OpenRouterEmbedder struct {
-	apiKey    string
-	model     string
-	dims      int
-	baseURL   string       // overridable for tests
-	client    *http.Client // overridable for tests
-	available *bool
+	apiKey  string
+	model   string
+	dims    int
+	baseURL string       // overridable for tests
+	client  *http.Client // overridable for tests
+	avail   availableCache
 }
 
 // NewOpenRouterEmbedder creates an OpenRouter embedding provider.
@@ -39,19 +40,52 @@ func NewOpenRouterEmbedder(apiKey, model string, dims int) *OpenRouterEmbedder {
 	}
 }
 
-func (e *OpenRouterEmbedder) Name() string   { return "openrouter" }
+func (e *OpenRouterEmbedder) Name() string    { return "openrouter" }
 func (e *OpenRouterEmbedder) Dimensions() int { return e.dims }
 
 func (e *OpenRouterEmbedder) Available(ctx context.Context) bool {
-	if e.available != nil {
-		return *e.available
+	if v, hit := e.avail.get(); hit {
+		return v
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ok := openRouterAvailableProbe(ctx, e.client, e.baseURL, e.apiKey)
+	e.avail.set(ok)
+	return ok
+}
+
+// openRouterAvailableProbe issues a GET against /models and only cares
+// about the HTTP status. A 2xx means credentials work and the API is
+// reachable. We don't parse the body — ListOpenRouterModels does the full
+// parse when the caller actually needs the list.
+//
+// Verifies the API key is accepted but NOT that a specific model is still
+// listed or callable. For that use `2nb models test`.
+func openRouterAvailableProbe(ctx context.Context, client *http.Client, baseURL, apiKey string) bool {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if baseURL == "" {
+		baseURL = openrouterBaseURL
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, err := e.Embed(ctx, []string{"test"})
-	result := err == nil
-	e.available = &result
-	return result
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
+	if err != nil {
+		slog.Debug("openrouter probe: request build failed", "err", err)
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Debug("openrouter probe: transport failed", "err", err)
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+	if !ok {
+		slog.Debug("openrouter probe: non-2xx", "status", resp.StatusCode)
+	}
+	return ok
 }
 
 type orEmbedRequest struct {
@@ -116,11 +150,11 @@ func (e *OpenRouterEmbedder) ListModels(_ context.Context) ([]ModelInfo, error) 
 
 // OpenRouterGenerator implements GenerationProvider using OpenRouter's OpenAI-compatible API.
 type OpenRouterGenerator struct {
-	apiKey    string
-	model     string
-	baseURL   string
-	client    *http.Client
-	available *bool
+	apiKey  string
+	model   string
+	baseURL string
+	client  *http.Client
+	avail   availableCache
 }
 
 // NewOpenRouterGenerator creates an OpenRouter generation provider.
@@ -136,15 +170,12 @@ func NewOpenRouterGenerator(apiKey, model string) *OpenRouterGenerator {
 func (g *OpenRouterGenerator) Name() string { return "openrouter" }
 
 func (g *OpenRouterGenerator) Available(ctx context.Context) bool {
-	if g.available != nil {
-		return *g.available
+	if v, hit := g.avail.get(); hit {
+		return v
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	_, err := g.Generate(ctx, "hi", GenOpts{MaxTokens: 1, Temperature: 0})
-	result := err == nil
-	g.available = &result
-	return result
+	ok := openRouterAvailableProbe(ctx, g.client, g.baseURL, g.apiKey)
+	g.avail.set(ok)
+	return ok
 }
 
 type orChatRequest struct {
