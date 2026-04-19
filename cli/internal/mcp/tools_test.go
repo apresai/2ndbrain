@@ -123,6 +123,42 @@ func TestHandleKBCreate(t *testing.T) {
 	}
 }
 
+// TestHandleKBCreate_IndexesDocument asserts the handler invoked the real
+// indexer (not just wrote a file). Before the IndexSingleFile delegation,
+// kb_create did its own partial upsert and skipped link resolution; the
+// symptom was that kb_related on a newly-created doc saw a zero graph.
+// Verifying chunks land for the created doc confirms the indexing path
+// ran end-to-end.
+func TestHandleKBCreate_IndexesDocument(t *testing.T) {
+	h, _ := makeHandlers(t)
+	ctx := context.Background()
+
+	res, err := h.handleKBCreate(ctx, makeRequest(map[string]any{
+		"title": "Indexed Note",
+		"type":  "note",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleKBCreate failed: err=%v text=%s", err, resultText(t, res))
+	}
+	var result map[string]any
+	json.Unmarshal([]byte(resultText(t, res)), &result)
+	docID, _ := result["id"].(string)
+	if docID == "" {
+		t.Fatal("result missing id")
+	}
+
+	var count int
+	err = h.vault.DB.Conn().QueryRow(
+		"SELECT COUNT(*) FROM chunks WHERE doc_id = ?", docID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query chunks: %v", err)
+	}
+	if count == 0 {
+		t.Error("chunks table is empty for newly-created doc — indexing path didn't run")
+	}
+}
+
 // TestHandleKBCreate_MissingArgs verifies that kb_create returns an error
 // result when required arguments are absent.
 func TestHandleKBCreate_MissingArgs(t *testing.T) {
@@ -473,5 +509,62 @@ func TestHandleKBIndex(t *testing.T) {
 	}
 	if int(docsIndexed) < 3 {
 		t.Errorf("expected at least 3 documents indexed, got %v", docsIndexed)
+	}
+}
+
+func TestHandlers_ThresholdCachesOnce(t *testing.T) {
+	// handlers.threshold() uses sync.Once to memoize the resolved
+	// AIConfig.SimilarityThreshold for the MCP session. Subsequent vault
+	// config mutations should NOT change the returned value — that's the
+	// whole point of the cache.
+	h, v := makeHandlers(t)
+	v.Config.AI.SimilarityThreshold = 0.42
+	first := h.threshold()
+	if first != 0.42 {
+		t.Fatalf("first call = %v, want 0.42", first)
+	}
+
+	v.Config.AI.SimilarityThreshold = 0.99
+	second := h.threshold()
+	if second != first {
+		t.Errorf("cache bypassed: first=%v second=%v (sync.Once should keep them equal)", first, second)
+	}
+}
+
+func TestHandlers_EmbeddingCacheRoundtrip(t *testing.T) {
+	h, v := makeHandlers(t)
+
+	// Fresh cache: loads from DB. No embeddings yet, should return empty slices.
+	ids, vecs, err := h.getCachedEmbeddings()
+	if err != nil {
+		t.Fatalf("getCachedEmbeddings empty: %v", err)
+	}
+	if len(ids) != 0 || len(vecs) != 0 {
+		t.Errorf("empty vault: got %d ids, %d vecs", len(ids), len(vecs))
+	}
+
+	// Add a doc with an embedding directly at the DB layer.
+	doc := testutil.CreateAndIndex(t, v, "Cached Doc", "note", "body")
+	if err := v.DB.SetEmbedding(doc.ID, []float32{1, 0, 0}, "test-model", "hash-1"); err != nil {
+		t.Fatalf("SetEmbedding: %v", err)
+	}
+
+	// Without invalidation, the cache still returns the old (empty) result.
+	ids, _, _ = h.getCachedEmbeddings()
+	if len(ids) != 0 {
+		t.Errorf("before invalidate: got %d ids, want 0 (cache should be stale)", len(ids))
+	}
+
+	// After invalidate, next call reloads from DB.
+	h.invalidateEmbeddings()
+	ids, vecs, err = h.getCachedEmbeddings()
+	if err != nil {
+		t.Fatalf("getCachedEmbeddings post-invalidate: %v", err)
+	}
+	if len(ids) != 1 || len(vecs) != 1 {
+		t.Fatalf("post-invalidate: got %d ids %d vecs, want 1 each", len(ids), len(vecs))
+	}
+	if ids[0] != doc.ID {
+		t.Errorf("id = %q, want %q", ids[0], doc.ID)
 	}
 }

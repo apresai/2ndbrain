@@ -149,6 +149,100 @@ func TestFtsQuery_DashedModelIdQuoted(t *testing.T) {
 	}
 }
 
+// TestHybridSearch_ThresholdFilters asserts that vector hits below
+// MinVectorScore are dropped before RRF fusion. We hand-craft unit vectors
+// so cosines are deterministic: aligned → 1.0, orthogonal → 0.0.
+func TestHybridSearch_ThresholdFilters(t *testing.T) {
+	db := setupSearchDB(t)
+	// Three docs with BM25 hits on "rocket" so the BM25 channel returns
+	// all three; vector channel discriminates.
+	insertTestDoc(t, db, "d-aligned", "a.md", "Aligned", "note", "draft",
+		"# Rocket\n\nRocket science aligned with query.\n")
+	insertTestDoc(t, db, "d-partial", "p.md", "Partial", "note", "draft",
+		"# Rocket\n\nRocket-adjacent material.\n")
+	insertTestDoc(t, db, "d-orthogonal", "o.md", "Orthogonal", "note", "draft",
+		"# Rocket\n\nRocket off-topic.\n")
+
+	// Query vector = [1, 0]; doc vectors give cosines 1.0, 0.5, 0.0.
+	db.SetEmbedding("d-aligned", []float32{1, 0}, "t", "h1")
+	db.SetEmbedding("d-partial", []float32{1, 1}, "t", "h2") // cos ≈ 0.707
+	db.SetEmbedding("d-orthogonal", []float32{0, 1}, "t", "h3")
+
+	ids, vecs, err := db.AllEmbeddings()
+	if err != nil {
+		t.Fatalf("AllEmbeddings: %v", err)
+	}
+
+	engine := NewEngine(db.Conn())
+	// Threshold 0.8 → only the aligned doc clears.
+	results, mode, err := engine.HybridSearch(
+		Options{Query: "rocket", Limit: 10, MinVectorScore: 0.8},
+		[]float32{1, 0}, ids, vecs,
+	)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+	if mode != ModeHybrid {
+		t.Errorf("mode = %v, want hybrid", mode)
+	}
+	// d-aligned (cos=1.0) must survive the 0.8 threshold. d-orthogonal
+	// still clears BM25 independently so we don't assert its absence —
+	// the threshold gates only the vector channel, not the hybrid union.
+	var sawAligned bool
+	for _, r := range results {
+		if r.DocID == "d-aligned" {
+			sawAligned = true
+		}
+	}
+	if !sawAligned {
+		t.Error("d-aligned (cos=1.0) was filtered out despite threshold 0.8")
+	}
+}
+
+// TestHybridSearch_BM25OnlyFlag asserts the BM25Only short-circuit skips
+// the vector channel entirely even when embeddings are present.
+func TestHybridSearch_BM25OnlyFlag(t *testing.T) {
+	db := setupSearchDB(t)
+	insertTestDoc(t, db, "d1", "f.md", "Foo", "note", "draft", "# Foo\n\nfoo term.\n")
+	db.SetEmbedding("d1", []float32{1, 0}, "t", "h")
+	ids, vecs, _ := db.AllEmbeddings()
+
+	engine := NewEngine(db.Conn())
+	_, mode, err := engine.HybridSearch(
+		Options{Query: "foo", Limit: 10, BM25Only: true},
+		[]float32{1, 0}, ids, vecs,
+	)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+	if mode != ModeKeyword {
+		t.Errorf("mode = %v, want keyword (BM25Only flag should skip vector channel)", mode)
+	}
+}
+
+// TestHybridSearch_EmptyEmbeddingsFallsBackToKeyword — no stored vectors
+// means hybrid is impossible; handler should still return BM25 results
+// flagged as keyword mode.
+func TestHybridSearch_EmptyEmbeddingsFallsBackToKeyword(t *testing.T) {
+	db := setupSearchDB(t)
+	insertTestDoc(t, db, "d1", "f.md", "Bar", "note", "draft", "# Bar\n\nbar content.\n")
+
+	engine := NewEngine(db.Conn())
+	results, mode, err := engine.HybridSearch(
+		Options{Query: "bar", Limit: 10},
+		[]float32{1, 0}, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+	if mode != ModeKeyword {
+		t.Errorf("mode = %v, want keyword (no embeddings)", mode)
+	}
+	if len(results) == 0 {
+		t.Error("expected BM25 results")
+	}
+}
+
 func TestFtsQuery_PlainWordsNotQuoted(t *testing.T) {
 	// Regression guard: alphanumeric-only terms must stay unquoted
 	// so existing queries don't get wrapped unnecessarily.

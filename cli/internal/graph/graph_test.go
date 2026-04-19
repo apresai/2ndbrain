@@ -64,6 +64,42 @@ func TestTraverse_OneHop(t *testing.T) {
 	}
 }
 
+// TestTraverse_BacklinkEdgeDirection is the regression test for the
+// `forward == 0` branch in getNeighbors. Before the fix, both outbound and
+// inbound edges radiated from the focus node (all edges had Source=docID),
+// producing a misleading graph where every backlink appeared to point
+// outward. Now the direction must reflect the real link: A→B means
+// Source=A, Target=B, regardless of whether we traversed from A or B.
+func TestTraverse_BacklinkEdgeDirection(t *testing.T) {
+	v := testutil.NewTestVault(t)
+
+	docB := testutil.CreateAndIndex(t, v, "Doc B", "note", "Target document.")
+	docA := testutil.CreateAndIndex(t, v, "Doc A", "note", "See [[Doc B]] for details.")
+
+	if err := v.DB.ResolveLinks(); err != nil {
+		t.Fatalf("resolve links: %v", err)
+	}
+
+	// Traverse from B — the link is incoming from A's perspective, so the
+	// edge must still be A→B (not B→A).
+	g, err := Traverse(v.DB.Conn(), docB.ID, 1)
+	if err != nil {
+		t.Fatalf("Traverse: %v", err)
+	}
+	if len(g.Edges) != 1 {
+		t.Fatalf("edges: got %d, want 1", len(g.Edges))
+	}
+
+	edge := g.Edges[0]
+	if edge.Source != docA.ID {
+		t.Errorf("backlink edge Source = %q, want %q (A should remain source even when traversing from B)",
+			edge.Source, docA.ID)
+	}
+	if edge.Target != docB.ID {
+		t.Errorf("backlink edge Target = %q, want %q", edge.Target, docB.ID)
+	}
+}
+
 // TestTraverse_DepthZero verifies that depth=0 returns only the root node
 // with no edges, even when outgoing links exist.
 func TestTraverse_DepthZero(t *testing.T) {

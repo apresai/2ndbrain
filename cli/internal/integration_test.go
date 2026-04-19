@@ -169,6 +169,72 @@ func TestIndexVault_FullRun(t *testing.T) {
 	}
 }
 
+// TestE2E_IndexSearchDeleteReindex covers the full happy-path lifecycle
+// across store, vault, and search: index several docs, find one via BM25,
+// delete it, reindex, confirm it's gone from the results. Catches
+// regressions where any layer (FTS5 cleanup, purgeStale, link resolution)
+// fails to remove a deleted doc from the index.
+func TestE2E_IndexSearchDeleteReindex(t *testing.T) {
+	v := testutil.NewTestVault(t)
+
+	writeDoc(t, v, "alpha.md", "id-alpha", "Alpha", "note",
+		"Body mentioning quokkas for a unique search term.\n")
+	writeDoc(t, v, "beta.md", "id-beta", "Beta", "note",
+		"Body about capybaras.\n")
+	writeDoc(t, v, "gamma.md", "id-gamma", "Gamma", "note",
+		"Body about pangolins.\n")
+
+	if _, err := vault.IndexVault(v, nil); err != nil {
+		t.Fatalf("first index: %v", err)
+	}
+
+	engine := search.NewEngine(v.DB.Conn())
+	hits, err := engine.Search(search.Options{Query: "quokkas", Limit: 10})
+	if err != nil {
+		t.Fatalf("initial search: %v", err)
+	}
+	var found bool
+	for _, r := range hits {
+		if r.DocID == "id-alpha" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected id-alpha in 'quokkas' results before delete")
+	}
+
+	// Delete the file AND its index entry. purgeStale would also catch this
+	// on reindex, but DeleteDocument is the explicit path exercised by the
+	// CLI/MCP delete flows.
+	if err := os.Remove(v.AbsPath("alpha.md")); err != nil {
+		t.Fatalf("remove file: %v", err)
+	}
+	if err := v.DB.DeleteDocument("id-alpha"); err != nil {
+		t.Fatalf("delete doc: %v", err)
+	}
+
+	if _, err := vault.IndexVault(v, nil); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+
+	hits, err = engine.Search(search.Options{Query: "quokkas", Limit: 10})
+	if err != nil {
+		t.Fatalf("post-delete search: %v", err)
+	}
+	for _, r := range hits {
+		if r.DocID == "id-alpha" {
+			t.Errorf("id-alpha still appears in search after delete+reindex")
+		}
+	}
+
+	// Sanity: the other docs should still be searchable.
+	hits, _ = engine.Search(search.Options{Query: "capybaras", Limit: 10})
+	if len(hits) == 0 {
+		t.Error("capybaras search returned no results — reindex wiped too much")
+	}
+}
+
 func writeDoc(t *testing.T, v *vault.Vault, filename, id, title, docType, body string) {
 	t.Helper()
 	content := strings.Join([]string{
