@@ -10,6 +10,13 @@ AI-native markdown knowledge base with a Go CLI, MCP server, and native macOS ed
 - `press-release.md` — Product vision document
 - `test-plan.md` — Requirements validation test plan
 
+### Project docs (`docs/`)
+
+- [`agent-teaching.md`](docs/agent-teaching.md) — MCP vs CLI decision matrix + test battery design
+- [`mcp-integration.md`](docs/mcp-integration.md) — MCP setup snippets for Claude Code, Cursor, and other clients
+- [`templates.md`](docs/templates.md) — Built-in document type templates (adr, runbook, prd, prfaq, note, postmortem)
+- [`vault-structure.md`](docs/vault-structure.md) — On-disk vault layout reference
+
 ## Versioning
 
 Format: `major.minor.build` (e.g., `0.1.0`). Single source of truth: `VERSION` file at repo root.
@@ -93,9 +100,10 @@ open app/.build/arm64-apple-macosx/debug/SecondBrain.app
 
 ```bash
 make test               # Go unit tests (cli/)
+make test-battery       # Golden-path E2E battery (cli/battery_test.go) — curated smoke suite
 make test-swift         # Swift unit tests (app/) — JSON decoding, parsing, wizard logic
 make test-gui           # GUI tests via AppleScript + screencapture
-make test-all           # Everything: Go + Swift + GUI
+make test-all           # Everything: Go + battery + Swift + GUI
 make install            # Build + install CLI to /usr/local/bin + app to /Applications
 ```
 
@@ -126,7 +134,9 @@ Test scripts live in `tests/`:
 | `gui-test-editor.sh` | Undo/redo, bold/italic, save, preview |
 | `gui-test-ui.sh` | Sidebar, focus mode, tabs, graph view |
 | `gui-test-vault.sh` | FSEvents, Obsidian import/export |
+| `gui-test-vault-switch.sh` | Open vault A → switch to B via UserDefaults, verify persistence |
 | `gui-test-ai.sh` | Ask AI panel, status bar indicator, semantic search |
+| `gui-test-polish.sh` | Cmd+Option+P diff view flow (credential-gated) |
 
 ### Key patterns for GUI tests
 

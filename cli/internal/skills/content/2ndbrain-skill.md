@@ -7,17 +7,19 @@ description: 2ndbrain knowledge base — CLI commands, MCP tools, document forma
 
 This project uses **2ndbrain** (`2nb`), an AI-native markdown knowledge base with a Go CLI, a native macOS editor, and an MCP server. All documents live as plain `.md` files with YAML frontmatter in a **vault** directory. The CLI and the macOS app share a SQLite index at `<vault>/.2ndbrain/index.db` via WAL mode.
 
-## First — orient yourself in the vault
+## First — orient yourself in the vault (the 5-command drill)
 
-**Run these before any create / write / index action.** They prevent the most common failure mode (writing to the wrong vault because the active vault wasn't checked).
+**Run these before any create / write / index action.** They prevent the most common failure mode (writing to the wrong vault because the active vault wasn't checked). Each answers a specific question, in order:
 
 ```bash
-2nb config show   # vault_root, vault_dir, vault_name, full ai.* config
-2nb ai            # defaults to `ai status` — confirms embeddings are ready
-2nb list --limit 10   # what's already here?
+2nb vault status              # Is this a vault? Is it healthy? How many docs?
+2nb ai status                 # Can I use semantic search? Which provider?
+2nb config show               # Full config (vault paths, ai.* settings)
+2nb list --json --limit 5     # Sample of content — what's actually here?
+2nb skills show claude-code   # Self-referential: what am I supposed to know?
 ```
 
-If `vault_root` isn't the directory you expected, either `cd` into the right vault or pass `--vault <path>` on every command. The "active vault" is separate from your current working directory — it's stored in `~/.2ndbrain-active-vault` and survives across sessions. Running `2nb create` from inside `~/dev/obsidian` will still write to whatever vault is active, not to `~/dev/obsidian`, unless you pass `--vault ~/dev/obsidian`.
+If `vault_root` (from `config show`) isn't the directory you expected, either `cd` into the right vault or pass `--vault <path>` on every command. The "active vault" is separate from your current working directory — it's stored in `~/.2ndbrain-active-vault` and survives across sessions. Running `2nb create` from inside `~/dev/obsidian` will still write to whatever vault is active, not to `~/dev/obsidian`, unless you pass `--vault ~/dev/obsidian`.
 
 **If the current directory isn't a 2nb vault**, you have two choices:
 1. Initialize it: `2nb vault create .` (adds a `.2ndbrain/` directory so 2nb can index it). The legacy `2nb init` still works but is deprecated.
@@ -121,7 +123,7 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 | Tool | When to call it |
 |---|---|
 | `kb_search` | Hybrid BM25 + semantic search. **Check the `vector_score` field** on each result — it's the raw cosine similarity, which is a better relevance signal than `score` (the RRF fusion score). Above ~0.4 = strong match; 0.2–0.4 = related; below 0.2 is filtered out entirely. |
-| `kb_ask` | RAG Q&A — synthesizes an answer from the top matches. **Fall back to `kb_search`** if `kb_ask` returns "no relevant documents" — the threshold might be too tight. |
+| `kb_ask` | RAG Q&A — synthesizes an answer from the top matches. **Fall back to `kb_search`** if `kb_ask` returns "no relevant documents" — both use the same threshold, but `kb_ask` only considers the top 5 results; a borderline match at rank 8 will show up in `kb_search` but not in `kb_ask`. |
 | `kb_read` | Full document or a specific heading chunk. Call after `kb_search`/`kb_list` to fetch content for the paths you found. |
 | `kb_structure` | Heading tree as JSON. Use to pick a chunk name before calling `kb_read` with `chunk:`. |
 | `kb_related` | BFS over the `[[wikilink]]` graph to depth N. Use for "what connects to this?" questions. |
@@ -146,6 +148,22 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 | `kb_git_status` | Porcelain map of modified/untracked files. |
 
 All three return `{"git_repo": false}` when the vault isn't git-backed — don't retry, just skip.
+
+## Which surface should I use? MCP vs CLI
+
+Both surfaces share the same vault, schemas, and SQLite index. The differences are:
+
+| Task | Prefer MCP when… | Prefer CLI when… |
+|---|---|---|
+| Search, ask, read, list, structure, related | Long agent session with repeated calls — MCP caches embeddings + threshold per session, saving a DB roundtrip per call | One-shot, scripted, piping into other tools |
+| Frontmatter edit | **MCP-only**: `kb_update_meta` does atomic schema-validated updates | `2nb meta --set` works for single keys but doesn't match `kb_update_meta`'s validation |
+| Create / delete | Either — semantically identical | Either — CLI has human-readable stderr hints |
+| Suggest links, polish | Agent wants structured JSON with scores and snippets | Piping to diff/patch or human review in terminal |
+| Git read operations | Either — output is identical | Either |
+| **Vault create / set / list / status** | — | **CLI-only** — MCP is scoped to an already-open vault |
+| **Skills install, models bench/calibrate, config set, import/export-obsidian** | — | **CLI-only** — session-setup operations that don't belong in an MCP session |
+
+**Rule of thumb:** if you're in an MCP-capable client and the tool exists, prefer MCP for latency and structured output. For vault management, skills install, or anything that manipulates the 2nb installation itself, drop to CLI.
 
 ## Workflow recipes
 
@@ -193,6 +211,69 @@ All three return `{"git_repo": false}` when the vault isn't git-backed — don't
   - < 0.20 — filtered out entirely by `ai.similarity_threshold`
 
 If legitimate matches are being cut, lower the threshold: `2nb config set ai.similarity_threshold 0.15`. If noise is slipping through, raise it. Per-query overrides: `2nb search "foo" --threshold 0.35`.
+
+## Error recovery playbook
+
+When semantic search falls back to BM25, the CLI prints a warning to stderr and the `--json` envelope includes it in `warnings[]`. Match on the stable prefix `"semantic search disabled:"` — the tail varies with provider/dim details.
+
+| Warning or state | What's wrong | Fix |
+|---|---|---|
+| `"semantic search disabled: vault was embedded with Nd vectors but current provider X produces Md"` | Dimension mismatch — you switched providers and existing embeddings are the wrong size | `2nb index --force-reembed` OR switch the provider back to the one that built this vault |
+| `"semantic search disabled: provider X unavailable — falling back to keyword search"` | The configured provider isn't reachable right now (creds missing, service down, network) | Check `2nb ai status`. BM25 still works — results still return, just without vector ranking. |
+| `"semantic search disabled: no AI provider configured"` | Nothing set up yet | `2nb ai setup` |
+| `"semantic search disabled: embedder X not registered"` | Config names a provider that isn't compiled in | `2nb config show` — check `ai.provider` |
+| Search returns `mode: keyword` with no warnings | Vault has no embeddings yet | `2nb index` — BM25 works immediately, embeddings backfill during the run |
+| Search returns empty results | Usually a threshold issue, not a content gap | Try `2nb search "foo" --threshold 0.15` or `--bm25-only` |
+| `kb_ask` returns "no relevant documents" | Top 5 results all got threshold-filtered (see note above — `ask` and `search` share thresholds but `ask` sees fewer ranks) | Drop to `kb_search` with the same query |
+| `"schema version N newer than supported"` on open | Vault opened by a newer `2nb` than the one installed | `brew upgrade apresai/tap/twonb` |
+
+## Worked JSON examples
+
+`2nb search --json` returns an envelope — decode `{mode, warnings, results}`, not a raw array:
+
+```bash
+$ 2nb search "authentication" --json --limit 2
+{
+  "mode": "hybrid",
+  "warnings": [],
+  "results": [
+    {
+      "path": "use-jwt-for-auth.md",
+      "title": "Use JWT for Auth",
+      "score": 0.0163,
+      "vector_score": 0.72,
+      "content": "...",
+      "type": "adr",
+      "status": "accepted"
+    }
+  ]
+}
+```
+
+Degraded state (provider swap without re-embed):
+
+```bash
+$ 2nb search "authentication" --json
+{
+  "mode": "keyword",
+  "warnings": ["semantic search disabled: vault was embedded with 1024d vectors but current provider \"openrouter\" produces 768d — run '2nb index --force-reembed' or switch provider back to the one that built this vault"],
+  "results": [...]
+}
+```
+
+`2nb ask --json` uses the same envelope shape:
+
+```bash
+$ 2nb ask "how does auth work?" --json
+{
+  "mode": "hybrid",
+  "warnings": [],
+  "answer": "Authentication uses JWT...",
+  "sources": ["use-jwt-for-auth.md", "debug-auth-failures.md"]
+}
+```
+
+**Always check `warnings[]` and `mode`** before assuming hybrid search ran. An agent that proceeds on empty results without checking `warnings` will report "no matches" when the real problem is a broken provider.
 
 ## Document Format
 

@@ -483,9 +483,10 @@ Export back to Obsidian anytime:
 make build          # CLI + macOS app
 make install        # CLI to /usr/local/bin, app to ~/Applications
 make test           # Go unit tests
+make test-battery   # Golden-path E2E battery (vault, CRUD, index, MCP, skills)
 make test-swift     # Swift unit tests (JSON decoding, parsing, wizard logic)
 make test-gui       # GUI tests (AppleScript automation)
-make test-all       # Go + Swift + GUI
+make test-all       # Go + battery + Swift + GUI
 ```
 
 Requires Go 1.24+, CGO_ENABLED=1, macOS 14+ (for Swift app).

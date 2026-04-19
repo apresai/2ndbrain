@@ -1,4 +1,4 @@
-.PHONY: build install clean test dev
+.PHONY: build install clean test test-e2e test-battery dev
 
 BINARY := 2nb
 VERSION := $(shell cat ../VERSION | tr -d '\n')
@@ -24,6 +24,9 @@ test:
 
 test-e2e:
 	go test -tags fts5 -race -v -run TestE2E -timeout 120s .
+
+test-battery:
+	go test -tags fts5 -race -v -run TestBattery -timeout 180s .
 
 dev: build
 	./$(BUILD_DIR)/$(BINARY) --help

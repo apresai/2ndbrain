@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app install clean test test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
+.PHONY: build build-cli build-app build-app-release package-app install clean test test-battery test-swift test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -59,6 +59,13 @@ clean:
 test:
 	$(MAKE) -C cli test
 
+# Golden-path end-to-end battery: one curated scenario per critical flow
+# (vault lifecycle, document CRUD, index rebuild, threshold, MCP lifecycle,
+# skills roundtrip). Faster to diagnose than the full test suite when one
+# of these flows regresses.
+test-battery:
+	$(MAKE) -C cli test-battery
+
 test-swift:
 	cd app && swift test
 
@@ -70,8 +77,10 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-ai.sh
 	SKIP_BUILD=1 ./tests/gui-test-index.sh
 	SKIP_BUILD=1 ./tests/gui-test-graph.sh
+	SKIP_BUILD=1 ./tests/gui-test-vault-switch.sh
+	SKIP_BUILD=1 ./tests/gui-test-polish.sh
 
-test-all: test test-swift test-gui
+test-all: test test-battery test-swift test-gui
 
 bump-build:
 	@echo "$(MAJOR).$(MINOR).$(shell echo $$(($(BUILD)+1)))" > VERSION
