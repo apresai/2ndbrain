@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.2] - 2026-04-19
+
+### Added
+- `models calibrate` command: samples random document pairs from the active vault, computes cosine similarity distribution (p50/p90/p95/p99), and recommends a threshold at p95+0.01; supports `--samples`, `--save`, `--scope`, and `--seed` flags
+- Per-model recommended similarity thresholds in the built-in model catalog (Nova-2: 0.65, Nemotron-VL: 0.60, nomic-embed-text: 0.50, mxbai/snowflake/bge-m3: 0.55, all-minilm: 0.35)
+- `--similarity-threshold` flag on `models add` to persist a custom threshold to the user catalog
+- `models list` now shows a THRESHOLD column with per-model recommendations
+- `ai status` now reports the active similarity threshold and its source (vault config / user calibration / model recommendation / default)
+- Search results now display RRF and cosine scores (`rrf=X.XXX, cos=Y.YYY`) inline for relevance transparency
+
+### Changed
+- Similarity threshold resolution follows a priority chain: vault `ai.similarity_threshold` → user catalog calibration → model's built-in recommendation → global default (0.20)
+
+
 ## [0.2.1] - 2026-04-19
 
 ## [0.2.1] - 2026-04-19
