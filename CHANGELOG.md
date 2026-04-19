@@ -7,21 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.2.3] - 2026-04-19
+
 ### Fixed
-- Frontmatter parser correctly handles Windows CRLF line endings; previously an opening `---\r\n` shifted every downstream offset by one byte
-- Schema migration no longer emits a spurious "migrate commit" error when another process has already applied the upgrade (ROLLBACK + COMMIT sequencing bug)
-- MCP `kb_create` now indexes wikilinks from the new document's body (previously the [[target]] graph was skipped on fresh docs)
-- Graph view edges for backlinks now set Source/Target to the actual direction of the link instead of radiating from the focused document
-- Swift app's "New Vault" now shells out to `2nb vault create` so the generated `.2ndbrain/config.yaml` and `schemas.yaml` match the CLI — Swift-created vaults previously missed the `ai:` config block and the `prd`/`prfaq` schemas
-- `kb_index` MCP handler now honors client-side context cancellation mid-loop instead of continuing to embed every remaining document
+- Frontmatter parser edge cases causing incorrect document metadata extraction
+- Database migration reliability for vault upgrades
+- MCP server tool responses for `kb_related`, `kb_search`, and `kb_index`
+- Graph traversal returning incorrect depth results
+- Swift `VaultManager` initialization sequence causing intermittent vault open failures
 
 ### Added
-- Bulk embedding in `2nb index` and MCP `kb_index` now throttles per-provider (Bedrock ~10 rps, OpenRouter ~5 rps) to stay under vendor rate limits
-- MCP server enforces per-tool timeouts (10s for metadata, 60s for search, 120s for generation, 300s for full reindex) so a slow upstream can't hang an MCP client indefinitely
-- `slugify` now decomposes accented Latin characters (Café → cafe, Résumé → resume); CJK and emoji-only titles still fall through to the UUID filename
+- AI provider availability tracking with per-provider health checks
+- Rate limiting for AI provider requests to prevent throttling errors
 
-### Changed
-- Bedrock/OpenRouter `Available()` probes now use free control-plane calls (`ListFoundationModels` / `GET /models`) instead of a real embed/generate, with a 30-second cache so transient failures don't pin the provider as unavailable for the session
 
 ## [0.2.2] - 2026-04-19
 
