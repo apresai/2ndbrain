@@ -91,12 +91,13 @@ func init() {
 }
 
 func runCompletionInstall(cmd *cobra.Command, args []string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+
 	dir := completionInstallDir
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("resolve home directory: %w", err)
-		}
 		dir = filepath.Join(home, ".zsh", "completions")
 	} else {
 		dir = expandPath(dir)
@@ -115,15 +116,69 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 	if err := rootCmd.GenZshCompletion(f); err != nil {
 		return fmt.Errorf("generate zsh completion: %w", err)
 	}
-
 	fmt.Fprintf(cmd.ErrOrStderr(), "Installed zsh completion to %s\n", target)
-	if !flagPorcelain {
-		fmt.Fprintln(cmd.ErrOrStderr())
-		fmt.Fprintln(cmd.ErrOrStderr(), "If tab-completion doesn't work in a new shell, add this to ~/.zshrc:")
+
+	zshrcPath := filepath.Join(home, ".zshrc")
+	added, err := updateZshrc(zshrcPath, dir)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not update %s: %v\n", zshrcPath, err)
+		fmt.Fprintln(cmd.ErrOrStderr(), "Add this to your ~/.zshrc manually:")
 		fmt.Fprintf(cmd.ErrOrStderr(), "  fpath=(%s $fpath)\n", dir)
-		fmt.Fprintln(cmd.ErrOrStderr(), "  autoload -Uz compinit && compinit")
+		fmt.Fprintln(cmd.ErrOrStderr(), "  autoload -Uz compinit && compinit -i")
+	} else if added {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Updated %s with completion init block.\n", zshrcPath)
+		fmt.Fprintln(cmd.ErrOrStderr(), "Restart your shell or run: source ~/.zshrc")
+	} else {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Shell config %s already has completion block — no changes made.\n", zshrcPath)
 	}
+
 	return nil
+}
+
+const zshrcBlockBegin = "# BEGIN 2nb completion managed block"
+const zshrcBlockEnd = "# END 2nb completion managed block"
+
+func updateZshrc(zshrcPath, completionDir string) (added bool, err error) {
+	existing, err := os.ReadFile(zshrcPath)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read %s: %w", zshrcPath, err)
+	}
+
+	existingStr := string(existing)
+	if strings.Contains(existingStr, zshrcBlockBegin) {
+		return false, nil
+	}
+
+	block := buildZshrcBlock(completionDir)
+
+	var buf strings.Builder
+	if len(existingStr) > 0 {
+		buf.WriteString(existingStr)
+		if !strings.HasSuffix(existingStr, "\n") {
+			buf.WriteByte('\n')
+		}
+		buf.WriteByte('\n')
+	}
+	buf.WriteString(block)
+	buf.WriteByte('\n')
+
+	if err = os.WriteFile(zshrcPath, []byte(buf.String()), 0o644); err != nil {
+		return false, fmt.Errorf("write %s: %w", zshrcPath, err)
+	}
+	return true, nil
+}
+
+func buildZshrcBlock(completionDir string) string {
+	var b strings.Builder
+	b.WriteString(zshrcBlockBegin + "\n")
+	fmt.Fprintf(&b, "fpath=(%s $fpath)\n", completionDir)
+	b.WriteString("[[ -d /opt/homebrew/share/zsh/site-functions ]] && fpath=(/opt/homebrew/share/zsh/site-functions $fpath)\n")
+	b.WriteString("if ! whence compdef >/dev/null 2>&1; then\n")
+	b.WriteString("  autoload -Uz compinit\n")
+	b.WriteString("  compinit -i\n")
+	b.WriteString("fi\n")
+	b.WriteString(zshrcBlockEnd)
+	return b.String()
 }
 
 // -----------------------------------------------------------------------------
