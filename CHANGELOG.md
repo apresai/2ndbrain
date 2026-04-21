@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.6] - 2026-04-21
+
+### Fixed
+- `completion install` now works when gcloud, Homebrew, or other tools run `compinit` before 2ndbrain's completion block
+
+
 ## [0.2.5] - 2026-04-21
 
 ### Changed
