@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.4] - 2026-04-21
+
+## [0.2.4] - 2026-04-21
+
+### Added
+- `completion install` now automatically updates `~/.zshrc` with the required `fpath` entry and `compinit` block — no manual shell config edits needed after running the command
+- Golden-path E2E battery test suite covering core CLI workflows (`cli/battery_test.go`)
+- GUI test scripts for polish diff flow and vault-switch persistence
+
+### Changed
+- Updated `2ndbrain-skill.md` agent skill content with expanded MCP vs CLI guidance and test battery design
+
+
 ## [0.2.3] - 2026-04-19
 
 ### Fixed
