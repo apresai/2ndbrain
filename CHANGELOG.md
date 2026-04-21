@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.5] - 2026-04-21
+
+### Changed
+- `completion install` is now hardened for real-world zsh setups: handles existing `fpath` entries, early-return guards in `.zshrc`, missing completion directories, and multiple `2nb` binaries on PATH
+
+### Added
+- Test suite for `completion install` covering edge cases in `.zshrc` parsing and completion directory detection
+
+
 ## [0.2.4] - 2026-04-21
 
 ## [0.2.4] - 2026-04-21
