@@ -38,8 +38,11 @@ func TestUpdateZshrc_FreshInsert(t *testing.T) {
 	if !strings.Contains(s, "if [[ -o interactive ]]; then") {
 		t.Error("missing interactive shell guard")
 	}
-	if !strings.Contains(s, "compinit") {
+	if !strings.Contains(s, "autoload -Uz compinit") {
 		t.Error("missing compinit")
+	}
+	if strings.Contains(s, "whence compdef") {
+		t.Error("block should not have whence compdef guard — compinit must always run")
 	}
 }
 
@@ -224,7 +227,6 @@ func TestBuildZshrcBlock_Contents(t *testing.T) {
 		"if [[ -o interactive ]]; then",
 		"fpath=(/home/user/.zsh/completions $fpath)",
 		"/opt/homebrew/share/zsh/site-functions",
-		"whence compdef",
 		"autoload -Uz compinit",
 		"compinit -i",
 	}
@@ -350,6 +352,86 @@ func TestGetBinaryVersion(t *testing.T) {
 	}
 }
 
+func TestUpdateZshrc_PlacesBlockBeforeExistingCompinit(t *testing.T) {
+	dir := t.TempDir()
+	zshrc := filepath.Join(dir, ".zshrc")
+	existing := strings.Join([]string{
+		"# zshrc",
+		"export PATH=$HOME/bin:$PATH",
+		`source "$HOME/google-cloud-sdk/completion.zsh.inc"`,
+		"autoload -Uz compinit",
+		"compinit -i",
+		"",
+	}, "\n")
+	if err := os.WriteFile(zshrc, []byte(existing), 0o644); err != nil {
+		t.Fatalf("write zshrc: %v", err)
+	}
+
+	completionDir := filepath.Join(dir, ".zsh", "completions")
+	added, err := updateZshrc(zshrc, completionDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !added {
+		t.Fatal("expected added=true")
+	}
+
+	content, err := os.ReadFile(zshrc)
+	if err != nil {
+		t.Fatalf("read zshrc: %v", err)
+	}
+	s := string(content)
+	blockIdx := strings.Index(s, zshrcBlockBegin)
+	// Block must land before the gcloud source line so our fpath is set up
+	// before gcloud's compinit runs.
+	gcloudIdx := strings.Index(s, "google-cloud-sdk")
+	if blockIdx == -1 || gcloudIdx == -1 {
+		t.Fatalf("missing block (%d) or gcloud line (%d)", blockIdx, gcloudIdx)
+	}
+	if blockIdx > gcloudIdx {
+		t.Fatalf("managed block must be before gcloud completion source (block at %d, gcloud at %d)", blockIdx, gcloudIdx)
+	}
+}
+
+func TestUpdateZshrc_PlacesBlockBeforeExistingFpath(t *testing.T) {
+	dir := t.TempDir()
+	zshrc := filepath.Join(dir, ".zshrc")
+	existing := strings.Join([]string{
+		"# zshrc",
+		"export PATH=$HOME/bin:$PATH",
+		"fpath=(/opt/homebrew/share/zsh/site-functions $fpath)",
+		"autoload -Uz compinit",
+		"compinit -i",
+		"",
+	}, "\n")
+	if err := os.WriteFile(zshrc, []byte(existing), 0o644); err != nil {
+		t.Fatalf("write zshrc: %v", err)
+	}
+
+	completionDir := filepath.Join(dir, ".zsh", "completions")
+	added, err := updateZshrc(zshrc, completionDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !added {
+		t.Fatal("expected added=true")
+	}
+
+	content, err := os.ReadFile(zshrc)
+	if err != nil {
+		t.Fatalf("read zshrc: %v", err)
+	}
+	s := string(content)
+	blockIdx := strings.Index(s, zshrcBlockBegin)
+	fpathIdx := strings.Index(s, "fpath=(/opt/homebrew")
+	if blockIdx == -1 || fpathIdx == -1 {
+		t.Fatalf("missing block (%d) or existing fpath line (%d)", blockIdx, fpathIdx)
+	}
+	if blockIdx > fpathIdx {
+		t.Fatalf("managed block must be before existing fpath line (block at %d, fpath at %d)", blockIdx, fpathIdx)
+	}
+}
+
 func TestFirstTopLevelReturnOrExitLine(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -400,6 +482,53 @@ func TestFirstTopLevelReturnOrExitLine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := firstTopLevelReturnOrExitLine(tc.lines)
+			if got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFirstCompletionSetupLine(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+		want  int
+	}{
+		{
+			name:  "explicit compinit",
+			lines: []string{"export X=1", "autoload -Uz compinit", "compinit -i"},
+			want:  1,
+		},
+		{
+			name:  "fpath assignment",
+			lines: []string{"export X=1", "fpath=(/opt/homebrew/share/zsh/site-functions $fpath)"},
+			want:  1,
+		},
+		{
+			name:  "gcloud source completion",
+			lines: []string{"export X=1", `source "$HOME/google-cloud-sdk/completion.zsh.inc"`, "compinit"},
+			want:  1,
+		},
+		{
+			name:  "dot-source completion",
+			lines: []string{"export X=1", `. "$HOME/google-cloud-sdk/completion.zsh.inc"`, "compinit"},
+			want:  1,
+		},
+		{
+			name:  "no completion setup",
+			lines: []string{"export X=1", "alias ll='ls -la'"},
+			want:  -1,
+		},
+		{
+			name:  "skip indented compinit",
+			lines: []string{"if true; then", "  compinit", "fi"},
+			want:  -1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := firstCompletionSetupLine(tc.lines)
 			if got != tc.want {
 				t.Errorf("got %d, want %d", got, tc.want)
 			}

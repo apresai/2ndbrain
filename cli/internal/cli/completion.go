@@ -164,10 +164,8 @@ func buildZshrcBlock(completionDir string) string {
 	b.WriteString("if [[ -o interactive ]]; then\n")
 	fmt.Fprintf(&b, "  fpath=(%s $fpath)\n", completionDir)
 	b.WriteString("  [[ -d /opt/homebrew/share/zsh/site-functions ]] && fpath=(/opt/homebrew/share/zsh/site-functions $fpath)\n")
-	b.WriteString("  if ! whence compdef >/dev/null 2>&1; then\n")
-	b.WriteString("    autoload -Uz compinit\n")
-	b.WriteString("    compinit -i\n")
-	b.WriteString("  fi\n")
+	b.WriteString("  autoload -Uz compinit\n")
+	b.WriteString("  compinit -i\n")
 	b.WriteString("fi\n")
 	b.WriteString(zshrcBlockEnd)
 	return b.String()
@@ -204,6 +202,9 @@ func injectManagedZshrcBlock(content, block string) string {
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	insertAt := firstTopLevelReturnOrExitLine(lines)
 	if insertAt < 0 {
+		insertAt = firstCompletionSetupLine(lines)
+	}
+	if insertAt < 0 {
 		return strings.TrimRight(content, "\n") + "\n\n" + block + "\n"
 	}
 	before := strings.TrimRight(strings.Join(lines[:insertAt], "\n"), "\n")
@@ -239,6 +240,34 @@ func firstTopLevelReturnOrExitLine(lines []string) int {
 		}
 		// if-block guard whose only body is return/exit.
 		if (strings.HasPrefix(t, "if ") || t == "if") && isSimpleReturnBlock(lines, i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstCompletionSetupLine returns the index of the first unindented line that
+// performs completion setup: an explicit compinit call, an fpath assignment, or
+// a source of a file whose path contains "completion" or "compinit". Used as a
+// fallback insertion point when no early-return guard is found, so our fpath
+// update lands before any existing compinit — avoiding the case where compinit
+// runs before our directory is in fpath.
+func firstCompletionSetupLine(lines []string) int {
+	for i, line := range lines {
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			continue
+		}
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if hasWordPrefix(t, "compinit") || strings.HasPrefix(t, "fpath=") ||
+			(hasWordPrefix(t, "autoload") && strings.Contains(t, "compinit")) {
+			return i
+		}
+		// `source .../completion.zsh.inc` or `. .../compinit` etc.
+		if (strings.HasPrefix(t, "source ") || (len(t) >= 2 && t[0] == '.' && t[1] == ' ')) &&
+			(strings.Contains(t, "completion") || strings.Contains(t, "compinit")) {
 			return i
 		}
 	}
