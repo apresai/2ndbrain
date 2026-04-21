@@ -237,7 +237,7 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `config set` | `<key> <value>` | Write a config value |
 | `config set-key` | `<provider>` | Store API key in macOS Keychain |
 | `completion` | `zsh|bash|fish|powershell` | Emit shell completion script to stdout |
-| `completion install` | `--dir <path>` | Install zsh completion to `~/.zsh/completions/_2nb` (or `--dir`); idempotently updates `~/.zshrc` with fpath + compinit block |
+| `completion install` | `--dir <path>` | Install zsh completion to the existing completion dir from `.zshrc` (or `~/.zsh/completions/_2nb`, or `--dir`); idempotently updates `~/.zshrc` with fpath + compinit block placed before any early-return guards; warns with version info if multiple `2nb` binaries are found on PATH |
 
 **Shell completion:** subcommands, flags, and most values tab-complete (vault paths, doc `.md` paths, schema types/statuses, agent slugs, model IDs, AI providers). Run `2nb completion install` once; completions dispatch to the built binary so they stay fresh as commands evolve. Homebrew installs the completion scripts automatically via GoReleaser — for non-brew installs use `completion install`.
 

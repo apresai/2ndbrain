@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/skills"
@@ -95,16 +101,10 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-
-	dir := completionInstallDir
-	if dir == "" {
-		dir = filepath.Join(home, ".zsh", "completions")
-	} else {
-		dir = expandPath(dir)
-	}
-
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
+	zshrcPath := filepath.Join(home, ".zshrc")
+	dir, err := resolveCompletionInstallDir(completionInstallDir, zshrcPath, home)
+	if err != nil {
+		return err
 	}
 
 	target := filepath.Join(dir, "_2nb")
@@ -118,7 +118,6 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Installed zsh completion to %s\n", target)
 
-	zshrcPath := filepath.Join(home, ".zshrc")
 	added, err := updateZshrc(zshrcPath, dir)
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not update %s: %v\n", zshrcPath, err)
@@ -131,6 +130,7 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Shell config %s already has completion block — no changes made.\n", zshrcPath)
 	}
+	warnIfMultiple2nbOnPath(cmd.ErrOrStderr())
 
 	return nil
 }
@@ -145,24 +145,14 @@ func updateZshrc(zshrcPath, completionDir string) (added bool, err error) {
 	}
 
 	existingStr := string(existing)
-	if strings.Contains(existingStr, zshrcBlockBegin) {
-		return false, nil
-	}
 
 	block := buildZshrcBlock(completionDir)
-
-	var buf strings.Builder
-	if len(existingStr) > 0 {
-		buf.WriteString(existingStr)
-		if !strings.HasSuffix(existingStr, "\n") {
-			buf.WriteByte('\n')
-		}
-		buf.WriteByte('\n')
+	withoutManaged := stripManagedZshrcBlock(existingStr)
+	updated := injectManagedZshrcBlock(withoutManaged, block)
+	if strings.TrimRight(existingStr, "\n") == strings.TrimRight(updated, "\n") {
+		return false, nil
 	}
-	buf.WriteString(block)
-	buf.WriteByte('\n')
-
-	if err = os.WriteFile(zshrcPath, []byte(buf.String()), 0o644); err != nil {
+	if err = os.WriteFile(zshrcPath, []byte(updated), 0o644); err != nil {
 		return false, fmt.Errorf("write %s: %w", zshrcPath, err)
 	}
 	return true, nil
@@ -171,14 +161,357 @@ func updateZshrc(zshrcPath, completionDir string) (added bool, err error) {
 func buildZshrcBlock(completionDir string) string {
 	var b strings.Builder
 	b.WriteString(zshrcBlockBegin + "\n")
-	fmt.Fprintf(&b, "fpath=(%s $fpath)\n", completionDir)
-	b.WriteString("[[ -d /opt/homebrew/share/zsh/site-functions ]] && fpath=(/opt/homebrew/share/zsh/site-functions $fpath)\n")
-	b.WriteString("if ! whence compdef >/dev/null 2>&1; then\n")
-	b.WriteString("  autoload -Uz compinit\n")
-	b.WriteString("  compinit -i\n")
+	b.WriteString("if [[ -o interactive ]]; then\n")
+	fmt.Fprintf(&b, "  fpath=(%s $fpath)\n", completionDir)
+	b.WriteString("  [[ -d /opt/homebrew/share/zsh/site-functions ]] && fpath=(/opt/homebrew/share/zsh/site-functions $fpath)\n")
+	b.WriteString("  if ! whence compdef >/dev/null 2>&1; then\n")
+	b.WriteString("    autoload -Uz compinit\n")
+	b.WriteString("    compinit -i\n")
+	b.WriteString("  fi\n")
 	b.WriteString("fi\n")
 	b.WriteString(zshrcBlockEnd)
 	return b.String()
+}
+
+func stripManagedZshrcBlock(content string) string {
+	if strings.TrimRight(content, "\n") == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	inBlock := false
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == zshrcBlockBegin {
+			inBlock = true
+			continue
+		}
+		if inBlock {
+			if t == zshrcBlockEnd {
+				inBlock = false
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n")
+}
+
+func injectManagedZshrcBlock(content, block string) string {
+	if strings.TrimRight(content, "\n") == "" {
+		return block + "\n"
+	}
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	insertAt := firstTopLevelReturnOrExitLine(lines)
+	if insertAt < 0 {
+		return strings.TrimRight(content, "\n") + "\n\n" + block + "\n"
+	}
+	before := strings.TrimRight(strings.Join(lines[:insertAt], "\n"), "\n")
+	after := strings.TrimLeft(strings.Join(lines[insertAt:], "\n"), "\n")
+	parts := make([]string, 0, 3)
+	if before != "" {
+		parts = append(parts, before)
+	}
+	parts = append(parts, block)
+	if after != "" {
+		parts = append(parts, after)
+	}
+	return strings.Join(parts, "\n\n") + "\n"
+}
+
+func firstTopLevelReturnOrExitLine(lines []string) int {
+	for i, line := range lines {
+		// Indented lines are inside a block — never top-level guards.
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			continue
+		}
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		// Bare return/exit at top level.
+		if hasWordPrefix(t, "return") || hasWordPrefix(t, "exit") {
+			return i
+		}
+		// One-liner guards: `[[ cond ]] && return`, `cond || exit`, etc.
+		if hasInlineReturnOrExit(t) {
+			return i
+		}
+		// if-block guard whose only body is return/exit.
+		if (strings.HasPrefix(t, "if ") || t == "if") && isSimpleReturnBlock(lines, i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// hasInlineReturnOrExit detects one-liner guards like `[[ cond ]] && return`.
+func hasInlineReturnOrExit(line string) bool {
+	for _, tok := range []string{"&& return", "|| return", "; return", "&& exit", "|| exit", "; exit"} {
+		idx := strings.Index(line, tok)
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+len(tok):])
+		// Accept: end of line, comment, semicolon, or return code digit.
+		if rest == "" || rest[0] == '#' || rest[0] == ';' || (rest[0] >= '0' && rest[0] <= '9') {
+			return true
+		}
+	}
+	return false
+}
+
+// isSimpleReturnBlock reports whether the if-block whose header is at ifIdx
+// has only return/exit as its then-branch body (i.e., it's a guard, not logic).
+func isSimpleReturnBlock(lines []string, ifIdx int) bool {
+	for j := ifIdx + 1; j < len(lines); j++ {
+		t := strings.TrimSpace(lines[j])
+		if t == "" || strings.HasPrefix(t, "#") || t == "then" {
+			continue
+		}
+		if t == "fi" {
+			return false // closed without a return — not a guard
+		}
+		if t == "else" || t == "elif" || strings.HasPrefix(t, "elif ") {
+			return false // multi-branch if — not a simple guard
+		}
+		if hasWordPrefix(t, "return") || hasWordPrefix(t, "exit") || hasInlineReturnOrExit(t) {
+			return true
+		}
+		return false // other commands in the block
+	}
+	return false
+}
+
+func hasWordPrefix(s, word string) bool {
+	if !strings.HasPrefix(s, word) {
+		return false
+	}
+	if len(s) == len(word) {
+		return true
+	}
+	next := s[len(word)]
+	return next == ' ' || next == '\t'
+}
+
+func resolveCompletionInstallDir(explicitDir, zshrcPath, home string) (string, error) {
+	if explicitDir != "" {
+		dir := expandPath(explicitDir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", fmt.Errorf("create %s: %w", dir, err)
+		}
+		return dir, nil
+	}
+	candidates := completionDirCandidates(zshrcPath, home)
+	var errs []string
+	for _, dir := range candidates {
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			return dir, nil
+		} else {
+			errs = append(errs, fmt.Sprintf("%s: %v", dir, err))
+		}
+	}
+	return "", fmt.Errorf("create completion directory: %s", strings.Join(errs, "; "))
+}
+
+func completionDirCandidates(zshrcPath, home string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+
+	if data, err := os.ReadFile(zshrcPath); err == nil {
+		for _, dir := range completionDirsFromZshrc(string(data), home) {
+			if _, ok := seen[dir]; ok {
+				continue
+			}
+			seen[dir] = struct{}{}
+			out = append(out, dir)
+		}
+	}
+
+	defaults := []string{
+		filepath.Join(home, ".zsh", "completions"),
+		filepath.Join(home, ".zfunc"),
+		"/opt/homebrew/share/zsh/site-functions",
+		"/usr/local/share/zsh/site-functions",
+	}
+	for _, dir := range defaults {
+		dir = filepath.Clean(dir)
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		out = append(out, dir)
+	}
+	return out
+}
+
+var completionDirTokenRE = regexp.MustCompile(`(?:~|\$HOME|/)[^ \t\n\r"')()]*?(?:completions?|site-functions|zfunc)[^ \t\n\r"')()]*`)
+
+func completionDirsFromZshrc(content, home string) []string {
+	matches := completionDirTokenRE.FindAllString(content, -1)
+	seen := map[string]struct{}{}
+	var homeDirs []string
+	var otherDirs []string
+
+	for _, token := range matches {
+		dir := normalizeCompletionDirToken(token, home)
+		if dir == "" {
+			continue
+		}
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		if dir == home || strings.HasPrefix(dir, home+string(os.PathSeparator)) {
+			homeDirs = append(homeDirs, dir)
+		} else {
+			otherDirs = append(otherDirs, dir)
+		}
+	}
+
+	return append(homeDirs, otherDirs...)
+}
+
+func normalizeCompletionDirToken(token, home string) string {
+	token = strings.TrimSpace(token)
+	switch {
+	case token == "~":
+		token = home
+	case strings.HasPrefix(token, "~/"):
+		token = filepath.Join(home, token[2:])
+	case token == "$HOME":
+		token = home
+	case strings.HasPrefix(token, "$HOME/"):
+		token = filepath.Join(home, token[len("$HOME/"):])
+	}
+	token = filepath.Clean(token)
+	if token == "" || !filepath.IsAbs(token) {
+		return ""
+	}
+	return token
+}
+
+func warnIfMultiple2nbOnPath(w io.Writer) {
+	paths := findExecutablesOnPATH("2nb", os.Getenv("PATH"))
+	if len(paths) <= 1 {
+		return
+	}
+
+	active, _ := exec.LookPath("2nb")
+	if active != "" {
+		if abs, err := filepath.Abs(active); err == nil {
+			active = abs
+		}
+		if real, err := filepath.EvalSymlinks(active); err == nil {
+			active = real
+		}
+	}
+
+	// Fetch versions in parallel — each probe has a 1 s timeout.
+	var mu sync.Mutex
+	versions := make(map[string]string, len(paths))
+	var wg sync.WaitGroup
+	for _, p := range paths {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+			v := getBinaryVersion(p)
+			mu.Lock()
+			versions[p] = v
+			mu.Unlock()
+		}(p)
+	}
+	wg.Wait()
+
+	fmt.Fprintln(w, "Warning: multiple 2nb binaries found on PATH:")
+	hasHomebrew, hasManual := false, false
+	for _, p := range paths {
+		marker := " -"
+		if active != "" && sameExecutablePath(active, p) {
+			marker = " *"
+		}
+		label := ""
+		if looksLikeHomebrewPath(p) {
+			label = "  [Homebrew]"
+			hasHomebrew = true
+		} else {
+			hasManual = true
+		}
+		fmt.Fprintf(w, "  %s %s  v%s%s\n", marker, p, versions[p], label)
+	}
+	fmt.Fprintln(w, "  (* = active binary used when you run `2nb`)")
+	if hasHomebrew && hasManual {
+		fmt.Fprintln(w, "Tip: you have both a Homebrew-managed install and a manual install.")
+		fmt.Fprintln(w, "  Keep Homebrew: remove the manual copy  →  rm $(which 2nb)  (run for each non-Homebrew path above)")
+		fmt.Fprintln(w, "  Keep manual:   unlink Homebrew         →  brew unlink apresai/tap/twonb")
+	} else {
+		fmt.Fprintln(w, "Remove duplicates or reorder PATH so the version you want comes first.")
+	}
+}
+
+// getBinaryVersion runs `path --version` with a 1 s timeout and returns the
+// last space-delimited token from the output (Cobra format: "2nb version 0.2.4").
+// Returns "unknown" if the probe fails or the output is empty.
+func getBinaryVersion(path string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil || len(out) == 0 {
+		return "unknown"
+	}
+	parts := strings.Fields(string(out))
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return parts[len(parts)-1]
+}
+
+func looksLikeHomebrewPath(p string) bool {
+	return strings.Contains(p, "/homebrew/") ||
+		strings.Contains(p, "/Homebrew/") ||
+		strings.Contains(p, "/Cellar/")
+}
+
+func findExecutablesOnPATH(name, pathEnv string) []string {
+	seenCanonical := map[string]struct{}{}
+	var out []string
+
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		abs := candidate
+		if v, err := filepath.Abs(candidate); err == nil {
+			abs = v
+		}
+		canonical := abs
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			canonical = real
+		}
+		if _, ok := seenCanonical[canonical]; ok {
+			continue
+		}
+		seenCanonical[canonical] = struct{}{}
+		out = append(out, abs)
+	}
+	return out
+}
+
+func sameExecutablePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }
 
 // -----------------------------------------------------------------------------

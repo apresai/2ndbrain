@@ -55,7 +55,7 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 
 > The legacy `2nb init` command still works (it prints a deprecation notice). Prefer `2nb vault create <path>`.
 >
-> Homebrew installs shell completions automatically. For manual installs, `2nb completion install` writes the zsh script to `~/.zsh/completions/_2nb` and automatically updates `~/.zshrc` with the required fpath and compinit block. Re-running is safe — it won't duplicate the block.
+> Homebrew installs shell completions automatically. For manual installs, `2nb completion install` detects your existing completion directory from `.zshrc` (falling back to `~/.zsh/completions/_2nb`) and updates `.zshrc` with the required `fpath` and `compinit` block, placed before any early-return guards. Re-running is safe — the block is replaced in-place, not duplicated. If multiple `2nb` binaries are found on PATH, a warning is printed showing each binary's version and which is active.
 
 ## Features
 
