@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.8] - 2026-04-22
+
+### Changed
+- `GenOpts.Temperature` is now `*float64`; pass `nil` to omit temperature from the request (model uses its default), or use `ai.Ptr(value)` to set an explicit value
+
+### Fixed
+- Bedrock generation no longer fails permanently when a model rejects the `temperature` inference parameter; the generator retries once without temperature and caches the result for the process lifetime
+
+
 ## [0.2.7] - 2026-04-22
 
 ### Fixed
