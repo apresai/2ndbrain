@@ -158,7 +158,9 @@ func TestDetectEmbedFormat(t *testing.T) {
 		{"amazon.nova-pro-v1:0", fmtNova},
 		{"amazon.titan-embed-text-v1", fmtTitanV1},
 		{"amazon.titan-embed-text-v2:0", fmtTitanV2},
-		{"amazon.titan-embed-image-v1", fmtTitanV2}, // titan-embed- prefix → v2 path
+		{"amazon.titan-embed-image-v1", fmtTitanImage},
+		{"amazon.titan-embed-image-v1:0", fmtTitanImage},
+		{"amazon.titan-embed-g1-text-02", fmtTitanV1},
 		{"cohere.embed-english-v3", fmtCohere},
 		{"cohere.embed-multilingual-v3", fmtCohere},
 		{"cohere.embed-english-v4", fmtCohere},
@@ -222,6 +224,57 @@ func TestInferProviderGlobal(t *testing.T) {
 		got := InferProvider(id)
 		if got != "bedrock" {
 			t.Errorf("InferProvider(%q) = %q, want bedrock", id, got)
+		}
+	}
+}
+
+func TestDetectEmbedFormatGeoPrefix(t *testing.T) {
+	tests := []struct {
+		modelID string
+		want    bedrockEmbedFmt
+	}{
+		{"us.cohere.embed-v4:0", fmtCohere},
+		{"global.cohere.embed-v4:0", fmtCohere},
+		{"eu.cohere.embed-multilingual-v3", fmtCohere},
+		{"us.amazon.titan-embed-text-v2:0", fmtTitanV2},
+		{"ap.amazon.nova-2-multimodal-embeddings-v1:0", fmtNova},
+	}
+	for _, tt := range tests {
+		got := detectEmbedFormat(tt.modelID)
+		if got != tt.want {
+			t.Errorf("detectEmbedFormat(%q) = %d, want %d", tt.modelID, got, tt.want)
+		}
+	}
+}
+
+func TestIsContextWindowVariantID(t *testing.T) {
+	yes := []string{
+		"amazon.nova-lite-v1:0:24k",
+		"amazon.nova-micro-v1:0:128k",
+		"amazon.nova-premier-v1:0:1000k",
+		"amazon.nova-premier-v1:0:mm",
+		"amazon.titan-embed-text-v1:2:8k",
+		"amazon.titan-embed-text-v2:0:8k",
+		"cohere.embed-english-v3:0:512",
+		"anthropic.claude-3-haiku-20240307-v1:0:200k",
+		"anthropic.claude-3-haiku-20240307-v1:0:48k",
+	}
+	no := []string{
+		"amazon.nova-lite-v1:0",
+		"amazon.titan-embed-text-v2:0",
+		"anthropic.claude-3-haiku-20240307-v1:0",
+		"cohere.embed-english-v3",
+		"us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"amazon.nova-micro-v1:0",
+	}
+	for _, id := range yes {
+		if !isContextWindowVariantID(id) {
+			t.Errorf("isContextWindowVariantID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range no {
+		if isContextWindowVariantID(id) {
+			t.Errorf("isContextWindowVariantID(%q) = true, want false", id)
 		}
 	}
 }

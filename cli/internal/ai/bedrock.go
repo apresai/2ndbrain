@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -138,15 +139,32 @@ type titanV2EmbedResponse struct {
 	} `json:"embeddingsByType"`
 }
 
-// Cohere Embed v3 — batched (≤96 texts per call), fixed 1024 dims
+// Cohere Embed — batched (≤96 texts per call), fixed 1024 dims.
+// v3 response: {"embeddings": [[...],...]}
+// v4 response: {"embeddings": {"float": [[...],...]}
 type cohereEmbedRequest struct {
 	Texts     []string `json:"texts"`
 	InputType string   `json:"input_type"`
 	Truncate  string   `json:"truncate,omitempty"`
 }
 
-type cohereEmbedResponse struct {
-	Embeddings [][]float32 `json:"embeddings"`
+// parseCohereEmbeddings decodes either the v3 flat array or the v4 typed object.
+func parseCohereEmbeddings(body []byte) ([][]float32, error) {
+	var v3 struct {
+		Embeddings [][]float32 `json:"embeddings"`
+	}
+	if err := json.Unmarshal(body, &v3); err == nil && len(v3.Embeddings) > 0 {
+		return v3.Embeddings, nil
+	}
+	var v4 struct {
+		Embeddings struct {
+			Float [][]float32 `json:"float"`
+		} `json:"embeddings"`
+	}
+	if err := json.Unmarshal(body, &v4); err == nil && len(v4.Embeddings.Float) > 0 {
+		return v4.Embeddings.Float, nil
+	}
+	return nil, fmt.Errorf("unrecognized Cohere embed response format")
 }
 
 // ── Embedding format detection ─────────────────────────────────────────────
@@ -154,19 +172,25 @@ type cohereEmbedResponse struct {
 type bedrockEmbedFmt int
 
 const (
-	fmtNova    bedrockEmbedFmt = iota
-	fmtTitanV1
-	fmtTitanV2
-	fmtCohere
+	fmtNova      bedrockEmbedFmt = iota
+	fmtTitanV1                   // simple {"inputText":...} → {"embedding":[...]}
+	fmtTitanV2                   // {"inputText":..., "dimensions":N, ...} → {"embeddingsByType":...}
+	fmtTitanImage                // image-only model, not supported for text embedding
+	fmtCohere                    // batched {"texts":[...]} → {"embeddings":[[...],...]}
 )
 
 func detectEmbedFormat(modelID string) bedrockEmbedFmt {
-	lower := strings.ToLower(modelID)
+	// Strip inference profile geo prefix (us./eu./ap./global.) before matching.
+	lower := strings.ToLower(inferenceProfileBaseID(modelID))
 	switch {
 	case strings.HasPrefix(lower, "cohere.embed-"):
 		return fmtCohere
 	case lower == "amazon.titan-embed-text-v1":
 		return fmtTitanV1
+	case strings.HasPrefix(lower, "amazon.titan-embed-g1-"):
+		return fmtTitanV1
+	case strings.HasPrefix(lower, "amazon.titan-embed-image-"):
+		return fmtTitanImage
 	case strings.HasPrefix(lower, "amazon.titan-embed-"):
 		return fmtTitanV2
 	default:
@@ -184,6 +208,8 @@ func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float3
 		return b.embedTitanV1(ctx, texts)
 	case fmtTitanV2:
 		return b.embedTitanV2(ctx, texts)
+	case fmtTitanImage:
+		return nil, fmt.Errorf("titan image embedding model requires image input — text embedding not supported")
 	default:
 		return b.embedNova(ctx, texts)
 	}
@@ -315,14 +341,14 @@ func (b *BedrockEmbedder) embedCohere(ctx context.Context, texts []string) ([][]
 		if err != nil {
 			return nil, err
 		}
-		var embedResp cohereEmbedResponse
-		if err := json.Unmarshal(body, &embedResp); err != nil {
+		embs, err := parseCohereEmbeddings(body)
+		if err != nil {
 			return nil, fmt.Errorf("unmarshal embed response: %w", err)
 		}
-		if len(embedResp.Embeddings) != len(batch) {
-			return nil, fmt.Errorf("expected %d embeddings, got %d", len(batch), len(embedResp.Embeddings))
+		if len(embs) != len(batch) {
+			return nil, fmt.Errorf("expected %d embeddings, got %d", len(batch), len(embs))
 		}
-		for j, emb := range embedResp.Embeddings {
+		for j, emb := range embs {
 			results[start+j] = emb
 		}
 	}
@@ -350,7 +376,8 @@ type BedrockGenerator struct {
 	model         string
 	region        string
 	avail         availableCache
-	noTemperature atomic.Bool // cached: model rejects temperature in InferenceConfiguration
+	noTemperature  atomic.Bool // cached: model rejects temperature in InferenceConfiguration
+	noSystemPrompt atomic.Bool // cached: model rejects system prompts
 }
 
 // NewBedrockGenerator creates a Bedrock generation provider.
@@ -401,7 +428,7 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 		InferenceConfig: inferCfg,
 	}
 
-	if opts.SystemPrompt != "" {
+	if opts.SystemPrompt != "" && !b.noSystemPrompt.Load() {
 		input.System = []types.SystemContentBlock{
 			&types.SystemContentBlockMemberText{Value: opts.SystemPrompt},
 		}
@@ -416,6 +443,12 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 			inferCfg.Temperature = nil
 			resp, err = b.client.Converse(ctx, input)
 		}
+		// Some models reject system prompts. Retry without one and cache for this process.
+		if err != nil && opts.SystemPrompt != "" && !b.noSystemPrompt.Load() && isSystemPromptRejected(err) {
+			b.noSystemPrompt.Store(true)
+			input.System = nil
+			resp, err = b.client.Converse(ctx, input)
+		}
 		if err != nil {
 			return "", fmt.Errorf("converse %s: %w", b.model, err)
 		}
@@ -426,12 +459,22 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 		return "", fmt.Errorf("empty response from %s", b.model)
 	}
 
-	text, ok := msg.Value.Content[0].(*types.ContentBlockMemberText)
-	if !ok {
-		return "", fmt.Errorf("unexpected content type from %s", b.model)
+	// Iterate content blocks — reasoning models emit non-text blocks first.
+	for _, block := range msg.Value.Content {
+		if t, ok := block.(*types.ContentBlockMemberText); ok {
+			return t.Value, nil
+		}
 	}
-
-	return text.Value, nil
+	// Fallback: some models (e.g. DeepSeek R1) embed their answer inside a
+	// reasoning content block rather than emitting a separate text block.
+	for _, block := range msg.Value.Content {
+		if r, ok := block.(*types.ContentBlockMemberReasoningContent); ok {
+			if t, ok := r.Value.(*types.ReasoningContentBlockMemberReasoningText); ok && aws.ToString(t.Value.Text) != "" {
+				return aws.ToString(t.Value.Text), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no text content in response from %s", b.model)
 }
 
 // isTemperatureRejected reports whether err is a Bedrock ValidationException
@@ -445,6 +488,17 @@ func isTemperatureRejected(err error) bool {
 	return strings.Contains(msg, "temperature") ||
 		strings.Contains(msg, "inferenceconfig") ||
 		strings.Contains(msg, "inference_config")
+}
+
+// isSystemPromptRejected reports whether err is a Bedrock ValidationException
+// indicating the model does not accept system prompts.
+func isSystemPromptRejected(err error) bool {
+	var ve *types.ValidationException
+	if !errors.As(err, &ve) {
+		return false
+	}
+	msg := strings.ToLower(ve.ErrorMessage())
+	return strings.Contains(msg, "system message") || strings.Contains(msg, "doesn't support system")
 }
 
 func (b *BedrockGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
@@ -505,9 +559,7 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 					ID:       id,
 					Name:     aws.ToString(p.InferenceProfileName),
 					Provider: "bedrock",
-					// AWS has not shipped embedding inference profiles as of 2025-04.
-					// If that changes, OutputModalities on the profile would be needed here.
-					Type:  "generation",
+					Type:     InferModelType(inferenceProfileBaseID(id)),
 					Local:    false,
 					Tier:     TierUnverified,
 					Notes:    "use 2nb models test to verify",
@@ -538,6 +590,11 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 		}
 
 		id := aws.ToString(fm.ModelId)
+		// Skip context-window variant IDs (e.g., model:0:24k, model:1:8k, model:0:512).
+		// ListFoundationModels returns these as metadata entries but they are not invokable.
+		if isContextWindowVariantID(id) {
+			continue
+		}
 		// Skip if an inference profile covers this base model — the base ID
 		// cannot be invoked directly for those models.
 		if coveredBaseIDs[id] {
@@ -621,4 +678,25 @@ func inferenceProfileBaseID(id string) string {
 		}
 	}
 	return id
+}
+
+// isContextWindowVariantID reports whether id is a non-invokable context-window
+// variant returned by ListFoundationModels (e.g. "amazon.nova-lite-v1:0:24k",
+// "cohere.embed-english-v3:0:512"). These have the form base:version:size and
+// return 404 when invoked directly.
+func isContextWindowVariantID(id string) bool {
+	i := strings.LastIndex(id, ":")
+	if i < 0 || !strings.Contains(id[:i], ":") {
+		return false // must have at least two colons
+	}
+	suffix := id[i+1:]
+	if suffix == "mm" {
+		return true
+	}
+	if strings.HasSuffix(suffix, "k") {
+		_, err := strconv.Atoi(suffix[:len(suffix)-1])
+		return err == nil
+	}
+	n, err := strconv.Atoi(suffix)
+	return err == nil && n > 10 // >10 avoids catching :0 :1 :2 version numbers
 }
