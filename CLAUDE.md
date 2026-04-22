@@ -217,8 +217,8 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
 | `ai setup` | `--provider`, `--embedding-model`, `--generation-model` | Multi-provider setup wizard with easy mode |
 | `ai local` | | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
-| `models list` | `--type`, `--free`, `--discover`, `--status`, `--provider` | List verified model catalog, optionally discover vendor models |
-| `models test` | `<model-id>`, `--provider`, `--type` | Smoke-test a model (embed or generate probe) |
+| `models list` | `--type`, `--free`, `--discover`, `--status`, `--provider`, `--promote`, `--scope` | List verified model catalog, optionally discover vendor models; `--discover --promote` tests unverified models concurrently and adds those that pass to the user catalog |
+| `models test` | `<model-id>`, `--provider`, `--type`, `--save`, `--scope` | Smoke-test a model (embed or generate probe); `--save` adds the model to the user catalog if it passes |
 | `models add` | `<model-id>`, `--provider`, `--type`, `--scope`, `--name`, `--dimensions`, `--context-length`, `--price-in`, `--price-out`, `--similarity-threshold`, `--notes` | Add a model to the user catalog (global `~/.config/2nb/models.yaml` or per-vault `.2ndbrain/models.yaml`). Entries are layered into `models list` as `tier=user_verified`. `--similarity-threshold` is embedding-only and persists into the threshold resolution chain |
 | `models remove` | `<model-id>`, `--provider`, `--scope` | Remove a model from the user catalog |
 | `models bench` | `--model`, `--probe`, `--provider` | Benchmark models against vault with persistent history |

@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"text/tabwriter"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
@@ -18,11 +21,15 @@ var (
 	modelsDiscover    bool
 	modelsCheckStatus bool
 	modelsProvider    string
+	modelsPromote     bool
+	modelsPromoteScope string
 )
 
 var (
 	testProvider  string
 	testModelType string
+	testSave      bool
+	testSaveScope string
 )
 
 var (
@@ -88,13 +95,19 @@ func init() {
 	modelsListCmd.Flags().BoolVar(&modelsDiscover, "discover", false, "Query vendor APIs for full model catalogs")
 	modelsListCmd.Flags().BoolVar(&modelsCheckStatus, "status", false, "Probe provider reachability and credentials")
 	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama")
+	modelsListCmd.Flags().BoolVar(&modelsPromote, "promote", false, "Test unverified discovered models and add those that pass (requires --discover)")
+	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "global", "Catalog scope for --promote: global or vault")
 	_ = modelsListCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
+	_ = modelsListCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama (auto-detected if omitted)")
 	modelsTestCmd.Flags().StringVar(&testModelType, "type", "", "Model type: embedding or generation (auto-detected if omitted)")
+	modelsTestCmd.Flags().BoolVar(&testSave, "save", false, "Add model to user catalog if probe passes")
+	modelsTestCmd.Flags().StringVar(&testSaveScope, "scope", "global", "Catalog scope when --save is set: global or vault")
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
+	_ = modelsTestCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsAddCmd.Flags().StringVar(&addProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
 	modelsAddCmd.Flags().StringVar(&addType, "type", "", "Type: embedding or generation (required)")
@@ -127,6 +140,10 @@ func init() {
 }
 
 func runModelsList(cmd *cobra.Command, args []string) error {
+	if modelsPromote && !modelsDiscover {
+		return fmt.Errorf("--promote requires --discover")
+	}
+
 	v, err := openVault()
 	if err != nil {
 		return err
@@ -184,9 +201,66 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	// Tips.
 	fmt.Println()
 	fmt.Println("Tip: switch models with: 2nb config set ai.generation_model <model-id>")
-	if len(merged.Unverified) > 0 {
+	if len(merged.Unverified) > 0 && !modelsPromote {
 		fmt.Println("     Models in UNVERIFIED may not work — 2nb hasn't built a harness for them yet.")
+		fmt.Println("     Run with --promote to test and auto-add the ones that work.")
 	}
+
+	if !modelsPromote || len(merged.Unverified) == 0 {
+		return nil
+	}
+
+	// --promote: test all unverified models concurrently and save passing ones.
+	total := len(merged.Unverified)
+	fmt.Printf("\nPromoting %d unverified model(s) — testing concurrently (max 5)...\n\n", total)
+
+	const promoteConcurrency = 5
+	sem := make(chan struct{}, promoteConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var passed int
+	var counter atomic.Int32
+
+	scope := ai.UserCatalogScope(modelsPromoteScope)
+
+	for _, m := range merged.Unverified {
+		wg.Add(1)
+		go func(m ai.ModelInfo) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			n := int(counter.Add(1))
+			result, err := ai.TestProbeModel(ctx, v.Config.AI, m.ID, m.Provider, m.Type)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err == nil && result != nil && result.OK {
+				entry := promotedEntry(&m, result)
+				if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
+					passed++
+					fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",
+						n, total, result.Provider, result.Type, result.ModelID)
+				} else {
+					fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → save failed: %v\n",
+						n, total, result.Provider, result.Type, result.ModelID, saveErr)
+				}
+			} else {
+				detail := m.ID
+				if result != nil && result.Detail != "" {
+					detail = result.Detail
+				} else if err != nil {
+					detail = err.Error()
+				}
+				fmt.Printf("[%d/%d] FAIL  %s/%s  (%s)  %s\n",
+					n, total, m.Provider, m.Type, m.ID, detail)
+			}
+		}(m)
+	}
+	wg.Wait()
+
+	fmt.Printf("\nPromoted %d of %d models to %s catalog.\n", passed, total, modelsPromoteScope)
 	return nil
 }
 
@@ -302,6 +376,16 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Printf("  response: %s\n", detail)
 		}
+		if testSave {
+			base := findBuiltinModel(result.Provider, result.ModelID)
+			entry := promotedEntry(base, result)
+			scope := ai.UserCatalogScope(testSaveScope)
+			if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
+				fmt.Printf("  warning: failed to save: %v\n", err)
+			} else {
+				fmt.Printf("  → saved to %s catalog\n", testSaveScope)
+			}
+		}
 	} else {
 		fmt.Printf("FAIL  %s/%s  (%s, %s)\n", result.Provider, result.Type, result.Latency, result.ModelID)
 		fmt.Printf("  error: %s\n", result.Detail)
@@ -375,6 +459,46 @@ func runModelsRemove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("remove: %w", err)
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s/%s from %s catalog\n", removeProvider, modelID, scope)
+	return nil
+}
+
+// promotedEntry builds a user-catalog ModelInfo from a passing probe result.
+// base (from the builtin catalog or discovery data) supplies name, pricing, and
+// dimensions when available; Tier and TestedAt are always set from the promotion.
+func promotedEntry(base *ai.ModelInfo, result *ai.TestProbeResult) ai.ModelInfo {
+	entry := ai.ModelInfo{
+		ID:       result.ModelID,
+		Provider: result.Provider,
+		Type:     result.Type,
+		Tier:     ai.TierUserVerified,
+		TestedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if base != nil {
+		entry.Name       = base.Name
+		entry.Dimensions = base.Dimensions
+		entry.ContextLen = base.ContextLen
+		entry.PriceIn    = base.PriceIn
+		entry.PriceOut   = base.PriceOut
+		entry.RecommendedSimilarityThreshold = base.RecommendedSimilarityThreshold
+		entry.Notes      = base.Notes
+		if base.PriceIn > 0 || base.PriceOut > 0 {
+			entry.PriceSource = base.PriceSource
+			if entry.PriceSource == "" {
+				entry.PriceSource = "vendor"
+			}
+		}
+	}
+	return entry
+}
+
+// findBuiltinModel returns the builtin catalog entry for (provider, id), or nil.
+func findBuiltinModel(provider, id string) *ai.ModelInfo {
+	for _, m := range ai.BuiltinCatalog() {
+		if m.Provider == provider && m.ID == id {
+			cp := m
+			return &cp
+		}
+	}
 	return nil
 }
 

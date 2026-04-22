@@ -148,9 +148,12 @@ Browse verified models across all providers, test any model, and benchmark your 
 # Check credentials and reachability
 2nb models list --status
 
-# Test if a model works before switching
-2nb models test amazon.nova-micro-v1:0
+# Test if a model works before switching (--save adds it to your catalog)
+2nb models test amazon.nova-micro-v1:0 --save
 2nb models test google/gemma-4-31b-it:free
+
+# Discover and auto-promote all passing models in one step
+2nb models list --discover --promote
 
 # Benchmark your favorites
 2nb models bench fav amazon.nova-micro-v1:0
@@ -198,8 +201,8 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ai setup` | Multi-provider setup wizard (easy mode or custom) |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
 | `ai embed <text>` | Generate embedding vector (debug) |
-| `models list [--discover] [--status] [--provider]` | Verified model catalog + user catalog + vendor discovery |
-| `models test <model-id>` | Smoke-test any model (embed or generate probe) |
+| `models list [--discover] [--status] [--provider] [--promote]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass |
+| `models test <model-id> [--save] [--scope global\|vault]` | Smoke-test any model (embed or generate probe); `--save` adds the model to your catalog if it passes |
 | `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (layered into `models list`) |
 | `models remove <id> --provider [--scope global\|vault]` | Remove a model from your user catalog |
 | `models bench` | Benchmark favorites with persistent history |
