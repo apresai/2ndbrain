@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.7] - 2026-04-22
+
+### Fixed
+
+- Bedrock provider no longer sends `Temperature` in `InferenceConfiguration` when not explicitly set, preventing API errors on models that reject a zero-value temperature field
+
+
 ## [0.2.6] - 2026-04-21
 
 ### Fixed
