@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.11] - 2026-04-22
+
+### Fixed
+
+- **Bedrock discovery**: context-window variant IDs (e.g. `model:0:24k`, `model:0:512`) are no longer returned as invokable models — they 404 when called directly
+- **Bedrock discovery**: inference profiles are now type-classified correctly instead of being hardcoded as `generation`
+- **Bedrock generation**: reasoning models (e.g. DeepSeek R1) that emit non-text content blocks first now extract the text response correctly
+- **Bedrock generation**: models that reject system prompts now get a transparent retry without one, cached per process
+- **Bedrock embeddings**: Cohere Embed v4's `{"embeddings": {"float": [...]}}` response shape is now parsed correctly alongside v3's flat array format
+- **Bedrock embeddings**: inference profile geo-prefixed IDs (`us./eu./ap./global.`) are stripped before embed format detection; Titan image models now return a clear unsupported error instead of silently failing
+
+
 ## [0.2.10] - 2026-04-22
 
 Now I have a complete picture of the changes. Here's the changelog entry:
