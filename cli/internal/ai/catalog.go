@@ -30,6 +30,52 @@ func BuiltinCatalog() []ModelInfo {
 		RecommendedSimilarityThreshold: 0.65,
 	})
 
+	// --- Bedrock Embedding (Titan Text Embeddings v2 format) ---
+	// Threshold 0.50: estimated from model training objective (bidirectional
+	// encoder, cosine-normalized). Run `2nb models calibrate` to tune per vault.
+	models = append(models, ModelInfo{
+		ID:                             "amazon.titan-embed-text-v2:0",
+		Name:                           "Amazon Titan Text Embeddings v2",
+		Provider:                       "bedrock",
+		Type:                           "embedding",
+		Dimensions:                     1024,
+		ContextLen:                     8192,
+		PriceIn:                        0.020,
+		PriceOut:                       0,
+		Local:                          false,
+		Tier:                           TierVerified,
+		ConfigHint:                     configHint("bedrock", "embedding", "amazon.titan-embed-text-v2:0"),
+		RecommendedSimilarityThreshold: 0.50,
+		Notes:                          "supports 256/512/1024 dims",
+	})
+
+	// --- Bedrock Embedding (Cohere Embed v3 format — batched, fixed 1024 dims) ---
+	// Threshold 0.50: estimated. Cohere v3 uses contrastive training similar to
+	// OpenAI ada-002; real-vault calibration recommended.
+	for _, m := range []struct {
+		id, name string
+		notes    string
+	}{
+		{"cohere.embed-english-v3", "Cohere Embed English v3", "English-optimized"},
+		{"cohere.embed-multilingual-v3", "Cohere Embed Multilingual v3", "100+ languages"},
+	} {
+		models = append(models, ModelInfo{
+			ID:                             m.id,
+			Name:                           m.name,
+			Provider:                       "bedrock",
+			Type:                           "embedding",
+			Dimensions:                     1024,
+			ContextLen:                     512,
+			PriceIn:                        0.100,
+			PriceOut:                       0,
+			Local:                          false,
+			Tier:                           TierVerified,
+			ConfigHint:                     configHint("bedrock", "embedding", m.id),
+			RecommendedSimilarityThreshold: 0.50,
+			Notes:                          m.notes,
+		})
+	}
+
 	// --- Bedrock Generation (Converse API — works across all Bedrock models) ---
 	for _, m := range []struct {
 		id, name   string

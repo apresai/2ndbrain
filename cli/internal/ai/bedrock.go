@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
+	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
@@ -88,9 +89,11 @@ func (b *BedrockEmbedder) Available(ctx context.Context) bool {
 	return ok
 }
 
-// novaEmbedRequest is the request body for Nova Embeddings v2.
+// ── Embedding request/response structs ────────────────────────────────────
+
+// Nova Embeddings v2
 type novaEmbedRequest struct {
-	TaskType             string                `json:"taskType"`
+	TaskType              string               `json:"taskType"`
 	SingleEmbeddingParams *novaEmbeddingParams `json:"singleEmbeddingParams"`
 }
 
@@ -105,7 +108,6 @@ type novaTextInput struct {
 	Value          string `json:"value"`
 }
 
-// novaEmbedResponse is the response from Nova Embeddings v2.
 type novaEmbedResponse struct {
 	Embeddings []struct {
 		EmbeddingType string    `json:"embeddingType"`
@@ -113,7 +115,94 @@ type novaEmbedResponse struct {
 	} `json:"embeddings"`
 }
 
+// Titan Text Embeddings v1 — fixed 1536 dims, per-text
+type titanV1EmbedRequest struct {
+	InputText string `json:"inputText"`
+}
+
+type titanV1EmbedResponse struct {
+	Embedding []float32 `json:"embedding"`
+}
+
+// Titan Text Embeddings v2 — configurable dims (256/512/1024), per-text
+type titanV2EmbedRequest struct {
+	InputText      string   `json:"inputText"`
+	Dimensions     int      `json:"dimensions,omitempty"`
+	Normalize      bool     `json:"normalize"`
+	EmbeddingTypes []string `json:"embeddingTypes"`
+}
+
+type titanV2EmbedResponse struct {
+	EmbeddingsByType struct {
+		Float []float32 `json:"float"`
+	} `json:"embeddingsByType"`
+}
+
+// Cohere Embed v3 — batched (≤96 texts per call), fixed 1024 dims
+type cohereEmbedRequest struct {
+	Texts     []string `json:"texts"`
+	InputType string   `json:"input_type"`
+	Truncate  string   `json:"truncate,omitempty"`
+}
+
+type cohereEmbedResponse struct {
+	Embeddings [][]float32 `json:"embeddings"`
+}
+
+// ── Embedding format detection ─────────────────────────────────────────────
+
+type bedrockEmbedFmt int
+
+const (
+	fmtNova    bedrockEmbedFmt = iota
+	fmtTitanV1
+	fmtTitanV2
+	fmtCohere
+)
+
+func detectEmbedFormat(modelID string) bedrockEmbedFmt {
+	lower := strings.ToLower(modelID)
+	switch {
+	case strings.HasPrefix(lower, "cohere.embed-"):
+		return fmtCohere
+	case lower == "amazon.titan-embed-text-v1":
+		return fmtTitanV1
+	case strings.HasPrefix(lower, "amazon.titan-embed-"):
+		return fmtTitanV2
+	default:
+		return fmtNova
+	}
+}
+
+// ── Embed dispatch ─────────────────────────────────────────────────────────
+
 func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	switch detectEmbedFormat(b.model) {
+	case fmtCohere:
+		return b.embedCohere(ctx, texts)
+	case fmtTitanV1:
+		return b.embedTitanV1(ctx, texts)
+	case fmtTitanV2:
+		return b.embedTitanV2(ctx, texts)
+	default:
+		return b.embedNova(ctx, texts)
+	}
+}
+
+func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]byte, error) {
+	resp, err := b.client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
+		ModelId:     aws.String(b.model),
+		ContentType: aws.String("application/json"),
+		Accept:      aws.String("application/json"),
+		Body:        reqBody,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("invoke %s: %w", b.model, err)
+	}
+	return resp.Body, nil
+}
+
+func (b *BedrockEmbedder) embedNova(ctx context.Context, texts []string) ([][]float32, error) {
 	results := make([][]float32, len(texts))
 	for i, text := range texts {
 		req := novaEmbedRequest{
@@ -131,25 +220,111 @@ func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float3
 		if err != nil {
 			return nil, fmt.Errorf("marshal embed request: %w", err)
 		}
-
-		resp, err := b.client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
-			ModelId:     aws.String(b.model),
-			ContentType: aws.String("application/json"),
-			Accept:      aws.String("application/json"),
-			Body:        reqBody,
-		})
+		body, err := b.invokeModel(ctx, reqBody)
 		if err != nil {
-			return nil, fmt.Errorf("invoke %s: %w", b.model, err)
+			return nil, err
 		}
-
 		var embedResp novaEmbedResponse
-		if err := json.Unmarshal(resp.Body, &embedResp); err != nil {
+		if err := json.Unmarshal(body, &embedResp); err != nil {
 			return nil, fmt.Errorf("unmarshal embed response: %w", err)
 		}
 		if len(embedResp.Embeddings) == 0 {
 			return nil, fmt.Errorf("no embeddings in response for text %d", i)
 		}
 		results[i] = embedResp.Embeddings[0].Embedding
+	}
+	return results, nil
+}
+
+func (b *BedrockEmbedder) embedTitanV1(ctx context.Context, texts []string) ([][]float32, error) {
+	results := make([][]float32, len(texts))
+	for i, text := range texts {
+		reqBody, err := json.Marshal(titanV1EmbedRequest{InputText: text})
+		if err != nil {
+			return nil, fmt.Errorf("marshal embed request: %w", err)
+		}
+		body, err := b.invokeModel(ctx, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		var embedResp titanV1EmbedResponse
+		if err := json.Unmarshal(body, &embedResp); err != nil {
+			return nil, fmt.Errorf("unmarshal embed response: %w", err)
+		}
+		if len(embedResp.Embedding) == 0 {
+			return nil, fmt.Errorf("no embedding in response for text %d", i)
+		}
+		results[i] = embedResp.Embedding
+	}
+	return results, nil
+}
+
+func (b *BedrockEmbedder) embedTitanV2(ctx context.Context, texts []string) ([][]float32, error) {
+	dims := b.dims
+	if dims == 0 {
+		dims = 1024
+	}
+	results := make([][]float32, len(texts))
+	for i, text := range texts {
+		req := titanV2EmbedRequest{
+			InputText:      text,
+			Dimensions:     dims,
+			Normalize:      true,
+			EmbeddingTypes: []string{"float"},
+		}
+		reqBody, err := json.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("marshal embed request: %w", err)
+		}
+		body, err := b.invokeModel(ctx, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		var embedResp titanV2EmbedResponse
+		if err := json.Unmarshal(body, &embedResp); err != nil {
+			return nil, fmt.Errorf("unmarshal embed response: %w", err)
+		}
+		if len(embedResp.EmbeddingsByType.Float) == 0 {
+			return nil, fmt.Errorf("no embedding in response for text %d", i)
+		}
+		results[i] = embedResp.EmbeddingsByType.Float
+	}
+	return results, nil
+}
+
+const cohereBatchSize = 96
+
+func (b *BedrockEmbedder) embedCohere(ctx context.Context, texts []string) ([][]float32, error) {
+	results := make([][]float32, len(texts))
+	for start := 0; start < len(texts); start += cohereBatchSize {
+		end := start + cohereBatchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batch := texts[start:end]
+		req := cohereEmbedRequest{
+			Texts:     batch,
+			InputType: "search_document",
+			Truncate:  "END",
+		}
+		reqBody, err := json.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("marshal embed request: %w", err)
+		}
+		body, err := b.invokeModel(ctx, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		var embedResp cohereEmbedResponse
+		if err := json.Unmarshal(body, &embedResp); err != nil {
+			return nil, fmt.Errorf("unmarshal embed response: %w", err)
+		}
+		if len(embedResp.Embeddings) != len(batch) {
+			return nil, fmt.Errorf("expected %d embeddings, got %d", len(batch), len(embedResp.Embeddings))
+		}
+		for j, emb := range embedResp.Embeddings {
+			results[start+j] = emb
+		}
 	}
 	return results, nil
 }
@@ -282,9 +457,19 @@ func (b *BedrockGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
 	}}, nil
 }
 
-// ListBedrockVendorModels calls the Bedrock ListFoundationModels API to discover
-// all models available in the configured region. Results are returned with
-// Tier=TierUnverified since 2nb may not have a harness for their invoke format.
+// ListBedrockVendorModels discovers models available in the configured Bedrock
+// region. It merges two sources:
+//
+//  1. System-defined inference profiles (ListInferenceProfiles) — these are the
+//     correct invokable IDs for newer models (e.g. us.anthropic.claude-…). Only
+//     profiles matching the user's geographic prefix (us./eu./ap.) or global.*
+//     are included.
+//
+//  2. Foundation models (ListFoundationModels) — base model IDs. Models whose
+//     base ID is already covered by an included inference profile are skipped,
+//     since the base ID cannot be invoked directly for those models.
+//
+// Results are returned with Tier=TierUnverified.
 func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInfo, error) {
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
@@ -292,6 +477,47 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 	}
 
 	client := bedrock.NewFromConfig(awsCfg)
+
+	// ── Step 1: system-defined inference profiles ──────────────────────────
+	geo := geoPrefix(cfg.Region)
+	var inferenceProfiles []ModelInfo
+	coveredBaseIDs := make(map[string]bool)
+
+	paginator := bedrock.NewListInferenceProfilesPaginator(client, &bedrock.ListInferenceProfilesInput{
+		TypeEquals: bedrocktypes.InferenceProfileTypeSystemDefined,
+	})
+	for paginator.HasMorePages() {
+		page, pageErr := paginator.NextPage(ctx)
+		if pageErr != nil {
+			// Non-fatal: credentials may not have permission; fall through to
+			// foundation models only.
+			slog.Debug("list inference profiles failed", "err", pageErr)
+			break
+		}
+		for _, p := range page.InferenceProfileSummaries {
+			if p.Status != bedrocktypes.InferenceProfileStatusActive {
+				continue
+			}
+			id := aws.ToString(p.InferenceProfileId)
+			// Include only profiles for this region's geography or global.
+			if (geo != "" && strings.HasPrefix(id, geo)) || strings.HasPrefix(id, "global.") {
+				inferenceProfiles = append(inferenceProfiles, ModelInfo{
+					ID:       id,
+					Name:     aws.ToString(p.InferenceProfileName),
+					Provider: "bedrock",
+					// AWS has not shipped embedding inference profiles as of 2025-04.
+					// If that changes, OutputModalities on the profile would be needed here.
+					Type:  "generation",
+					Local:    false,
+					Tier:     TierUnverified,
+					Notes:    "use 2nb models test to verify",
+				})
+				coveredBaseIDs[inferenceProfileBaseID(id)] = true
+			}
+		}
+	}
+
+	// ── Step 2: foundation models not covered by an inference profile ──────
 	resp, err := client.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{})
 	if err != nil {
 		return nil, fmt.Errorf("list foundation models: %w", err)
@@ -311,6 +537,13 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 			continue
 		}
 
+		id := aws.ToString(fm.ModelId)
+		// Skip if an inference profile covers this base model — the base ID
+		// cannot be invoked directly for those models.
+		if coveredBaseIDs[id] {
+			continue
+		}
+
 		modelType := "generation"
 		for _, m := range fm.OutputModalities {
 			if strings.EqualFold(string(m), "EMBEDDING") {
@@ -319,7 +552,6 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 			}
 		}
 
-		id := aws.ToString(fm.ModelId)
 		models = append(models, ModelInfo{
 			ID:       id,
 			Name:     aws.ToString(fm.ModelName),
@@ -330,7 +562,8 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 			Notes:    "use 2nb models test to verify",
 		})
 	}
-	return models, nil
+
+	return append(models, inferenceProfiles...), nil
 }
 
 // CheckBedrockCredentials resolves AWS credentials from the SDK credential chain.
@@ -359,4 +592,33 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	reg.RegisterGenerator("bedrock", generator)
 
 	return nil
+}
+
+// ── Inference profile helpers ──────────────────────────────────────────────
+
+// geoPrefix returns the geographic inference profile prefix for a Bedrock region.
+// Returns "" for regions with no standard prefix (e.g. me-south-1, sa-east-1).
+func geoPrefix(region string) string {
+	switch {
+	case strings.HasPrefix(region, "us-"):
+		return "us."
+	case strings.HasPrefix(region, "eu-"):
+		return "eu."
+	case strings.HasPrefix(region, "ap-"):
+		return "ap."
+	default:
+		return ""
+	}
+}
+
+// inferenceProfileBaseID strips the region prefix from an inference profile ID,
+// returning the underlying foundation model ID used for deduplication.
+// e.g. "us.anthropic.claude-3-5-haiku-20241022-v1:0" → "anthropic.claude-3-5-haiku-20241022-v1:0"
+func inferenceProfileBaseID(id string) string {
+	for _, pfx := range []string{"us.", "eu.", "ap.", "global."} {
+		if strings.HasPrefix(id, pfx) {
+			return id[len(pfx):]
+		}
+	}
+	return id
 }

@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -144,4 +145,181 @@ func TestBedrockListModels(t *testing.T) {
 	if genModels[0].Type != "generation" {
 		t.Errorf("type = %q, want generation", genModels[0].Type)
 	}
+}
+
+// ── Pure logic tests — no API calls ───────────────────────────────────────
+
+func TestDetectEmbedFormat(t *testing.T) {
+	tests := []struct {
+		modelID string
+		want    bedrockEmbedFmt
+	}{
+		{"amazon.nova-2-multimodal-embeddings-v1:0", fmtNova},
+		{"amazon.nova-pro-v1:0", fmtNova},
+		{"amazon.titan-embed-text-v1", fmtTitanV1},
+		{"amazon.titan-embed-text-v2:0", fmtTitanV2},
+		{"amazon.titan-embed-image-v1", fmtTitanV2}, // titan-embed- prefix → v2 path
+		{"cohere.embed-english-v3", fmtCohere},
+		{"cohere.embed-multilingual-v3", fmtCohere},
+		{"cohere.embed-english-v4", fmtCohere},
+	}
+	for _, tt := range tests {
+		got := detectEmbedFormat(tt.modelID)
+		if got != tt.want {
+			t.Errorf("detectEmbedFormat(%q) = %d, want %d", tt.modelID, got, tt.want)
+		}
+	}
+}
+
+func TestGeoPrefix(t *testing.T) {
+	tests := []struct {
+		region string
+		want   string
+	}{
+		{"us-east-1", "us."},
+		{"us-west-2", "us."},
+		{"eu-west-1", "eu."},
+		{"eu-central-1", "eu."},
+		{"ap-southeast-1", "ap."},
+		{"ap-northeast-1", "ap."},
+		{"me-south-1", ""},
+		{"sa-east-1", ""},
+		{"ca-central-1", ""},
+	}
+	for _, tt := range tests {
+		got := geoPrefix(tt.region)
+		if got != tt.want {
+			t.Errorf("geoPrefix(%q) = %q, want %q", tt.region, got, tt.want)
+		}
+	}
+}
+
+func TestInferenceProfileBaseID(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"us.anthropic.claude-3-5-haiku-20241022-v1:0", "anthropic.claude-3-5-haiku-20241022-v1:0"},
+		{"eu.meta.llama3-8b-instruct-v1:0", "meta.llama3-8b-instruct-v1:0"},
+		{"ap.amazon.nova-pro-v1:0", "amazon.nova-pro-v1:0"},
+		{"global.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5-20251001-v1:0"},
+		{"amazon.nova-micro-v1:0", "amazon.nova-micro-v1:0"}, // no prefix → unchanged
+	}
+	for _, tt := range tests {
+		got := inferenceProfileBaseID(tt.input)
+		if got != tt.want {
+			t.Errorf("inferenceProfileBaseID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestInferProviderGlobal(t *testing.T) {
+	tests := []string{
+		"global.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+	}
+	for _, id := range tests {
+		got := InferProvider(id)
+		if got != "bedrock" {
+			t.Errorf("InferProvider(%q) = %q, want bedrock", id, got)
+		}
+	}
+}
+
+// ── Integration tests — require AWS credentials ────────────────────────────
+
+func TestBedrockEmbedTitanV2(t *testing.T) {
+	ctx := context.Background()
+	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
+
+	embedder, err := NewBedrockEmbedder(ctx, cfg, "amazon.titan-embed-text-v2:0", 1024)
+	if err != nil {
+		t.Skipf("AWS credentials not configured: %v", err)
+	}
+
+	vecs, err := embedder.Embed(ctx, []string{
+		"The quick brown fox jumps over the lazy dog.",
+		"Semantic search with Titan v2 embeddings.",
+	})
+	if err != nil {
+		t.Fatalf("Embed (Titan v2): %v", err)
+	}
+	if len(vecs) != 2 {
+		t.Fatalf("got %d vectors, want 2", len(vecs))
+	}
+	if len(vecs[0]) != 1024 {
+		t.Errorf("dims = %d, want 1024", len(vecs[0]))
+	}
+	allZero := true
+	for _, v := range vecs[0] {
+		if v != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Error("embedding is all zeros")
+	}
+	t.Logf("Titan v2 embedding dims: %d", len(vecs[0]))
+}
+
+func TestBedrockEmbedCohereEnglish(t *testing.T) {
+	ctx := context.Background()
+	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
+
+	embedder, err := NewBedrockEmbedder(ctx, cfg, "cohere.embed-english-v3", 1024)
+	if err != nil {
+		t.Skipf("AWS credentials not configured: %v", err)
+	}
+
+	// Test batching with more texts than a single call would handle.
+	texts := []string{
+		"First document for Cohere embedding test.",
+		"Second document about semantic search.",
+		"Third document for batching verification.",
+	}
+	vecs, err := embedder.Embed(ctx, texts)
+	if err != nil {
+		t.Fatalf("Embed (Cohere): %v", err)
+	}
+	if len(vecs) != len(texts) {
+		t.Fatalf("got %d vectors, want %d", len(vecs), len(texts))
+	}
+	if len(vecs[0]) != 1024 {
+		t.Errorf("dims = %d, want 1024", len(vecs[0]))
+	}
+	t.Logf("Cohere embed dims: %d", len(vecs[0]))
+}
+
+func TestListBedrockVendorModelsInferenceProfiles(t *testing.T) {
+	ctx := context.Background()
+	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
+
+	models, err := ListBedrockVendorModels(ctx, cfg)
+	if err != nil {
+		t.Skipf("AWS credentials not configured: %v", err)
+	}
+	if len(models) == 0 {
+		t.Fatal("no models returned")
+	}
+
+	// Should include us.anthropic.* inference profile IDs.
+	hasUsProfile := false
+	hasBareAnthropic := false
+	for _, m := range models {
+		if strings.HasPrefix(m.ID, "us.anthropic.") {
+			hasUsProfile = true
+		}
+		// Bare anthropic.* base IDs should be suppressed when inference profiles cover them.
+		if strings.HasPrefix(m.ID, "anthropic.claude-3-5") || strings.HasPrefix(m.ID, "anthropic.claude-haiku") {
+			hasBareAnthropic = true
+		}
+	}
+	if !hasUsProfile {
+		t.Error("expected us.anthropic.* inference profile IDs in discovery output")
+	}
+	if hasBareAnthropic {
+		t.Error("bare anthropic.claude-3-5* base IDs should be suppressed by inference profile dedup")
+	}
+	t.Logf("discovered %d models", len(models))
 }

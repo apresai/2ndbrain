@@ -488,7 +488,25 @@ func promotedEntry(base *ai.ModelInfo, result *ai.TestProbeResult) ai.ModelInfo 
 			}
 		}
 	}
+	// For embedding models with no dimension info, parse actual dims from the
+	// probe result detail ("dims=1024") so promoted entries carry accurate metadata.
+	if result.Type == "embedding" && entry.Dimensions == 0 {
+		if d := parseDimsFromDetail(result.Detail); d > 0 {
+			entry.Dimensions = d
+		}
+	}
 	return entry
+}
+
+// parseDimsFromDetail extracts the embedding dimension from a probe result
+// detail string of the form "dims=1024 ...".
+func parseDimsFromDetail(detail string) int {
+	if i := strings.Index(detail, "dims="); i >= 0 {
+		var d int
+		fmt.Sscanf(detail[i+5:], "%d", &d)
+		return d
+	}
+	return 0
 }
 
 // findBuiltinModel returns the builtin catalog entry for (provider, id), or nil.
