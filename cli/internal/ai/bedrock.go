@@ -206,7 +206,13 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 	if maxTokens == 0 {
 		maxTokens = 512
 	}
-	temp := float32(opts.Temperature)
+
+	inferCfg := &types.InferenceConfiguration{
+		MaxTokens: aws.Int32(maxTokens),
+	}
+	if opts.Temperature > 0 {
+		inferCfg.Temperature = aws.Float32(float32(opts.Temperature))
+	}
 
 	input := &bedrockruntime.ConverseInput{
 		ModelId: aws.String(b.model),
@@ -216,10 +222,7 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 				&types.ContentBlockMemberText{Value: prompt},
 			},
 		}},
-		InferenceConfig: &types.InferenceConfiguration{
-			MaxTokens:   aws.Int32(maxTokens),
-			Temperature: aws.Float32(temp),
-		},
+		InferenceConfig: inferCfg,
 	}
 
 	if opts.SystemPrompt != "" {
