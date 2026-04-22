@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.9] - 2026-04-22
+
+## [0.2.9] - 2026-04-22
+
+### Added
+- `models list --discover --promote` flag: discovered models that pass concurrent smoke-testing are automatically added to the user catalog
+
+
 ## [0.2.8] - 2026-04-22
 
 ### Changed
