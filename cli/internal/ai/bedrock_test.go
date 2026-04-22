@@ -50,8 +50,7 @@ func TestBedrockGenerate(t *testing.T) {
 	_, gen := requireBedrock(t)
 
 	resp, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{
-		MaxTokens:   10,
-		Temperature: 0,
+		MaxTokens: 10,
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -67,7 +66,6 @@ func TestBedrockGenerateWithSystemPrompt(t *testing.T) {
 
 	resp, err := gen.Generate(context.Background(), "What color is the sky?", GenOpts{
 		MaxTokens:    50,
-		Temperature:  0,
 		SystemPrompt: "Reply with exactly one word.",
 	})
 	if err != nil {
@@ -90,7 +88,6 @@ func TestBedrockGenerateNovaMicro(t *testing.T) {
 
 	resp, err := gen.Generate(ctx, "What is 2+2? Reply with just the number.", GenOpts{
 		MaxTokens:    10,
-		Temperature:  0,
 		SystemPrompt: "You are a calculator.",
 	})
 	if err != nil {

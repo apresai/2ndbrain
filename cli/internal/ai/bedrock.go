@@ -3,9 +3,11 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -168,11 +170,12 @@ func (b *BedrockEmbedder) ListModels(_ context.Context) ([]ModelInfo, error) {
 
 // BedrockGenerator implements GenerationProvider using Amazon Bedrock.
 type BedrockGenerator struct {
-	client *bedrockruntime.Client
-	ctrl   *bedrock.Client
-	model  string
-	region string
-	avail  availableCache
+	client        *bedrockruntime.Client
+	ctrl          *bedrock.Client
+	model         string
+	region        string
+	avail         availableCache
+	noTemperature atomic.Bool // cached: model rejects temperature in InferenceConfiguration
 }
 
 // NewBedrockGenerator creates a Bedrock generation provider.
@@ -207,11 +210,9 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 		maxTokens = 512
 	}
 
-	inferCfg := &types.InferenceConfiguration{
-		MaxTokens: aws.Int32(maxTokens),
-	}
-	if opts.Temperature > 0 {
-		inferCfg.Temperature = aws.Float32(float32(opts.Temperature))
+	inferCfg := &types.InferenceConfiguration{MaxTokens: aws.Int32(maxTokens)}
+	if opts.Temperature != nil && !b.noTemperature.Load() {
+		inferCfg.Temperature = aws.Float32(float32(*opts.Temperature))
 	}
 
 	input := &bedrockruntime.ConverseInput{
@@ -233,7 +234,16 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 
 	resp, err := b.client.Converse(ctx, input)
 	if err != nil {
-		return "", fmt.Errorf("converse %s: %w", b.model, err)
+		// Some models (e.g. Claude Opus 4.7) reject temperature entirely.
+		// Retry once without it and cache the result for this process.
+		if opts.Temperature != nil && !b.noTemperature.Load() && isTemperatureRejected(err) {
+			b.noTemperature.Store(true)
+			inferCfg.Temperature = nil
+			resp, err = b.client.Converse(ctx, input)
+		}
+		if err != nil {
+			return "", fmt.Errorf("converse %s: %w", b.model, err)
+		}
 	}
 
 	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)
@@ -247,6 +257,19 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 	}
 
 	return text.Value, nil
+}
+
+// isTemperatureRejected reports whether err is a Bedrock ValidationException
+// indicating the model does not accept the temperature inference parameter.
+func isTemperatureRejected(err error) bool {
+	var ve *types.ValidationException
+	if !errors.As(err, &ve) {
+		return false
+	}
+	msg := strings.ToLower(ve.ErrorMessage())
+	return strings.Contains(msg, "temperature") ||
+		strings.Contains(msg, "inferenceconfig") ||
+		strings.Contains(msg, "inference_config")
 }
 
 func (b *BedrockGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {

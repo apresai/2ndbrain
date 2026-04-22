@@ -24,9 +24,12 @@ type GenerationProvider interface {
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
 
+// Ptr returns a pointer to v. Use for optional GenOpts fields like Temperature.
+func Ptr[T any](v T) *T { return &v }
+
 // GenOpts configures text generation.
 type GenOpts struct {
-	Temperature  float64
+	Temperature  *float64 // nil = omit (model uses its default); non-nil = send this value
 	MaxTokens    int
 	SystemPrompt string
 }
@@ -94,7 +97,7 @@ type ModelInfo struct {
 // DefaultGenOpts returns sensible defaults for generation.
 func DefaultGenOpts() GenOpts {
 	return GenOpts{
-		Temperature: 0.1,
+		Temperature: Ptr(0.1),
 		MaxTokens:   512,
 	}
 }

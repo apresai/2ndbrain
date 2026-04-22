@@ -750,7 +750,7 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	}
 
 	opts := ai.GenOpts{
-		Temperature:  0.2,
+		Temperature:  ai.Ptr(0.2),
 		MaxTokens:    4096,
 		SystemPrompt: systemPrompt,
 	}

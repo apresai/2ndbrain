@@ -77,7 +77,7 @@ func TestOpenRouterGenerate(t *testing.T) {
 	key := requireOpenRouterKey(t)
 
 	gen := NewOpenRouterGenerator(key, "google/gemma-3-4b-it:free")
-	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10, Temperature: 0})
+	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10})
 	skipOnTransient(t, err)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -95,7 +95,6 @@ func TestOpenRouterGenerateWithSystemPrompt(t *testing.T) {
 	result, err := gen.Generate(context.Background(), "What color is the sky?", GenOpts{
 		SystemPrompt: "Reply with exactly one word.",
 		MaxTokens:    10,
-		Temperature:  0,
 	})
 	skipOnTransient(t, err)
 	if err != nil {
@@ -118,7 +117,6 @@ func TestOpenRouterGenerate_Gemma3SystemPrompt(t *testing.T) {
 	_, err := gen.Generate(context.Background(), "What is 2+2?", GenOpts{
 		SystemPrompt: "Reply with just the number.",
 		MaxTokens:    10,
-		Temperature:  0,
 	})
 	skipOnTransient(t, err)
 	if err != nil {

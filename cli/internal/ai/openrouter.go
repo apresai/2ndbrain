@@ -181,7 +181,7 @@ func (g *OpenRouterGenerator) Available(ctx context.Context) bool {
 type orChatRequest struct {
 	Model       string      `json:"model"`
 	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Temperature float64     `json:"temperature,omitempty"`
+	Temperature *float64    `json:"temperature,omitempty"`
 	Messages    []orMessage `json:"messages"`
 }
 

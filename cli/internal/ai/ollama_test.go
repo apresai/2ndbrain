@@ -73,7 +73,7 @@ func TestOllamaGenerate(t *testing.T) {
 	requireOllamaModel(t, "qwen2.5:0.5b")
 
 	gen := NewOllamaGenerator(ollamaTestEndpoint, "qwen2.5:0.5b")
-	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10, Temperature: 0})
+	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -90,7 +90,6 @@ func TestOllamaGenerateWithSystemPrompt(t *testing.T) {
 	result, err := gen.Generate(context.Background(), "What color is the sky?", GenOpts{
 		SystemPrompt: "Reply with exactly one word.",
 		MaxTokens:    10,
-		Temperature:  0,
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)

@@ -162,8 +162,8 @@ func (o *OllamaGenerator) Generate(ctx context.Context, prompt string, opts GenO
 	}
 
 	genOpts := &ollamaGenOptions{}
-	if opts.Temperature > 0 {
-		genOpts.Temperature = opts.Temperature
+	if opts.Temperature != nil {
+		genOpts.Temperature = *opts.Temperature
 	}
 	if opts.MaxTokens > 0 {
 		genOpts.NumPredict = opts.MaxTokens

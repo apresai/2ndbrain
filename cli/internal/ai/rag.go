@@ -38,7 +38,7 @@ Answer concisely based only on the provided documents. If the documents don't co
 
 	answer, err := gen.Generate(ctx, prompt, GenOpts{
 		MaxTokens:    512,
-		Temperature:  0.1,
+		Temperature:  Ptr(0.1),
 		SystemPrompt: "You are a helpful assistant answering questions about a knowledge base. Use only the provided context to answer.",
 	})
 	if err != nil {
