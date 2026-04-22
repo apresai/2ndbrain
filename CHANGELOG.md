@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.10] - 2026-04-22
+
+Now I have a complete picture of the changes. Here's the changelog entry:
+
+```markdown
+## [0.2.10] - 2026-04-22
+
+### Added
+- Bedrock `--discover` now merges system-defined inference profiles (`us.*`, `eu.*`, `ap.*`, `global.*`) with foundation models, returning the correct invokable IDs for newer Claude and Nova generation models
+- Bedrock embedder supports multiple embedding API formats — Nova v2 (default), Titan v1, Titan v2, and Cohere v3 (batched, ≤96 texts per call) — detected automatically from the model ID
+- New verified embedding models: `amazon.titan-embed-text-v2:0` (256/512/1024 configurable dims) and `cohere.embed-english-v3` / `cohere.embed-multilingual-v3`
+- New verified generation models: Claude Haiku 4.5, Sonnet 4, and Opus 4 via cross-region Bedrock inference profile IDs (`us.anthropic.claude-*`)
+- Bedrock generator retries automatically without temperature when a model rejects it (e.g. Claude Opus 4.7), caching the result for the process lifetime
+```
+
+
 ## [0.2.9] - 2026-04-22
 
 ## [0.2.9] - 2026-04-22
