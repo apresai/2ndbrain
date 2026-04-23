@@ -288,7 +288,9 @@ func addBedrockOfferPricing(dst map[string]modelPrice, offer awsOfferFile, regio
 					}
 					current := dst[key]
 					applyBedrockCandidate(&current, candidate)
-					dst[key] = current
+					if current.HasIn || current.HasOut || current.HasRequest || current.Source != "" {
+						dst[key] = current
+					}
 				}
 			}
 		}
@@ -325,10 +327,55 @@ func bedrockOfferAliases(attrs map[string]string) []string {
 	if v := attrs["provider"]; v != "" && attrs["model"] != "" {
 		add(v + " " + attrs["model"])
 	}
+	for _, alias := range bedrockUsagetypeAliases(attrs["usagetype"]) {
+		add(alias)
+	}
 	if strings.Contains(attrs["usagetype"], "NovaMultiModalEmbeddings") {
 		add("Nova MultiModal Embeddings")
 	}
 
+	return aliases
+}
+
+func bedrockUsagetypeAliases(usagetype string) []string {
+	if usagetype == "" || isMPUsagetype(usagetype) {
+		return nil
+	}
+	dash := strings.Index(usagetype, "-")
+	if dash < 0 || dash == len(usagetype)-1 {
+		return nil
+	}
+	raw := usagetype[dash+1:]
+	lower := strings.ToLower(raw)
+	end := len(raw)
+	for _, marker := range []string{
+		"-input-tokens",
+		"-output-tokens",
+		"-input-token",
+		"-output-token",
+		"-cache-",
+		"-customization",
+		"-provisionedthroughput",
+		"-rft-",
+		"-nova-grounding",
+	} {
+		if i := strings.Index(lower, marker); i >= 0 && i < end {
+			end = i
+		}
+	}
+	if end == len(raw) {
+		return nil
+	}
+
+	model := strings.Trim(raw[:end], "-_ ")
+	if model == "" {
+		return nil
+	}
+
+	aliases := []string{model}
+	if trimmed := strings.TrimSuffix(model, "-mantle"); trimmed != model {
+		aliases = append(aliases, trimmed)
+	}
 	return aliases
 }
 
@@ -548,6 +595,14 @@ func bedrockModelAliases(modelID string) []string {
 	add(strings.TrimSuffix(providerless, "-instruct"))
 	add(strings.TrimSuffix(providerless, "-chat"))
 	add(strings.TrimSuffix(providerless, "-text"))
+	add(strings.TrimSuffix(providerless, "-it"))
+	add(strings.TrimSuffix(providerless, "-pt"))
+	if strings.HasPrefix(providerless, "nova-2-") {
+		add(strings.Replace(providerless, "nova-2-", "nova-2.0-", 1))
+	}
+	if trimmed := trimTrailingNumericAlias(providerless); trimmed != providerless {
+		add(trimmed)
+	}
 
 	switch {
 	case strings.HasPrefix(base, "amazon.nova-2-multimodal-embeddings"):
@@ -588,6 +643,18 @@ func trimBedrockAlias(s string) string {
 		parts = parts[:last]
 	}
 	return strings.Join(parts, "-")
+}
+
+func trimTrailingNumericAlias(s string) string {
+	parts := strings.Split(s, "-")
+	if len(parts) < 2 {
+		return s
+	}
+	last := parts[len(parts)-1]
+	if len(last) == 4 && isAllDigits(last) {
+		return strings.Join(parts[:len(parts)-1], "-")
+	}
+	return s
 }
 
 func normalizePriceAlias(s string) string {

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 )
@@ -174,6 +175,13 @@ func addTestOfferPrice(offer *awsOfferFile, sku string, attrs map[string]string,
 	}
 }
 
+func assertPriceClose(t *testing.T, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 1e-9 {
+		t.Fatalf("price = %v, want %v", got, want)
+	}
+}
+
 func TestBedrockPricingPrefersGlobalStandardLegacyMarketplace(t *testing.T) {
 	offer := awsOfferFile{}
 	baseAttrs := map[string]string{
@@ -322,6 +330,192 @@ func TestBedrockPricingIgnoresNonStandardTiersForCanonicalDisplayPrice(t *testin
 	}
 }
 
+func TestBedrockPricingDoesNotStoreNonStandardOnlyAliases(t *testing.T) {
+	offer := awsOfferFile{}
+	addTestOfferPrice(&offer, "flex-only", map[string]string{
+		"regionCode":    "us-east-1",
+		"model":         "Flex Only",
+		"provider":      "Example",
+		"inferenceType": "Input tokens flex",
+		"usagetype":     "USE1-example.flex-only-mantle-input-tokens-flex",
+		"service_tier":  "flex",
+	}, "1K tokens", "$0.0001 per 1K token for example.flex-only-mantle-input-tokens-flex in US East (N. Virginia)", "0.0001000000")
+
+	dst := map[string]modelPrice{}
+	addBedrockOfferPricing(dst, offer, "us-east-1")
+	if _, ok := bedrockPriceForModel(&providerPricing{alias: dst}, "example.flex-only"); ok {
+		t.Fatal("non-standard-only Bedrock rows should not create empty pricing aliases")
+	}
+}
+
+func TestBedrockPricingMatchesGemmaModelIDToDisplayName(t *testing.T) {
+	offer := awsOfferFile{}
+	base := map[string]string{
+		"regionCode":   "us-east-1",
+		"model":        "Gemma 3 4B",
+		"provider":     "Google",
+		"service_tier": "standard",
+	}
+
+	addTestOfferPrice(&offer, "gemma-input", map[string]string{
+		"regionCode":    base["regionCode"],
+		"model":         base["model"],
+		"provider":      base["provider"],
+		"inferenceType": "Input tokens",
+		"usagetype":     "USE1-google.gemma-3-4b-it-mantle-input-tokens-standard",
+		"service_tier":  base["service_tier"],
+	}, "1K tokens", "$0.00004 per 1K token for google.gemma-3-4b-it-mantle-input-tokens-standard in US East (N. Virginia)", "0.0000400000")
+	addTestOfferPrice(&offer, "gemma-output", map[string]string{
+		"regionCode":    base["regionCode"],
+		"model":         base["model"],
+		"provider":      base["provider"],
+		"inferenceType": "Output tokens",
+		"usagetype":     "USE1-google.gemma-3-4b-it-mantle-output-tokens-standard",
+		"service_tier":  base["service_tier"],
+	}, "1K tokens", "$0.00008 per 1K token for google.gemma-3-4b-it-mantle-output-tokens-standard in US East (N. Virginia)", "0.0000800000")
+
+	dst := map[string]modelPrice{}
+	addBedrockOfferPricing(dst, offer, "us-east-1")
+	price, ok := bedrockPriceForModel(&providerPricing{alias: dst}, "google.gemma-3-4b-it")
+	if !ok {
+		t.Fatal("expected Gemma 3 4B price to resolve")
+	}
+	if price.PriceIn != 0.04 || price.PriceOut != 0.08 {
+		t.Fatalf("expected Gemma standard pricing, got in=%v out=%v", price.PriceIn, price.PriceOut)
+	}
+}
+
+func TestBedrockPricingMatchesNova2ModelIDToDisplayName(t *testing.T) {
+	offer := awsOfferFile{}
+	base := map[string]string{
+		"regionCode": "us-east-1",
+		"model":      "Nova 2.0 Lite",
+		"provider":   "Amazon",
+	}
+
+	addTestOfferPrice(&offer, "nova-regional-input", map[string]string{
+		"regionCode":    base["regionCode"],
+		"model":         base["model"],
+		"provider":      base["provider"],
+		"inferenceType": "Input tokens",
+		"usagetype":     "USE1-Nova2.0Lite-input-tokens",
+	}, "1K tokens", "$0.00033 per 1K tokens for USE1-Nova2.0Lite-input-tokens in US East (N. Virginia)", "0.0003300000")
+	addTestOfferPrice(&offer, "nova-regional-output", map[string]string{
+		"regionCode":    base["regionCode"],
+		"model":         base["model"],
+		"provider":      base["provider"],
+		"inferenceType": "Output tokens",
+		"usagetype":     "USE1-Nova2.0Lite-output-tokens",
+	}, "1K tokens", "$0.00275 per 1K tokens for USE1-Nova2.0Lite-output-tokens in US East (N. Virginia)", "0.0027500000")
+	addTestOfferPrice(&offer, "nova-global-input", map[string]string{
+		"regionCode":    base["regionCode"],
+		"model":         base["model"],
+		"provider":      base["provider"],
+		"inferenceType": "Input tokens",
+		"usagetype":     "USE1-Nova2.0Lite-input-tokens-cross-region-global",
+	}, "1K tokens", "$0.0003 per 1K token for Nova2.0Lite-input-tokens-cross-region-global in US East (N. Virginia)", "0.0003000000")
+	addTestOfferPrice(&offer, "nova-global-output", map[string]string{
+		"regionCode":    base["regionCode"],
+		"model":         base["model"],
+		"provider":      base["provider"],
+		"inferenceType": "Output tokens",
+		"usagetype":     "USE1-Nova2.0Lite-output-tokens-cross-region-global",
+	}, "1K tokens", "$0.0025 per 1K token for Nova2.0Lite-output-tokens-cross-region-global in US East (N. Virginia)", "0.0025000000")
+
+	dst := map[string]modelPrice{}
+	addBedrockOfferPricing(dst, offer, "us-east-1")
+	price, ok := bedrockPriceForModel(&providerPricing{alias: dst}, "global.amazon.nova-2-lite-v1:0")
+	if !ok {
+		t.Fatal("expected Nova 2 Lite price to resolve")
+	}
+	if price.PriceIn != 0.3 || price.PriceOut != 2.5 {
+		t.Fatalf("expected Nova 2 Lite global standard pricing, got in=%v out=%v", price.PriceIn, price.PriceOut)
+	}
+}
+
+func TestBedrockPricingMatchesUsagetypeModelIDAliases(t *testing.T) {
+	offer := awsOfferFile{}
+
+	addTestOfferPrice(&offer, "mistral-input", map[string]string{
+		"regionCode":    "us-east-1",
+		"model":         "Ministral 8B 3.0",
+		"provider":      "Mistral",
+		"inferenceType": "Input tokens",
+		"usagetype":     "USE1-mistral.ministral-3-8b-instruct-mantle-input-tokens-standard",
+		"service_tier":  "standard",
+	}, "1K tokens", "$0.00004 per 1K token for mistral.ministral-3-8b-instruct-mantle-input-tokens-standard in US East (N. Virginia)", "0.0000400000")
+	addTestOfferPrice(&offer, "mistral-output", map[string]string{
+		"regionCode":    "us-east-1",
+		"model":         "Ministral 8B 3.0",
+		"provider":      "Mistral",
+		"inferenceType": "Output tokens",
+		"usagetype":     "USE1-mistral.ministral-3-8b-instruct-mantle-output-tokens-standard",
+		"service_tier":  "standard",
+	}, "1K tokens", "$0.00012 per 1K token for mistral.ministral-3-8b-instruct-mantle-output-tokens-standard in US East (N. Virginia)", "0.0001200000")
+	addTestOfferPrice(&offer, "nvidia-input", map[string]string{
+		"regionCode":    "us-east-1",
+		"model":         "NVIDIA Nemotron 3 Super 120B A12B",
+		"provider":      "Nvidia",
+		"inferenceType": "Input tokens",
+		"usagetype":     "USE1-nvidia.nemotron-super-3-120b-mantle-input-tokens-standard",
+		"service_tier":  "standard",
+	}, "1K tokens", "$0.00045 per 1K token for nvidia.nemotron-super-3-120b-mantle-input-tokens-standard in US East (N. Virginia)", "0.0004500000")
+	addTestOfferPrice(&offer, "nvidia-output", map[string]string{
+		"regionCode":    "us-east-1",
+		"model":         "NVIDIA Nemotron 3 Super 120B A12B",
+		"provider":      "Nvidia",
+		"inferenceType": "Output tokens",
+		"usagetype":     "USE1-nvidia.nemotron-super-3-120b-mantle-output-tokens-standard",
+		"service_tier":  "standard",
+	}, "1K tokens", "$0.0018 per 1K token for nvidia.nemotron-super-3-120b-mantle-output-tokens-standard in US East (N. Virginia)", "0.0018000000")
+
+	dst := map[string]modelPrice{}
+	addBedrockOfferPricing(dst, offer, "us-east-1")
+	pricing := &providerPricing{alias: dst}
+
+	mistralPrice, ok := bedrockPriceForModel(pricing, "mistral.ministral-3-8b-instruct")
+	if !ok {
+		t.Fatal("expected Mistral usagetype model ID price to resolve")
+	}
+	assertPriceClose(t, mistralPrice.PriceIn, 0.04)
+	assertPriceClose(t, mistralPrice.PriceOut, 0.12)
+
+	nvidiaPrice, ok := bedrockPriceForModel(pricing, "nvidia.nemotron-super-3-120b")
+	if !ok {
+		t.Fatal("expected NVIDIA usagetype model ID price to resolve")
+	}
+	assertPriceClose(t, nvidiaPrice.PriceIn, 0.45)
+	assertPriceClose(t, nvidiaPrice.PriceOut, 1.8)
+}
+
+func TestBedrockPricingMatchesDatedMistralDisplayAlias(t *testing.T) {
+	offer := awsOfferFile{}
+	addTestOfferPrice(&offer, "mistral-small-input", map[string]string{
+		"regionCode":    "us-east-1",
+		"model":         "Mistral Small",
+		"provider":      "Mistral",
+		"inferenceType": "Input tokens",
+		"usagetype":     "USE1-MistralSmall-input-tokens",
+	}, "1K tokens", "$0.0001 per 1K tokens for USE1-MistralSmall-input-tokens in US East (N. Virginia)", "0.0001000000")
+	addTestOfferPrice(&offer, "mistral-small-output", map[string]string{
+		"regionCode":    "us-east-1",
+		"model":         "Mistral Small",
+		"provider":      "Mistral",
+		"inferenceType": "Output tokens",
+		"usagetype":     "USE1-MistralSmall-output-tokens",
+	}, "1K tokens", "$0.0003 per 1K tokens for USE1-MistralSmall-output-tokens in US East (N. Virginia)", "0.0003000000")
+
+	dst := map[string]modelPrice{}
+	addBedrockOfferPricing(dst, offer, "us-east-1")
+	price, ok := bedrockPriceForModel(&providerPricing{alias: dst}, "mistral.mistral-small-2402-v1:0")
+	if !ok {
+		t.Fatal("expected dated Mistral display alias price to resolve")
+	}
+	if price.PriceIn != 0.1 || price.PriceOut != 0.3 {
+		t.Fatalf("expected Mistral Small pricing, got in=%v out=%v", price.PriceIn, price.PriceOut)
+	}
+}
+
 func TestBedrockPublicPricingOfferFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -358,6 +552,14 @@ func TestBedrockCanonicalPricingSmoke(t *testing.T) {
 	for _, modelID := range []string{
 		"deepseek.v3.2",
 		"qwen.qwen3-coder-next",
+		"google.gemma-3-4b-it",
+		"google.gemma-3-12b-it",
+		"google.gemma-3-27b-it",
+		"global.amazon.nova-2-lite-v1:0",
+		"mistral.ministral-3-8b-instruct",
+		"mistral.mistral-small-2402-v1:0",
+		"nvidia.nemotron-nano-9b-v2",
+		"nvidia.nemotron-super-3-120b",
 		"us.anthropic.claude-sonnet-4-6",
 		"us.anthropic.claude-opus-4-7",
 	} {
