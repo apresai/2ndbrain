@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.13] - 2026-04-22
+
+### Added
+- TwelveLabs Marengo embedding models via Bedrock InvokeModel (`models add --provider bedrock --type embedding --price-request`)
+- Live pricing fetched from OpenRouter `/models` API and AWS pricing offer files with 24h disk cache
+- Per-model pricing overrides via `models add` flags (`--price-in`, `--price-out`, `--price-request`)
+
+### Changed
+- `models list` and `ai status` now display live pricing data; falls back to stale cache then builtin metadata in air-gapped environments
+- Bedrock provider expanded to support embedding model invocations
+
+### Fixed
+- Frontmatter parsing edge cases
+
+
 ## [0.2.12] - 2026-04-22
 
 ### Added
