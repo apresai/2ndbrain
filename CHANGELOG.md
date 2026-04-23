@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.14] - 2026-04-23
+
+Based on the diff analysis, here is the CHANGELOG entry:
+
+```markdown
+## [0.2.14] - 2026-04-23
+
+### Fixed
+- Bedrock model discovery now skips legacy and lifecycle-blocked foundation models correctly
+- Model type (embedding vs. generation) is now detected from `FoundationModelDetails` instead of inferred from model class, improving accuracy for text and multimodal models
+- Bedrock `--discover` no longer includes non-text-input models in results
+```
+
+
 ## [0.2.13] - 2026-04-22
 
 ### Added
