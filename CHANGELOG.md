@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.15] - 2026-04-23
+
+### Fixed
+
+- Bedrock live pricing now correctly resolves model IDs to AWS offer file entries, fixing cases where pricing showed "unknown" for supported models (Nova, Titan, Cohere, TwelveLabs Marengo, and cross-region inference profiles)
+
+
 ## [0.2.14] - 2026-04-23
 
 Based on the diff analysis, here is the CHANGELOG entry:
