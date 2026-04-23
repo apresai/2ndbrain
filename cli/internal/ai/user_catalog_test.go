@@ -48,6 +48,9 @@ func TestSaveAndLoad_GlobalRoundTrip(t *testing.T) {
 	if got.PriceSource != "user" {
 		t.Fatalf("expected price_source=user (derived), got %q", got.PriceSource)
 	}
+	if !got.PriceOverride {
+		t.Fatal("expected non-zero user price to infer price_override=true")
+	}
 }
 
 func TestSaveAndLoad_ReplacesExisting(t *testing.T) {
@@ -201,9 +204,28 @@ func TestLoadUserCatalog_LayersOnBuiltinKeepsTier(t *testing.T) {
 	}
 }
 
-// Regression: a user catalog entry marked as "free" (price_in=0) with an
-// explicit price_source="user" must override a non-zero builtin price.
+// Regression: an explicit zero-price user override must override a non-zero
+// builtin price only when the override marker is present.
 func TestOverlay_ExplicitZeroPriceWinsWhenPriceSourceSet(t *testing.T) {
+	base := []ModelInfo{
+		{ID: "pricey", Provider: "bedrock", PriceIn: 10.0, PriceSource: "builtin"},
+	}
+	top := []ModelInfo{
+		{ID: "pricey", Provider: "bedrock", PriceIn: 0, PriceSource: "user", PriceOverride: true, Tier: TierUserVerified},
+	}
+	out := overlay(base, top)
+	if out[0].PriceIn != 0 {
+		t.Fatalf("explicit zero-price override should win, got %v", out[0].PriceIn)
+	}
+	if out[0].PriceSource != "user" {
+		t.Fatalf("expected price_source=user, got %q", out[0].PriceSource)
+	}
+	if !out[0].PriceOverride {
+		t.Fatal("expected price_override=true to be preserved")
+	}
+}
+
+func TestOverlay_LegacyZeroPriceUserEntryDoesNotOverride(t *testing.T) {
 	base := []ModelInfo{
 		{ID: "pricey", Provider: "bedrock", PriceIn: 10.0, PriceSource: "builtin"},
 	}
@@ -211,11 +233,36 @@ func TestOverlay_ExplicitZeroPriceWinsWhenPriceSourceSet(t *testing.T) {
 		{ID: "pricey", Provider: "bedrock", PriceIn: 0, PriceSource: "user", Tier: TierUserVerified},
 	}
 	out := overlay(base, top)
-	if out[0].PriceIn != 0 {
-		t.Fatalf("explicit price_source=user with price=0 should win, got %v", out[0].PriceIn)
+	if out[0].PriceIn != 10.0 {
+		t.Fatalf("legacy zero-price user entry should not wipe builtin price, got %v", out[0].PriceIn)
 	}
-	if out[0].PriceSource != "user" {
-		t.Fatalf("expected price_source=user, got %q", out[0].PriceSource)
+	if out[0].PriceSource != "builtin" {
+		t.Fatalf("expected builtin price_source to survive, got %q", out[0].PriceSource)
+	}
+}
+
+func TestLoadUserCatalog_LegacyZeroPriceUserEntryIsRecovered(t *testing.T) {
+	setupHome(t)
+	entry := ModelInfo{
+		ID:          "deepseek.v3.2",
+		Provider:    "bedrock",
+		Type:        "generation",
+		PriceSource: "user",
+		Tier:        TierUserVerified,
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	models := LoadUserCatalog("")
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	if models[0].PriceSource != "" {
+		t.Fatalf("legacy zero-price user entry should load as unpriced, got %q", models[0].PriceSource)
+	}
+	if models[0].PriceOverride {
+		t.Fatal("legacy zero-price user entry should not infer price_override")
 	}
 }
 

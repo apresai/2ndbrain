@@ -33,17 +33,17 @@ var (
 )
 
 var (
-	addProvider   string
-	addType       string
-	addName       string
-	addDimensions int
-	addContextLen int
+	addProvider     string
+	addType         string
+	addName         string
+	addDimensions   int
+	addContextLen   int
 	addPriceIn      float64
 	addPriceOut     float64
 	addPriceRequest float64
 	addThreshold    float64
-	addNotes      string
-	addScope      string
+	addNotes        string
+	addScope        string
 
 	removeProvider string
 	removeScope    string
@@ -406,6 +406,7 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	priceOverride := cmd.Flags().Changed("price-in") || cmd.Flags().Changed("price-out") || cmd.Flags().Changed("price-request")
 
 	if addType != "embedding" && addType != "generation" {
 		return fmt.Errorf("--type must be embedding or generation, got %q", addType)
@@ -431,8 +432,11 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		PriceRequest:                   addPriceRequest,
 		Notes:                          addNotes,
 		Tier:                           ai.TierUserVerified,
-		PriceSource:                    "user",
+		PriceOverride:                  priceOverride,
 		RecommendedSimilarityThreshold: addThreshold,
+	}
+	if priceOverride {
+		entry.PriceSource = "user"
 	}
 	if entry.Name == "" {
 		entry.Name = modelID

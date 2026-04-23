@@ -159,6 +159,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 
 	// Generate embeddings if a provider is available
 	embedded := 0
+	embeddingCancelled := false
 	cfg := h.vault.Config.AI
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if embErr == nil && embedder.Available(ctx) {
@@ -174,6 +175,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 					// return what we got so far rather than block further.
 					// Reassigning `i` doesn't exit a range loop; use a labeled
 					// break so the doc list stops being processed immediately.
+					embeddingCancelled = true
 					slog.Warn("kb_index embedding aborted by ctx",
 						"embedded", embedded,
 						"remaining", len(docs)-i,
@@ -205,10 +207,11 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 	}
 
 	result := map[string]any{
-		"documents_indexed": stats.DocsIndexed,
-		"chunks_created":    stats.ChunksCreated,
-		"links_found":       stats.LinksFound,
-		"embeddings_updated": embedded,
+		"documents_indexed":   stats.DocsIndexed,
+		"chunks_created":      stats.ChunksCreated,
+		"links_found":         stats.LinksFound,
+		"embeddings_updated":  embedded,
+		"embedding_cancelled": embeddingCancelled,
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")

@@ -213,6 +213,14 @@ func overlay(base, top []ModelInfo) []ModelInfo {
 	return out
 }
 
+func modelHasAnyPrice(m ModelInfo) bool {
+	return m.PriceIn != 0 || m.PriceOut != 0 || m.PriceRequest != 0
+}
+
+func hasUserPriceOverride(m ModelInfo) bool {
+	return m.PriceSource == "user" && (m.PriceOverride || modelHasAnyPrice(m))
+}
+
 // mergeFields copies fields from `top` onto `base`, returning the merged
 // entry. Price fields are copied as a unit when `top.PriceSource` is set,
 // so a user catalog entry with explicit price_in=0 (e.g. a free tier)
@@ -233,11 +241,20 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 	// When the overlay declares a price source, treat prices as intentional
 	// even if zero. Otherwise only non-zero overrides apply (protects builtin
 	// prices from overlays that haven't populated them).
-	if top.PriceSource != "" {
+	if top.PriceSource == "user" {
+		if hasUserPriceOverride(top) {
+			out.PriceIn = top.PriceIn
+			out.PriceOut = top.PriceOut
+			out.PriceRequest = top.PriceRequest
+			out.PriceSource = "user"
+			out.PriceOverride = true
+		}
+	} else if top.PriceSource != "" {
 		out.PriceIn = top.PriceIn
 		out.PriceOut = top.PriceOut
 		out.PriceRequest = top.PriceRequest
 		out.PriceSource = top.PriceSource
+		out.PriceOverride = top.PriceOverride
 	} else {
 		if top.PriceIn != 0 {
 			out.PriceIn = top.PriceIn
@@ -297,7 +314,19 @@ func tagAsUserCatalog(m *ModelInfo) {
 	if m.Tier == "" {
 		m.Tier = TierUserVerified
 	}
-	if m.PriceSource == "" && (m.PriceIn != 0 || m.PriceOut != 0 || m.PriceRequest != 0) {
+	switch {
+	case m.PriceOverride:
 		m.PriceSource = "user"
+	case m.PriceSource == "user":
+		if modelHasAnyPrice(*m) {
+			m.PriceOverride = true
+		} else {
+			// Back-compat for buggy legacy entries written without explicit
+			// price flags: zero-valued user prices should not mask vendor data.
+			m.PriceSource = ""
+		}
+	case m.PriceSource == "" && modelHasAnyPrice(*m):
+		m.PriceSource = "user"
+		m.PriceOverride = true
 	}
 }

@@ -39,10 +39,20 @@ func ParseFrontmatter(content []byte) (meta map[string]any, body string, err err
 	rest := s[openLen:]
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
-		// Try \r\n
+		// Try CRLF with trailing newline
 		idx = strings.Index(rest, "\r\n---\r\n")
 		if idx == -1 {
-			// Frontmatter might end at EOF with just "---"
+			// Try CRLF at EOF
+			idx = strings.Index(rest, "\r\n---")
+			if idx != -1 && idx+len("\r\n---") == len(rest) {
+				yamlStr := rest[:idx]
+				meta = make(map[string]any)
+				if err := yaml.Unmarshal([]byte(yamlStr), &meta); err != nil {
+					return nil, s, fmt.Errorf("malformed YAML frontmatter: %w", err)
+				}
+				return meta, "", nil
+			}
+			// Try LF at EOF
 			idx = strings.Index(rest, "\n---")
 			if idx == -1 {
 				return nil, s, nil

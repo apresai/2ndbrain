@@ -52,12 +52,12 @@ const (
 // JSON is used for CLI --json output and vendor API payloads; YAML is used
 // for the user catalog file at ~/.config/2nb/models.yaml.
 type ModelInfo struct {
-	ID         string  `json:"id" yaml:"id"`
-	Name       string  `json:"name" yaml:"name,omitempty"`
-	Provider   string  `json:"provider" yaml:"provider"`
-	Type       string  `json:"type" yaml:"type"` // "embedding" or "generation"
-	Dimensions int     `json:"dimensions,omitempty" yaml:"dimensions,omitempty"`
-	ContextLen int     `json:"context_length,omitempty" yaml:"context_length,omitempty"`
+	ID         string `json:"id" yaml:"id"`
+	Name       string `json:"name" yaml:"name,omitempty"`
+	Provider   string `json:"provider" yaml:"provider"`
+	Type       string `json:"type" yaml:"type"` // "embedding" or "generation"
+	Dimensions int    `json:"dimensions,omitempty" yaml:"dimensions,omitempty"`
+	ContextLen int    `json:"context_length,omitempty" yaml:"context_length,omitempty"`
 	// RecommendedSimilarityThreshold is the suggested minimum cosine similarity
 	// for semantic search with this embedding model. Used when the vault's
 	// ai.similarity_threshold isn't explicitly set. Different embedding models
@@ -90,6 +90,11 @@ type ModelInfo struct {
 	// PriceSource records which layer supplied the pricing: "builtin", "bundled",
 	// "user", "vendor". Empty when price fields are zero/unknown.
 	PriceSource string `json:"price_source,omitempty" yaml:"price_source,omitempty"`
+	// PriceOverride is set when a user explicitly wants their price fields to
+	// override builtin or vendor pricing, including explicit zero-cost entries.
+	// Absent legacy user-catalog entries with zero prices are treated as
+	// unpriced so live vendor pricing can recover automatically.
+	PriceOverride bool `json:"price_override,omitempty" yaml:"price_override,omitempty"`
 	// TestedAt is an ISO-8601 timestamp recorded when the model last passed
 	// `2nb models test`. Present only on user-catalog entries.
 	TestedAt string `json:"tested_at,omitempty" yaml:"tested_at,omitempty"`

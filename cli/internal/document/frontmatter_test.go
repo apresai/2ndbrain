@@ -78,6 +78,22 @@ func TestParseFrontmatter_EOFClose(t *testing.T) {
 	}
 }
 
+func TestParseFrontmatter_CRLFEOFClose(t *testing.T) {
+	// CRLF frontmatter ending at EOF with just "---", no body.
+	// This tests the bug fix for CRLF EOF handling.
+	content := []byte("---\r\ntitle: Hello\r\n---")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["title"] != "Hello" {
+		t.Errorf("title = %v, want Hello", meta["title"])
+	}
+	if body != "" {
+		t.Errorf("body = %q, want empty", body)
+	}
+}
+
 func TestParseFrontmatter_NoFrontmatter(t *testing.T) {
 	content := []byte("Just text\n")
 	meta, body, err := ParseFrontmatter(content)

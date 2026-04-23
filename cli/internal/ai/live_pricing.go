@@ -16,21 +16,59 @@ import (
 )
 
 const (
-	pricingCacheTTL        = 24 * time.Hour
-	openRouterModelsURL    = openrouterBaseURL + "/models"
-	awsOfferBaseURL        = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/"
-	bedrockOfferCode       = "AmazonBedrock"
-	bedrockFMOfferCode     = "AmazonBedrockFoundationModels"
+	pricingCacheTTL     = 24 * time.Hour
+	openRouterModelsURL = openrouterBaseURL + "/models"
+	awsOfferBaseURL     = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/"
+	bedrockOfferCode    = "AmazonBedrock"
+	bedrockFMOfferCode  = "AmazonBedrockFoundationModels"
 )
 
 type modelPrice struct {
-	PriceIn     float64
-	PriceOut    float64
+	PriceIn      float64
+	PriceOut     float64
 	PriceRequest float64
-	HasIn       bool
-	HasOut      bool
-	HasRequest  bool
-	Source      string
+	HasIn        bool
+	HasOut       bool
+	HasRequest   bool
+	Source       string
+	inRank       int
+	outRank      int
+	requestRank  int
+}
+
+type bedrockPriceKind uint8
+
+const (
+	bedrockPriceUnknown bedrockPriceKind = iota
+	bedrockPriceInput
+	bedrockPriceOutput
+	bedrockPriceRequest
+)
+
+type bedrockPriceRouting uint8
+
+const (
+	bedrockRoutingUnknown bedrockPriceRouting = iota
+	bedrockRoutingRegional
+	bedrockRoutingGlobal
+)
+
+type bedrockPriceTier uint8
+
+const (
+	bedrockTierUnknown bedrockPriceTier = iota
+	bedrockTierStandard
+	bedrockTierFlex
+	bedrockTierPriority
+	bedrockTierBatch
+	bedrockTierReserved
+)
+
+type bedrockPriceCandidate struct {
+	Kind    bedrockPriceKind
+	Price   float64
+	Routing bedrockPriceRouting
+	Tier    bedrockPriceTier
 }
 
 type providerPricing struct {
@@ -84,7 +122,7 @@ func enrichModels(models []ModelInfo, orPricing, brPricing *providerPricing) []M
 	copy(out, models)
 
 	for i := range out {
-		if out[i].PriceSource == "user" {
+		if hasUserPriceOverride(out[i]) {
 			continue
 		}
 		switch out[i].Provider {
@@ -239,7 +277,7 @@ func addBedrockOfferPricing(dst map[string]modelPrice, offer awsOfferFile, regio
 		}
 		for _, term := range terms {
 			for _, dim := range term.PriceDimensions {
-				kind, price, ok := classifyBedrockPriceDimension(attrs, dim)
+				candidate, ok := classifyBedrockPriceDimension(attrs, dim)
 				if !ok {
 					continue
 				}
@@ -249,18 +287,7 @@ func addBedrockOfferPricing(dst map[string]modelPrice, offer awsOfferFile, regio
 						continue
 					}
 					current := dst[key]
-					current.Source = "vendor"
-					switch kind {
-					case "input":
-						current.PriceIn = price
-						current.HasIn = true
-					case "output":
-						current.PriceOut = price
-						current.HasOut = true
-					case "request":
-						current.PriceRequest = price
-						current.HasRequest = true
-					}
+					applyBedrockCandidate(&current, candidate)
 					dst[key] = current
 				}
 			}
@@ -305,9 +332,10 @@ func bedrockOfferAliases(attrs map[string]string) []string {
 	return aliases
 }
 
-func classifyBedrockPriceDimension(attrs map[string]string, dim awsOfferDimension) (string, float64, bool) {
+func classifyBedrockPriceDimension(attrs map[string]string, dim awsOfferDimension) (bedrockPriceCandidate, bool) {
 	usagetype := attrs["usagetype"]
-	text := strings.ToLower(strings.Join([]string{
+	rawLower := strings.ToLower(usagetype)
+	text := normalizePricingText(strings.Join([]string{
 		usagetype,
 		attrs["inferenceType"],
 		attrs["feature"],
@@ -318,65 +346,153 @@ func classifyBedrockPriceDimension(attrs map[string]string, dim awsOfferDimensio
 		dim.Unit,
 	}, " "))
 
-	for _, bad := range []string{
-		"batch",
-		"priority",
+	for _, unsupported := range []string{
 		"cache",
-		"cross-region",
-		"global",
-		"provisioned",
-		"reserved",
-		"custom-model",
+		"custom model",
 		"grounding",
-		"flex",
+		"image",
 		"latency optimized",
-		"latency-optimized",
-		"mantle",
+		"long context",
+		" lctx ",
+		"provisioned",
+		"rerank",
+		"second",
+		"video",
+		"audio",
 	} {
-		if strings.Contains(text, bad) {
-			return "", 0, false
+		if strings.Contains(text, unsupported) {
+			return bedrockPriceCandidate{}, false
 		}
-	}
-
-	if strings.Contains(text, "image") || strings.Contains(text, "video") || strings.Contains(text, "audio") || strings.Contains(text, "second") {
-		return "", 0, false
 	}
 
 	price := parseUnitPrice(dim.PricePerUnit["USD"])
 	if price == 0 && dim.PricePerUnit["USD"] == "" {
-		return "", 0, false
+		return bedrockPriceCandidate{}, false
 	}
 
-	// AmazonBedrockFoundationModels (Marketplace) offer: usagetype encodes token
-	// direction as "InputTokenCount" / "OutputTokenCount" (no spaces). Check the
-	// raw usagetype first before falling through to the description-based heuristics.
+	tier := bedrockTierStandard
+	switch {
+	case strings.Contains(text, "batch"):
+		tier = bedrockTierBatch
+	case strings.Contains(text, "priority"):
+		tier = bedrockTierPriority
+	case strings.Contains(text, "flex"):
+		tier = bedrockTierFlex
+	case strings.Contains(text, "reserved"):
+		tier = bedrockTierReserved
+	}
+
+	routing := bedrockRoutingRegional
+	switch {
+	case strings.Contains(text, "global"), strings.Contains(text, "cross region"):
+		routing = bedrockRoutingGlobal
+	case strings.Contains(text, "regional"), strings.Contains(text, " geo "):
+		routing = bedrockRoutingRegional
+	}
+
+	kind := bedrockPriceUnknown
+	// Marketplace offer files use both legacy CamelCase and newer snake_case
+	// token identifiers. Check the raw usagetype before the normalized text.
 	if isMPUsagetype(usagetype) {
 		switch {
-		case strings.Contains(usagetype, "InputTokenCount"):
-			return "input", normalizeBedrockTokenPrice(price, dim), true
-		case strings.Contains(usagetype, "OutputTokenCount"):
-			return "output", normalizeBedrockTokenPrice(price, dim), true
-		default:
-			return "", 0, false
+		case strings.Contains(usagetype, "InputTokenCount"), strings.Contains(rawLower, "input_tokens"):
+			kind = bedrockPriceInput
+		case strings.Contains(usagetype, "OutputTokenCount"), strings.Contains(rawLower, "output_tokens"):
+			kind = bedrockPriceOutput
+		case strings.Contains(rawLower, "request_count"):
+			kind = bedrockPriceRequest
 		}
 	}
 
-	switch {
-	case strings.Contains(text, "request count"):
-		return "request", price, true
-	case strings.Contains(text, "response token") || strings.Contains(text, "output token"):
-		return "output", normalizeBedrockTokenPrice(price, dim), true
-	case strings.Contains(text, "input token"):
-		return "input", normalizeBedrockTokenPrice(price, dim), true
-	default:
-		return "", 0, false
+	if kind == bedrockPriceUnknown {
+		switch {
+		case strings.Contains(text, "request count"):
+			kind = bedrockPriceRequest
+		case strings.Contains(text, "response token"), strings.Contains(text, "output token"):
+			kind = bedrockPriceOutput
+		case strings.Contains(text, "input token"):
+			kind = bedrockPriceInput
+		}
 	}
+	if kind == bedrockPriceUnknown {
+		return bedrockPriceCandidate{}, false
+	}
+
+	if kind == bedrockPriceRequest {
+		return bedrockPriceCandidate{Kind: kind, Price: price, Routing: routing, Tier: tier}, true
+	}
+	return bedrockPriceCandidate{
+		Kind:    kind,
+		Price:   normalizeBedrockTokenPrice(price, dim),
+		Routing: routing,
+		Tier:    tier,
+	}, true
 }
 
 // isMPUsagetype reports whether a usagetype belongs to the Bedrock Marketplace
 // (AmazonBedrockFoundationModels) offer, identified by the "MP:" infix.
 func isMPUsagetype(usagetype string) bool {
 	return strings.Contains(usagetype, "-MP:")
+}
+
+func normalizePricingText(s string) string {
+	var b strings.Builder
+	lastSpace := true
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func bedrockCandidateRank(candidate bedrockPriceCandidate) int {
+	if candidate.Tier != bedrockTierStandard {
+		return 0
+	}
+	switch candidate.Routing {
+	case bedrockRoutingGlobal:
+		return 2
+	case bedrockRoutingRegional, bedrockRoutingUnknown:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func applyBedrockCandidate(dst *modelPrice, candidate bedrockPriceCandidate) {
+	rank := bedrockCandidateRank(candidate)
+	if rank == 0 {
+		return
+	}
+
+	dst.Source = "vendor"
+	switch candidate.Kind {
+	case bedrockPriceInput:
+		if !dst.HasIn || rank > dst.inRank || (rank == dst.inRank && candidate.Price < dst.PriceIn) {
+			dst.PriceIn = candidate.Price
+			dst.HasIn = true
+			dst.inRank = rank
+		}
+	case bedrockPriceOutput:
+		if !dst.HasOut || rank > dst.outRank || (rank == dst.outRank && candidate.Price < dst.PriceOut) {
+			dst.PriceOut = candidate.Price
+			dst.HasOut = true
+			dst.outRank = rank
+		}
+	case bedrockPriceRequest:
+		if !dst.HasRequest || rank > dst.requestRank || (rank == dst.requestRank && candidate.Price < dst.PriceRequest) {
+			dst.PriceRequest = candidate.Price
+			dst.HasRequest = true
+			dst.requestRank = rank
+		}
+	}
 }
 
 func normalizeBedrockTokenPrice(price float64, dim awsOfferDimension) float64 {
