@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.12] - 2026-04-22
+
+### Added
+- Live pricing for `models list`, `ai status`, and `index` — fetched from OpenRouter and AWS pricing APIs with a 24-hour disk cache (`~/Library/Caches/2nb/pricing`); falls back to stale cache then builtin metadata when offline
+- TwelveLabs Marengo embed family support via Bedrock InvokeModel (Marengo 2.7 and 3.0 request/response formats); add via `2nb models add <model-id> --provider bedrock --type embedding --price-request <USD>`
+- `--price-request` flag on `models add` for per-request priced embedding models
+
+### Fixed
+- Bedrock model discovery failures for reasoning models, system prompts, variant IDs, and embedding formats
+
+
 ## [0.2.11] - 2026-04-22
 
 ### Fixed
