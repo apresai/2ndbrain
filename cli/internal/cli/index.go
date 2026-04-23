@@ -27,7 +27,7 @@ var indexCmd = &cobra.Command{
 }
 
 var (
-	indexDocFlag     string
+	indexDocFlag      string
 	indexForceReembed bool
 )
 
@@ -213,12 +213,6 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 		fmt.Fprintf(os.Stderr, "  embedding %d documents...\n", len(docs))
 	}
 	embedStart := time.Now()
-
-	// Look up model pricing for cost estimate
-	var pricePerMillion float64
-	if models, err := embedder.ListModels(ctx); err == nil && len(models) > 0 {
-		pricePerMillion = models[0].PriceIn
-	}
 	var totalChars int
 	embedded := 0
 
@@ -258,18 +252,22 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 
 	// Show cost estimate for non-free providers
 	if !flagPorcelain && embedded > 0 {
+		var modelInfo ai.ModelInfo
+		if models, err := loadVerifiedModelCatalog(ctx, cfg, v.Root); err == nil {
+			modelInfo, _ = lookupModelInfo(models, cfg.Provider, model)
+		} else {
+			slog.Debug("cost estimate skipped: catalog load failed", "err", err)
+		}
 		estimatedTokens := float64(totalChars) / 4.0 // rough chars→tokens estimate
-		if pricePerMillion > 0 {
-			cost := (estimatedTokens / 1_000_000) * pricePerMillion
+		if ai.IsExplicitlyFree(modelInfo) {
+			fmt.Fprintf(os.Stderr, "  cost: free (%s)\n", model)
+		} else if cost, ok := ai.EstimateInputCost(modelInfo, estimatedTokens, embedded); ok {
 			fmt.Fprintf(os.Stderr, "  cost estimate: $%.4f (%s)\n", cost, model)
-			// Suggest local alternative if extrapolated monthly cost > $3
 			monthlyCost := cost * 4 // assume ~4 re-indexes per month
 			if monthlyCost > 3.0 {
 				fmt.Fprintf(os.Stderr, "  estimated monthly cost: ~$%.2f\n", monthlyCost)
 				fmt.Fprintf(os.Stderr, "  tip: run `2nb ai setup` to configure free local AI with Ollama\n")
 			}
-		} else {
-			fmt.Fprintf(os.Stderr, "  cost: free (%s)\n", model)
 		}
 	}
 

@@ -2,8 +2,13 @@ package ai
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aws/smithy-go"
 )
 
 func requireBedrock(t *testing.T) (*BedrockEmbedder, *BedrockGenerator) {
@@ -164,12 +169,135 @@ func TestDetectEmbedFormat(t *testing.T) {
 		{"cohere.embed-english-v3", fmtCohere},
 		{"cohere.embed-multilingual-v3", fmtCohere},
 		{"cohere.embed-english-v4", fmtCohere},
+		{"us.twelvelabs.marengo-embed-2-7-v1:0", fmtTwelveLabs27},
+		{"us.twelvelabs.marengo-embed-3-0-v1:0", fmtTwelveLabs30},
 	}
 	for _, tt := range tests {
 		got := detectEmbedFormat(tt.modelID)
 		if got != tt.want {
 			t.Errorf("detectEmbedFormat(%q) = %d, want %d", tt.modelID, got, tt.want)
 		}
+	}
+}
+
+func TestBedrockModelSupported(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelID   string
+		modelType string
+		wantOK    bool
+		wantText  string
+	}{
+		{"nova micro generation", "amazon.nova-micro-v1:0", "generation", true, ""},
+		{"claude generation", "us.anthropic.claude-3-5-haiku-20241022-v1:0", "generation", true, ""},
+		{"marengo 27 embedding", "us.twelvelabs.marengo-embed-2-7-v1:0", "embedding", true, ""},
+		{"marengo 30 embedding", "us.twelvelabs.marengo-embed-3-0-v1:0", "embedding", true, ""},
+		{"nova canvas rejected", "amazon.nova-canvas-v1:0", "generation", false, "image-generation"},
+		{"nova reel rejected", "amazon.nova-reel-v1:0", "generation", false, "video-generation"},
+		{"rerank rejected", "cohere.rerank-v3-5:0", "generation", false, "reranking"},
+		{"pegasus rejected", "us.twelvelabs.pegasus-1-2-v1:0", "generation", false, "video-understanding"},
+		{"titan image embed rejected", "amazon.titan-embed-image-v1:0", "embedding", false, "image input"},
+		{"palmyra vision rejected", "writer.palmyra-vision-7b", "generation", false, "Palmyra Vision"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotOK, gotReason := bedrockModelSupported(tt.modelID, tt.modelType)
+			if gotOK != tt.wantOK {
+				t.Fatalf("bedrockModelSupported(%q, %q) ok = %v, want %v (reason %q)", tt.modelID, tt.modelType, gotOK, tt.wantOK, gotReason)
+			}
+			if tt.wantText != "" && !strings.Contains(gotReason, tt.wantText) {
+				t.Fatalf("bedrockModelSupported(%q, %q) reason = %q, want substring %q", tt.modelID, tt.modelType, gotReason, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestParseTwelveLabsEmbedding(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []float32
+	}{
+		{
+			name: "top-level embedding",
+			body: `{"embedding":[0.1,0.2]}`,
+			want: []float32{0.1, 0.2},
+		},
+		{
+			name: "object data embedding",
+			body: `{"data":{"embedding":[0.3,0.4]}}`,
+			want: []float32{0.3, 0.4},
+		},
+		{
+			name: "array data embedding",
+			body: `{"data":[{"embedding":[0.5,0.6]}]}`,
+			want: []float32{0.5, 0.6},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseTwelveLabsEmbedding([]byte(tt.body))
+			if err != nil {
+				t.Fatalf("parseTwelveLabsEmbedding() error = %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("len(got) = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("got[%d] = %v, want %v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBedrockEmbedTwelveLabsMarengo27(t *testing.T) {
+	testBedrockMarengoEmbed(t, "us.twelvelabs.marengo-embed-2-7-v1:0")
+}
+
+func TestBedrockEmbedTwelveLabsMarengo30(t *testing.T) {
+	testBedrockMarengoEmbed(t, "us.twelvelabs.marengo-embed-3-0-v1:0")
+}
+
+func testBedrockMarengoEmbed(t *testing.T, modelID string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
+	if !CheckBedrockCredentials(ctx, cfg) {
+		t.Skip("AWS credentials not configured for Bedrock")
+	}
+
+	embedder, err := NewBedrockEmbedder(ctx, cfg, modelID, 0)
+	if err != nil {
+		t.Skipf("Bedrock embedder unavailable: %v", err)
+	}
+
+	vecs, err := embedder.Embed(ctx, []string{"Bedrock Marengo text embedding probe"})
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "AccessDenied"),
+			strings.Contains(msg, "not authorized"),
+			strings.Contains(msg, "ModelNotReady"),
+			strings.Contains(msg, "validationexception"),
+			strings.Contains(msg, "ValidationException"),
+			strings.Contains(msg, "ResourceNotFoundException"):
+			t.Skipf("Marengo model not available in this account/region: %v", err)
+		default:
+			t.Fatalf("Embed(%s): %v", modelID, err)
+		}
+	}
+	if len(vecs) != 1 {
+		t.Fatalf("got %d vectors, want 1", len(vecs))
+	}
+	if len(vecs[0]) == 0 {
+		t.Fatalf("empty embedding vector for %s", modelID)
 	}
 }
 
@@ -375,4 +503,97 @@ func TestListBedrockVendorModelsInferenceProfiles(t *testing.T) {
 		t.Error("bare anthropic.claude-3-5* base IDs should be suppressed by inference profile dedup")
 	}
 	t.Logf("discovered %d models", len(models))
+}
+
+// --- isBedrockModelLifecycleBlocked pure-logic tests ---
+
+type fakeAPIError struct {
+	code    string
+	message string
+	fault   smithy.ErrorFault
+}
+
+func (e *fakeAPIError) Error() string        { return fmt.Sprintf("%s: %s", e.code, e.message) }
+func (e *fakeAPIError) ErrorCode() string    { return e.code }
+func (e *fakeAPIError) ErrorMessage() string { return e.message }
+func (e *fakeAPIError) ErrorFault() smithy.ErrorFault { return e.fault }
+
+func TestIsBedrockModelLifecycleBlocked(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		want    bool
+	}{
+		{
+			name: "end of its life message",
+			err:  &fakeAPIError{code: "ResourceNotFoundException", message: "Model is at end of its life"},
+			want: true,
+		},
+		{
+			name: "marked as legacy message",
+			err:  &fakeAPIError{code: "ResourceNotFoundException", message: "Model is marked as legacy"},
+			want: true,
+		},
+		{
+			name: "RNF without lifecycle message",
+			err:  &fakeAPIError{code: "ResourceNotFoundException", message: "Model not found"},
+			want: false,
+		},
+		{
+			name: "non-RNF error",
+			err:  &fakeAPIError{code: "ValidationException", message: "end of its life"},
+			want: false,
+		},
+		{
+			name: "non-api error",
+			err:  errors.New("network timeout"),
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isBedrockModelLifecycleBlocked(tc.err)
+			if got != tc.want {
+				t.Errorf("isBedrockModelLifecycleBlocked = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// --- bedrockModelSupported static allowlist tests ---
+
+func TestBedrockModelSupportedStaticAllowlist(t *testing.T) {
+	cases := []struct {
+		modelID   string
+		modelType string
+		wantOK    bool
+	}{
+		// generation — supported
+		{"anthropic.claude-3-5-sonnet-20241022-v2:0", "generation", true},
+		{"amazon.nova-micro-v1:0", "generation", true},
+		{"meta.llama3-8b-instruct-v1:0", "generation", true},
+		{"mistral.mistral-7b-instruct-v0:2", "generation", true},
+		// generation — blocked
+		{"amazon.nova-canvas-v1:0", "generation", false},
+		{"amazon.nova-reel-v1:0", "generation", false},
+		{"stability.stable-image-core-v1:0", "generation", false},
+		{"cohere.rerank-english-v3:0", "generation", false},
+		{"twelvelabs.pegasus-1:0", "generation", false},
+		// embedding — supported
+		{"amazon.titan-embed-text-v2:0", "embedding", true},
+		{"cohere.embed-english-v3:0", "embedding", true},
+		{"amazon.titan-embed-g1-text-02", "embedding", true},
+		// embedding — blocked
+		{"amazon.titan-embed-image-v1", "embedding", false},
+		{"some.unknown-model", "embedding", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.modelID+"/"+tc.modelType, func(t *testing.T) {
+			ok, reason := bedrockModelSupported(tc.modelID, tc.modelType)
+			if ok != tc.wantOK {
+				t.Errorf("bedrockModelSupported(%q, %q) = %v (reason: %q), want %v",
+					tc.modelID, tc.modelType, ok, reason, tc.wantOK)
+			}
+		})
+	}
 }

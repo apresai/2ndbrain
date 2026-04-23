@@ -1,6 +1,9 @@
 package ai
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // BuiltinCatalog returns all models that 2nb has verified API harnesses for.
 // These models have been tested with the current provider implementations
@@ -219,6 +222,17 @@ func BuiltinCatalog() []ModelInfo {
 			Tier:       TierVerified,
 			ConfigHint: configHint("ollama", "generation", m.id),
 		})
+	}
+
+	for i := range models {
+		switch {
+		case models[i].Local:
+			models[i].PriceSource = "builtin"
+		case models[i].PriceIn > 0 || models[i].PriceOut > 0 || models[i].PriceRequest > 0:
+			models[i].PriceSource = "builtin"
+		case models[i].Provider == "openrouter" && strings.HasSuffix(models[i].ID, ":free"):
+			models[i].PriceSource = "builtin"
+		}
 	}
 
 	return models

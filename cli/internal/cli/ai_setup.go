@@ -87,6 +87,11 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	verifiedModels, err := loadVerifiedModelCatalog(ctx, cfg, v.Root)
+	if err != nil {
+		return err
+	}
+
 	// Step 3: Pick models — easy mode or custom.
 	var embedID, genID string
 	var dims int
@@ -116,10 +121,11 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	if embedID == "" {
 		if setupEmbeddingModel != "" {
 			embedID = setupEmbeddingModel
-			dims = lookupCatalogDims(provider, embedID)
+			m, _ := lookupModelInfo(verifiedModels, provider, embedID)
+			dims = m.Dimensions
 			fmt.Printf("\nEmbedding model: %s\n", embedID)
 		} else {
-			embedID, dims = pickModel(scanner, provider, "embedding")
+			embedID, dims = pickModel(scanner, verifiedModels, provider, "embedding")
 		}
 	}
 	if genID == "" {
@@ -127,7 +133,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 			genID = setupGenerationModel
 			fmt.Printf("Generation model: %s\n", genID)
 		} else {
-			genID, _ = pickModel(scanner, provider, "generation")
+			genID, _ = pickModel(scanner, verifiedModels, provider, "generation")
 		}
 	}
 
@@ -153,14 +159,14 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 
 	// Step 4: Probe models.
 	fmt.Printf("\nTesting embedding model %s...\n", embedID)
-	probeWithRetry(ctx, scanner, &cfg, provider, "embedding", &embedID, &dims)
+	probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "embedding", &embedID, &dims)
 	cfg.EmbeddingModel = embedID
 	if dims > 0 {
 		cfg.Dimensions = dims
 	}
 
 	fmt.Printf("Testing generation model %s...\n", genID)
-	probeWithRetry(ctx, scanner, &cfg, provider, "generation", &genID, &dims)
+	probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "generation", &genID, &dims)
 	cfg.GenerationModel = genID
 
 	// Step 5: Save config.
@@ -274,8 +280,7 @@ func setupOllama(ctx context.Context, cfg *ai.AIConfig) error {
 
 // --- Model selection ---
 
-func pickModel(scanner *bufio.Scanner, provider, modelType string) (string, int) {
-	catalog := ai.BuiltinCatalog()
+func pickModel(scanner *bufio.Scanner, catalog []ai.ModelInfo, provider, modelType string) (string, int) {
 	var models []ai.ModelInfo
 	for _, m := range catalog {
 		if m.Provider == provider && m.Type == modelType {
@@ -296,10 +301,7 @@ func pickModel(scanner *bufio.Scanner, provider, modelType string) (string, int)
 
 	fmt.Printf("\nSelect %s model:\n", modelType)
 	for i, m := range models {
-		price := "free"
-		if m.PriceIn > 0 || m.PriceOut > 0 {
-			price = fmt.Sprintf("$%.2f/$%.2f", m.PriceIn, m.PriceOut)
-		}
+		price := ai.CompactPriceLabel(m)
 		extra := ""
 		if m.Dimensions > 0 {
 			extra = fmt.Sprintf("  %dd", m.Dimensions)
@@ -318,14 +320,6 @@ func pickModel(scanner *bufio.Scanner, provider, modelType string) (string, int)
 	return selected.ID, selected.Dimensions
 }
 
-func lookupCatalogDims(provider, modelID string) int {
-	for _, m := range ai.BuiltinCatalog() {
-		if m.Provider == provider && m.ID == modelID {
-			return m.Dimensions
-		}
-	}
-	return 0
-}
 
 func ollamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 	ctx := context.Background()
@@ -348,7 +342,7 @@ func ollamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 
 // --- Probe with retry ---
 
-func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig, provider, modelType string, modelID *string, dims *int) {
+func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig, models []ai.ModelInfo, provider, modelType string, modelID *string, dims *int) {
 	for {
 		result, err := ai.TestProbeModel(ctx, *cfg, *modelID, provider, modelType)
 		if err == nil && result.OK {
@@ -366,7 +360,7 @@ func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfi
 			fmt.Println("  Continuing without validation.")
 			return
 		}
-		*modelID, *dims = pickModel(scanner, provider, modelType)
+		*modelID, *dims = pickModel(scanner, models, provider, modelType)
 	}
 }
 

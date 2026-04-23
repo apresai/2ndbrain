@@ -25,6 +25,7 @@ type orModelEntry struct {
 type orPricing struct {
 	Prompt     string `json:"prompt"`     // per-token price as string
 	Completion string `json:"completion"` // per-token price as string
+	Request    string `json:"request"`    // per-request price as string
 }
 
 type orArch struct {
@@ -44,7 +45,9 @@ func ListOpenRouterModels(ctx context.Context, apiKey, baseURL string) ([]ModelI
 	if err != nil {
 		return nil, fmt.Errorf("create models request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -78,6 +81,8 @@ func ListOpenRouterModels(ctx context.Context, apiKey, baseURL string) ([]ModelI
 		if m.Pricing != nil {
 			mi.PriceIn = parsePerMillionPrice(m.Pricing.Prompt)
 			mi.PriceOut = parsePerMillionPrice(m.Pricing.Completion)
+			mi.PriceRequest = parseUnitPrice(m.Pricing.Request)
+			mi.PriceSource = "vendor"
 		}
 		models = append(models, mi)
 	}

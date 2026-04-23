@@ -236,6 +236,7 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 	if top.PriceSource != "" {
 		out.PriceIn = top.PriceIn
 		out.PriceOut = top.PriceOut
+		out.PriceRequest = top.PriceRequest
 		out.PriceSource = top.PriceSource
 	} else {
 		if top.PriceIn != 0 {
@@ -243,6 +244,9 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 		}
 		if top.PriceOut != 0 {
 			out.PriceOut = top.PriceOut
+		}
+		if top.PriceRequest != 0 {
+			out.PriceRequest = top.PriceRequest
 		}
 	}
 	if top.ConfigHint != "" {
@@ -293,7 +297,7 @@ func tagAsUserCatalog(m *ModelInfo) {
 	if m.Tier == "" {
 		m.Tier = TierUserVerified
 	}
-	if m.PriceSource == "" && (m.PriceIn != 0 || m.PriceOut != 0) {
+	if m.PriceSource == "" && (m.PriceIn != 0 || m.PriceOut != 0 || m.PriceRequest != 0) {
 		m.PriceSource = "user"
 	}
 }

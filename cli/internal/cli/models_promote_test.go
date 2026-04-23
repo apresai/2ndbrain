@@ -64,6 +64,7 @@ func TestPromotedEntry(t *testing.T) {
 			ContextLen:                     32000,
 			PriceIn:                        0.5,
 			PriceOut:                       1.5,
+			PriceRequest:                   0.02,
 			PriceSource:                    "vendor",
 			Notes:                          "fast model",
 			RecommendedSimilarityThreshold: 0.6,
@@ -85,6 +86,9 @@ func TestPromotedEntry(t *testing.T) {
 		}
 		if entry.PriceOut != 1.5 {
 			t.Errorf("PriceOut = %g, want 1.5", entry.PriceOut)
+		}
+		if entry.PriceRequest != 0.02 {
+			t.Errorf("PriceRequest = %g, want 0.02", entry.PriceRequest)
 		}
 		if entry.PriceSource != "vendor" {
 			t.Errorf("PriceSource = %q, want vendor", entry.PriceSource)
@@ -113,15 +117,15 @@ func TestPromotedEntry(t *testing.T) {
 		}
 	})
 
-	t.Run("PriceSource not set when prices are zero", func(t *testing.T) {
+	t.Run("explicit free PriceSource is preserved", func(t *testing.T) {
 		base := &ai.ModelInfo{
 			PriceIn:     0,
 			PriceOut:    0,
 			PriceSource: "vendor",
 		}
 		entry := promotedEntry(base, result)
-		if entry.PriceSource != "" {
-			t.Errorf("PriceSource = %q, want empty for free model", entry.PriceSource)
+		if entry.PriceSource != "vendor" {
+			t.Errorf("PriceSource = %q, want vendor for known-free model", entry.PriceSource)
 		}
 	})
 }

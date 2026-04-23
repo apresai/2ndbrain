@@ -108,6 +108,7 @@ func ListOllamaModels(ctx context.Context, client *http.Client, endpoint string)
 			Local:    true,
 			PriceIn:  0,
 			PriceOut: 0,
+			PriceSource: "vendor",
 		}
 		if mi.Type == "embedding" {
 			mi.Dimensions = lookupEmbeddingDims(m.Name)

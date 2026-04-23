@@ -67,6 +67,9 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 		}
 	}
 
+	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
+	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)
+
 	sortModels(result.Verified)
 	sortModels(result.Unverified)
 

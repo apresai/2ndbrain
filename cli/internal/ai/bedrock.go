@@ -148,6 +148,27 @@ type cohereEmbedRequest struct {
 	Truncate  string   `json:"truncate,omitempty"`
 }
 
+type twelvelabs27EmbedRequest struct {
+	InputType string `json:"inputType"`
+	InputText string `json:"inputText"`
+}
+
+type twelvelabs30EmbedRequest struct {
+	InputType string `json:"inputType"`
+	Text      struct {
+		InputText string `json:"inputText"`
+	} `json:"text"`
+}
+
+type twelvelabsEmbedEnvelope struct {
+	Embedding []float32       `json:"embedding"`
+	Data      json.RawMessage `json:"data"`
+}
+
+type twelvelabsEmbedItem struct {
+	Embedding []float32 `json:"embedding"`
+}
+
 // parseCohereEmbeddings decodes either the v3 flat array or the v4 typed object.
 func parseCohereEmbeddings(body []byte) ([][]float32, error) {
 	var v3 struct {
@@ -172,11 +193,13 @@ func parseCohereEmbeddings(body []byte) ([][]float32, error) {
 type bedrockEmbedFmt int
 
 const (
-	fmtNova      bedrockEmbedFmt = iota
-	fmtTitanV1                   // simple {"inputText":...} → {"embedding":[...]}
-	fmtTitanV2                   // {"inputText":..., "dimensions":N, ...} → {"embeddingsByType":...}
-	fmtTitanImage                // image-only model, not supported for text embedding
-	fmtCohere                    // batched {"texts":[...]} → {"embeddings":[[...],...]}
+	fmtNova         bedrockEmbedFmt = iota
+	fmtTitanV1                      // simple {"inputText":...} → {"embedding":[...]}
+	fmtTitanV2                      // {"inputText":..., "dimensions":N, ...} → {"embeddingsByType":...}
+	fmtTitanImage                   // image-only model, not supported for text embedding
+	fmtCohere                       // batched {"texts":[...]} → {"embeddings":[[...],...]}
+	fmtTwelveLabs27                 // {"inputType":"text","inputText":"..."} → {"embedding":[...]}
+	fmtTwelveLabs30                 // {"inputType":"text","text":{"inputText":"..."}} → {"data":{"embedding":[...]}}
 )
 
 func detectEmbedFormat(modelID string) bedrockEmbedFmt {
@@ -185,6 +208,10 @@ func detectEmbedFormat(modelID string) bedrockEmbedFmt {
 	switch {
 	case strings.HasPrefix(lower, "cohere.embed-"):
 		return fmtCohere
+	case strings.Contains(lower, "marengo-embed-2-7"):
+		return fmtTwelveLabs27
+	case strings.Contains(lower, "marengo-embed-3-0"):
+		return fmtTwelveLabs30
 	case lower == "amazon.titan-embed-text-v1":
 		return fmtTitanV1
 	case strings.HasPrefix(lower, "amazon.titan-embed-g1-"):
@@ -204,6 +231,10 @@ func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float3
 	switch detectEmbedFormat(b.model) {
 	case fmtCohere:
 		return b.embedCohere(ctx, texts)
+	case fmtTwelveLabs27:
+		return b.embedTwelveLabs27(ctx, texts)
+	case fmtTwelveLabs30:
+		return b.embedTwelveLabs30(ctx, texts)
 	case fmtTitanV1:
 		return b.embedTitanV1(ctx, texts)
 	case fmtTitanV2:
@@ -216,16 +247,26 @@ func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float3
 }
 
 func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]byte, error) {
-	resp, err := b.client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(b.model),
-		ContentType: aws.String("application/json"),
-		Accept:      aws.String("application/json"),
-		Body:        reqBody,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("invoke %s: %w", b.model, err)
+	var (
+		resp *bedrockruntime.InvokeModelOutput
+		err  error
+	)
+	for attempt := 1; attempt <= 3; attempt++ {
+		resp, err = b.client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
+			ModelId:     aws.String(b.model),
+			ContentType: aws.String("application/json"),
+			Accept:      aws.String("application/json"),
+			Body:        reqBody,
+		})
+		if err == nil {
+			return resp.Body, nil
+		}
+		if !isBedrockRetryable(err) || attempt == 3 {
+			break
+		}
+		time.Sleep(bedrockRetryDelay(attempt))
 	}
-	return resp.Body, nil
+	return nil, fmt.Errorf("invoke %s: %w", b.model, err)
 }
 
 func (b *BedrockEmbedder) embedNova(ctx context.Context, texts []string) ([][]float32, error) {
@@ -355,27 +396,91 @@ func (b *BedrockEmbedder) embedCohere(ctx context.Context, texts []string) ([][]
 	return results, nil
 }
 
+func (b *BedrockEmbedder) embedTwelveLabsEach(ctx context.Context, texts []string, buildReq func(string) any) ([][]float32, error) {
+	results := make([][]float32, len(texts))
+	for i, text := range texts {
+		reqBody, err := json.Marshal(buildReq(text))
+		if err != nil {
+			return nil, fmt.Errorf("marshal embed request: %w", err)
+		}
+		body, err := b.invokeModel(ctx, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		embedding, err := parseTwelveLabsEmbedding(body)
+		if err != nil {
+			return nil, fmt.Errorf("parse embed response for text %d: %w", i, err)
+		}
+		results[i] = embedding
+	}
+	return results, nil
+}
+
+func (b *BedrockEmbedder) embedTwelveLabs27(ctx context.Context, texts []string) ([][]float32, error) {
+	return b.embedTwelveLabsEach(ctx, texts, func(text string) any {
+		return twelvelabs27EmbedRequest{InputType: "text", InputText: text}
+	})
+}
+
+func (b *BedrockEmbedder) embedTwelveLabs30(ctx context.Context, texts []string) ([][]float32, error) {
+	return b.embedTwelveLabsEach(ctx, texts, func(text string) any {
+		req := twelvelabs30EmbedRequest{InputType: "text"}
+		req.Text.InputText = text
+		return req
+	})
+}
+
+func parseTwelveLabsEmbedding(body []byte) ([]float32, error) {
+	var resp twelvelabsEmbedEnvelope
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("unmarshal embed response: %w", err)
+	}
+	if len(resp.Embedding) > 0 {
+		return resp.Embedding, nil
+	}
+	if len(resp.Data) == 0 {
+		return nil, fmt.Errorf("no embedding in response")
+	}
+
+	var obj twelvelabsEmbedItem
+	if err := json.Unmarshal(resp.Data, &obj); err == nil && len(obj.Embedding) > 0 {
+		return obj.Embedding, nil
+	}
+
+	var arr []twelvelabsEmbedItem
+	if err := json.Unmarshal(resp.Data, &arr); err == nil {
+		for _, item := range arr {
+			if len(item.Embedding) > 0 {
+				return item.Embedding, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no embedding in response")
+}
+
 func (b *BedrockEmbedder) ListModels(_ context.Context) ([]ModelInfo, error) {
 	return []ModelInfo{{
-		ID:         b.model,
-		Name:       "Amazon Nova Embeddings v2",
-		Provider:   "bedrock",
-		Type:       "embedding",
-		Dimensions: b.dims,
-		ContextLen: 2048,
-		PriceIn:    0.135,
-		PriceOut:   0,
-		Local:      false,
+		ID:          b.model,
+		Name:        "Amazon Nova Embeddings v2",
+		Provider:    "bedrock",
+		Type:        "embedding",
+		Dimensions:  b.dims,
+		ContextLen:  2048,
+		PriceIn:     0.135,
+		PriceOut:    0,
+		PriceSource: "builtin",
+		Local:       false,
 	}}, nil
 }
 
 // BedrockGenerator implements GenerationProvider using Amazon Bedrock.
 type BedrockGenerator struct {
-	client        *bedrockruntime.Client
-	ctrl          *bedrock.Client
-	model         string
-	region        string
-	avail         availableCache
+	client         *bedrockruntime.Client
+	ctrl           *bedrock.Client
+	model          string
+	region         string
+	avail          availableCache
 	noTemperature  atomic.Bool // cached: model rejects temperature in InferenceConfiguration
 	noSystemPrompt atomic.Bool // cached: model rejects system prompts
 }
@@ -434,20 +539,20 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 		}
 	}
 
-	resp, err := b.client.Converse(ctx, input)
+	resp, err := b.converseWithRetry(ctx, input)
 	if err != nil {
 		// Some models (e.g. Claude Opus 4.7) reject temperature entirely.
 		// Retry once without it and cache the result for this process.
 		if opts.Temperature != nil && !b.noTemperature.Load() && isTemperatureRejected(err) {
 			b.noTemperature.Store(true)
 			inferCfg.Temperature = nil
-			resp, err = b.client.Converse(ctx, input)
+			resp, err = b.converseWithRetry(ctx, input)
 		}
 		// Some models reject system prompts. Retry without one and cache for this process.
 		if err != nil && opts.SystemPrompt != "" && !b.noSystemPrompt.Load() && isSystemPromptRejected(err) {
 			b.noSystemPrompt.Store(true)
 			input.System = nil
-			resp, err = b.client.Converse(ctx, input)
+			resp, err = b.converseWithRetry(ctx, input)
 		}
 		if err != nil {
 			return "", fmt.Errorf("converse %s: %w", b.model, err)
@@ -477,6 +582,19 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 	return "", fmt.Errorf("no text content in response from %s", b.model)
 }
 
+func (b *BedrockGenerator) converseWithRetry(ctx context.Context, input *bedrockruntime.ConverseInput) (*bedrockruntime.ConverseOutput, error) {
+	var resp *bedrockruntime.ConverseOutput
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		resp, err = b.client.Converse(ctx, input)
+		if err == nil || !isBedrockRetryable(err) || attempt == 3 {
+			break
+		}
+		time.Sleep(bedrockRetryDelay(attempt))
+	}
+	return resp, err
+}
+
 // isTemperatureRejected reports whether err is a Bedrock ValidationException
 // indicating the model does not accept the temperature inference parameter.
 func isTemperatureRejected(err error) bool {
@@ -503,11 +621,12 @@ func isSystemPromptRejected(err error) bool {
 
 func (b *BedrockGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
 	return []ModelInfo{{
-		ID:       b.model,
-		Name:     b.model,
-		Provider: "bedrock",
-		Type:     "generation",
-		Local:    false,
+		ID:          b.model,
+		Name:        b.model,
+		Provider:    "bedrock",
+		Type:        "generation",
+		PriceSource: "builtin",
+		Local:       false,
 	}}, nil
 }
 
@@ -532,6 +651,16 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 
 	client := bedrock.NewFromConfig(awsCfg)
 
+	resp, err := client.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{})
+	if err != nil {
+		return nil, fmt.Errorf("list foundation models: %w", err)
+	}
+
+	summaries := make(map[string]bedrocktypes.FoundationModelSummary, len(resp.ModelSummaries))
+	for _, fm := range resp.ModelSummaries {
+		summaries[aws.ToString(fm.ModelId)] = fm
+	}
+
 	// ── Step 1: system-defined inference profiles ──────────────────────────
 	geo := geoPrefix(cfg.Region)
 	var inferenceProfiles []ModelInfo
@@ -553,39 +682,50 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 				continue
 			}
 			id := aws.ToString(p.InferenceProfileId)
-			// Include only profiles for this region's geography or global.
-			if (geo != "" && strings.HasPrefix(id, geo)) || strings.HasPrefix(id, "global.") {
-				inferenceProfiles = append(inferenceProfiles, ModelInfo{
-					ID:       id,
-					Name:     aws.ToString(p.InferenceProfileName),
-					Provider: "bedrock",
-					Type:     InferModelType(inferenceProfileBaseID(id)),
-					Local:    false,
-					Tier:     TierUnverified,
-					Notes:    "use 2nb models test to verify",
-				})
-				coveredBaseIDs[inferenceProfileBaseID(id)] = true
+			if !(strings.HasPrefix(id, "global.") || (geo != "" && strings.HasPrefix(id, geo))) {
+				continue
 			}
+			baseID := inferenceProfileBaseID(id)
+			modelType := InferModelType(baseID)
+			if summary, ok := summaries[baseID]; ok {
+				if summary.ModelLifecycle != nil && summary.ModelLifecycle.Status == bedrocktypes.FoundationModelLifecycleStatusLegacy {
+					continue
+				}
+				if !bedrockSummaryHasTextInput(summary) {
+					continue
+				}
+				modelType = bedrockModelTypeFromSummary(summary)
+			} else {
+				blocked, blockErr := bedrockFoundationModelBlocked(ctx, client, baseID)
+				if blockErr != nil {
+					slog.Debug("get foundation model failed", "model", baseID, "err", blockErr)
+				}
+				if blocked {
+					continue
+				}
+			}
+			if ok, _ := bedrockModelSupported(baseID, modelType); !ok {
+				continue
+			}
+			inferenceProfiles = append(inferenceProfiles, ModelInfo{
+				ID:       id,
+				Name:     aws.ToString(p.InferenceProfileName),
+				Provider: "bedrock",
+				Type:     modelType,
+				Local:    false,
+				Tier:     TierUnverified,
+				Notes:    "use 2nb models test to verify",
+			})
+			coveredBaseIDs[baseID] = true
 		}
-	}
-
-	// ── Step 2: foundation models not covered by an inference profile ──────
-	resp, err := client.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{})
-	if err != nil {
-		return nil, fmt.Errorf("list foundation models: %w", err)
 	}
 
 	var models []ModelInfo
 	for _, fm := range resp.ModelSummaries {
-		// Skip models without text input capability.
-		hasText := false
-		for _, m := range fm.InputModalities {
-			if strings.EqualFold(string(m), "TEXT") {
-				hasText = true
-				break
-			}
+		if fm.ModelLifecycle != nil && fm.ModelLifecycle.Status == bedrocktypes.FoundationModelLifecycleStatusLegacy {
+			continue
 		}
-		if !hasText {
+		if !bedrockSummaryHasTextInput(fm) {
 			continue
 		}
 
@@ -601,12 +741,9 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 			continue
 		}
 
-		modelType := "generation"
-		for _, m := range fm.OutputModalities {
-			if strings.EqualFold(string(m), "EMBEDDING") {
-				modelType = "embedding"
-				break
-			}
+		modelType := bedrockModelTypeFromSummary(fm)
+		if ok, _ := bedrockModelSupported(id, modelType); !ok {
+			continue
 		}
 
 		models = append(models, ModelInfo{

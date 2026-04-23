@@ -66,9 +66,10 @@ type ModelInfo struct {
 	// Only meaningful for Type="embedding". Zero means "no model recommendation,
 	// fall back to ai.DefaultSimilarityThreshold".
 	RecommendedSimilarityThreshold float64 `json:"recommended_similarity_threshold,omitempty" yaml:"recommended_similarity_threshold,omitempty"`
-	PriceIn    float64 `json:"price_input_per_million" yaml:"price_input_per_million,omitempty"`
-	PriceOut   float64 `json:"price_output_per_million" yaml:"price_output_per_million,omitempty"`
-	Local      bool    `json:"local" yaml:"local,omitempty"`
+	PriceIn                        float64 `json:"price_input_per_million" yaml:"price_input_per_million,omitempty"`
+	PriceOut                       float64 `json:"price_output_per_million" yaml:"price_output_per_million,omitempty"`
+	PriceRequest                   float64 `json:"price_per_request,omitempty" yaml:"price_per_request,omitempty"`
+	Local                          bool    `json:"local" yaml:"local,omitempty"`
 
 	// Tier indicates whether 2nb has a verified harness for this model.
 	Tier ModelTier `json:"tier,omitempty" yaml:"tier,omitempty"`

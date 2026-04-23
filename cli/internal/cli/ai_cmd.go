@@ -117,32 +117,19 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		return output.Write(os.Stdout, format, status)
 	}
 
-	// Look up pricing from the catalog (source of truth for metadata).
-	var embedPrice, genPriceIn, genPriceOut float64
-	for _, m := range ai.BuiltinCatalog() {
-		if m.Provider == cfg.Provider && m.ID == cfg.EmbeddingModel {
-			embedPrice = m.PriceIn
-		}
-		if m.Provider == cfg.Provider && m.ID == cfg.GenerationModel {
-			genPriceIn = m.PriceIn
-			genPriceOut = m.PriceOut
-		}
+	models, err := loadVerifiedModelCatalog(ctx, cfg, v.Root)
+	if err != nil {
+		return err
 	}
+	embedModel, _ := lookupModelInfo(models, cfg.Provider, cfg.EmbeddingModel)
+	genModel, _ := lookupModelInfo(models, cfg.Provider, cfg.GenerationModel)
 
 	// Pretty output
 	fmt.Printf("Provider:         %s\n", status.Provider)
 	fmt.Printf("Embedding model:  %s\n", status.EmbeddingModel)
-	if embedPrice == 0 {
-		fmt.Printf("  pricing:        free\n")
-	} else {
-		fmt.Printf("  pricing:        $%.2f per 1M tokens\n", embedPrice)
-	}
+	fmt.Printf("  pricing:        %s\n", ai.VerbosePriceLabel(embedModel))
 	fmt.Printf("Generation model: %s\n", status.GenModel)
-	if genPriceIn == 0 && genPriceOut == 0 {
-		fmt.Printf("  pricing:        free\n")
-	} else {
-		fmt.Printf("  pricing:        $%.2f in / $%.2f out per 1M tokens\n", genPriceIn, genPriceOut)
-	}
+	fmt.Printf("  pricing:        %s\n", ai.VerbosePriceLabel(genModel))
 	fmt.Printf("Dimensions:       %d\n", status.Dimensions)
 	fmt.Printf("Embed ready:      %v\n", status.EmbedAvailable)
 	fmt.Printf("Generation ready: %v\n", status.GenAvailable)
@@ -173,7 +160,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Suggest local alternative for paid providers
-	if cfg.Provider != "ollama" && embedPrice > 0 {
+	if cfg.Provider != "ollama" && ai.HasKnownPricing(embedModel) && !ai.IsExplicitlyFree(embedModel) {
 		fmt.Fprintf(os.Stderr, "\nTip: run `2nb ai setup` for free local AI with Ollama\n")
 	}
 

@@ -69,6 +69,9 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID string) error {
 	switch provider {
 	case "bedrock":
+		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding"); err != nil {
+			return err
+		}
 		e, err := NewBedrockEmbedder(ctx, cfg.Bedrock, modelID, cfg.Dimensions)
 		if err != nil {
 			return err
@@ -123,6 +126,9 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID string
 
 	switch provider {
 	case "bedrock":
+		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation"); err != nil {
+			return "", err
+		}
 		g, err := NewBedrockGenerator(ctx, cfg.Bedrock, modelID)
 		if err != nil {
 			return "", err

@@ -16,12 +16,12 @@ import (
 )
 
 var (
-	modelsTypeFilt    string
-	modelsFreeOnly    bool
-	modelsDiscover    bool
-	modelsCheckStatus bool
-	modelsProvider    string
-	modelsPromote     bool
+	modelsTypeFilt     string
+	modelsFreeOnly     bool
+	modelsDiscover     bool
+	modelsCheckStatus  bool
+	modelsProvider     string
+	modelsPromote      bool
 	modelsPromoteScope string
 )
 
@@ -33,16 +33,17 @@ var (
 )
 
 var (
-	addProvider    string
-	addType        string
-	addName        string
-	addDimensions  int
-	addContextLen  int
-	addPriceIn     float64
-	addPriceOut    float64
-	addThreshold   float64
-	addNotes       string
-	addScope       string
+	addProvider   string
+	addType       string
+	addName       string
+	addDimensions int
+	addContextLen int
+	addPriceIn      float64
+	addPriceOut     float64
+	addPriceRequest float64
+	addThreshold    float64
+	addNotes      string
+	addScope      string
 
 	removeProvider string
 	removeScope    string
@@ -116,6 +117,7 @@ func init() {
 	modelsAddCmd.Flags().IntVar(&addContextLen, "context-length", 0, "Max context length in tokens")
 	modelsAddCmd.Flags().Float64Var(&addPriceIn, "price-in", 0, "Input price per million tokens (USD)")
 	modelsAddCmd.Flags().Float64Var(&addPriceOut, "price-out", 0, "Output price per million tokens (USD)")
+	modelsAddCmd.Flags().Float64Var(&addPriceRequest, "price-request", 0, "Per-request price (USD)")
 	modelsAddCmd.Flags().StringVar(&addNotes, "notes", "", "Freeform notes")
 	modelsAddCmd.Flags().Float64Var(&addThreshold, "similarity-threshold", 0, "Recommended min cosine for semantic search (embedding models only, 0..1)")
 	modelsAddCmd.Flags().StringVar(&addScope, "scope", "global", "Scope: global (~/.config/2nb/models.yaml) or vault (.2ndbrain/models.yaml)")
@@ -270,7 +272,7 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 		if modelsTypeFilt != "" && m.Type != modelsTypeFilt {
 			continue
 		}
-		if modelsFreeOnly && (m.PriceIn > 0 || m.PriceOut > 0) {
+		if modelsFreeOnly && !ai.IsExplicitlyFree(m) {
 			continue
 		}
 		if modelsProvider != "" && m.Provider != modelsProvider {
@@ -290,14 +292,7 @@ func printModelHeader(w *tabwriter.Writer, showStatus bool) {
 }
 
 func printModelRow(w *tabwriter.Writer, m ai.ModelInfo, showStatus bool) {
-	price := "free"
-	if m.PriceIn > 0 || m.PriceOut > 0 {
-		outPart := "--"
-		if m.PriceOut > 0 {
-			outPart = fmt.Sprintf("$%.2f", m.PriceOut)
-		}
-		price = fmt.Sprintf("$%.2f/%s", m.PriceIn, outPart)
-	}
+	price := ai.CompactPriceLabel(m)
 	ctxLen := "-"
 	if m.ContextLen > 0 {
 		ctxLen = formatContext(m.ContextLen)
@@ -433,6 +428,7 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		ContextLen:                     addContextLen,
 		PriceIn:                        addPriceIn,
 		PriceOut:                       addPriceOut,
+		PriceRequest:                   addPriceRequest,
 		Notes:                          addNotes,
 		Tier:                           ai.TierUserVerified,
 		PriceSource:                    "user",
@@ -474,18 +470,18 @@ func promotedEntry(base *ai.ModelInfo, result *ai.TestProbeResult) ai.ModelInfo 
 		TestedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if base != nil {
-		entry.Name       = base.Name
+		entry.Name = base.Name
 		entry.Dimensions = base.Dimensions
 		entry.ContextLen = base.ContextLen
-		entry.PriceIn    = base.PriceIn
-		entry.PriceOut   = base.PriceOut
+		entry.PriceIn = base.PriceIn
+		entry.PriceOut = base.PriceOut
+		entry.PriceRequest = base.PriceRequest
 		entry.RecommendedSimilarityThreshold = base.RecommendedSimilarityThreshold
-		entry.Notes      = base.Notes
-		if base.PriceIn > 0 || base.PriceOut > 0 {
+		entry.Notes = base.Notes
+		if base.PriceSource != "" {
 			entry.PriceSource = base.PriceSource
-			if entry.PriceSource == "" {
-				entry.PriceSource = "vendor"
-			}
+		} else if base.PriceIn > 0 || base.PriceOut > 0 || base.PriceRequest > 0 {
+			entry.PriceSource = "vendor"
 		}
 	}
 	// For embedding models with no dimension info, parse actual dims from the
