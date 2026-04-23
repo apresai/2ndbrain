@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -505,6 +506,40 @@ func TestListBedrockVendorModelsInferenceProfiles(t *testing.T) {
 	t.Logf("discovered %d models", len(models))
 }
 
+func TestBedrockTextInputHelpers(t *testing.T) {
+	summaryText := bedrocktypes.FoundationModelSummary{
+		InputModalities: []bedrocktypes.ModelModality{bedrocktypes.ModelModalityText},
+	}
+	if !bedrockSummaryHasTextInput(summaryText) {
+		t.Fatal("expected text input summary to be accepted")
+	}
+
+	summaryImage := bedrocktypes.FoundationModelSummary{
+		InputModalities: []bedrocktypes.ModelModality{bedrocktypes.ModelModalityImage},
+	}
+	if bedrockSummaryHasTextInput(summaryImage) {
+		t.Fatal("expected non-text summary to be rejected")
+	}
+
+	detailsText := &bedrocktypes.FoundationModelDetails{
+		InputModalities:  []bedrocktypes.ModelModality{bedrocktypes.ModelModalityText},
+		OutputModalities: []bedrocktypes.ModelModality{bedrocktypes.ModelModalityEmbedding},
+	}
+	if !bedrockDetailsHasTextInput(detailsText) {
+		t.Fatal("expected text input details to be accepted")
+	}
+	if got := bedrockModelTypeFromDetails(detailsText); got != "embedding" {
+		t.Fatalf("bedrockModelTypeFromDetails = %q, want embedding", got)
+	}
+
+	detailsImage := &bedrocktypes.FoundationModelDetails{
+		InputModalities: []bedrocktypes.ModelModality{bedrocktypes.ModelModalityImage},
+	}
+	if bedrockDetailsHasTextInput(detailsImage) {
+		t.Fatal("expected non-text details to be rejected")
+	}
+}
+
 // --- isBedrockModelLifecycleBlocked pure-logic tests ---
 
 type fakeAPIError struct {
@@ -513,16 +548,16 @@ type fakeAPIError struct {
 	fault   smithy.ErrorFault
 }
 
-func (e *fakeAPIError) Error() string        { return fmt.Sprintf("%s: %s", e.code, e.message) }
-func (e *fakeAPIError) ErrorCode() string    { return e.code }
-func (e *fakeAPIError) ErrorMessage() string { return e.message }
+func (e *fakeAPIError) Error() string                 { return fmt.Sprintf("%s: %s", e.code, e.message) }
+func (e *fakeAPIError) ErrorCode() string             { return e.code }
+func (e *fakeAPIError) ErrorMessage() string          { return e.message }
 func (e *fakeAPIError) ErrorFault() smithy.ErrorFault { return e.fault }
 
 func TestIsBedrockModelLifecycleBlocked(t *testing.T) {
 	cases := []struct {
-		name    string
-		err     error
-		want    bool
+		name string
+		err  error
+		want bool
 	}{
 		{
 			name: "end of its life message",

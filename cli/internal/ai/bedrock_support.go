@@ -24,7 +24,31 @@ func bedrockSummaryHasTextInput(fm bedrocktypes.FoundationModelSummary) bool {
 	return false
 }
 
+func bedrockDetailsHasTextInput(fm *bedrocktypes.FoundationModelDetails) bool {
+	if fm == nil {
+		return false
+	}
+	for _, m := range fm.InputModalities {
+		if strings.EqualFold(string(m), "TEXT") {
+			return true
+		}
+	}
+	return false
+}
+
 func bedrockModelTypeFromSummary(fm bedrocktypes.FoundationModelSummary) string {
+	for _, m := range fm.OutputModalities {
+		if strings.EqualFold(string(m), "EMBEDDING") {
+			return "embedding"
+		}
+	}
+	return "generation"
+}
+
+func bedrockModelTypeFromDetails(fm *bedrocktypes.FoundationModelDetails) string {
+	if fm == nil {
+		return "generation"
+	}
 	for _, m := range fm.OutputModalities {
 		if strings.EqualFold(string(m), "EMBEDDING") {
 			return "embedding"
@@ -125,19 +149,27 @@ func bedrockModelIsLegacy(ctx context.Context, cfg BedrockConfig, modelID string
 	return bedrockFoundationModelBlocked(ctx, client, modelID)
 }
 
-func bedrockFoundationModelBlocked(ctx context.Context, client *bedrock.Client, modelID string) (bool, error) {
+func bedrockFoundationModelDetails(ctx context.Context, client *bedrock.Client, modelID string) (*bedrocktypes.FoundationModelDetails, error) {
 	resp, err := client.GetFoundationModel(ctx, &bedrock.GetFoundationModelInput{
 		ModelIdentifier: aws.String(inferenceProfileBaseID(modelID)),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.ModelDetails, nil
+}
+
+func bedrockFoundationModelBlocked(ctx context.Context, client *bedrock.Client, modelID string) (bool, error) {
+	details, err := bedrockFoundationModelDetails(ctx, client, modelID)
 	if err != nil {
 		if isBedrockModelLifecycleBlocked(err) {
 			return true, nil
 		}
 		return false, err
 	}
-	return resp.ModelDetails != nil &&
-		resp.ModelDetails.ModelLifecycle != nil &&
-		resp.ModelDetails.ModelLifecycle.Status == bedrocktypes.FoundationModelLifecycleStatusLegacy, nil
+	return details != nil &&
+		details.ModelLifecycle != nil &&
+		details.ModelLifecycle.Status == bedrocktypes.FoundationModelLifecycleStatusLegacy, nil
 }
 
 func isBedrockModelLifecycleBlocked(err error) bool {

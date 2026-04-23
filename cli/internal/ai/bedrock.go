@@ -696,12 +696,21 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 				}
 				modelType = bedrockModelTypeFromSummary(summary)
 			} else {
-				blocked, blockErr := bedrockFoundationModelBlocked(ctx, client, baseID)
-				if blockErr != nil {
-					slog.Debug("get foundation model failed", "model", baseID, "err", blockErr)
-				}
-				if blocked {
+				details, detailErr := bedrockFoundationModelDetails(ctx, client, baseID)
+				if detailErr != nil {
+					if isBedrockModelLifecycleBlocked(detailErr) {
+						continue
+					}
+					slog.Debug("get foundation model failed", "model", baseID, "err", detailErr)
 					continue
+				} else {
+					if details.ModelLifecycle != nil && details.ModelLifecycle.Status == bedrocktypes.FoundationModelLifecycleStatusLegacy {
+						continue
+					}
+					if !bedrockDetailsHasTextInput(details) {
+						continue
+					}
+					modelType = bedrockModelTypeFromDetails(details)
 				}
 			}
 			if ok, _ := bedrockModelSupported(baseID, modelType); !ok {
