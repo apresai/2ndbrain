@@ -466,13 +466,109 @@ func TestMergeFields_NewFieldsOverlay(t *testing.T) {
 	}
 }
 
+// TestResolveInvokeStrategy_BuiltinLookups verifies known builtins expose
+// their declared strategy — the wizard / dispatcher will query this on
+// every model selection.
+func TestResolveInvokeStrategy_BuiltinLookups(t *testing.T) {
+	setupHome(t) // ensure user catalog is empty so we're testing builtins only
+
+	cases := []struct {
+		provider, modelID string
+		want              string
+	}{
+		{"bedrock", "amazon.nova-2-multimodal-embeddings-v1:0", StrategyBedrockInvokeNovaEmbed},
+		{"bedrock", "amazon.titan-embed-text-v2:0", StrategyBedrockInvokeTitanEmbed},
+		{"bedrock", "cohere.embed-english-v3", StrategyBedrockInvokeCohereEmbed},
+		{"bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", StrategyBedrockConverse},
+		// Inference-profile prefix should resolve to the non-prefixed builtin.
+		{"bedrock", "eu.anthropic.claude-haiku-4-5-20251001-v1:0", StrategyBedrockConverse},
+		{"openrouter", "anthropic/claude-sonnet-4", StrategyOpenRouterChat},
+		{"ollama", "nomic-embed-text", StrategyOllamaEmbeddings},
+		{"bedrock", "not.a.known.model", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider+":"+tc.modelID, func(t *testing.T) {
+			got := ResolveInvokeStrategy(tc.provider, tc.modelID, "")
+			if got != tc.want {
+				t.Errorf("ResolveInvokeStrategy(%q,%q) = %q, want %q", tc.provider, tc.modelID, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveInvokeStrategy_UserCatalogOverrides verifies a user-catalog
+// entry for a model NOT in the builtin set exposes its declared strategy.
+// A user catalog entry for a builtin model should also win when both
+// declare a strategy (user intent beats builtin default).
+func TestResolveInvokeStrategy_UserCatalogOverrides(t *testing.T) {
+	setupHome(t)
+
+	// Brand-new model not in builtin, user declares strategy.
+	custom := ModelInfo{
+		ID:             "vendor/custom-gen-v9",
+		Provider:       "openrouter",
+		Type:           "generation",
+		InvokeStrategy: StrategyOpenRouterChat,
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", custom); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got := ResolveInvokeStrategy("openrouter", "vendor/custom-gen-v9", ""); got != StrategyOpenRouterChat {
+		t.Errorf("custom user entry: got %q", got)
+	}
+
+	// User override of a builtin: builtin says StrategyBedrockConverse,
+	// user catalog says something else (simulated). User entry should win.
+	override := ModelInfo{
+		ID:             "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		Provider:       "bedrock",
+		Type:           "generation",
+		InvokeStrategy: StrategyBedrockInvokeAnthropic,
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", override); err != nil {
+		t.Fatalf("save override: %v", err)
+	}
+	if got := ResolveInvokeStrategy("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != StrategyBedrockInvokeAnthropic {
+		t.Errorf("user override of builtin: got %q", got)
+	}
+}
+
+// TestBedrockEmbedFormatFromStrategy round-trips the strategy↔format
+// map so new strategies don't accidentally drop their format binding.
+func TestBedrockEmbedFormatFromStrategy(t *testing.T) {
+	cases := []struct {
+		strategy string
+		wantFmt  bedrockEmbedFmt
+		wantOK   bool
+	}{
+		{StrategyBedrockInvokeNovaEmbed, fmtNova, true},
+		{StrategyBedrockInvokeTitanEmbed, fmtTitanV2, true},
+		{StrategyBedrockInvokeCohereEmbed, fmtCohere, true},
+		{StrategyBedrockInvokeMarengo27, fmtTwelveLabs27, true},
+		{StrategyBedrockInvokeMarengo30, fmtTwelveLabs30, true},
+		{StrategyBedrockConverse, 0, false},
+		{"unrecognized", 0, false},
+		{"", 0, false},
+	}
+	for _, tc := range cases {
+		got, ok := bedrockEmbedFormatFromStrategy(tc.strategy)
+		if ok != tc.wantOK {
+			t.Errorf("%q: ok = %v, want %v", tc.strategy, ok, tc.wantOK)
+			continue
+		}
+		if ok && got != tc.wantFmt {
+			t.Errorf("%q: format = %v, want %v", tc.strategy, got, tc.wantFmt)
+		}
+	}
+}
+
 // TestKnownInvokeStrategies_AllAccounted is a cheap tripwire: if someone
 // adds a Strategy* constant but forgets KnownInvokeStrategies(), this
 // test stays green but the wizard won't list the new strategy. Keep
 // the numeric check loose so adding a new strategy is a one-liner.
 func TestKnownInvokeStrategies_AllAccounted(t *testing.T) {
 	got := KnownInvokeStrategies()
-	if len(got) < 14 {
+	if len(got) < 15 {
 		t.Errorf("KnownInvokeStrategies returned %d entries; expected at least 15", len(got))
 	}
 	for _, s := range got {

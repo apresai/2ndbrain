@@ -59,7 +59,12 @@ type BedrockEmbedder struct {
 	model  string
 	dims   int
 	region string
-	avail  availableCache
+	// strategy is the model's declared InvokeStrategy from the builtin
+	// catalog, resolved once at construction. Empty when the model isn't
+	// in the catalog or the catalog entry doesn't declare one, in which
+	// case Embed falls back to detectEmbedFormat model-ID matching.
+	strategy string
+	avail    availableCache
 }
 
 // NewBedrockEmbedder creates a Bedrock embedding provider.
@@ -70,11 +75,12 @@ func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, di
 	}
 
 	return &BedrockEmbedder{
-		client: bedrockruntime.NewFromConfig(awsCfg),
-		ctrl:   bedrock.NewFromConfig(awsCfg),
-		model:  model,
-		dims:   dims,
-		region: cfg.Region,
+		client:   bedrockruntime.NewFromConfig(awsCfg),
+		ctrl:     bedrock.NewFromConfig(awsCfg),
+		model:    model,
+		dims:     dims,
+		region:   cfg.Region,
+		strategy: ResolveInvokeStrategy("bedrock", model, ""),
 	}, nil
 }
 
@@ -228,7 +234,8 @@ func detectEmbedFormat(modelID string) bedrockEmbedFmt {
 // ── Embed dispatch ─────────────────────────────────────────────────────────
 
 func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
-	switch detectEmbedFormat(b.model) {
+	format := b.resolvedEmbedFormat()
+	switch format {
 	case fmtCohere:
 		return b.embedCohere(ctx, texts)
 	case fmtTwelveLabs27:
@@ -244,6 +251,23 @@ func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float3
 	default:
 		return b.embedNova(ctx, texts)
 	}
+}
+
+// resolvedEmbedFormat prefers the cached catalog-declared InvokeStrategy
+// when set. Titan v1 can't be distinguished from Titan v2 by strategy
+// alone (both use StrategyBedrockInvokeTitanEmbed), so we fall through
+// to detectEmbedFormat for the v1 exact-match path. All other strategies
+// map 1:1 to a format.
+func (b *BedrockEmbedder) resolvedEmbedFormat() bedrockEmbedFmt {
+	if b.strategy != "" {
+		if f, ok := bedrockEmbedFormatFromStrategy(b.strategy); ok {
+			if f == fmtTitanV2 {
+				return detectEmbedFormat(b.model)
+			}
+			return f
+		}
+	}
+	return detectEmbedFormat(b.model)
 }
 
 func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]byte, error) {

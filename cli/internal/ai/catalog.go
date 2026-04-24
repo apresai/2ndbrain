@@ -31,6 +31,7 @@ func BuiltinCatalog() []ModelInfo {
 		Tier:                           TierVerified,
 		ConfigHint:                     configHint("bedrock", "embedding", "amazon.nova-2-multimodal-embeddings-v1:0"),
 		RecommendedSimilarityThreshold: 0.65,
+		InvokeStrategy:                 StrategyBedrockInvokeNovaEmbed,
 	})
 
 	// --- Bedrock Embedding (Titan Text Embeddings v2 format) ---
@@ -50,6 +51,7 @@ func BuiltinCatalog() []ModelInfo {
 		ConfigHint:                     configHint("bedrock", "embedding", "amazon.titan-embed-text-v2:0"),
 		RecommendedSimilarityThreshold: 0.50,
 		Notes:                          "supports 256/512/1024 dims",
+		InvokeStrategy:                 StrategyBedrockInvokeTitanEmbed,
 	})
 
 	// --- Bedrock Embedding (Cohere Embed v3 format — batched, fixed 1024 dims) ---
@@ -76,6 +78,7 @@ func BuiltinCatalog() []ModelInfo {
 			ConfigHint:                     configHint("bedrock", "embedding", m.id),
 			RecommendedSimilarityThreshold: 0.50,
 			Notes:                          m.notes,
+			InvokeStrategy:                 StrategyBedrockInvokeCohereEmbed,
 		})
 	}
 
@@ -97,17 +100,18 @@ func BuiltinCatalog() []ModelInfo {
 		{"amazon.nova-pro-v1:0", "Amazon Nova Pro", 300000, 0.80, 3.20, ""},
 	} {
 		models = append(models, ModelInfo{
-			ID:         m.id,
-			Name:       m.name,
-			Provider:   "bedrock",
-			Type:       "generation",
-			ContextLen: m.ctxLen,
-			PriceIn:    m.priceIn,
-			PriceOut:   m.priceOut,
-			Local:      false,
-			Tier:       TierVerified,
-			ConfigHint: configHint("bedrock", "generation", m.id),
-			Notes:      m.notes,
+			ID:             m.id,
+			Name:           m.name,
+			Provider:       "bedrock",
+			Type:           "generation",
+			ContextLen:     m.ctxLen,
+			PriceIn:        m.priceIn,
+			PriceOut:       m.priceOut,
+			Local:          false,
+			Tier:           TierVerified,
+			ConfigHint:     configHint("bedrock", "generation", m.id),
+			Notes:          m.notes,
+			InvokeStrategy: StrategyBedrockConverse,
 		})
 	}
 
@@ -128,6 +132,7 @@ func BuiltinCatalog() []ModelInfo {
 		Tier:                           TierVerified,
 		ConfigHint:                     configHint("openrouter", "embedding", "nvidia/llama-nemotron-embed-vl-1b-v2:free"),
 		RecommendedSimilarityThreshold: 0.60,
+		InvokeStrategy:                 StrategyOpenRouterEmbeddings,
 	})
 
 	// --- OpenRouter Generation (OpenAI-compatible chat completions) ---
@@ -149,16 +154,17 @@ func BuiltinCatalog() []ModelInfo {
 		{"openai/gpt-4o", "GPT-4o", 128000, 2.50, 10.00},
 	} {
 		models = append(models, ModelInfo{
-			ID:         m.id,
-			Name:       m.name,
-			Provider:   "openrouter",
-			Type:       "generation",
-			ContextLen: m.ctxLen,
-			PriceIn:    m.priceIn,
-			PriceOut:   m.priceOut,
-			Local:      false,
-			Tier:       TierVerified,
-			ConfigHint: configHint("openrouter", "generation", m.id),
+			ID:             m.id,
+			Name:           m.name,
+			Provider:       "openrouter",
+			Type:           "generation",
+			ContextLen:     m.ctxLen,
+			PriceIn:        m.priceIn,
+			PriceOut:       m.priceOut,
+			Local:          false,
+			Tier:           TierVerified,
+			ConfigHint:     configHint("openrouter", "generation", m.id),
+			InvokeStrategy: StrategyOpenRouterChat,
 		})
 	}
 
@@ -197,6 +203,7 @@ func BuiltinCatalog() []ModelInfo {
 			ConfigHint:                     configHint("ollama", "embedding", m.id),
 			RecommendedSimilarityThreshold: m.threshold,
 			Notes:                          m.notes,
+			InvokeStrategy:                 StrategyOllamaEmbeddings,
 		})
 	}
 
@@ -213,14 +220,15 @@ func BuiltinCatalog() []ModelInfo {
 		{"phi4-mini", "Phi-4 Mini", 131072},
 	} {
 		models = append(models, ModelInfo{
-			ID:         m.id,
-			Name:       m.name,
-			Provider:   "ollama",
-			Type:       "generation",
-			ContextLen: m.ctxLen,
-			Local:      true,
-			Tier:       TierVerified,
-			ConfigHint: configHint("ollama", "generation", m.id),
+			ID:             m.id,
+			Name:           m.name,
+			Provider:       "ollama",
+			Type:           "generation",
+			ContextLen:     m.ctxLen,
+			Local:          true,
+			Tier:           TierVerified,
+			ConfigHint:     configHint("ollama", "generation", m.id),
+			InvokeStrategy: StrategyOllamaGenerate,
 		})
 	}
 
