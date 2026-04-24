@@ -106,6 +106,13 @@ struct ContentView: View {
                     set: { appState.showAISetupWizard = $0 }
                 ))
             }
+            if appState.showModelWizard {
+                overlayBackground { appState.showModelWizard = false }
+                ModelWizardView(onClose: { appState.showModelWizard = false })
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(radius: 20)
+            }
         }
     }
 

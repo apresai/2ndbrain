@@ -265,6 +265,11 @@ struct SecondBrainApp: App {
                 }
                 .disabled(appState.vault == nil)
 
+                Button("Model Wizard...") {
+                    appState.showModelWizard = true
+                }
+                .disabled(appState.vault == nil)
+
                 Divider()
 
                 Button("AI Agent Skills...") {

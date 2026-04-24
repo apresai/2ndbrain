@@ -33,6 +33,7 @@ final class AppState {
     var typewriterModeActive = false
     var showTemplatePicker = false
     var showAISetupWizard = false
+    var showModelWizard = false
     var inlineRenderingEnabled = false
     var editorFontSize: CGFloat = UserDefaults.standard.object(forKey: "editorFontSize") as? CGFloat ?? 14
     var editorFontFamily: String = UserDefaults.standard.string(forKey: "editorFontFamily") ?? "System Mono"
@@ -1566,11 +1567,61 @@ final class AppState {
 
     func fetchModels(provider: String) async throws -> [CatalogModelInfo] {
         guard let vault else { throw CLIError.noVault }
+        // --enabled-only hides user-disabled models from the standard
+        // dropdown. Power users can still see them via `2nb models list`.
         let data = try await runCLI(
-            ["models", "list", "--json", "--porcelain", "--provider", provider],
+            ["models", "list", "--json", "--porcelain", "--provider", provider, "--enabled-only"],
             cwd: vault.rootURL
         )
         return try JSONDecoder().decode([CatalogModelInfo].self, from: data)
+    }
+
+    /// Fetches the full merged catalog including discovered-but-unverified
+    /// vendor models. Used by the Model Wizard where the user explicitly
+    /// wants to see everything available, verified or not.
+    func fetchModelsForWizard() async throws -> [CatalogModelInfo] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(
+            ["models", "list", "--json", "--porcelain", "--discover"],
+            cwd: vault.rootURL
+        )
+        struct MergedList: Decodable {
+            let verified: [CatalogModelInfo]
+            let unverified: [CatalogModelInfo]?
+        }
+        // The CLI currently emits a flat array for `models list`, but
+        // when --discover is set the response may be the MergedModelList
+        // wrapper. Try the wrapper first; fall back to flat array.
+        if let merged = try? JSONDecoder().decode(MergedList.self, from: data) {
+            return merged.verified + (merged.unverified ?? [])
+        }
+        return try JSONDecoder().decode([CatalogModelInfo].self, from: data)
+    }
+
+    func costPreview(modelIDs: [String], probe: String) async throws -> CostPreviewResponse {
+        guard let vault else { throw CLIError.noVault }
+        var args = ["models", "cost-preview", "--json", "--porcelain", "--probe", probe]
+        args.append(contentsOf: modelIDs)
+        let data = try await runCLI(args, cwd: vault.rootURL)
+        return try JSONDecoder().decode(CostPreviewResponse.self, from: data)
+    }
+
+    /// Tests one model and saves it on pass. Matches the wizard flow step.
+    /// Returns the decoded AIProbeResult so the UI can render outcome + latency.
+    func testAndSave(modelID: String, provider: String, type: String, scope: String) async throws -> AIProbeResult {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(
+            [
+                "models", "test", modelID,
+                "--provider", provider,
+                "--type", type,
+                "--save",
+                "--scope", scope,
+                "--json", "--porcelain",
+            ],
+            cwd: vault.rootURL
+        )
+        return try JSONDecoder().decode(AIProbeResult.self, from: data)
     }
 
     func checkOllamaStatus() async -> OllamaReadiness {
@@ -1813,6 +1864,10 @@ struct CatalogModelInfo: Codable, Identifiable {
     let priceIn: Double?
     let priceOut: Double?
     let contextLen: Int?
+    let tier: String?
+    let invokeStrategy: String?
+    let enabled: Bool?
+    let testedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case modelID = "id"
@@ -1822,6 +1877,39 @@ struct CatalogModelInfo: Codable, Identifiable {
         case priceIn = "price_input_per_million"
         case priceOut = "price_output_per_million"
         case contextLen = "context_length"
+        case tier
+        case invokeStrategy = "invoke_strategy"
+        case enabled
+        case testedAt = "tested_at"
+    }
+}
+
+struct CostEstimate: Codable, Identifiable {
+    var id: String { modelID }
+    let modelID: String
+    let provider: String
+    let requests: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let usd: Double
+    let knownPricing: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+        case provider, requests, usd
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
+        case knownPricing = "known_pricing"
+    }
+}
+
+struct CostPreviewResponse: Codable {
+    let estimates: [CostEstimate]
+    let totalUSD: Double
+
+    enum CodingKeys: String, CodingKey {
+        case estimates
+        case totalUSD = "total_usd"
     }
 }
 
