@@ -51,9 +51,11 @@ var (
 
 	enableProvider string
 	enableScope    string
+	enableVendor   string
 
 	disableProvider string
 	disableScope    string
+	disableVendor   string
 )
 
 var modelsCmd = &cobra.Command{
@@ -98,17 +100,17 @@ var modelsRemoveCmd = &cobra.Command{
 }
 
 var modelsEnableCmd = &cobra.Command{
-	Use:               "enable <model-id>",
-	Short:             "Mark a model as enabled so it appears in selection dropdowns",
-	Args:              cobra.ExactArgs(1),
+	Use:               "enable [model-id]",
+	Short:             "Mark a model (or every model from a vendor with --vendor) as enabled so it appears in selection dropdowns",
+	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsEnable,
 }
 
 var modelsDisableCmd = &cobra.Command{
-	Use:               "disable <model-id>",
-	Short:             "Mark a model as disabled so it is hidden from selection dropdowns",
-	Args:              cobra.ExactArgs(1),
+	Use:               "disable [model-id]",
+	Short:             "Mark a model (or every model from a vendor with --vendor) as disabled so it is hidden from selection dropdowns",
+	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsDisable,
 }
@@ -159,12 +161,14 @@ func init() {
 
 	modelsEnableCmd.Flags().StringVar(&enableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
 	modelsEnableCmd.Flags().StringVar(&enableScope, "scope", "global", "Scope: global or vault")
+	modelsEnableCmd.Flags().StringVar(&enableVendor, "vendor", "", "Apply to every model whose VendorOf() matches (e.g. anthropic, amazon, google). Omits <model-id>.")
 	_ = modelsEnableCmd.MarkFlagRequired("provider")
 	_ = modelsEnableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsEnableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsDisableCmd.Flags().StringVar(&disableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
 	modelsDisableCmd.Flags().StringVar(&disableScope, "scope", "global", "Scope: global or vault")
+	modelsDisableCmd.Flags().StringVar(&disableVendor, "vendor", "", "Apply to every model whose VendorOf() matches (e.g. anthropic, amazon, google). Omits <model-id>.")
 	_ = modelsDisableCmd.MarkFlagRequired("provider")
 	_ = modelsDisableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsDisableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
@@ -502,11 +506,90 @@ func runModelsRemove(cmd *cobra.Command, args []string) error {
 }
 
 func runModelsEnable(cmd *cobra.Command, args []string) error {
-	return setModelEnabled(cmd, args[0], enableProvider, enableScope, true)
+	return runModelsEnableDisable(cmd, args, enableProvider, enableScope, enableVendor, true)
 }
 
 func runModelsDisable(cmd *cobra.Command, args []string) error {
-	return setModelEnabled(cmd, args[0], disableProvider, disableScope, false)
+	return runModelsEnableDisable(cmd, args, disableProvider, disableScope, disableVendor, false)
+}
+
+// runModelsEnableDisable dispatches between single-model (positional arg)
+// and vendor-batch (--vendor flag) modes. Exactly one of the two inputs
+// must be present.
+func runModelsEnableDisable(cmd *cobra.Command, args []string, provider, scopeStr, vendor string, enabled bool) error {
+	if len(args) == 0 && vendor == "" {
+		return fmt.Errorf("pass either a <model-id> or --vendor <name>")
+	}
+	if len(args) > 0 && vendor != "" {
+		return fmt.Errorf("pass either a <model-id> or --vendor, not both")
+	}
+	if len(args) == 1 {
+		return setModelEnabled(cmd, args[0], provider, scopeStr, enabled)
+	}
+	return setVendorEnabled(cmd, vendor, provider, scopeStr, enabled)
+}
+
+// setVendorEnabled resolves every model in the merged catalog whose
+// VendorOf matches (vendor, provider) and applies enable/disable to
+// each. One CLI call, one write pass, one FSEvents tick.
+func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, enabled bool) error {
+	scope, vaultRoot, err := resolveCatalogScope(scopeStr)
+	if err != nil {
+		return err
+	}
+
+	// Collect candidates from the merged catalog so we apply the flag
+	// to both builtin entries (which get minimal user-catalog entries
+	// on first touch) and existing user entries.
+	list, err := ai.BuildModelList(cmd.Context(), ai.MergedListOptions{VaultRoot: vaultRoot})
+	if err != nil {
+		return fmt.Errorf("load model catalog: %w", err)
+	}
+	var matched []ai.ModelInfo
+	for _, m := range list.Verified {
+		if m.Provider != provider {
+			continue
+		}
+		if ai.VendorOf(m.ID, provider).Vendor != vendor {
+			continue
+		}
+		matched = append(matched, m)
+	}
+	if len(matched) == 0 {
+		return fmt.Errorf("no models found for vendor=%s provider=%s", vendor, provider)
+	}
+
+	// Load the user catalog once so we can merge rather than re-reading
+	// per model. Entries are keyed by (provider, id).
+	userByKey := make(map[string]ai.ModelInfo)
+	for _, m := range ai.LoadUserCatalog(vaultRoot) {
+		userByKey[m.Provider+"|"+m.ID] = m
+	}
+
+	count := 0
+	for _, m := range matched {
+		key := m.Provider + "|" + m.ID
+		entry, found := userByKey[key]
+		if !found {
+			entry = ai.ModelInfo{
+				ID:       m.ID,
+				Provider: m.Provider,
+				Tier:     ai.TierUserVerified,
+			}
+		}
+		entry.Enabled = ai.Ptr(enabled)
+		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+			return fmt.Errorf("save %s: %w", m.ID, err)
+		}
+		count++
+	}
+
+	verb := "enabled"
+	if !enabled {
+		verb = "disabled"
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s %d %s model(s) from %s in %s catalog\n", verb, count, provider, vendor, scope)
+	return nil
 }
 
 // setModelEnabled writes an Enabled pointer into the user-catalog entry for

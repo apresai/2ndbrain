@@ -1759,6 +1759,20 @@ final class AppState {
         )
     }
 
+    /// Enable or disable every model from a vendor within a provider in
+    /// one CLI call. Used by the Hub's per-group bulk-toggle buttons so
+    /// 20 Anthropic models flip with one `2nb models disable --vendor
+    /// anthropic` write rather than 20 individual calls.
+    func setVendorEnabled(vendor: String, provider: String, scope: String, enabled: Bool) async throws {
+        guard let vault else { throw CLIError.noVault }
+        let verb = enabled ? "enable" : "disable"
+        log.info("AI Hub action: models \(verb, privacy: .public) --vendor \(vendor, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public))")
+        _ = try await runCLI(
+            ["models", verb, "--vendor", vendor, "--provider", provider, "--scope", scope],
+            cwd: vault.rootURL
+        )
+    }
+
     /// Fetches the full AIStatusInfo envelope including providers[] for
     /// the AI Hub's provider cards and active-model section.
     func fetchAIStatus() async throws -> AIStatusInfo {
@@ -1970,6 +1984,125 @@ struct AIStatusInfo: Codable {
         case portabilityAction = "portability_action"
         case providers
     }
+}
+
+/// VendorInfo mirrors the Go ai.VendorInfo for client-side grouping.
+/// The Hub fetches the model list once and partitions it locally; we
+/// don't round-trip to the CLI per group.
+struct VendorInfo: Equatable, Hashable {
+    let vendor: String   // stable key: "anthropic", "amazon", "meta", …
+    let display: String  // human label: "Anthropic", "Amazon", "Meta"
+    let family: String   // optional sub-family inside a vendor
+
+    /// Parses a model ID + provider pair the same way Go's VendorOf does.
+    /// Kept intentionally narrow — the Hub only needs vendor + display;
+    /// family is surfaced but not critical for the UI. Any deeper logic
+    /// lives on the Go side where it's unit-tested.
+    static func from(modelID: String, provider: String) -> VendorInfo {
+        let lower = modelID.lowercased()
+        switch provider {
+        case "bedrock":
+            return bedrockVendor(lower)
+        case "openrouter":
+            return openrouterVendor(lower)
+        case "ollama":
+            return ollamaVendor(lower)
+        default:
+            return VendorInfo(vendor: "other", display: "Other", family: "")
+        }
+    }
+
+    private static func bedrockVendor(_ lower: String) -> VendorInfo {
+        // Strip geo inference-profile prefix (us./eu./ap./global.).
+        var stripped = lower
+        for prefix in ["us.", "eu.", "ap.", "global."] {
+            if stripped.hasPrefix(prefix) {
+                stripped = String(stripped.dropFirst(prefix.count))
+                break
+            }
+        }
+        let parts = stripped.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let first = parts.first else { return VendorInfo(vendor: "other", display: "Other", family: "") }
+        let vendor = String(first)
+        return VendorInfo(vendor: vendor, display: displayName(vendor), family: "")
+    }
+
+    private static func openrouterVendor(_ lower: String) -> VendorInfo {
+        let parts = lower.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return VendorInfo(vendor: "other", display: "Other", family: "") }
+        let vendor = String(parts[0])
+        return VendorInfo(vendor: vendor, display: displayName(vendor), family: "")
+    }
+
+    private static func ollamaVendor(_ lower: String) -> VendorInfo {
+        let base = lower.split(separator: ":").first.map(String.init) ?? lower
+        switch true {
+        case base.hasPrefix("llama"): return VendorInfo(vendor: "meta", display: "Meta", family: "Llama")
+        case base.hasPrefix("gemma"): return VendorInfo(vendor: "google", display: "Google", family: "Gemma")
+        case base.hasPrefix("qwen"): return VendorInfo(vendor: "qwen", display: "Qwen", family: "Qwen")
+        case base.hasPrefix("mistral"), base.hasPrefix("mixtral"):
+            return VendorInfo(vendor: "mistral", display: "Mistral", family: "Mistral")
+        case base.hasPrefix("phi"): return VendorInfo(vendor: "microsoft", display: "Microsoft", family: "Phi")
+        case base.hasPrefix("deepseek"): return VendorInfo(vendor: "deepseek", display: "DeepSeek", family: "DeepSeek")
+        case base.hasPrefix("nomic-"): return VendorInfo(vendor: "nomic", display: "Nomic", family: "Nomic Embed")
+        case base.hasPrefix("mxbai-"): return VendorInfo(vendor: "mixedbread", display: "Mixedbread", family: "mxbai")
+        case base.hasPrefix("snowflake-"): return VendorInfo(vendor: "snowflake", display: "Snowflake", family: "Arctic")
+        case base.hasPrefix("bge-"): return VendorInfo(vendor: "baai", display: "BAAI", family: "BGE")
+        case base.hasPrefix("all-minilm"): return VendorInfo(vendor: "sentence-transformers", display: "Sentence Transformers", family: "MiniLM")
+        default: return VendorInfo(vendor: "community", display: "Community", family: "")
+        }
+    }
+
+    private static func displayName(_ vendor: String) -> String {
+        switch vendor {
+        case "anthropic": return "Anthropic"
+        case "amazon": return "Amazon"
+        case "meta", "meta-llama": return "Meta"
+        case "mistral": return "Mistral"
+        case "cohere": return "Cohere"
+        case "ai21": return "AI21"
+        case "deepseek": return "DeepSeek"
+        case "moonshot", "moonshotai": return "Moonshot"
+        case "qwen": return "Qwen"
+        case "zai": return "Z.ai"
+        case "writer": return "Writer"
+        case "minimax": return "MiniMax"
+        case "nvidia": return "NVIDIA"
+        case "openai": return "OpenAI"
+        case "twelvelabs": return "TwelveLabs"
+        case "google": return "Google"
+        case "stability": return "Stability AI"
+        default:
+            return vendor.prefix(1).uppercased() + vendor.dropFirst()
+        }
+    }
+}
+
+/// VersionSortKey mirrors Go's ai.VersionSortKey: pad every number run
+/// to 8 digits, concat, then lowercase the whole ID for a deterministic
+/// tiebreak. "Larger" means "newer" for descending sort.
+func versionSortKey(_ modelID: String) -> String {
+    let lower = modelID.lowercased()
+    var result = ""
+    var i = lower.startIndex
+    while i < lower.endIndex {
+        let ch = lower[i]
+        if ch.isNumber {
+            var run = ""
+            while i < lower.endIndex && lower[i].isNumber {
+                run.append(lower[i])
+                i = lower.index(after: i)
+            }
+            if run.count < 8 {
+                run = String(repeating: "0", count: 8 - run.count) + run
+            }
+            result.append(run)
+        } else {
+            result.append(ch)
+            i = lower.index(after: i)
+        }
+    }
+    return result + "|" + lower
 }
 
 struct ProviderStatusInfo: Codable, Identifiable {

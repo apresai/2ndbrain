@@ -19,6 +19,11 @@ struct AIHubView: View {
     @State private var isDiscovering = false
     @State private var errorMessage: String?
     @State private var filter = CatalogFilter()
+    @State private var searchText: String = ""
+    /// Group keys currently collapsed. Default is expanded so users
+    /// immediately see their models; collapsing is an opt-in to
+    /// reduce clutter on very large catalogs.
+    @State private var collapsedGroups: Set<String> = []
 
     struct TestOutcome: Equatable {
         var running: Bool
@@ -28,9 +33,15 @@ struct AIHubView: View {
     }
 
     struct CatalogFilter: Equatable {
-        var typeOnly: String = "all" // all | embedding | generation
         var testedOnly: Bool = false
         var enabledOnly: Bool = false
+    }
+
+    /// Catalog group key: (type, vendor, provider). Stored as a
+    /// single string so it's both Hashable for the collapsed set
+    /// and easy to print.
+    private func groupKey(type: String, vendor: String, provider: String) -> String {
+        "\(type)|\(vendor)|\(provider)"
     }
 
     var body: some View {
@@ -268,28 +279,40 @@ struct AIHubView: View {
                 }
                 filterMenu
             }
+
+            // Search input — fuzzy-matches model ID + vendor display name.
+            // Hoisted above both type sections so it applies uniformly.
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search models or vendors", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Embeddings first — higher-stakes pick, smaller set.
+            catalogTypeSection(type: "embedding", title: "Embedding Models")
+            catalogTypeSection(type: "generation", title: "Generation Models")
+
             if filteredModels().isEmpty {
                 Text("No models match the current filter.")
                     .foregroundStyle(.secondary)
                     .padding()
                     .frame(maxWidth: .infinity)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(filteredModels()) { m in
-                        modelRow(m)
-                    }
-                }
             }
         }
     }
 
     private var filterMenu: some View {
         Menu {
-            Picker("Type", selection: $filter.typeOnly) {
-                Text("All").tag("all")
-                Text("Embedding").tag("embedding")
-                Text("Generation").tag("generation")
-            }
             Toggle("Tested only", isOn: $filter.testedOnly)
             Toggle("Enabled only", isOn: $filter.enabledOnly)
         } label: {
@@ -299,12 +322,147 @@ struct AIHubView: View {
         .controlSize(.small)
     }
 
+    /// filteredModels applies the search text + filter toggles. Used
+    /// both for the empty-state check and as the input to group
+    /// partitioning.
     private func filteredModels() -> [CatalogModelInfo] {
-        models.filter { m in
-            if filter.typeOnly != "all" && m.modelType != filter.typeOnly { return false }
+        let needle = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        return models.filter { m in
             if filter.testedOnly && (m.testedAt ?? "").isEmpty { return false }
             if filter.enabledOnly && (m.enabled == false) { return false }
+            if !needle.isEmpty {
+                let vendor = VendorInfo.from(modelID: m.modelID, provider: m.provider)
+                let haystack = (m.modelID + " " + vendor.display + " " + (m.name)).lowercased()
+                if !haystack.contains(needle) { return false }
+            }
             return true
+        }
+    }
+
+    @ViewBuilder
+    private func catalogTypeSection(type: String, title: String) -> some View {
+        let ofType = filteredModels().filter { $0.modelType == type }
+        if !ofType.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(title).font(.subheadline.bold())
+                    Text("(\(ofType.count))").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.top, 6)
+                ForEach(groupedByVendor(ofType), id: \.key) { group in
+                    vendorGroupView(group: group)
+                }
+            }
+        }
+    }
+
+    /// Vendor group: all models sharing (provider, vendor), newest first.
+    /// Intentionally NOT Hashable — its model slice carries
+    /// CatalogModelInfo which isn't Equatable, and we only need the
+    /// string key for `ForEach(..., id: \.key)`.
+    struct VendorGroup {
+        let key: String              // "<type>|<vendor>|<provider>"
+        let type: String
+        let vendor: String           // machine slug used by --vendor flag
+        let vendorDisplay: String
+        let provider: String
+        let models: [CatalogModelInfo]
+    }
+
+    /// Partitions a pre-filtered model slice by (vendor, provider)
+    /// within the implicit type. Each group's models are sorted
+    /// newest-first by versionSortKey.
+    private func groupedByVendor(_ ms: [CatalogModelInfo]) -> [VendorGroup] {
+        guard let firstType = ms.first?.modelType else { return [] }
+        var byKey: [String: [CatalogModelInfo]] = [:]
+        var displayByKey: [String: (String, String, String)] = [:] // vendor, display, provider
+        for m in ms {
+            let v = VendorInfo.from(modelID: m.modelID, provider: m.provider)
+            let k = groupKey(type: m.modelType, vendor: v.vendor, provider: m.provider)
+            byKey[k, default: []].append(m)
+            displayByKey[k] = (v.vendor, v.display, m.provider)
+        }
+        let groups = byKey.map { (k, list) -> VendorGroup in
+            let (vendor, display, provider) = displayByKey[k] ?? ("other", "Other", "")
+            let sorted = list.sorted { versionSortKey($0.modelID) > versionSortKey($1.modelID) }
+            return VendorGroup(
+                key: k,
+                type: firstType,
+                vendor: vendor,
+                vendorDisplay: display,
+                provider: provider,
+                models: sorted
+            )
+        }
+        // Sort groups by display name so the visual order is stable.
+        return groups.sorted { $0.vendorDisplay < $1.vendorDisplay }
+    }
+
+    @ViewBuilder
+    private func vendorGroupView(group: VendorGroup) -> some View {
+        let collapsed = collapsedGroups.contains(group.key)
+        let allDisabled = group.models.allSatisfy { $0.enabled == false }
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Button {
+                    if collapsed { collapsedGroups.remove(group.key) }
+                    else { collapsedGroups.insert(group.key) }
+                } label: {
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .frame(width: 12)
+                }
+                .buttonStyle(.plain)
+
+                Text(group.vendorDisplay).font(.subheadline.bold())
+                Text("·").foregroundStyle(.secondary)
+                Text(providerDisplayName(group.provider))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                Text("(\(group.models.count))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                // Equal-weight bulk toggles per the user's design choice.
+                Button(allDisabled ? "Enable all" : "Disable all") {
+                    Task { await bulkToggle(group: group, enable: allDisabled) }
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+
+                Button(allDisabled ? "Disable all" : "Enable all") {
+                    Task { await bulkToggle(group: group, enable: !allDisabled) }
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+            }
+            .padding(.vertical, 4)
+
+            if !collapsed {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(group.models) { m in
+                        modelRow(m)
+                            .padding(.leading, 20)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func bulkToggle(group: VendorGroup, enable: Bool) async {
+        do {
+            try await appState.setVendorEnabled(
+                vendor: group.vendor,
+                provider: group.provider,
+                scope: "vault",
+                enabled: enable
+            )
+            await reload()
+        } catch {
+            errorMessage = "Bulk toggle \(group.vendorDisplay) failed: \(error.localizedDescription)"
         }
     }
 
