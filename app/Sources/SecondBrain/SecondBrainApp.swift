@@ -255,19 +255,13 @@ struct SecondBrainApp: App {
 
                 Divider()
 
-                Button("AI Setup...") {
-                    appState.showAISetupWizard = true
+                // Merged AI Hub — replaces AI Setup, Test AI Connection,
+                // and Model Wizard. Single surface for providers, active
+                // models, and the catalog.
+                Button("AI...") {
+                    appState.showAIHub = true
                 }
-                .disabled(appState.vault == nil)
-
-                Button("Test AI Connection...") {
-                    appState.showAITest = true
-                }
-                .disabled(appState.vault == nil)
-
-                Button("Model Wizard...") {
-                    appState.showModelWizard = true
-                }
+                .keyboardShortcut(",", modifiers: [.command, .shift])
                 .disabled(appState.vault == nil)
 
                 Divider()

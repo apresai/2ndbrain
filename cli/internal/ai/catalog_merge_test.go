@@ -240,3 +240,69 @@ func TestBuildModelList_EnabledOnly_False_IncludesAll(t *testing.T) {
 		t.Errorf("disabled model %s/%s should appear when EnabledOnly=false", target.Provider, target.ID)
 	}
 }
+
+// TestBuildModelList_DropsDisabledProvider verifies that a provider-level
+// disable silences every model from that provider, regardless of tier
+// or the per-model Enabled flag.
+func TestBuildModelList_DropsDisabledProvider(t *testing.T) {
+	cfg := AIConfig{
+		Provider: "bedrock",
+		Bedrock:  BedrockConfig{Disabled: true},
+	}
+	got, err := BuildModelList(context.Background(), MergedListOptions{Config: cfg})
+	if err != nil {
+		t.Fatalf("BuildModelList: %v", err)
+	}
+	for _, m := range got.Verified {
+		if m.Provider == "bedrock" {
+			t.Errorf("bedrock entry %s leaked through disabled-provider filter", m.ID)
+		}
+	}
+	// Non-disabled providers should still surface entries.
+	hasOther := false
+	for _, m := range got.Verified {
+		if m.Provider != "bedrock" {
+			hasOther = true
+			break
+		}
+	}
+	if !hasOther {
+		t.Error("no non-bedrock entries surfaced — disabled filter may have dropped everything")
+	}
+}
+
+// TestProviderDisabled_UnknownNameIsFalse tripwires the switch so adding
+// a new provider requires touching ProviderDisabled.
+func TestProviderDisabled_UnknownNameIsFalse(t *testing.T) {
+	cfg := AIConfig{}
+	if cfg.ProviderDisabled("made-up") {
+		t.Error("unknown provider should default to enabled (false)")
+	}
+}
+
+// TestProviderDisabled_EachProviderToggles verifies each slot maps right.
+func TestProviderDisabled_EachProviderToggles(t *testing.T) {
+	cases := []struct {
+		name  string
+		apply func(*AIConfig)
+	}{
+		{"bedrock", func(c *AIConfig) { c.Bedrock.Disabled = true }},
+		{"openrouter", func(c *AIConfig) { c.OpenRouter.Disabled = true }},
+		{"ollama", func(c *AIConfig) { c.Ollama.Disabled = true }},
+	}
+	for _, tc := range cases {
+		cfg := AIConfig{}
+		tc.apply(&cfg)
+		if !cfg.ProviderDisabled(tc.name) {
+			t.Errorf("ProviderDisabled(%q) = false after setting disabled=true", tc.name)
+		}
+		for _, other := range []string{"bedrock", "openrouter", "ollama"} {
+			if other == tc.name {
+				continue
+			}
+			if cfg.ProviderDisabled(other) {
+				t.Errorf("setting %q disabled leaked into %q", tc.name, other)
+			}
+		}
+	}
+}

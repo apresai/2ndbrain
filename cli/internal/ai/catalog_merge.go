@@ -64,6 +64,11 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	if opts.EnabledOnly {
 		catalog = filterEnabled(catalog)
 	}
+	// Provider-level disable trumps everything: if the user silenced a
+	// provider (e.g. Ollama isn't running and they don't want it in the
+	// catalog), drop every entry from that provider regardless of tier
+	// or Enabled state.
+	catalog = filterDisabledProviders(catalog, opts.Config)
 	result.Verified = catalog
 
 	// Layer 4: vendor discovery. Only add entries not already in the merged catalog.
@@ -78,6 +83,7 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 		if opts.EnabledOnly {
 			result.Unverified = filterEnabled(result.Unverified)
 		}
+		result.Unverified = filterDisabledProviders(result.Unverified, opts.Config)
 	}
 
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
@@ -223,6 +229,21 @@ func filterEnabled(models []ModelInfo) []ModelInfo {
 	out := models[:0:0] // start fresh, same backing array length hint
 	for _, m := range models {
 		if m.Enabled != nil && !*m.Enabled {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// filterDisabledProviders removes entries whose provider is silenced by
+// cfg (e.g. cfg.Bedrock.Disabled == true). Unlike filterEnabled this acts
+// at the provider level, not per-model — a disabled provider shouldn't
+// offer any models in the catalog or selection dropdowns.
+func filterDisabledProviders(models []ModelInfo, cfg AIConfig) []ModelInfo {
+	out := models[:0:0]
+	for _, m := range models {
+		if cfg.ProviderDisabled(m.Provider) {
 			continue
 		}
 		out = append(out, m)

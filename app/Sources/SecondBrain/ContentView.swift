@@ -8,7 +8,7 @@ struct ContentView: View {
     @State private var focusChromeVisible = false
 
     private var anyOverlayVisible: Bool {
-        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI || appState.showTemplatePicker || appState.showAISetupWizard
+        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI || appState.showTemplatePicker || appState.showAIHub
     }
 
     /// Handle .md files dropped onto the editor window. We load each URL
@@ -99,16 +99,14 @@ struct ContentView: View {
                     set: { appState.showTemplatePicker = $0 }
                 ))
             }
-            if appState.showAISetupWizard {
-                overlayBackground { appState.showAISetupWizard = false }
-                AISetupWizardView(isPresented: Binding(
-                    get: { appState.showAISetupWizard },
-                    set: { appState.showAISetupWizard = $0 }
-                ))
-            }
-            if appState.showModelWizard {
-                overlayBackground { appState.showModelWizard = false }
-                ModelWizardView(onClose: { appState.showModelWizard = false })
+            // The AI Hub is the single surface for provider control, active
+            // model selection, and the catalog. showAISetupWizard and
+            // showModelWizard are computed aliases on showAIHub so any
+            // caller (Command Palette, status bar popover, Vault Status
+            // button, AI menu) opens the same sheet.
+            if appState.showAIHub {
+                overlayBackground { appState.showAIHub = false }
+                AIHubView(onClose: { appState.showAIHub = false })
                     .background(Color(nsColor: .windowBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .shadow(radius: 20)
@@ -403,16 +401,9 @@ private struct SecondarySheetsModifier: ViewModifier {
                 ))
                 .environment(appState)
             }
-            .sheet(isPresented: Binding(
-                get: { appState.showAITest },
-                set: { appState.showAITest = $0 }
-            )) {
-                AITestView(isPresented: Binding(
-                    get: { appState.showAITest },
-                    set: { appState.showAITest = $0 }
-                ))
-                .environment(appState)
-            }
+            // showAITest is a computed alias on showAIHub; the AI Hub
+            // overlay above renders the merged view for all three old
+            // entry points (AI Setup, Test AI Connection, Model Wizard).
             .sheet(isPresented: Binding(
                 get: { appState.showCommitDetail },
                 set: { newValue in

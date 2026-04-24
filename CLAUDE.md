@@ -396,11 +396,9 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | Skills install | SkillsInstallView.swift | Install SKILL.md for 8 AI agents (AI menu) |
 | MCP setup | MCPSetupView.swift | Show MCP config snippets for 6 AI tools (AI menu) |
 | Vault Status panel | VaultStatusView.swift | Unified health panel (Vault menu > Vault Status…) — vault info, index state, embedding portability, stale docs, provider reachability. Rebuild Index + Re-embed All buttons |
-| AI Test Connection | AITestView.swift | Standalone model probe (AI menu > Test AI Connection…) — shells out to `2nb models test` for embed + gen models, shows latency + ok/fail, offers Open AI Setup on failure |
-| Model Wizard | ModelWizardView.swift | Full discover → pick → cost preview → test-and-save flow (AI menu > Model Wizard…). Grouped list by provider with tier badges, scope picker (vault / global), auto-pre-checks verified models. Invokes existing CLI primitives (`models list --discover`, `models cost-preview`, `models test --save`). Live catalog sync via `modelsCatalogVersion` so CLI writes from another terminal refresh the UI without reopening the vault |
+| AI Hub | AIHubView.swift | Single merged surface (AI menu > AI… · Cmd+Shift+,) for everything AI. Three sections: Providers (enable/disable Bedrock / OpenRouter / Ollama cards with live status), Active (current embedding + generation with inline swap), Catalog (full data-driven model list with Test · Set active · Enable/Disable · Discover buttons and Type / Tested / Enabled filters). Replaces AI Setup Wizard, Test AI Connection, and Model Wizard. Observes `modelsCatalogVersion` so CLI edits from another terminal refresh live. Provider disable is vault config: `ai.<provider>.disabled` — hides every model from that provider until re-enabled |
 | Window toolbar | ContentView.swift | New Note / Search / Quick Open buttons visible whenever a vault is open (before any doc is selected) |
 | File→Notes menu rename | AppDelegate.swift | AppKit hook renames the File menu to "Notes"; observer reapplies on NSMenu.didBeginTrackingNotification + applicationDidBecomeActive |
-| AI setup wizard | AISetupWizardView.swift | 4-step provider/credentials/models/test wizard |
 | Obsidian import | SecondBrainApp.swift | Import via CLI with folder picker |
 | Obsidian export | SecondBrainApp.swift | Export via CLI with folder picker |
 | Spotlight indexing | SpotlightIndexer | CoreSpotlight integration |

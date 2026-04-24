@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
@@ -61,6 +63,21 @@ type AIStatus struct {
 	VaultEmbeddedDocs    int      `json:"vault_embedded_docs"`
 	PortabilityStatus    string   `json:"portability_status"` // see derivePortability
 	PortabilityAction    string   `json:"portability_action"` // one-line fix hint
+
+	// Providers surfaces per-provider readiness for the GUI's AI Hub
+	// and the `ai status` pretty output. Each entry reflects configured
+	// credentials, user disable flag, and a cheap reachability probe.
+	Providers []ProviderStatus `json:"providers,omitempty"`
+}
+
+// ProviderStatus is the GUI-facing shape of a single provider's health.
+type ProviderStatus struct {
+	Name          string `json:"name"`                     // bedrock | openrouter | ollama
+	ConfigPresent bool   `json:"config_present"`           // creds / endpoint configured
+	Disabled      bool   `json:"disabled"`                 // user explicitly silenced via ai.<provider>.disabled
+	Reachable     bool   `json:"reachable"`                // cheap probe succeeded
+	Reason        string `json:"reason,omitempty"`         // human-readable "why not ready" when relevant
+	Detail        string `json:"detail,omitempty"`         // endpoint / region / env var name for UX
 }
 
 func runAIStatus(cmd *cobra.Command, args []string) error {
@@ -112,6 +129,8 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		status.VaultEmbeddingDim, status.VaultEmbeddingModels, totalDocs, embeddedDocs,
 	)
 
+	status.Providers = collectProviderStatus(ctx, cfg)
+
 	format := getFormat(cmd)
 	if format != "" {
 		return output.Write(os.Stdout, format, status)
@@ -157,6 +176,32 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Status:         %s\n", strings.ToUpper(strings.ReplaceAll(status.PortabilityStatus, "_", " ")))
 	if status.PortabilityAction != "" {
 		fmt.Printf("  Action:         %s\n", status.PortabilityAction)
+	}
+
+	// Provider snapshot — useful to see which are enabled / reachable at a glance.
+	if len(status.Providers) > 0 {
+		fmt.Println()
+		fmt.Println("Providers:")
+		for _, p := range status.Providers {
+			state := "ready"
+			switch {
+			case p.Disabled:
+				state = "disabled"
+			case !p.ConfigPresent:
+				state = "not configured"
+			case !p.Reachable:
+				state = "unreachable"
+			}
+			detail := ""
+			if p.Detail != "" {
+				detail = "  " + p.Detail
+			}
+			reason := ""
+			if p.Reason != "" {
+				reason = " — " + p.Reason
+			}
+			fmt.Printf("  %-11s %s%s%s\n", p.Name, state, detail, reason)
+		}
 	}
 
 	// Suggest local alternative for paid providers
@@ -234,4 +279,102 @@ func runAIEmbed(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	return output.Write(os.Stdout, format, vecs[0])
+}
+
+// collectProviderStatus returns a per-provider readiness snapshot for
+// Bedrock, OpenRouter, and Ollama. Used by `ai status --json` and the
+// GUI's AI Hub. The reachability probe is cheap — credentials check
+// plus an endpoint ping for Ollama; no request is sent to the Bedrock
+// or OpenRouter APIs here.
+func collectProviderStatus(ctx context.Context, cfg ai.AIConfig) []ProviderStatus {
+	out := []ProviderStatus{
+		bedrockProviderStatus(ctx, cfg),
+		openrouterProviderStatus(cfg),
+		ollamaProviderStatus(ctx, cfg),
+	}
+	return out
+}
+
+func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
+	s := ProviderStatus{
+		Name:          "bedrock",
+		Disabled:      cfg.Bedrock.Disabled,
+		ConfigPresent: cfg.Bedrock.Region != "",
+		Detail:        cfg.Bedrock.Region,
+	}
+	if s.Disabled {
+		s.Reason = "disabled in vault config"
+		return s
+	}
+	if !s.ConfigPresent {
+		s.Reason = "region not set (ai.bedrock.region)"
+		return s
+	}
+	// Reachability: the embedder probe covers "creds work + AWS API
+	// reachable" in one cheap call (HeadObject-equivalent under the hood).
+	if emb, err := ai.DefaultRegistry.Embedder("bedrock"); err == nil {
+		s.Reachable = emb.Available(ctx)
+		if !s.Reachable {
+			s.Reason = "credentials missing or region unreachable"
+		}
+	} else {
+		s.Reason = "bedrock not registered (check ai.provider setup)"
+	}
+	return s
+}
+
+func openrouterProviderStatus(cfg ai.AIConfig) ProviderStatus {
+	s := ProviderStatus{
+		Name:          "openrouter",
+		Disabled:      cfg.OpenRouter.Disabled,
+		ConfigPresent: ai.HasAPIKey("openrouter"),
+		Detail:        cfg.OpenRouter.APIKeyEnv,
+	}
+	if s.Disabled {
+		s.Reason = "disabled in vault config"
+		return s
+	}
+	if !s.ConfigPresent {
+		s.Reason = "no API key (set $OPENROUTER_API_KEY or run `2nb config set-key openrouter`)"
+		return s
+	}
+	// Having a key implies we can hit the API; we don't ping live here
+	// to keep `ai status` fast. The Hub's test action will surface real
+	// network issues when the user runs a probe.
+	s.Reachable = true
+	return s
+}
+
+func ollamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
+	endpoint := cfg.Ollama.Endpoint
+	if endpoint == "" {
+		endpoint = "http://localhost:11434"
+	}
+	s := ProviderStatus{
+		Name:          "ollama",
+		Disabled:      cfg.Ollama.Disabled,
+		ConfigPresent: true, // endpoint always has a default
+		Detail:        endpoint,
+	}
+	if s.Disabled {
+		s.Reason = "disabled in vault config"
+		return s
+	}
+	// Cheap HTTP probe regardless of provider registration — users want
+	// to see "Ollama is running" even if Bedrock is the currently-active
+	// provider, so we don't gate on DefaultRegistry.
+	reqCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "GET", endpoint+"/api/tags", nil)
+	if err == nil {
+		resp, reqErr := http.DefaultClient.Do(req)
+		if reqErr == nil {
+			resp.Body.Close()
+			s.Reachable = resp.StatusCode < 500
+		}
+	}
+	if !s.Reachable {
+		s.Reason = "not running on " + endpoint
+	}
+	return s
 }

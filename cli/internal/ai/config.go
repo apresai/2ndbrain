@@ -19,17 +19,40 @@ type AIConfig struct {
 // OllamaConfig configures the local Ollama provider.
 type OllamaConfig struct {
 	Endpoint string `yaml:"endpoint" json:"endpoint"` // default: http://localhost:11434
+	// Disabled silences the provider in the catalog and GUI selection
+	// without removing credentials / endpoint. Absent == enabled.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 // BedrockConfig configures the AWS Bedrock provider.
 type BedrockConfig struct {
 	Profile string `yaml:"profile" json:"profile"` // AWS profile name
 	Region  string `yaml:"region" json:"region"`   // AWS region
+	// Disabled silences the provider in the catalog and GUI selection
+	// without removing credentials. Absent == enabled.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 // OpenRouterConfig configures the OpenRouter provider.
 type OpenRouterConfig struct {
 	APIKeyEnv string `yaml:"api_key_env" json:"api_key_env"` // env var name
+	// Disabled silences the provider in the catalog and GUI selection
+	// without removing the API key. Absent == enabled.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+}
+
+// ProviderDisabled returns whether the named provider has been explicitly
+// disabled in cfg. Unknown provider names return false (enabled by default).
+func (cfg AIConfig) ProviderDisabled(name string) bool {
+	switch name {
+	case "bedrock":
+		return cfg.Bedrock.Disabled
+	case "openrouter":
+		return cfg.OpenRouter.Disabled
+	case "ollama":
+		return cfg.Ollama.Disabled
+	}
+	return false
 }
 
 // DefaultSimilarityThreshold is the conservative floor for semantic search.

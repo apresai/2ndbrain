@@ -40,8 +40,21 @@ final class AppState {
     var showAskAI = false
     var typewriterModeActive = false
     var showTemplatePicker = false
-    var showAISetupWizard = false
-    var showModelWizard = false
+    // AI Hub is the single merged sheet for provider control, active
+    // model selection, and the model catalog. Replaces three earlier
+    // flags (showAISetupWizard, showModelWizard, showAITest), kept
+    // here as computed aliases so existing callers (Command Palette,
+    // status-bar popover, Vault Status, etc.) don't all need updates
+    // in this commit — they all open the same sheet regardless.
+    var showAIHub = false
+    var showAISetupWizard: Bool {
+        get { showAIHub }
+        set { showAIHub = newValue }
+    }
+    var showModelWizard: Bool {
+        get { showAIHub }
+        set { showAIHub = newValue }
+    }
     var inlineRenderingEnabled = false
     var editorFontSize: CGFloat = UserDefaults.standard.object(forKey: "editorFontSize") as? CGFloat ?? 14
     var editorFontFamily: String = UserDefaults.standard.string(forKey: "editorFontFamily") ?? "System Mono"
@@ -87,7 +100,14 @@ final class AppState {
 
     // AI state
     var aiStatus: AIStatusInfo?
-    var showAITest: Bool = false
+    // showAITest is kept as an alias for the AI Hub so the status bar
+    // AI popover and Vault Status's "Test Connection" button open the
+    // same unified sheet. Retiring the name entirely would force those
+    // call sites to change too; the alias keeps them working.
+    var showAITest: Bool {
+        get { showAIHub }
+        set { showAIHub = newValue }
+    }
 
     // Portability warnings from the most recent CLI search/ask. When
     // non-empty, the vault is in a degraded state (dimension mismatch,
@@ -247,11 +267,16 @@ final class AppState {
         fileWatcher?.stop()
         let watcher = FSEventsWatcher(
             path: url.path,
-            filter: { $0.hasSuffix(".md") || $0.hasSuffix("/models.yaml") }
+            filter: {
+                $0.hasSuffix(".md")
+                    || $0.hasSuffix("/models.yaml")
+                    || $0.hasSuffix("/config.yaml")
+            }
         ) { @Sendable [weak self] paths in
             Task { @MainActor in
                 let mdPaths = paths.filter { $0.hasSuffix(".md") }
                 let catalogChanged = paths.contains { $0.hasSuffix("/models.yaml") }
+                let configChanged = paths.contains { $0.hasSuffix("/config.yaml") }
                 if !mdPaths.isEmpty {
                     self?.refreshFiles()
                     for path in mdPaths {
@@ -262,8 +287,14 @@ final class AppState {
                     // view only rebuilds once per bump, not per file path.
                     self?.graphNeedsRebuild += 1
                 }
-                if catalogChanged {
+                if catalogChanged || configChanged {
+                    // Both feed the AI Hub: catalog for model rows,
+                    // config.yaml for active-model + provider-disable
+                    // changes the user made via `2nb config set`.
                     self?.modelsCatalogVersion += 1
+                }
+                if configChanged {
+                    await self?.refreshAIStatus()
                 }
             }
         }
@@ -1668,6 +1699,7 @@ final class AppState {
     /// Returns the decoded AIProbeResult so the UI can render outcome + latency.
     func testAndSave(modelID: String, provider: String, type: String, scope: String) async throws -> AIProbeResult {
         guard let vault else { throw CLIError.noVault }
+        log.info("AI Hub action: test \(modelID) (provider=\(provider) type=\(type) scope=\(scope))")
         let data = try await runCLI(
             [
                 "models", "test", modelID,
@@ -1680,6 +1712,62 @@ final class AppState {
             cwd: vault.rootURL
         )
         return try JSONDecoder().decode(AIProbeResult.self, from: data)
+    }
+
+    /// Writes ai.embedding_model or ai.generation_model via `2nb config set`
+    /// so the AI Hub can swap the active model without shelling through the
+    /// full setup wizard. Caller is responsible for validating type is
+    /// "embedding" or "generation". Triggers a config.yaml FSEvent which
+    /// rolls the Hub's displayed state automatically.
+    func setActiveModel(type: String, modelID: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        let key: String
+        switch type {
+        case "embedding": key = "ai.embedding_model"
+        case "generation": key = "ai.generation_model"
+        default:
+            throw CLIError.noVault  // fall through — callers must pass a known type
+        }
+        log.info("AI Hub action: set \(key) = \(modelID)")
+        _ = try await runCLI(
+            ["config", "set", key, modelID],
+            cwd: vault.rootURL
+        )
+    }
+
+    /// Flips ai.<provider>.disabled via `2nb config set`. The GUI uses
+    /// this to silence a provider without removing credentials.
+    func setProviderDisabled(_ provider: String, disabled: Bool) async throws {
+        guard let vault else { throw CLIError.noVault }
+        let key = "ai.\(provider).disabled"
+        log.info("AI Hub action: set \(key) = \(disabled)")
+        _ = try await runCLI(
+            ["config", "set", key, String(disabled)],
+            cwd: vault.rootURL
+        )
+    }
+
+    /// Enable or disable a single model in the user catalog so it shows /
+    /// hides from selection dropdowns. Mirrors `2nb models enable|disable`.
+    func setModelEnabled(_ modelID: String, provider: String, scope: String, enabled: Bool) async throws {
+        guard let vault else { throw CLIError.noVault }
+        let verb = enabled ? "enable" : "disable"
+        log.info("AI Hub action: models \(verb) \(modelID) (provider=\(provider) scope=\(scope))")
+        _ = try await runCLI(
+            ["models", verb, modelID, "--provider", provider, "--scope", scope],
+            cwd: vault.rootURL
+        )
+    }
+
+    /// Fetches the full AIStatusInfo envelope including providers[] for
+    /// the AI Hub's provider cards and active-model section.
+    func fetchAIStatus() async throws -> AIStatusInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(
+            ["ai", "status", "--json", "--porcelain"],
+            cwd: vault.rootURL
+        )
+        return try JSONDecoder().decode(AIStatusInfo.self, from: data)
     }
 
     func checkOllamaStatus() async -> OllamaReadiness {
@@ -1701,7 +1789,7 @@ final class AppState {
     func runCLI(_ args: [String], cwd: URL) async throws -> Data {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
-        log.debug("CLI exec: \(cmd)")
+        log.info("CLI exec: \(cmd)")
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
@@ -1768,7 +1856,7 @@ final class AppState {
     private func runCLIAllowingNonZero(_ args: [String], cwd: URL) async throws -> Data {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
-        log.debug("CLI exec (non-zero ok): \(cmd)")
+        log.info("CLI exec (non-zero ok): \(cmd)")
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
@@ -1861,6 +1949,10 @@ struct AIStatusInfo: Codable {
     let portabilityStatus: String?
     let portabilityAction: String?
 
+    // Per-provider readiness surfaced for the AI Hub. Optional because
+    // binaries before 0.3.0 don't emit this field.
+    let providers: [ProviderStatusInfo]?
+
     enum CodingKeys: String, CodingKey {
         case provider
         case embeddingModel = "embedding_model"
@@ -1876,6 +1968,26 @@ struct AIStatusInfo: Codable {
         case vaultEmbeddedDocs = "vault_embedded_docs"
         case portabilityStatus = "portability_status"
         case portabilityAction = "portability_action"
+        case providers
+    }
+}
+
+struct ProviderStatusInfo: Codable, Identifiable {
+    var id: String { name }
+    let name: String
+    let configPresent: Bool
+    let disabled: Bool
+    let reachable: Bool
+    let reason: String?
+    let detail: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case configPresent = "config_present"
+        case disabled
+        case reachable
+        case reason
+        case detail
     }
 }
 

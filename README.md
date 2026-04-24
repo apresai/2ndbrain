@@ -176,7 +176,7 @@ Browse verified models across all providers, test any model, and benchmark your 
 
 Models are tiered as **verified** (tested with 2nb) or **unverified** (available from vendor, use `models test` to check). The benchmark suite stores results in `.2ndbrain/bench.db` for tracking performance over time.
 
-Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bedrock_invoke_cohere_embed`, `openrouter_chat`) so adding a new model variant doesn't require a code change — a catalog entry with the right strategy is enough. The macOS editor's **AI → Model Wizard…** drives the same discover/pick/test/save flow with a grouped checkbox list, live cost preview, and spinners-per-row during testing. Catalog changes written by the CLI propagate to the running GUI via FSEvents without reopening the vault.
+Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bedrock_invoke_cohere_embed`, `openrouter_chat`) so adding a new model variant doesn't require a code change — a catalog entry with the right strategy is enough. The macOS editor's **AI → AI…** opens the AI Hub — a single sheet with provider cards (enable / disable Bedrock, OpenRouter, Ollama), active model status, and the full catalog with inline Test / Set active / Enable / Disable / Discover actions. Catalog changes written by the CLI propagate to the running GUI via FSEvents without reopening the vault.
 
 ## CLI Commands
 
@@ -425,13 +425,11 @@ A native SwiftUI + AppKit editor with:
 - **Suggest Links** (Cmd+Shift+L) — click-to-insert AI-suggested wikilinks to semantically related documents
 - **Polish** (Cmd+Option+P) — AI copy-edit the current document with an accept/reject diff preview
 - **Vault Status** — unified health panel (Vault menu) showing index state, embedding portability, stale docs, and provider reachability with Rebuild Index + Re-embed All buttons
-- **Test AI Connection** — standalone probe (AI menu) that runs `2nb models test` against both embedding and generation models with live latency
-- **Model Wizard** — guided discover → pick → cost preview → test-and-save (AI menu). Grouped checkbox list by provider with tier badges, live cost estimate, spinners-per-row during testing. Picks up catalog changes written by other terminals via FSEvents — no vault-reopen required
+- **AI Hub** (AI menu > AI…, Cmd+Shift+,) — single merged surface for providers (enable/disable Bedrock / OpenRouter / Ollama), active embedding + generation models, and the full catalog with per-row Test · Set active · Enable · Disable · Discover actions. Replaces the previous three wizards (AI Setup, Test AI Connection, Model Wizard). Catalog changes made from a terminal propagate live via FSEvents
 - **MCP Server Status** (Cmd+Shift+M) — see which AI clients are connected and which tools they've invoked, plus a live status-bar indicator
 - **Recent Activity** (Cmd+Shift+G) — for vaults that are git repos, browse recent commits with 1/3/7/30-day window; click any commit for full detail with per-file diffs
 - **Git diff viewer** — right-click any file in the sidebar → Show Changes vs HEAD
 - **Git sidebar indicators** — orange dot for modified, blue dot for untracked
-- AI setup wizard — guided provider/credentials/model configuration (AI menu)
 - Interactive AI status popover with staleness indicator and index rebuild
 - Clickable vault name in status bar — opens Vault Status panel
 - Status bar shows document type, status, word count, chunk count, token estimate, AI dot, MCP dot
