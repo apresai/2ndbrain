@@ -9,6 +9,14 @@ final class AppState {
     var vault: VaultManager?
     var database: DatabaseManager?
     var fileWatcher: FSEventsWatcher?
+    var globalCatalogWatcher: FSEventsWatcher?
+
+    // Bumped when models.yaml changes on disk — in the vault or globally.
+    // AISetupWizardView and any future "Manage Models" panel observe this
+    // counter and reload their cached model list on bump, so a CLI edit
+    // (`2nb models enable/disable`, `2nb models wizard`) is reflected in
+    // the running GUI without a restart.
+    var modelsCatalogVersion: Int = 0
 
     // Document tabs
     var openDocuments: [DocumentTab] = []
@@ -233,22 +241,72 @@ final class AppState {
         // Refresh git state (non-blocking)
         Task { await refreshGitStatus() }
 
-        // Start watching for changes
+        // Start watching for changes. Filter accepts .md (document changes)
+        // and models.yaml (catalog changes written by the CLI wizard or
+        // enable/disable commands).
         fileWatcher?.stop()
-        let watcher = FSEventsWatcher(path: url.path) { @Sendable [weak self] paths in
+        let watcher = FSEventsWatcher(
+            path: url.path,
+            filter: { $0.hasSuffix(".md") || $0.hasSuffix("/models.yaml") }
+        ) { @Sendable [weak self] paths in
             Task { @MainActor in
-                self?.refreshFiles()
-                for path in paths {
-                    self?.reloadIfOpen(path: path)
+                let mdPaths = paths.filter { $0.hasSuffix(".md") }
+                let catalogChanged = paths.contains { $0.hasSuffix("/models.yaml") }
+                if !mdPaths.isEmpty {
+                    self?.refreshFiles()
+                    for path in mdPaths {
+                        self?.reloadIfOpen(path: path)
+                    }
+                    // Bump the graph rebuild signal so an open GraphView
+                    // refreshes against the current index. Cheap token — the
+                    // view only rebuilds once per bump, not per file path.
+                    self?.graphNeedsRebuild += 1
                 }
-                // Bump the graph rebuild signal so an open GraphView
-                // refreshes against the current index. Cheap token — the
-                // view only rebuilds once per bump, not per file path.
-                self?.graphNeedsRebuild += 1
+                if catalogChanged {
+                    self?.modelsCatalogVersion += 1
+                }
             }
         }
         watcher.start()
         self.fileWatcher = watcher
+
+        // Second watcher for the user's global models catalog. Separate
+        // watcher because ~/.config/2nb is outside the vault tree.
+        startGlobalCatalogWatcher()
+    }
+
+    /// Watches ~/.config/2nb (or $XDG_CONFIG_HOME/2nb) for models.yaml
+    /// writes made by the CLI while the GUI is running. Idempotent — safe
+    /// to call multiple times; the previous watcher is stopped first.
+    private func startGlobalCatalogWatcher() {
+        globalCatalogWatcher?.stop()
+
+        let configRoot: String
+        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+            configRoot = (xdg as NSString).appendingPathComponent("2nb")
+        } else {
+            configRoot = (NSHomeDirectory() as NSString).appendingPathComponent(".config/2nb")
+        }
+
+        // Ensure the directory exists — FSEventStreamCreate silently
+        // fails on a non-existent path, which would leave the watcher
+        // inert with no warning. A missing directory is the common case
+        // for users who've never run `2nb config set`.
+        try? FileManager.default.createDirectory(
+            atPath: configRoot,
+            withIntermediateDirectories: true
+        )
+
+        let watcher = FSEventsWatcher(
+            path: configRoot,
+            filter: { $0.hasSuffix("/models.yaml") }
+        ) { @Sendable [weak self] _ in
+            Task { @MainActor in
+                self?.modelsCatalogVersion += 1
+            }
+        }
+        watcher.start()
+        self.globalCatalogWatcher = watcher
     }
 
     func refreshFiles() {

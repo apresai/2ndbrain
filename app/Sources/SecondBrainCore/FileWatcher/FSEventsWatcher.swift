@@ -3,11 +3,20 @@ import Foundation
 public final class FSEventsWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let path: String
+    private let filter: @Sendable (String) -> Bool
     private let callback: @Sendable ([String]) -> Void
     private let queue = DispatchQueue(label: "dev.apresai.2ndbrain.fswatcher")
 
-    public init(path: String, callback: @escaping @Sendable ([String]) -> Void) {
+    /// Default filter keeps the legacy "markdown-only" behavior so existing
+    /// callers don't change. Pass a custom `filter` to observe additional
+    /// files (e.g. .yaml catalogs).
+    public init(
+        path: String,
+        filter: @escaping @Sendable (String) -> Bool = { $0.hasSuffix(".md") },
+        callback: @escaping @Sendable ([String]) -> Void
+    ) {
         self.path = path
+        self.filter = filter
         self.callback = callback
     }
 
@@ -29,9 +38,9 @@ public final class FSEventsWatcher: @unchecked Sendable {
                 guard let info else { return }
                 let watcher = Unmanaged<FSEventsWatcher>.fromOpaque(info).takeUnretainedValue()
                 guard let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] else { return }
-                let mdPaths = paths.filter { $0.hasSuffix(".md") }
-                if !mdPaths.isEmpty {
-                    watcher.callback(mdPaths)
+                let matched = paths.filter { watcher.filter($0) }
+                if !matched.isEmpty {
+                    watcher.callback(matched)
                 }
             },
             &context,
