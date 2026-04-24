@@ -1712,13 +1712,41 @@ final class AppState {
             process.standardOutput = stdout
             process.standardError = stderr
 
-            process.terminationHandler = { proc in
-                let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-                if proc.terminationStatus == 0 {
-                    let data = stdout.fileHandleForReading.readDataToEndOfFile()
-                    continuation.resume(returning: data)
+            // Drain both pipes as data arrives. Without this the child blocks
+            // on write() once its stdout exceeds the ~16-64KB pipe buffer
+            // (e.g. `models list --discover` returns ~180KB of JSON),
+            // deadlocking because terminationHandler never fires.
+            let drain = PipeDrain()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
                 } else {
-                    let errMsg = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    drain.appendStdout(chunk)
+                }
+            }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    drain.appendStderr(chunk)
+                }
+            }
+
+            process.terminationHandler = { proc in
+                // Detach the handlers so no late reads fire after we resume.
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                // Flush any bytes that arrived between the last handler call
+                // and process exit.
+                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
+                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: drain.stdoutData)
+                } else {
+                    let errMsg = String(data: drain.stderrData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !errMsg.isEmpty {
                         log.error("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
                     }
@@ -1749,11 +1777,22 @@ final class AppState {
             let stdout = Pipe()
             process.standardOutput = stdout
             process.standardError = FileHandle.nullDevice
+            let drain = PipeDrain()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    drain.appendStdout(chunk)
+                }
+            }
             process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
                 if proc.terminationStatus != 0 {
                     log.debug("CLI \(cmd) exited \(proc.terminationStatus) (allowed)")
                 }
-                continuation.resume(returning: stdout.fileHandleForReading.readDataToEndOfFile())
+                continuation.resume(returning: drain.stdoutData)
             }
             do {
                 try process.run()
@@ -1762,6 +1801,40 @@ final class AppState {
                 continuation.resume(throwing: error)
             }
         }
+    }
+}
+
+/// Thread-safe accumulator for subprocess stdout/stderr. Readability
+/// handlers fire on arbitrary queues, so appends are serialized through
+/// an internal lock. Used by runCLI / runCLIAllowingNonZero to drain the
+/// child's pipes as data arrives — avoiding the pipe-buffer deadlock
+/// where a child blocks on write() past ~64KB and terminationHandler
+/// never fires.
+final class PipeDrain: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _stdout = Data()
+    private var _stderr = Data()
+
+    func appendStdout(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        _stdout.append(data)
+    }
+
+    func appendStderr(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        _stderr.append(data)
+    }
+
+    var stdoutData: Data {
+        lock.lock(); defer { lock.unlock() }
+        return _stdout
+    }
+
+    var stderrData: Data {
+        lock.lock(); defer { lock.unlock() }
+        return _stderr
     }
 }
 
