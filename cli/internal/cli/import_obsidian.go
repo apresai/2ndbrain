@@ -26,7 +26,7 @@ var importObsidianCmd = &cobra.Command{
 }
 
 func init() {
-	importObsidianCmd.Flags().StringVar(&importObsidianTarget, "target", "", "Target directory for the 2ndbrain vault (default: import in-place)")
+	importObsidianCmd.Flags().StringVar(&importObsidianTarget, "target", "", "Initialize a new 2ndbrain vault at this path and import into it (overrides active vault)")
 	importObsidianCmd.GroupID = "io"
 	rootCmd.AddCommand(importObsidianCmd)
 }
@@ -58,21 +58,37 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Determine the target root where .2ndbrain/ will live.
-	// Priority: --target flag > --vault flag > error (never modify source)
+	// Explicit --vault / 2NB_VAULT values are used as-is so bad paths surface
+	// as errors here, rather than silently falling through to the active vault.
 	var targetRoot string
-	if importObsidianTarget != "" {
+	switch {
+	case importObsidianTarget != "":
 		targetRoot, err = filepath.Abs(importObsidianTarget)
-		if err != nil {
-			return fmt.Errorf("resolve target path: %w", err)
-		}
-	} else if flagVault != "" {
+	case flagVault != "":
 		targetRoot, err = filepath.Abs(expandPath(flagVault))
-		if err != nil {
-			return fmt.Errorf("resolve vault path: %w", err)
+	case os.Getenv("2NB_VAULT") != "":
+		targetRoot, err = filepath.Abs(expandPath(os.Getenv("2NB_VAULT")))
+	default:
+		resolved := ""
+		if active := getActiveVault(); active != "" {
+			if _, statErr := os.Stat(filepath.Join(active, vault.DotDirName)); statErr == nil {
+				resolved = active
+			}
 		}
-	} else {
-		return fmt.Errorf("target vault required: use --vault <path> or --target <path>")
+		if resolved == "" {
+			if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+				if root := vault.FindVaultRoot(cwd); root != "" {
+					resolved = root
+				}
+			}
+		}
+		if resolved == "" {
+			return fmt.Errorf("no target vault: use --target <path> for a new vault, --vault <path> for an existing one, or set an active vault with `2nb vault set <path>`")
+		}
+		targetRoot, err = filepath.Abs(resolved)
+	}
+	if err != nil {
+		return fmt.Errorf("resolve target path: %w", err)
 	}
 
 	if targetRoot == srcPath {

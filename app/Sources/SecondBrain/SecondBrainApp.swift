@@ -122,6 +122,7 @@ struct SecondBrainApp: App {
                 Button("Import Obsidian Vault...") {
                     importObsidianPanel()
                 }
+                .disabled(appState.vault == nil)
 
                 Button("Export to Obsidian...") {
                     exportObsidianPanel()
@@ -314,6 +315,7 @@ struct SecondBrainApp: App {
     }
 
     private func importObsidianPanel() {
+        guard let vault = appState.vault else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -322,10 +324,10 @@ struct SecondBrainApp: App {
         panel.prompt = "Import"
 
         if panel.runModal() == .OK, let url = panel.url {
-            runCLICommand(["import-obsidian", url.path]) { success in
+            runCLICommand(["import-obsidian", url.path], cwd: vault.rootURL) { success in
                 if success {
-                    appState.openVault(at: url)
-                    UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+                    appState.openVault(at: vault.rootURL)
+                    UserDefaults.standard.set(vault.rootURL.path, forKey: "lastVaultPath")
                 }
             }
         }
