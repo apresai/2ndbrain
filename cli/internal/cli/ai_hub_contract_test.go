@@ -240,13 +240,37 @@ func TestContract_ModelsEnableDisableValidation(t *testing.T) {
 		"models", "disable", "--provider", "bedrock", "--scope", "vault"); err == nil {
 		t.Error("expected error when neither model-id nor --vendor given")
 	}
+}
 
-	// Both arg and --vendor → error.
-	if _, err := runCLIArgs(t, root,
-		"models", "disable", "some.id",
-		"--vendor", "anthropic",
-		"--provider", "bedrock", "--scope", "vault"); err == nil {
-		t.Error("expected error when both model-id and --vendor given")
+// TestContract_ModelsDisableVendorWithExplicitIDs covers the GUI path:
+// the Hub passes the model IDs it rendered alongside --vendor so
+// discovered-only models (not in the user catalog yet) get disabled too.
+// Previously --vendor + arg was rejected as "both"; now it's the happy
+// path for batch-by-explicit-IDs.
+func TestContract_ModelsDisableVendorWithExplicitIDs(t *testing.T) {
+	_, root := newContractVault(t)
+
+	out, err := runCLIArgs(t, root,
+		"models", "disable",
+		"twelvelabs.marengo-embed-2-7-v1:0",
+		"twelvelabs.marengo-embed-3-0-v1:0",
+		"--vendor", "twelvelabs",
+		"--provider", "bedrock",
+		"--scope", "vault")
+	if err != nil {
+		t.Fatalf("disable --vendor w/ explicit IDs: %v (out=%s)", err, truncate(out, 300))
+	}
+	// Both models should now be in the user catalog disabled.
+	catalogPath := filepath.Join(root, ".2ndbrain", "models.yaml")
+	data, _ := os.ReadFile(catalogPath)
+	body := string(data)
+	for _, id := range []string{"marengo-embed-2-7", "marengo-embed-3-0"} {
+		if !strings.Contains(body, id) {
+			t.Errorf("expected %s in catalog, got:\n%s", id, truncate(data, 400))
+		}
+	}
+	if !strings.Contains(body, "enabled: false") {
+		t.Errorf("expected enabled: false in catalog")
 	}
 }
 

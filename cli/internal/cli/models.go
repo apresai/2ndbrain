@@ -102,7 +102,7 @@ var modelsRemoveCmd = &cobra.Command{
 var modelsEnableCmd = &cobra.Command{
 	Use:               "enable [model-id]",
 	Short:             "Mark a model (or every model from a vendor with --vendor) as enabled so it appears in selection dropdowns",
-	Args:              cobra.MaximumNArgs(1),
+	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsEnable,
 }
@@ -110,7 +110,7 @@ var modelsEnableCmd = &cobra.Command{
 var modelsDisableCmd = &cobra.Command{
 	Use:               "disable [model-id]",
 	Short:             "Mark a model (or every model from a vendor with --vendor) as disabled so it is hidden from selection dropdowns",
-	Args:              cobra.MaximumNArgs(1),
+	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsDisable,
 }
@@ -513,73 +513,80 @@ func runModelsDisable(cmd *cobra.Command, args []string) error {
 	return runModelsEnableDisable(cmd, args, disableProvider, disableScope, disableVendor, false)
 }
 
-// runModelsEnableDisable dispatches between single-model (positional arg)
-// and vendor-batch (--vendor flag) modes. Exactly one of the two inputs
-// must be present.
+// runModelsEnableDisable dispatches three call shapes:
+//  1. One positional arg, no --vendor: single-model toggle.
+//  2. --vendor with positional args: batch-by-ids (caller pre-resolved
+//     the model list — used by the GUI to cover discovered-only entries
+//     the server's catalog lookup would miss).
+//  3. --vendor alone: batch-by-catalog-lookup (terminal users who don't
+//     want to enumerate IDs; only matches what's already in the merged
+//     catalog).
 func runModelsEnableDisable(cmd *cobra.Command, args []string, provider, scopeStr, vendor string, enabled bool) error {
 	if len(args) == 0 && vendor == "" {
 		return fmt.Errorf("pass either a <model-id> or --vendor <name>")
 	}
-	if len(args) > 0 && vendor != "" {
-		return fmt.Errorf("pass either a <model-id> or --vendor, not both")
-	}
-	if len(args) == 1 {
+	if len(args) == 1 && vendor == "" {
 		return setModelEnabled(cmd, args[0], provider, scopeStr, enabled)
 	}
-	return setVendorEnabled(cmd, vendor, provider, scopeStr, enabled)
+	// Vendor batch: with or without explicit IDs.
+	return setVendorEnabled(cmd, vendor, provider, scopeStr, enabled, args)
 }
 
-// setVendorEnabled resolves every model in the merged catalog whose
-// VendorOf matches (vendor, provider) and applies enable/disable to
-// each. One CLI call, one write pass, one FSEvents tick.
-func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, enabled bool) error {
+// setVendorEnabled persists enable/disable for a vendor group. When
+// explicitIDs is non-empty those are used directly (caller already
+// knows the full set — the GUI path). Otherwise we resolve matching
+// models from the merged user+builtin catalog.
+func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, enabled bool, explicitIDs []string) error {
 	scope, vaultRoot, err := resolveCatalogScope(scopeStr)
 	if err != nil {
 		return err
 	}
 
-	// Collect candidates from the merged catalog so we apply the flag
-	// to both builtin entries (which get minimal user-catalog entries
-	// on first touch) and existing user entries.
-	list, err := ai.BuildModelList(cmd.Context(), ai.MergedListOptions{VaultRoot: vaultRoot})
-	if err != nil {
-		return fmt.Errorf("load model catalog: %w", err)
-	}
-	var matched []ai.ModelInfo
-	for _, m := range list.Verified {
-		if m.Provider != provider {
-			continue
+	var modelIDs []string
+	if len(explicitIDs) > 0 {
+		modelIDs = explicitIDs
+	} else {
+		// Catalog lookup: only finds verified + user-saved entries.
+		// Discovered-only models need the explicit-IDs path.
+		list, err := ai.BuildModelList(cmd.Context(), ai.MergedListOptions{VaultRoot: vaultRoot})
+		if err != nil {
+			return fmt.Errorf("load model catalog: %w", err)
 		}
-		if ai.VendorOf(m.ID, provider).Vendor != vendor {
-			continue
+		for _, m := range list.Verified {
+			if m.Provider != provider {
+				continue
+			}
+			if ai.VendorOf(m.ID, provider).Vendor != vendor {
+				continue
+			}
+			modelIDs = append(modelIDs, m.ID)
 		}
-		matched = append(matched, m)
 	}
-	if len(matched) == 0 {
-		return fmt.Errorf("no models found for vendor=%s provider=%s", vendor, provider)
+	if len(modelIDs) == 0 {
+		return fmt.Errorf("no models found for vendor=%s provider=%s (tip: pass model IDs as positional args to cover discovered-only entries)", vendor, provider)
 	}
 
-	// Load the user catalog once so we can merge rather than re-reading
-	// per model. Entries are keyed by (provider, id).
+	// Preload the user catalog so we merge rather than fetching per
+	// model. Entries keyed by (provider, id).
 	userByKey := make(map[string]ai.ModelInfo)
 	for _, m := range ai.LoadUserCatalog(vaultRoot) {
 		userByKey[m.Provider+"|"+m.ID] = m
 	}
 
 	count := 0
-	for _, m := range matched {
-		key := m.Provider + "|" + m.ID
+	for _, id := range modelIDs {
+		key := provider + "|" + id
 		entry, found := userByKey[key]
 		if !found {
 			entry = ai.ModelInfo{
-				ID:       m.ID,
-				Provider: m.Provider,
+				ID:       id,
+				Provider: provider,
 				Tier:     ai.TierUserVerified,
 			}
 		}
 		entry.Enabled = ai.Ptr(enabled)
 		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
-			return fmt.Errorf("save %s: %w", m.ID, err)
+			return fmt.Errorf("save %s: %w", id, err)
 		}
 		count++
 	}

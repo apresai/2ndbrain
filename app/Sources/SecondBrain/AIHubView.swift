@@ -454,11 +454,16 @@ struct AIHubView: View {
 
     private func bulkToggle(group: VendorGroup, enable: Bool) async {
         do {
+            // Pass the IDs explicitly so discovered-only models (not yet
+            // in the user catalog) are covered — the CLI's catalog
+            // lookup would otherwise return no matches for those.
+            let ids = group.models.map(\.modelID)
             try await appState.setVendorEnabled(
                 vendor: group.vendor,
                 provider: group.provider,
                 scope: "vault",
-                enabled: enable
+                enabled: enable,
+                modelIDs: ids
             )
             await reload()
         } catch {

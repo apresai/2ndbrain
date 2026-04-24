@@ -1760,17 +1760,20 @@ final class AppState {
     }
 
     /// Enable or disable every model from a vendor within a provider in
-    /// one CLI call. Used by the Hub's per-group bulk-toggle buttons so
-    /// 20 Anthropic models flip with one `2nb models disable --vendor
-    /// anthropic` write rather than 20 individual calls.
-    func setVendorEnabled(vendor: String, provider: String, scope: String, enabled: Bool) async throws {
+    /// one CLI call. The caller should pass the list of model IDs the
+    /// Hub has already rendered; this avoids a catalog-lookup round-
+    /// trip inside the CLI and, critically, covers discovered-only
+    /// models that haven't yet been tested/saved into the user catalog
+    /// (which the CLI's lookup wouldn't find). --vendor is passed for
+    /// logging / telemetry only.
+    func setVendorEnabled(vendor: String, provider: String, scope: String, enabled: Bool, modelIDs: [String]) async throws {
         guard let vault else { throw CLIError.noVault }
         let verb = enabled ? "enable" : "disable"
-        log.info("AI Hub action: models \(verb, privacy: .public) --vendor \(vendor, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public))")
-        _ = try await runCLI(
-            ["models", verb, "--vendor", vendor, "--provider", provider, "--scope", scope],
-            cwd: vault.rootURL
-        )
+        log.info("AI Hub action: models \(verb, privacy: .public) --vendor \(vendor, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public) count=\(modelIDs.count))")
+        guard !modelIDs.isEmpty else { return }
+        var args = ["models", verb, "--vendor", vendor, "--provider", provider, "--scope", scope]
+        args.append(contentsOf: modelIDs)
+        _ = try await runCLI(args, cwd: vault.rootURL)
     }
 
     /// Fetches the full AIStatusInfo envelope including providers[] for
