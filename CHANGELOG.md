@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.18] - 2026-04-24
+
+## [0.2.18] - 2026-04-24
+
+### Fixed
+- Model Wizard: prevent double-tap from triggering duplicate actions
+
+### Changed
+- Expanded Bedrock Converse model allowlist to support additional models
+
+
 ## [0.2.17] - 2026-04-24
 
 ## [0.2.17] - 2026-04-24
