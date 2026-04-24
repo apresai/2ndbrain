@@ -119,6 +119,20 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 		case strings.HasPrefix(lower, "writer.palmyra-x4"),
 			strings.HasPrefix(lower, "writer.palmyra-x5"):
 			return true, ""
+		case strings.HasPrefix(lower, "google.gemma"):
+			return true, ""
+		case strings.HasPrefix(lower, "openai.gpt-oss"):
+			return true, ""
+		case strings.HasPrefix(lower, "qwen.qwen"):
+			return true, ""
+		case strings.HasPrefix(lower, "zai.glm"):
+			return true, ""
+		case strings.HasPrefix(lower, "moonshot"):
+			return true, ""
+		case strings.HasPrefix(lower, "minimax"):
+			return true, ""
+		case strings.HasPrefix(lower, "nvidia.nemotron"):
+			return true, ""
 		default:
 			return false, "2nb doesn't support this Bedrock Converse model path yet"
 		}

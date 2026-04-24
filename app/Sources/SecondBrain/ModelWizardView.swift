@@ -135,15 +135,10 @@ struct ModelWizardView: View {
                 outcomeIndicator(outcome)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard phase == .selecting else { return }
-            if selected.contains(model.modelID) {
-                selected.remove(model.modelID)
-            } else {
-                selected.insert(model.modelID)
-            }
-        }
+        // Previously had an .onTapGesture on the whole HStack that also
+        // toggled the selection; combined with the Toggle's own click
+        // handler that fired twice per click and the checkbox appeared
+        // unresponsive. The Toggle alone handles selection now.
     }
 
     @ViewBuilder
