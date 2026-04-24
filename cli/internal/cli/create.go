@@ -113,27 +113,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	doc.Path = v.RelPath(path)
 
-	// Index the new document
-	if err := v.DB.UpsertDocument(doc); err != nil {
+	// Index the new document. IndexSingleFile wraps document/chunks/tags/links
+	// in one transaction so a failure can't leave the index half-populated.
+	if err := vault.IndexSingleFile(v, path); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to index document: %v\n", err)
 		slog.Warn("failed to index document", "err", err)
-	}
-
-	chunks := document.ChunkDocument(doc)
-	if err := v.DB.UpsertChunks(chunks); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to index chunks: %v\n", err)
-		slog.Warn("failed to index chunks", "err", err)
-	}
-
-	if err := v.DB.UpsertTags(doc.ID, doc.Tags); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to index tags: %v\n", err)
-		slog.Warn("failed to index tags", "err", err)
-	}
-
-	links := document.ExtractWikiLinks(doc.Body)
-	if err := v.DB.UpsertLinks(doc.ID, links); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to index links: %v\n", err)
-		slog.Warn("failed to index links", "err", err)
 	}
 
 	// Embed the new document if an AI provider is available

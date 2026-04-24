@@ -161,6 +161,15 @@ func TestTraverse_Cycle(t *testing.T) {
 	if !seen[docA.ID] || !seen[docB.ID] {
 		t.Errorf("expected both docA (%q) and docB (%q) in graph", docA.ID, docB.ID)
 	}
+
+	seenEdges := make(map[string]bool)
+	for _, e := range g.Edges {
+		key := e.Source + "->" + e.Target
+		if seenEdges[key] {
+			t.Errorf("duplicate edge in graph: %s", key)
+		}
+		seenEdges[key] = true
+	}
 }
 
 // TestAdjacencyList_Empty verifies that an isolated document returns an empty

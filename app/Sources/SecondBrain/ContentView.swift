@@ -240,7 +240,6 @@ struct WelcomeView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .keyboardShortcut("n", modifiers: .command)
                 .padding(.top, 8)
             }
         }

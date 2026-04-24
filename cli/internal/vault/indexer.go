@@ -177,6 +177,11 @@ func purgeStale(v *Vault) error {
 			stale = append(stale, id)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		// Cursor aborted mid-scan; the stale list is partial. Warn but
+		// proceed with what we have so we don't leave the user stuck.
+		fmt.Fprintf(os.Stderr, "warning: purgeStale iteration incomplete: %v\n", err)
+	}
 
 	for _, id := range stale {
 		if err := v.DB.DeleteDocument(id); err != nil {

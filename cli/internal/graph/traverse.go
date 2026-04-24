@@ -24,10 +24,19 @@ type Graph struct {
 	Edges []Edge `json:"edges"`
 }
 
+// edgeKey is used to dedup edges emitted during BFS. Label is excluded
+// on purpose: two traversals of the same source→target pair with different
+// labels still count as one edge.
+type edgeKey struct{ Source, Target string }
+
 // Traverse performs a BFS from the given document to the specified depth.
 func Traverse(db *sql.DB, docID string, maxDepth int) (*Graph, error) {
 	g := &Graph{}
 	visited := make(map[string]bool)
+	// getNeighbors returns both forward and backward links, so an A-B
+	// edge surfaces when visiting A *and* again when visiting B. Dedup
+	// by (source,target) so each edge is emitted exactly once.
+	seenEdges := make(map[edgeKey]bool)
 
 	// Seed: get the starting document
 	root, err := getNode(db, docID, 0)
@@ -57,7 +66,12 @@ func Traverse(db *sql.DB, docID string, maxDepth int) (*Graph, error) {
 		}
 
 		for i, neighbor := range neighbors {
-			g.Edges = append(g.Edges, edges[i])
+			edge := edges[i]
+			key := edgeKey{Source: edge.Source, Target: edge.Target}
+			if !seenEdges[key] {
+				seenEdges[key] = true
+				g.Edges = append(g.Edges, edge)
+			}
 
 			if !visited[neighbor] {
 				visited[neighbor] = true

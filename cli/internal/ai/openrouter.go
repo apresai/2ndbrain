@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -296,9 +297,18 @@ func doOpenRouterRequest(ctx context.Context, client *http.Client, url, apiKey s
 
 // InitOpenRouter creates and registers OpenRouter providers with the given registry.
 func InitOpenRouter(ctx context.Context, reg *Registry, cfg OpenRouterConfig, aiCfg AIConfig) error {
-	apiKey, err := GetAPIKey("openrouter")
-	if err != nil {
-		return fmt.Errorf("init openrouter: %w", err)
+	// Honor a user-configured env var name before falling back to the
+	// default (OPENROUTER_API_KEY) or macOS Keychain.
+	var apiKey string
+	if cfg.APIKeyEnv != "" {
+		apiKey = os.Getenv(cfg.APIKeyEnv)
+	}
+	if apiKey == "" {
+		var err error
+		apiKey, err = GetAPIKey("openrouter")
+		if err != nil {
+			return fmt.Errorf("init openrouter: %w", err)
+		}
 	}
 
 	embedder := NewOpenRouterEmbedder(apiKey, aiCfg.EmbeddingModel, aiCfg.Dimensions)
