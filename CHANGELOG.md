@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.16] - 2026-04-24
+
+## [0.2.16] - 2026-04-24
+
+### Added
+- `models wizard` CLI command — interactive end-to-end provider → discover → pick → cost preview → test → save flow with `--json` streaming events for GUI/automation
+- Model Wizard panel in macOS editor (AI menu) — grouped model list with tier badges, scope picker, cost preview, and test-and-save flow
+- `models cost-preview` command — estimate USD cost of running probes across one or more models without API calls
+- Invoke strategy system — `InvokeStrategy` field on catalog entries routes models to the correct API dialect; adding new model variants no longer requires code changes
+- Bedrock Converse strategy (`bedrock_converse`) as a first-class invoke target alongside existing provider-specific strategies
+- Retrieval-quality probe — scores stored embeddings via MRR@K and Recall@K over resolved wikilink pairs at zero API cost
+- Live catalog sync in macOS editor — CLI writes to the model catalog refresh the UI automatically via FSEvents without reopening the vault
+- Enable/disable toggle for models — `models enable` / `models disable` commands hide models from selection dropdowns; `models list --enabled-only` filters accordingly
+
+### Fixed
+- MCP server: path traversal vulnerability in tool handlers
+- Tag parsing: edge cases in frontmatter tag normalization
+- Schema migration: data-integrity issue during version upgrades
+- Merge conflict view: observer memory leak
+- Graph traversal: duplicate node/edge deduplication
+- `purgeStale`: stale document removal correctness
+- OpenRouter: env variable resolution for API key
+- Document create: missing transaction boundary
+- Duplicate shortcut: filename collision on rapid invocation
+- `import-obsidian`: now correctly honors the active vault instead of defaulting to cwd
+
+
 ## [0.2.15] - 2026-04-23
 
 ### Fixed
