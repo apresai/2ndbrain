@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.3.0] - 2026-04-24
+
+## [0.3.0] - 2026-04-24
+
+### Added
+- **AI Hub** — unified AI configuration surface (AI menu > AI… · Cmd+Shift+,) combining provider setup, model wizard, and connection testing into a single panel with provider cards, active model selectors, and a full model catalog with Test/Set active/Enable/Disable/Discover actions
+
+### Removed
+- AI Setup Wizard, Model Wizard, and Test AI Connection as separate menu items/views (replaced by AI Hub)
+
+
 ## [0.2.18] - 2026-04-24
 
 ## [0.2.18] - 2026-04-24
