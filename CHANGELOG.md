@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.4.1] - 2026-04-24
+
+### Fixed
+
+- AI Hub: vendor batch enable/disable now correctly applies to discovered-only models that lack a builtin catalog entry
+
+
 ## [0.4.0] - 2026-04-24
 
 ### Added
