@@ -161,9 +161,22 @@ Browse verified models across all providers, test any model, and benchmark your 
 2nb models bench                  # runs embed/generate/search/rag probes
 2nb models bench compare          # side-by-side latency leaderboard
 2nb models bench history          # view past runs
+
+# End-to-end wizard: discover → pick → cost preview → test → save
+2nb models wizard                 # TTY interactive flow
+2nb models wizard --json          # JSON-event stream (GUI / automation)
+
+# Estimate before you run
+2nb models cost-preview us.anthropic.claude-opus-4-20250514-v1:0 --probe bench_rag
+
+# Hide a model from selection dropdowns without removing it from the catalog
+2nb models disable cohere.embed-multilingual-v3 --provider bedrock --scope vault
+2nb models enable  cohere.embed-multilingual-v3 --provider bedrock --scope vault
 ```
 
 Models are tiered as **verified** (tested with 2nb) or **unverified** (available from vendor, use `models test` to check). The benchmark suite stores results in `.2ndbrain/bench.db` for tracking performance over time.
+
+Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bedrock_invoke_cohere_embed`, `openrouter_chat`) so adding a new model variant doesn't require a code change — a catalog entry with the right strategy is enough. The macOS editor's **AI → Model Wizard…** drives the same discover/pick/test/save flow with a grouped checkbox list, live cost preview, and spinners-per-row during testing. Catalog changes written by the CLI propagate to the running GUI via FSEvents without reopening the vault.
 
 ## CLI Commands
 
@@ -201,10 +214,14 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ai setup` | Multi-provider setup wizard (easy mode or custom) |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
 | `ai embed <text>` | Generate embedding vector (debug) |
-| `models list [--discover] [--status] [--provider] [--promote]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass |
+| `models list [--discover] [--status] [--provider] [--promote] [--enabled-only]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass; `--enabled-only` filters out user-disabled models (dropdowns use this) |
 | `models test <model-id> [--save] [--scope global\|vault]` | Smoke-test any model (embed or generate probe); `--save` adds the model to your catalog if it passes |
 | `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (layered into `models list`) |
 | `models remove <id> --provider [--scope global\|vault]` | Remove a model from your user catalog |
+| `models enable <id> --provider [--scope global\|vault]` | Mark a model enabled so it appears in dropdowns |
+| `models disable <id> --provider [--scope global\|vault]` | Hide a model from dropdowns; still listed by bare `models list` |
+| `models cost-preview [ids...] --probe <kind> [--provider] [--all]` | Estimate USD cost of running a probe (test / bench_embed / bench_gen / bench_rag / retrieval) across one or more models before committing |
+| `models wizard [--scope] [--provider] [--skip-discover] [--cost-cap] [--json]` | Interactive discover → pick → cost preview → test → save flow; `--json` emits an event stream for GUI / automation |
 | `models bench` | Benchmark favorites with persistent history |
 | `models bench fav <model-id>` | Add model to benchmark favorites |
 | `models bench compare` | Side-by-side latency leaderboard |
@@ -409,6 +426,7 @@ A native SwiftUI + AppKit editor with:
 - **Polish** (Cmd+Option+P) — AI copy-edit the current document with an accept/reject diff preview
 - **Vault Status** — unified health panel (Vault menu) showing index state, embedding portability, stale docs, and provider reachability with Rebuild Index + Re-embed All buttons
 - **Test AI Connection** — standalone probe (AI menu) that runs `2nb models test` against both embedding and generation models with live latency
+- **Model Wizard** — guided discover → pick → cost preview → test-and-save (AI menu). Grouped checkbox list by provider with tier badges, live cost estimate, spinners-per-row during testing. Picks up catalog changes written by other terminals via FSEvents — no vault-reopen required
 - **MCP Server Status** (Cmd+Shift+M) — see which AI clients are connected and which tools they've invoked, plus a live status-bar indicator
 - **Recent Activity** (Cmd+Shift+G) — for vaults that are git repos, browse recent commits with 1/3/7/30-day window; click any commit for full detail with per-file diffs
 - **Git diff viewer** — right-click any file in the sidebar → Show Changes vs HEAD

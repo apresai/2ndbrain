@@ -176,7 +176,7 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (47)
+### CLI Commands (51)
 
 Commands are organized into groups (Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration).
 
@@ -217,10 +217,14 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 | `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
 | `ai setup` | `--provider`, `--embedding-model`, `--generation-model` | Multi-provider setup wizard with easy mode |
 | `ai local` | | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
-| `models list` | `--type`, `--free`, `--discover`, `--status`, `--provider`, `--promote`, `--scope` | List verified model catalog, optionally discover vendor models; `--discover --promote` tests unverified models concurrently and adds those that pass to the user catalog; `--free` shows only models with explicitly-confirmed free pricing (models with no pricing metadata are excluded) |
+| `models list` | `--type`, `--free`, `--discover`, `--status`, `--provider`, `--promote`, `--scope`, `--enabled-only` | List verified model catalog, optionally discover vendor models; `--discover --promote` tests unverified models concurrently and adds those that pass to the user catalog; `--free` shows only models with explicitly-confirmed free pricing; `--enabled-only` drops user-disabled models (see `models disable` below) — dropdowns pass this flag, power-user CLI use does not |
 | `models test` | `<model-id>`, `--provider`, `--type`, `--save`, `--scope` | Smoke-test a model (embed or generate probe); `--save` adds the model to the user catalog if it passes |
 | `models add` | `<model-id>`, `--provider`, `--type`, `--scope`, `--name`, `--dimensions`, `--context-length`, `--price-in`, `--price-out`, `--price-request`, `--similarity-threshold`, `--notes` | Add a model to the user catalog (global `~/.config/2nb/models.yaml` or per-vault `.2ndbrain/models.yaml`). Entries are layered into `models list` as `tier=user_verified`. `--similarity-threshold` is embedding-only and persists into the threshold resolution chain; `--price-request` is for per-request priced models (e.g. TwelveLabs Marengo embed) |
 | `models remove` | `<model-id>`, `--provider`, `--scope` | Remove a model from the user catalog |
+| `models enable` | `<model-id>`, `--provider`, `--scope` | Mark a model enabled so it appears in selection dropdowns. Creates a minimal user-catalog entry if one doesn't exist yet, so it works against builtin-only models too |
+| `models disable` | `<model-id>`, `--provider`, `--scope` | Hide a model from selection dropdowns (`--enabled-only` filters it). Still listed by bare `2nb models list` for transparency |
+| `models cost-preview` | `[model-id...]`, `--probe test\|bench_embed\|bench_gen\|bench_rag\|retrieval`, `--provider`, `--all` | Estimate USD cost of running a probe across one or more models. Known/unknown pricing flagged per row; total at footer. Runs locally against cached pricing — no API calls |
+| `models wizard` | `--scope vault\|global`, `--provider`, `--skip-discover`, `--cost-cap <usd>`, `--json` | Interactive end-to-end: providers → discover → easy-mode picks → cost preview → test → save. `--json` emits line-delimited events (`providers`/`discovered`/`cost_preview`/`test_start`/`test_result`/`saved`/`done`) for GUI / automation consumption; aborts non-interactively if estimated cost exceeds `--cost-cap` (default $0.10) |
 | `models bench` | `--model`, `--probe`, `--provider` | Benchmark models against vault with persistent history |
 | `models calibrate` | `--samples`, `--save`, `--scope`, `--seed` | Measure the vault's baseline cosine distribution and recommend a similarity threshold; `--save` persists to the user catalog |
 | `models bench fav` | `<model-id>` | Add model to benchmark favorites |
@@ -252,6 +256,12 @@ Commands are organized into groups (Getting Started, Documents, Search & AI, Qua
 **Bedrock embedding support:** In addition to the builtin catalog models, 2nb supports the TwelveLabs Marengo embed family via Bedrock InvokeModel (formats: Marengo 2.7 `{"inputType":"text","inputText":"..."}` and Marengo 3.0 `{"inputType":"text","text":{"inputText":"..."}}` → `{"data":{"embedding":[...]}}` envelope). Add them via `2nb models add <marengo-model-id> --provider bedrock --type embedding --price-request <USD>`.
 
 **Live pricing:** `models list`, `ai status`, and `index` fetch live pricing from OpenRouter's `/models` API and AWS pricing offer files with a 24h disk cache at `$XDG_CACHE_HOME/2nb/pricing` (macOS: `~/Library/Caches/2nb/pricing`). Fetches have a 15s timeout; air-gapped environments fall back to the stale cache then to builtin metadata.
+
+**Invoke strategy:** catalog entries carry an `InvokeStrategy` string that names which API dialect to call. Defined strategies in `cli/internal/ai/invoke_strategy.go`: `bedrock_converse` (unified chat), `bedrock_invoke_{anthropic,nova,nova_embed,titan_embed,cohere_embed,marengo_2_7,marengo_3_0}`, `anthropic_messages` (direct, not via Bedrock), `openai_{chat,embeddings}`, `openrouter_{chat,embeddings}`, `ollama_{generate,embeddings}`. Empty = "use provider default" (back-compat). `ai.ResolveInvokeStrategy(provider, modelID, vaultRoot)` looks up the declared strategy; the user catalog overrides the builtin. Adding a new model variant no longer requires a code change in the dispatcher — a catalog entry with the right strategy is enough.
+
+**Retrieval-quality probe:** `bench.RetrievalQualityProbe(db)` scores the vault's currently-stored embeddings by checking whether each resolved wikilink's target appears in the top-K semantic neighbors of its source. Returns both MRR@K and Recall@K over the usable-pair set, plus `PairsUsed` and `Documents` for context. K defaults to 10. Requires at least 10 resolved wikilink pairs (configurable via `MinLinksForRetrievalProbe`); below that the probe returns `ErrTooFewLinks` so callers can skip silently. Zero API cost — reads stored embeddings directly.
+
+**Cost estimator:** `ai.EstimateCost(m, probe)` and `ai.EstimateCosts(models, probe)` project per-probe cost using the model's current pricing. `ProbeKind` options: `test` (20 in / 32 out / 1 req), `bench_embed` (10 in / 0 out), `bench_gen` (20 / 128 / 1), `bench_rag` (2500 / 512 / 1), `retrieval` (0 — no API calls). `CostEstimate.KnownPricing` distinguishes known-free (Local=true or explicit $0 with PriceSource set) from unknown-pricing (all zeros, no source).
 
 **Logging:** When `--verbose` is used, structured logs (via `log/slog`) are written to stderr and to `.2ndbrain/logs/cli.log`. Without `--verbose`, only the log file is written.
 
@@ -387,6 +397,7 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 | MCP setup | MCPSetupView.swift | Show MCP config snippets for 6 AI tools (AI menu) |
 | Vault Status panel | VaultStatusView.swift | Unified health panel (Vault menu > Vault Status…) — vault info, index state, embedding portability, stale docs, provider reachability. Rebuild Index + Re-embed All buttons |
 | AI Test Connection | AITestView.swift | Standalone model probe (AI menu > Test AI Connection…) — shells out to `2nb models test` for embed + gen models, shows latency + ok/fail, offers Open AI Setup on failure |
+| Model Wizard | ModelWizardView.swift | Full discover → pick → cost preview → test-and-save flow (AI menu > Model Wizard…). Grouped list by provider with tier badges, scope picker (vault / global), auto-pre-checks verified models. Invokes existing CLI primitives (`models list --discover`, `models cost-preview`, `models test --save`). Live catalog sync via `modelsCatalogVersion` so CLI writes from another terminal refresh the UI without reopening the vault |
 | Window toolbar | ContentView.swift | New Note / Search / Quick Open buttons visible whenever a vault is open (before any doc is selected) |
 | File→Notes menu rename | AppDelegate.swift | AppKit hook renames the File menu to "Notes"; observer reapplies on NSMenu.didBeginTrackingNotification + applicationDidBecomeActive |
 | AI setup wizard | AISetupWizardView.swift | 4-step provider/credentials/models/test wizard |
