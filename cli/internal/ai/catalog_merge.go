@@ -16,6 +16,11 @@ type MergedListOptions struct {
 	// VaultRoot, if set, loads the per-vault user catalog from
 	// <VaultRoot>/.2ndbrain/models.yaml in addition to the global one.
 	VaultRoot string
+	// EnabledOnly, when true, filters out entries whose Enabled field is
+	// explicitly set to false. Nil-Enabled entries (the default) are treated
+	// as visible so builtin models without an explicit user override remain
+	// present. Use this to produce the subset shown in GUI dropdowns.
+	EnabledOnly bool
 }
 
 // MergedModelList is the output of BuildModelList.
@@ -54,6 +59,11 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 		applyStatusChecks(ctx, catalog, opts.Config)
 	}
 
+	// EnabledOnly: drop any entry that has Enabled explicitly set to false.
+	// Nil means the user never touched the flag, so we treat it as visible.
+	if opts.EnabledOnly {
+		catalog = filterEnabled(catalog)
+	}
 	result.Verified = catalog
 
 	// Layer 4: vendor discovery. Only add entries not already in the merged catalog.
@@ -64,6 +74,9 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 			if !idx[catalogKey(m.Provider, m.ID)] {
 				result.Unverified = append(result.Unverified, m)
 			}
+		}
+		if opts.EnabledOnly {
+			result.Unverified = filterEnabled(result.Unverified)
 		}
 	}
 
@@ -201,6 +214,20 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig) []ModelInfo {
 
 	wg.Wait()
 	return all
+}
+
+// filterEnabled removes entries that are explicitly disabled (Enabled != nil &&
+// *Enabled == false). Nil-Enabled entries are treated as visible per the
+// "nil means default, which is visible" rule documented on ModelInfo.Enabled.
+func filterEnabled(models []ModelInfo) []ModelInfo {
+	out := models[:0:0] // start fresh, same backing array length hint
+	for _, m := range models {
+		if m.Enabled != nil && !*m.Enabled {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // sortModels sorts by provider, then type (embedding first), then model ID.

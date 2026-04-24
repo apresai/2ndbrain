@@ -139,3 +139,104 @@ func TestSortModels(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildModelList_EnabledOnly_FiltersDisabled verifies that when EnabledOnly
+// is true, entries whose Enabled field is explicitly false are excluded, while
+// nil-Enabled entries (the default for untouched builtins) remain present.
+func TestBuildModelList_EnabledOnly_FiltersDisabled(t *testing.T) {
+	setupHome(t)
+
+	// Pick the first builtin model and disable it in the user catalog.
+	builtin := BuiltinCatalog()
+	if len(builtin) == 0 {
+		t.Skip("no builtin catalog entries")
+	}
+	target := builtin[0]
+	disabled := false
+	entry := ModelInfo{
+		ID:       target.ID,
+		Provider: target.Provider,
+		Tier:     TierUserVerified,
+		Enabled:  &disabled,
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	ctx := context.Background()
+	result, err := BuildModelList(ctx, MergedListOptions{
+		Config:      DefaultAIConfig(),
+		EnabledOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildModelList: %v", err)
+	}
+
+	// The disabled entry must be absent.
+	for _, m := range result.Verified {
+		if m.Provider == target.Provider && m.ID == target.ID {
+			t.Errorf("disabled model %s/%s appeared in EnabledOnly list", target.Provider, target.ID)
+		}
+	}
+
+	// Other builtin models (nil Enabled) must remain.
+	if len(result.Verified) == 0 {
+		t.Error("all models were filtered — nil-Enabled entries should survive EnabledOnly")
+	}
+	// Verify at least one nil-Enabled builtin is present.
+	foundNil := false
+	for _, m := range result.Verified {
+		if m.Enabled == nil {
+			foundNil = true
+			break
+		}
+	}
+	if !foundNil {
+		t.Error("expected at least one nil-Enabled entry to survive EnabledOnly filter")
+	}
+}
+
+// TestBuildModelList_EnabledOnly_False_IncludesAll verifies that when
+// EnabledOnly is false (the default), disabled models are still returned.
+func TestBuildModelList_EnabledOnly_False_IncludesAll(t *testing.T) {
+	setupHome(t)
+
+	builtin := BuiltinCatalog()
+	if len(builtin) == 0 {
+		t.Skip("no builtin catalog entries")
+	}
+	target := builtin[0]
+	disabled := false
+	entry := ModelInfo{
+		ID:       target.ID,
+		Provider: target.Provider,
+		Tier:     TierUserVerified,
+		Enabled:  &disabled,
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	ctx := context.Background()
+	result, err := BuildModelList(ctx, MergedListOptions{
+		Config:      DefaultAIConfig(),
+		EnabledOnly: false, // default — all models included
+	})
+	if err != nil {
+		t.Fatalf("BuildModelList: %v", err)
+	}
+
+	found := false
+	for _, m := range result.Verified {
+		if m.Provider == target.Provider && m.ID == target.ID {
+			found = true
+			if m.Enabled == nil || *m.Enabled != false {
+				t.Errorf("expected Enabled=false on the entry, got %v", m.Enabled)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("disabled model %s/%s should appear when EnabledOnly=false", target.Provider, target.ID)
+	}
+}

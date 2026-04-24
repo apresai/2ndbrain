@@ -23,6 +23,7 @@ var (
 	modelsProvider     string
 	modelsPromote      bool
 	modelsPromoteScope string
+	modelsEnabledOnly  bool
 )
 
 var (
@@ -47,6 +48,12 @@ var (
 
 	removeProvider string
 	removeScope    string
+
+	enableProvider string
+	enableScope    string
+
+	disableProvider string
+	disableScope    string
 )
 
 var modelsCmd = &cobra.Command{
@@ -90,6 +97,22 @@ var modelsRemoveCmd = &cobra.Command{
 	RunE:              runModelsRemove,
 }
 
+var modelsEnableCmd = &cobra.Command{
+	Use:               "enable <model-id>",
+	Short:             "Mark a model as enabled so it appears in selection dropdowns",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeModelIDs,
+	RunE:              runModelsEnable,
+}
+
+var modelsDisableCmd = &cobra.Command{
+	Use:               "disable <model-id>",
+	Short:             "Mark a model as disabled so it is hidden from selection dropdowns",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeModelIDs,
+	RunE:              runModelsDisable,
+}
+
 func init() {
 	modelsListCmd.Flags().StringVar(&modelsTypeFilt, "type", "", "Filter by type: embed or generation")
 	modelsListCmd.Flags().BoolVar(&modelsFreeOnly, "free", false, "Show only free models")
@@ -98,6 +121,7 @@ func init() {
 	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama")
 	modelsListCmd.Flags().BoolVar(&modelsPromote, "promote", false, "Test unverified discovered models and add those that pass (requires --discover)")
 	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "global", "Catalog scope for --promote: global or vault")
+	modelsListCmd.Flags().BoolVar(&modelsEnabledOnly, "enabled-only", false, "Exclude models explicitly disabled by the user (use for GUI dropdowns)")
 	_ = modelsListCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
@@ -133,10 +157,24 @@ func init() {
 	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
+	modelsEnableCmd.Flags().StringVar(&enableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsEnableCmd.Flags().StringVar(&enableScope, "scope", "global", "Scope: global or vault")
+	_ = modelsEnableCmd.MarkFlagRequired("provider")
+	_ = modelsEnableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = modelsEnableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
+
+	modelsDisableCmd.Flags().StringVar(&disableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsDisableCmd.Flags().StringVar(&disableScope, "scope", "global", "Scope: global or vault")
+	_ = modelsDisableCmd.MarkFlagRequired("provider")
+	_ = modelsDisableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = modelsDisableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
+
 	modelsCmd.AddCommand(modelsListCmd)
 	modelsCmd.AddCommand(modelsTestCmd)
 	modelsCmd.AddCommand(modelsAddCmd)
 	modelsCmd.AddCommand(modelsRemoveCmd)
+	modelsCmd.AddCommand(modelsEnableCmd)
+	modelsCmd.AddCommand(modelsDisableCmd)
 	modelsCmd.GroupID = "ai"
 	rootCmd.AddCommand(modelsCmd)
 }
@@ -158,6 +196,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 		Discover:    modelsDiscover,
 		CheckStatus: modelsCheckStatus,
 		VaultRoot:   v.Root,
+		EnabledOnly: modelsEnabledOnly,
 	})
 	if err != nil {
 		return err
@@ -459,6 +498,56 @@ func runModelsRemove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("remove: %w", err)
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s/%s from %s catalog\n", removeProvider, modelID, scope)
+	return nil
+}
+
+func runModelsEnable(cmd *cobra.Command, args []string) error {
+	return setModelEnabled(cmd, args[0], enableProvider, enableScope, true)
+}
+
+func runModelsDisable(cmd *cobra.Command, args []string) error {
+	return setModelEnabled(cmd, args[0], disableProvider, disableScope, false)
+}
+
+// setModelEnabled writes an Enabled pointer into the user-catalog entry for
+// (provider, modelID). When no entry exists yet (builtin-only models), a
+// minimal entry is created so the flag persists without a prior `models add`.
+func setModelEnabled(cmd *cobra.Command, modelID, provider, scopeStr string, enabled bool) error {
+	scope, vaultRoot, err := resolveCatalogScope(scopeStr)
+	if err != nil {
+		return err
+	}
+
+	// Load user catalog and find an existing entry; fall back to a minimal one
+	// so enable/disable work against purely-builtin models too.
+	user := ai.LoadUserCatalog(vaultRoot)
+	var entry ai.ModelInfo
+	found := false
+	for _, m := range user {
+		if m.Provider == provider && m.ID == modelID {
+			entry = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		entry = ai.ModelInfo{
+			ID:       modelID,
+			Provider: provider,
+			Tier:     ai.TierUserVerified,
+		}
+	}
+
+	entry.Enabled = ai.Ptr(enabled)
+	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+		return fmt.Errorf("save: %w", err)
+	}
+
+	verb := "enabled"
+	if !enabled {
+		verb = "disabled"
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog\n", verb, provider, modelID, scope)
 	return nil
 }
 
