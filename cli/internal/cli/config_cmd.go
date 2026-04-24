@@ -167,8 +167,11 @@ var settableConfigKeys = []string{
 	"ai.similarity_threshold",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
+	"ai.bedrock.disabled",
 	"ai.openrouter.api_key_env",
+	"ai.openrouter.disabled",
 	"ai.ollama.endpoint",
+	"ai.ollama.disabled",
 }
 
 func unknownConfigKeyError(key string) error {
@@ -191,10 +194,16 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return cfg.Bedrock.Profile, nil
 	case "ai.bedrock.region":
 		return cfg.Bedrock.Region, nil
+	case "ai.bedrock.disabled":
+		return strconv.FormatBool(cfg.Bedrock.Disabled), nil
 	case "ai.openrouter.api_key_env":
 		return cfg.OpenRouter.APIKeyEnv, nil
+	case "ai.openrouter.disabled":
+		return strconv.FormatBool(cfg.OpenRouter.Disabled), nil
 	case "ai.ollama.endpoint":
 		return cfg.Ollama.Endpoint, nil
+	case "ai.ollama.disabled":
+		return strconv.FormatBool(cfg.Ollama.Disabled), nil
 	default:
 		return "", unknownConfigKeyError(key)
 	}
@@ -227,12 +236,44 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		cfg.Bedrock.Profile = value
 	case "ai.bedrock.region":
 		cfg.Bedrock.Region = value
+	case "ai.bedrock.disabled":
+		b, err := parseConfigBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Bedrock.Disabled = b
 	case "ai.openrouter.api_key_env":
 		cfg.OpenRouter.APIKeyEnv = value
+	case "ai.openrouter.disabled":
+		b, err := parseConfigBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.OpenRouter.Disabled = b
 	case "ai.ollama.endpoint":
 		cfg.Ollama.Endpoint = value
+	case "ai.ollama.disabled":
+		b, err := parseConfigBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Ollama.Disabled = b
 	default:
 		return unknownConfigKeyError(key)
 	}
 	return nil
+}
+
+// parseConfigBool centralizes the accepted spellings of a boolean config
+// value so `config set ai.bedrock.disabled true` / `1` / `yes` all work
+// uniformly. GUI callers always pass literal "true"/"false" from
+// String(Bool), but terminal users reach for `yes`/`no` / `on`/`off`.
+func parseConfigBool(key, value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "y", "on":
+		return true, nil
+	case "false", "0", "no", "n", "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s must be a boolean (got %q); accepted: true/false, yes/no, on/off, 1/0", key, value)
 }

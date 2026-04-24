@@ -1699,7 +1699,7 @@ final class AppState {
     /// Returns the decoded AIProbeResult so the UI can render outcome + latency.
     func testAndSave(modelID: String, provider: String, type: String, scope: String) async throws -> AIProbeResult {
         guard let vault else { throw CLIError.noVault }
-        log.info("AI Hub action: test \(modelID) (provider=\(provider) type=\(type) scope=\(scope))")
+        log.info("AI Hub action: test \(modelID, privacy: .public) (provider=\(provider, privacy: .public) type=\(type, privacy: .public) scope=\(scope, privacy: .public))")
         let data = try await runCLI(
             [
                 "models", "test", modelID,
@@ -1728,7 +1728,7 @@ final class AppState {
         default:
             throw CLIError.noVault  // fall through — callers must pass a known type
         }
-        log.info("AI Hub action: set \(key) = \(modelID)")
+        log.info("AI Hub action: set \(key, privacy: .public) = \(modelID, privacy: .public)")
         _ = try await runCLI(
             ["config", "set", key, modelID],
             cwd: vault.rootURL
@@ -1740,7 +1740,7 @@ final class AppState {
     func setProviderDisabled(_ provider: String, disabled: Bool) async throws {
         guard let vault else { throw CLIError.noVault }
         let key = "ai.\(provider).disabled"
-        log.info("AI Hub action: set \(key) = \(disabled)")
+        log.info("AI Hub action: set \(key, privacy: .public) = \(disabled, privacy: .public)")
         _ = try await runCLI(
             ["config", "set", key, String(disabled)],
             cwd: vault.rootURL
@@ -1752,7 +1752,7 @@ final class AppState {
     func setModelEnabled(_ modelID: String, provider: String, scope: String, enabled: Bool) async throws {
         guard let vault else { throw CLIError.noVault }
         let verb = enabled ? "enable" : "disable"
-        log.info("AI Hub action: models \(verb) \(modelID) (provider=\(provider) scope=\(scope))")
+        log.info("AI Hub action: models \(verb, privacy: .public) \(modelID, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public))")
         _ = try await runCLI(
             ["models", verb, modelID, "--provider", provider, "--scope", scope],
             cwd: vault.rootURL
@@ -1789,7 +1789,7 @@ final class AppState {
     func runCLI(_ args: [String], cwd: URL) async throws -> Data {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
-        log.info("CLI exec: \(cmd)")
+        log.info("CLI exec: \(cmd, privacy: .public)")
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
@@ -1836,7 +1836,7 @@ final class AppState {
                     let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !errMsg.isEmpty {
-                        log.error("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
+                        log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
                     }
                     continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus))
                 }
