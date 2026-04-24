@@ -31,6 +31,19 @@ func TestParse_WithFullFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParse_SingleStringTag(t *testing.T) {
+	// `tags: foo` (no list) is valid YAML and parses as a plain string;
+	// it must be treated as a single-item tag list, not silently dropped.
+	content := []byte("---\nid: single\ntitle: Single Tag\ntags: mytag\n---\nbody")
+	doc, err := Parse("single.md", content)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(doc.Tags) != 1 || doc.Tags[0] != "mytag" {
+		t.Errorf("Tags = %v, want [mytag]", doc.Tags)
+	}
+}
+
 func TestParse_NoFrontmatter(t *testing.T) {
 	content := []byte("# Just a heading\n\nSome text.\n")
 	doc, err := Parse("test.md", content)

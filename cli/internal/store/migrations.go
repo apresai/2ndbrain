@@ -89,10 +89,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 `
 
-const schemaV2 = `
-ALTER TABLE documents ADD COLUMN embedding BLOB;
-ALTER TABLE documents ADD COLUMN embedding_model TEXT NOT NULL DEFAULT '';
-ALTER TABLE documents ADD COLUMN embedding_hash TEXT NOT NULL DEFAULT '';
-
-UPDATE schema_version SET version = 2;
-`
+// schemaV2Statements are applied one at a time so a duplicate-column error
+// on a previously-applied ALTER doesn't short-circuit the remaining ALTERs.
+// mattn/go-sqlite3's multi-statement Exec stops at the first error; lumping
+// these into one string left the schema stuck if an earlier pass committed
+// a subset of the columns.
+var schemaV2Statements = []string{
+	`ALTER TABLE documents ADD COLUMN embedding BLOB`,
+	`ALTER TABLE documents ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE documents ADD COLUMN embedding_hash TEXT NOT NULL DEFAULT ''`,
+}

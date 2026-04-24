@@ -81,8 +81,16 @@ func (db *DB) migrate() error {
 		if err := db.conn.QueryRow("SELECT version FROM schema_version").Scan(&version); err != nil {
 			migrateErr = fmt.Errorf("migrate re-read version: %w", err)
 		} else if version < 2 {
-			if _, err := db.conn.Exec(schemaV2); err != nil && !isDuplicateColumn(err) {
-				migrateErr = fmt.Errorf("migrate v1→v2: %w", err)
+			for _, stmt := range schemaV2Statements {
+				if _, err := db.conn.Exec(stmt); err != nil && !isDuplicateColumn(err) {
+					migrateErr = fmt.Errorf("migrate v1→v2: %w", err)
+					break
+				}
+			}
+			if migrateErr == nil {
+				if _, err := db.conn.Exec("UPDATE schema_version SET version = 2"); err != nil {
+					migrateErr = fmt.Errorf("migrate v1→v2 bump version: %w", err)
+				}
 			}
 		}
 

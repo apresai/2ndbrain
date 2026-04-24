@@ -40,7 +40,7 @@ func (db *DB) DocumentsNeedingEmbedding(model string) ([]struct {
 	rows, err := db.conn.Query(`
 		SELECT id, path, content_hash FROM documents
 		WHERE content_hash != embedding_hash
-		   OR embedding_model != ?
+		   OR COALESCE(embedding_model, '') != ?
 		   OR embedding IS NULL
 	`, model)
 	if err != nil {

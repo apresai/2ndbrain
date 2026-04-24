@@ -140,16 +140,26 @@ func (db *DB) GetDocumentByPath(path string) (*document.Document, error) {
 	return &doc, nil
 }
 
-// ResolveLinks matches unresolved wikilinks to existing documents by path or title.
+// linkMatchClause is the per-link match predicate shared by ResolveLinks'
+// two correlated subqueries. Keeping it in one place guarantees the SELECT
+// that picks the target and the COUNT that gates ambiguity stay in sync.
+const linkMatchClause = `links.target_raw = replace(d.path, '.md', '')
+	OR links.target_raw = d.title
+	OR links.target_raw = d.path`
+
+// ResolveLinks matches unresolved wikilinks to existing documents by path or
+// title, but only when exactly one document matches. Ambiguous links (two
+// documents sharing a title / filename) are left unresolved for `2nb lint`
+// to surface, rather than silently wiring up an arbitrary winner.
 func (db *DB) ResolveLinks() error {
-	_, err := db.conn.Exec(`
-		UPDATE links SET target_id = d.id, resolved = 1
-		FROM documents d
-		WHERE (links.target_raw = replace(d.path, '.md', '')
-		   OR links.target_raw = d.title
-		   OR links.target_raw = d.path)
-		AND links.resolved = 0
-	`)
+	q := fmt.Sprintf(`
+		UPDATE links
+		SET target_id = (SELECT d.id FROM documents d WHERE %[1]s LIMIT 1),
+		    resolved = 1
+		WHERE resolved = 0
+		  AND (SELECT COUNT(DISTINCT d.id) FROM documents d WHERE %[1]s) = 1
+	`, linkMatchClause)
+	_, err := db.conn.Exec(q)
 	return err
 }
 

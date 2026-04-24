@@ -221,6 +221,12 @@ func extractTags(meta map[string]any) []string {
 		return tags
 	case []string:
 		return v
+	case string:
+		// `tags: foo` in YAML parses as a bare string; treat it as one tag.
+		if v == "" {
+			return nil
+		}
+		return []string{v}
 	default:
 		return nil
 	}

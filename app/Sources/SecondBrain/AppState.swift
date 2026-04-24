@@ -1049,7 +1049,11 @@ final class AppState {
             openDocuments[idx].isDirty = false
             openDocuments[idx].hasExternalConflict = false
         case .cancel:
-            openDocuments[idx].hasExternalConflict = true
+            // Dismiss without choosing: return to pre-conflict state so the
+            // tab isn't permanently locked from saving. Next save overwrites
+            // disk (same effect as keepMine); if the user wanted the disk
+            // version instead they should have picked "Use Theirs".
+            openDocuments[idx].hasExternalConflict = false
         }
     }
 

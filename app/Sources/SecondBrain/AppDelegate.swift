@@ -4,13 +4,14 @@ import os
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let log = Logger(subsystem: "dev.apresai.2ndbrain", category: "appdelegate")
+    private var menuTrackingObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         renameFileMenuToNotes()
 
         // SwiftUI rebuilds the menu when scene state changes and may reset
         // our rename back to "File". Re-apply on every menu-tracking cycle.
-        NotificationCenter.default.addObserver(
+        menuTrackingObserver = NotificationCenter.default.addObserver(
             forName: NSMenu.didBeginTrackingNotification,
             object: nil,
             queue: .main
@@ -18,6 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in
                 self?.renameFileMenuToNotes()
             }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let token = menuTrackingObserver {
+            NotificationCenter.default.removeObserver(token)
         }
     }
 

@@ -370,7 +370,7 @@ func (h *handlers) handleKBRead(ctx context.Context, request mcplib.CallToolRequ
 	}
 
 	absPath := h.vault.AbsPath(path)
-	if !strings.HasPrefix(absPath, h.vault.Root) {
+	if !h.vault.ContainsPath(absPath) {
 		return mcplib.NewToolResultError("path outside vault"), nil
 	}
 
@@ -492,6 +492,9 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 	}
 
 	absPath := h.vault.AbsPath(path)
+	if !h.vault.ContainsPath(absPath) {
+		return mcplib.NewToolResultError("path outside vault"), nil
+	}
 	doc, err := document.ParseFile(absPath)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
@@ -543,7 +546,10 @@ func (h *handlers) handleKBStructure(ctx context.Context, request mcplib.CallToo
 		return mcplib.NewToolResultError("path traversal not allowed"), nil
 	}
 
-	absPath := filepath.Join(h.vault.Root, path)
+	absPath := h.vault.AbsPath(path)
+	if !h.vault.ContainsPath(absPath) {
+		return mcplib.NewToolResultError("path outside vault"), nil
+	}
 	doc, err := document.ParseFile(absPath)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
@@ -597,6 +603,9 @@ func (h *handlers) handleKBDelete(ctx context.Context, request mcplib.CallToolRe
 	}
 
 	absPath := h.vault.AbsPath(path)
+	if !h.vault.ContainsPath(absPath) {
+		return mcplib.NewToolResultError("path outside vault"), nil
+	}
 	if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
 		return mcplib.NewToolResultError(fmt.Sprintf("delete file failed: %v", err)), nil
 	}
@@ -734,7 +743,7 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	}
 
 	absPath := h.vault.AbsPath(path)
-	if !strings.HasPrefix(absPath, h.vault.Root) {
+	if !h.vault.ContainsPath(absPath) {
 		return mcplib.NewToolResultError("path outside vault"), nil
 	}
 
@@ -788,7 +797,7 @@ func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.Call
 	}
 
 	absPath := h.vault.AbsPath(path)
-	if !strings.HasPrefix(absPath, h.vault.Root) {
+	if !h.vault.ContainsPath(absPath) {
 		return mcplib.NewToolResultError("path outside vault"), nil
 	}
 

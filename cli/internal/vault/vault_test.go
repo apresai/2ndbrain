@@ -116,3 +116,37 @@ func TestRelPath_AbsPath_RoundTrip(t *testing.T) {
 		t.Errorf("absPath = %q, want %q", back, absPath)
 	}
 }
+
+func TestContainsPath(t *testing.T) {
+	root := t.TempDir()
+	v, err := Init(root)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	defer v.Close()
+	// Use v.Root so symlink resolution (e.g. /tmp → /private/tmp on macOS)
+	// matches what AbsPath produces.
+	cleanRoot := v.Root
+
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"root itself", cleanRoot, true},
+		{"vault file", filepath.Join(cleanRoot, "note.md"), true},
+		{"nested vault file", filepath.Join(cleanRoot, "a", "b.md"), true},
+		{"parent dir", filepath.Dir(cleanRoot), false},
+		{"unrelated abs path", "/etc/hosts", false},
+		{"sibling root prefix (vault2 bypass)", cleanRoot + "2/sensitive.md", false},
+		{"dotdot climb", filepath.Join(cleanRoot, "..", "outside.md"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := v.ContainsPath(tc.path)
+			if got != tc.want {
+				t.Errorf("ContainsPath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}

@@ -153,6 +153,25 @@ func (v *Vault) AbsPath(relPath string) string {
 	return filepath.Join(v.Root, relPath)
 }
 
+// ContainsPath reports whether absPath resolves to a location strictly
+// inside the vault root (or the root itself). Uses filepath.Rel so a
+// sibling "<root>2" directory or a ".." climb can't pass a prefix check.
+// Trusted CLI callers don't need this; MCP handlers must.
+func (v *Vault) ContainsPath(absPath string) bool {
+	root := filepath.Clean(v.Root)
+	p := filepath.Clean(absPath)
+	if p == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	// !IsAbs is a Windows safety net: filepath.Rel returns an absolute
+	// path when source and dest sit on different drives.
+	return !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
+}
+
 // FindVaultRoot walks up from dir until it finds a directory containing
 // a .2ndbrain/ child, and returns that directory (the vault root).
 // Returns "" if no vault is found before reaching the filesystem root.
