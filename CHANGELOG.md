@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.2.17] - 2026-04-24
+
+## [0.2.17] - 2026-04-24
+
+### Fixed
+- GUI pipe-buffer deadlock that caused the app to hang when CLI commands produced large output
+
+
 ## [0.2.16] - 2026-04-24
 
 ## [0.2.16] - 2026-04-24
