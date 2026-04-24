@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.3.1] - 2026-04-24
+
+### Fixed
+
+- **AI Hub provider toggles**: `config set` now accepts `ai.bedrock.disabled`, `ai.openrouter.disabled`, and `ai.ollama.disabled` keys, enabling the AI Hub enable/disable provider cards to persist correctly
+- **Log message redaction**: Unredacted AI Hub action logs in the macOS app (model IDs, provider names, CLI commands, error output were being suppressed by the OS privacy filter)
+
+
 ## [0.3.0] - 2026-04-24
 
 ## [0.3.0] - 2026-04-24
