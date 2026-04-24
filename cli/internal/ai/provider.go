@@ -98,6 +98,50 @@ type ModelInfo struct {
 	// TestedAt is an ISO-8601 timestamp recorded when the model last passed
 	// `2nb models test`. Present only on user-catalog entries.
 	TestedAt string `json:"tested_at,omitempty" yaml:"tested_at,omitempty"`
+
+	// InvokeStrategy names the API dialect used to call this model (see the
+	// Strategy* constants). Empty means "use the provider's default path",
+	// which preserves back-compat with catalog entries written before this
+	// field existed.
+	InvokeStrategy string `json:"invoke_strategy,omitempty" yaml:"invoke_strategy,omitempty"`
+
+	// TestLatencyMs is the latency of the last passing test probe, in
+	// milliseconds. Paired with TestedAt; 0 when no test has succeeded.
+	TestLatencyMs int64 `json:"test_latency_ms,omitempty" yaml:"test_latency_ms,omitempty"`
+
+	// TestError holds the failure reason from the most recent test attempt.
+	// Non-empty iff the last attempt failed; TestedAt then reflects the
+	// failure time. Consumers should treat a non-empty value as "this model
+	// is NOT known to work right now".
+	TestError string `json:"test_error,omitempty" yaml:"test_error,omitempty"`
+
+	// Benchmark is the most-recent benchmark summary for this model. Nil
+	// when the model has never been benchmarked. The full history still
+	// lives in <vault>/.2ndbrain/bench.db; this field lets dropdowns and
+	// the wizard render latency / quality without a DB join.
+	Benchmark *BenchmarkSummary `json:"benchmark,omitempty" yaml:"benchmark,omitempty"`
+
+	// Enabled controls whether this model appears in selection dropdowns.
+	// Nil ("unset") defers to the tier default (verified / user_verified =
+	// visible, unverified = hidden). Explicit false hides the model from
+	// dropdowns but keeps it in `2nb models list` for power users.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// BenchmarkSummary is the most-recent benchmark snapshot for a model,
+// stored inline in the catalog for fast dropdown / wizard rendering.
+type BenchmarkSummary struct {
+	// RanAt is an ISO-8601 timestamp of the benchmark run.
+	RanAt string `json:"ran_at,omitempty" yaml:"ran_at,omitempty"`
+	// AvgLatencyMs is the mean latency across probes in this run.
+	AvgLatencyMs int64 `json:"avg_latency_ms,omitempty" yaml:"avg_latency_ms,omitempty"`
+	// QualityScore is a 0..1 retrieval-quality score from the wikilink
+	// ground-truth probe (embedding models only). 0 when the probe wasn't
+	// run or the vault had too few links to compute a score.
+	QualityScore float64 `json:"quality_score,omitempty" yaml:"quality_score,omitempty"`
+	// VaultDocCount records how many documents the run was calibrated
+	// against, so comparisons across runs are apples-to-apples.
+	VaultDocCount int `json:"vault_doc_count,omitempty" yaml:"vault_doc_count,omitempty"`
 }
 
 // DefaultGenOpts returns sensible defaults for generation.

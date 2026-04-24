@@ -323,3 +323,164 @@ func TestXDGConfigHomeOverride(t *testing.T) {
 		t.Fatalf("expected file at %s, got: %v", want, err)
 	}
 }
+
+// TestLoadUserCatalog_OldYamlWithoutNewFields verifies back-compat: a
+// pre-existing yaml file with no invoke_strategy / benchmark / enabled
+// fields must load without error and leave those fields at zero values,
+// so nothing inadvertently re-serializes them with defaults.
+func TestLoadUserCatalog_OldYamlWithoutNewFields(t *testing.T) {
+	home := setupHome(t)
+	path := filepath.Join(home, ".config", "2nb", userCatalogFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	oldYAML := []byte(`version: 1
+models:
+  - id: legacy.model
+    provider: bedrock
+    type: generation
+    name: Legacy Model
+    context_length: 8192
+    tested_at: "2026-01-15T10:00:00Z"
+`)
+	if err := os.WriteFile(path, oldYAML, 0o644); err != nil {
+		t.Fatalf("write old yaml: %v", err)
+	}
+
+	models := LoadUserCatalog("")
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	m := models[0]
+	if m.ID != "legacy.model" || m.ContextLen != 8192 || m.TestedAt != "2026-01-15T10:00:00Z" {
+		t.Fatalf("legacy fields lost in round-trip: %+v", m)
+	}
+	if m.InvokeStrategy != "" {
+		t.Errorf("InvokeStrategy should be empty for legacy yaml, got %q", m.InvokeStrategy)
+	}
+	if m.TestLatencyMs != 0 || m.TestError != "" {
+		t.Errorf("new test fields should be zero, got latency=%d err=%q", m.TestLatencyMs, m.TestError)
+	}
+	if m.Benchmark != nil {
+		t.Errorf("Benchmark should be nil for legacy yaml, got %+v", m.Benchmark)
+	}
+	if m.Enabled != nil {
+		t.Errorf("Enabled should be nil for legacy yaml, got %v", *m.Enabled)
+	}
+}
+
+// TestSaveAndLoad_NewFieldsRoundTrip verifies the new phase-1 fields
+// survive a yaml write/read cycle with their values intact.
+func TestSaveAndLoad_NewFieldsRoundTrip(t *testing.T) {
+	setupHome(t)
+
+	disabled := false
+	entry := ModelInfo{
+		ID:             "new.model",
+		Provider:       "bedrock",
+		Type:           "generation",
+		InvokeStrategy: StrategyBedrockConverse,
+		TestedAt:       "2026-04-24T12:00:00Z",
+		TestLatencyMs:  420,
+		TestError:      "",
+		Benchmark: &BenchmarkSummary{
+			RanAt:         "2026-04-24T12:05:00Z",
+			AvgLatencyMs:  380,
+			QualityScore:  0.72,
+			VaultDocCount: 42,
+		},
+		Enabled: &disabled,
+	}
+
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded := LoadUserCatalog("")
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(loaded))
+	}
+	m := loaded[0]
+	if m.InvokeStrategy != StrategyBedrockConverse {
+		t.Errorf("InvokeStrategy: got %q", m.InvokeStrategy)
+	}
+	if m.TestLatencyMs != 420 {
+		t.Errorf("TestLatencyMs: got %d", m.TestLatencyMs)
+	}
+	if m.Benchmark == nil {
+		t.Fatal("Benchmark nil after round-trip")
+	}
+	if m.Benchmark.QualityScore != 0.72 || m.Benchmark.VaultDocCount != 42 {
+		t.Errorf("Benchmark fields: got %+v", m.Benchmark)
+	}
+	if m.Enabled == nil || *m.Enabled != false {
+		t.Errorf("Enabled: got %v", m.Enabled)
+	}
+}
+
+// TestMergeFields_NewFieldsOverlay verifies mergeFields propagates the
+// new fields from overlay to base, matching the documented semantics:
+// non-empty strategy overrides, non-nil Benchmark overrides, non-nil
+// Enabled overrides, and test result fields move as a unit with TestedAt.
+func TestMergeFields_NewFieldsOverlay(t *testing.T) {
+	base := ModelInfo{
+		ID: "m", Provider: "bedrock", Type: "generation",
+		InvokeStrategy: StrategyBedrockInvokeAnthropic,
+		TestedAt:       "2026-01-01T00:00:00Z",
+		TestLatencyMs:  1000,
+	}
+	trueVal := true
+	top := ModelInfo{
+		ID: "m", Provider: "bedrock",
+		InvokeStrategy: StrategyBedrockConverse,
+		TestedAt:       "2026-04-24T00:00:00Z",
+		TestLatencyMs:  200,
+		Benchmark: &BenchmarkSummary{
+			AvgLatencyMs: 180,
+			QualityScore: 0.8,
+		},
+		Enabled: &trueVal,
+	}
+
+	out := mergeFields(base, top)
+	if out.InvokeStrategy != StrategyBedrockConverse {
+		t.Errorf("strategy: got %q", out.InvokeStrategy)
+	}
+	if out.TestedAt != "2026-04-24T00:00:00Z" || out.TestLatencyMs != 200 {
+		t.Errorf("test fields didn't move as a unit: %+v", out)
+	}
+	if out.Benchmark == nil || out.Benchmark.QualityScore != 0.8 {
+		t.Errorf("benchmark: %+v", out.Benchmark)
+	}
+	if out.Enabled == nil || !*out.Enabled {
+		t.Errorf("enabled: %v", out.Enabled)
+	}
+
+	// Empty-overlay case: base fields must be preserved.
+	noop := ModelInfo{ID: "m", Provider: "bedrock"}
+	out2 := mergeFields(base, noop)
+	if out2.InvokeStrategy != StrategyBedrockInvokeAnthropic {
+		t.Errorf("empty overlay wiped base strategy: got %q", out2.InvokeStrategy)
+	}
+	if out2.TestLatencyMs != 1000 {
+		t.Errorf("empty overlay wiped base latency: got %d", out2.TestLatencyMs)
+	}
+}
+
+// TestKnownInvokeStrategies_AllAccounted is a cheap tripwire: if someone
+// adds a Strategy* constant but forgets KnownInvokeStrategies(), this
+// test stays green but the wizard won't list the new strategy. Keep
+// the numeric check loose so adding a new strategy is a one-liner.
+func TestKnownInvokeStrategies_AllAccounted(t *testing.T) {
+	got := KnownInvokeStrategies()
+	if len(got) < 14 {
+		t.Errorf("KnownInvokeStrategies returned %d entries; expected at least 15", len(got))
+	}
+	for _, s := range got {
+		if !IsKnownInvokeStrategy(s) {
+			t.Errorf("%q is in KnownInvokeStrategies but IsKnownInvokeStrategy rejects it", s)
+		}
+	}
+	if IsKnownInvokeStrategy("") || IsKnownInvokeStrategy("made_up_strategy") {
+		t.Error("IsKnownInvokeStrategy should reject empty and unknown values")
+	}
+}

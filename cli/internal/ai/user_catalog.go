@@ -274,6 +274,11 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 	}
 	if top.TestedAt != "" {
 		out.TestedAt = top.TestedAt
+		// Test result fields move as a unit with TestedAt: they describe the
+		// same event. TestLatencyMs and TestError may legitimately be zero /
+		// empty on a passing run, so overlay even zero values here.
+		out.TestLatencyMs = top.TestLatencyMs
+		out.TestError = top.TestError
 	}
 	// RecommendedSimilarityThreshold: any positive overlay value wins. Zero
 	// means "not set in the overlay" — preserve the builtin value. Users who
@@ -281,6 +286,17 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 	// the vault config instead (explicit override beats catalog).
 	if top.RecommendedSimilarityThreshold > 0 {
 		out.RecommendedSimilarityThreshold = top.RecommendedSimilarityThreshold
+	}
+	if top.InvokeStrategy != "" {
+		out.InvokeStrategy = top.InvokeStrategy
+	}
+	if top.Benchmark != nil {
+		b := *top.Benchmark
+		out.Benchmark = &b
+	}
+	if top.Enabled != nil {
+		e := *top.Enabled
+		out.Enabled = &e
 	}
 	out.Tier = elevateTier(out.Tier, top.Tier)
 	if top.Local {
