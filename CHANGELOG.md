@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.4.0] - 2026-04-24
+
+### Added
+- AI Hub catalog now groups models by vendor with collapsible disclosure sections showing model counts
+- Search field in AI Hub filters the model catalog by model ID or vendor name
+- Bulk "Enable all" / "Disable all" buttons per vendor group in AI Hub catalog
+- Contract test suite verifying CLI output matches Swift decoder expectations for AI Hub
+
+
 ## [0.3.1] - 2026-04-24
 
 ### Fixed
