@@ -722,7 +722,7 @@ func completeSortFields(cmd *cobra.Command, args []string, toComplete string) ([
 }
 
 func completeBenchProbes(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	return []string{"embed", "generate", "search", "rag"}, cobra.ShellCompDirectiveNoFileComp
+	return []string{"embed", "generate", "retrieval", "search", "rag"}, cobra.ShellCompDirectiveNoFileComp
 }
 
 // completeMetaSetKeys completes the key= half of `--set key=value`

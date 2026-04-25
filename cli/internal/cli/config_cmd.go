@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -69,10 +70,10 @@ func init() {
 // answers "which vault am I editing?" at the top instead of requiring the
 // user to cross-reference with `2nb vault`.
 type configDisplay struct {
-	VaultRoot string   `json:"vault_root" yaml:"vault_root"`
-	VaultDir  string   `json:"vault_dir" yaml:"vault_dir"`
-	VaultName string   `json:"vault_name" yaml:"vault_name"`
-	Config    any      `json:"config" yaml:"config"`
+	VaultRoot string `json:"vault_root" yaml:"vault_root"`
+	VaultDir  string `json:"vault_dir" yaml:"vault_dir"`
+	VaultName string `json:"vault_name" yaml:"vault_name"`
+	Config    any    `json:"config" yaml:"config"`
 }
 
 func runConfigShow(cmd *cobra.Command, args []string) error {
@@ -116,6 +117,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
 	key, value := args[0], args[1]
 	if err := setConfigValue(&v.Config.AI, key, value); err != nil {
@@ -125,6 +127,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	if err := v.Config.Save(v.DotDir); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
+	slog.Info("config set", "key", key, "value", value)
 
 	if !flagPorcelain {
 		fmt.Fprintf(os.Stderr, "Set %s = %s\n", key, value)

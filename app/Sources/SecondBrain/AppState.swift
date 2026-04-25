@@ -1714,13 +1714,20 @@ final class AppState {
         return try JSONDecoder().decode(AIProbeResult.self, from: data)
     }
 
-    /// Writes ai.embedding_model or ai.generation_model via `2nb config set`
+    /// Writes ai.provider plus ai.embedding_model or ai.generation_model via `2nb config set`
     /// so the AI Hub can swap the active model without shelling through the
     /// full setup wizard. Caller is responsible for validating type is
     /// "embedding" or "generation". Triggers a config.yaml FSEvent which
     /// rolls the Hub's displayed state automatically.
-    func setActiveModel(type: String, modelID: String) async throws {
+    ///
+    /// Refuses while an index rebuild is running — flipping the provider
+    /// mid-rebuild produces mixed-model embeddings in one DB. Snapshots the
+    /// current `ai.provider`; skips the provider write if unchanged, and
+    /// reverts it if the model-key write fails so the vault never sits with
+    /// a new provider against an old model.
+    func setActiveModel(type: String, modelID: String, provider: String) async throws {
         guard let vault else { throw CLIError.noVault }
+        if isIndexing { throw CLIError.indexRebuildInProgress }
         let key: String
         switch type {
         case "embedding": key = "ai.embedding_model"
@@ -1728,11 +1735,38 @@ final class AppState {
         default:
             throw CLIError.noVault  // fall through — callers must pass a known type
         }
-        log.info("AI Hub action: set \(key, privacy: .public) = \(modelID, privacy: .public)")
-        _ = try await runCLI(
-            ["config", "set", key, modelID],
+
+        let oldProviderData = try await runCLI(
+            ["config", "get", "ai.provider"],
             cwd: vault.rootURL
         )
+        let oldProvider = String(data: oldProviderData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        log.info("AI Hub action: set ai.provider=\(provider, privacy: .public) and \(key, privacy: .public)=\(modelID, privacy: .public) (was provider=\(oldProvider, privacy: .public))")
+
+        let providerChanged = oldProvider != provider
+        if providerChanged {
+            _ = try await runCLI(
+                ["config", "set", "ai.provider", provider],
+                cwd: vault.rootURL
+            )
+        }
+        do {
+            _ = try await runCLI(
+                ["config", "set", key, modelID],
+                cwd: vault.rootURL
+            )
+        } catch {
+            if providerChanged && !oldProvider.isEmpty {
+                log.error("setActiveModel partial-write: ai.provider was set to \(provider, privacy: .public) but \(key, privacy: .public)=\(modelID, privacy: .public) failed; reverting ai.provider to \(oldProvider, privacy: .public)")
+                _ = try? await runCLI(
+                    ["config", "set", "ai.provider", oldProvider],
+                    cwd: vault.rootURL
+                )
+            }
+            throw error
+        }
     }
 
     /// Flips ai.<provider>.disabled via `2nb config set`. The GUI uses
@@ -1757,6 +1791,108 @@ final class AppState {
             ["models", verb, modelID, "--provider", provider, "--scope", scope],
             cwd: vault.rootURL
         )
+    }
+
+    func setModelEnableState(_ modelID: String, provider: String, scope: String, state: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        log.info("AI Hub action: models enable-state \(modelID, privacy: .public) state=\(state, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public))")
+        _ = try await runCLI(
+            ["models", "enable-state", modelID, "--provider", provider, "--scope", scope, "--state", state],
+            cwd: vault.rootURL
+        )
+    }
+
+    /// Threshold-only update against the user catalog.
+    ///
+    /// Intentionally avoids passing `--price-in / --price-out / --price-request`
+    /// even when the in-memory model carries those values: Go's `mergeAddCatalogEntry`
+    /// derives `priceOverride` from `cmd.Flags().Changed(...)`, so any passed
+    /// price flag (even with the existing value) flips `PriceSource` to
+    /// `"user"` and disables future live-pricing refresh.
+    func setModelSimilarityThreshold(_ model: CatalogModelInfo, threshold: Double, scope: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        log.info("AI Hub action: models add \(model.modelID, privacy: .public) similarity_threshold=\(threshold, privacy: .public) scope=\(scope, privacy: .public)")
+        var args = [
+            "models", "add", model.modelID,
+            "--provider", model.provider,
+            "--type", model.modelType,
+            "--scope", scope,
+            "--similarity-threshold", String(format: "%.4f", threshold),
+        ]
+        if !model.name.isEmpty {
+            args.append(contentsOf: ["--name", model.name])
+        }
+        if let dimensions = model.dimensions, dimensions > 0 {
+            args.append(contentsOf: ["--dimensions", String(dimensions)])
+        }
+        if let contextLen = model.contextLen, contextLen > 0 {
+            args.append(contentsOf: ["--context-length", String(contextLen)])
+        }
+        if let notes = model.notes, !notes.isEmpty {
+            args.append(contentsOf: ["--notes", notes])
+        }
+        _ = try await runCLI(args, cwd: vault.rootURL)
+    }
+
+    func benchmarkModel(modelID: String, provider: String, type: String, probe: String, onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
+        guard let vault else { throw CLIError.noVault }
+        let fullArgs = CLIPath.args(
+            ["models", "bench", "--model", modelID, "--provider", provider, "--probe", probe, "--json", "--porcelain"],
+            vault: vault.rootURL
+        )
+        let cmd = "2nb " + fullArgs.joined(separator: " ")
+        log.info("AI Hub action: \(cmd, privacy: .public)")
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.arguments = fullArgs
+            process.currentDirectoryURL = vault.rootURL
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+
+            let state = LineBuffer()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                for line in state.append(text) {
+                    if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
+                        Task { @MainActor in onEvent(event) }
+                    }
+                }
+            }
+
+            process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                if let text = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) {
+                    for line in state.append(text) {
+                        if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
+                            Task { @MainActor in onEvent(event) }
+                        }
+                    }
+                }
+                for line in state.finish() {
+                    if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
+                        Task { @MainActor in onEvent(event) }
+                    }
+                }
+                if proc.terminationStatus == 0 {
+                    continuation.resume()
+                } else {
+                    let errMsg = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
+                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     /// Enable or disable every model from a vendor within a provider in
@@ -1943,6 +2079,32 @@ final class PipeDrain: @unchecked Sendable {
     }
 }
 
+final class LineBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = ""
+
+    func append(_ text: String) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        buffer += text
+        var lines: [String] = []
+        while let range = buffer.range(of: "\n") {
+            let line = String(buffer[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !line.isEmpty {
+                lines.append(line)
+            }
+            buffer.removeSubrange(buffer.startIndex...range.lowerBound)
+        }
+        return lines
+    }
+
+    func finish() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        let line = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        buffer = ""
+        return line.isEmpty ? [] : [line]
+    }
+}
+
 // MARK: - AI Types
 
 struct AIStatusInfo: Codable {
@@ -1987,125 +2149,6 @@ struct AIStatusInfo: Codable {
         case portabilityAction = "portability_action"
         case providers
     }
-}
-
-/// VendorInfo mirrors the Go ai.VendorInfo for client-side grouping.
-/// The Hub fetches the model list once and partitions it locally; we
-/// don't round-trip to the CLI per group.
-struct VendorInfo: Equatable, Hashable {
-    let vendor: String   // stable key: "anthropic", "amazon", "meta", …
-    let display: String  // human label: "Anthropic", "Amazon", "Meta"
-    let family: String   // optional sub-family inside a vendor
-
-    /// Parses a model ID + provider pair the same way Go's VendorOf does.
-    /// Kept intentionally narrow — the Hub only needs vendor + display;
-    /// family is surfaced but not critical for the UI. Any deeper logic
-    /// lives on the Go side where it's unit-tested.
-    static func from(modelID: String, provider: String) -> VendorInfo {
-        let lower = modelID.lowercased()
-        switch provider {
-        case "bedrock":
-            return bedrockVendor(lower)
-        case "openrouter":
-            return openrouterVendor(lower)
-        case "ollama":
-            return ollamaVendor(lower)
-        default:
-            return VendorInfo(vendor: "other", display: "Other", family: "")
-        }
-    }
-
-    private static func bedrockVendor(_ lower: String) -> VendorInfo {
-        // Strip geo inference-profile prefix (us./eu./ap./global.).
-        var stripped = lower
-        for prefix in ["us.", "eu.", "ap.", "global."] {
-            if stripped.hasPrefix(prefix) {
-                stripped = String(stripped.dropFirst(prefix.count))
-                break
-            }
-        }
-        let parts = stripped.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
-        guard let first = parts.first else { return VendorInfo(vendor: "other", display: "Other", family: "") }
-        let vendor = String(first)
-        return VendorInfo(vendor: vendor, display: displayName(vendor), family: "")
-    }
-
-    private static func openrouterVendor(_ lower: String) -> VendorInfo {
-        let parts = lower.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
-        guard parts.count == 2 else { return VendorInfo(vendor: "other", display: "Other", family: "") }
-        let vendor = String(parts[0])
-        return VendorInfo(vendor: vendor, display: displayName(vendor), family: "")
-    }
-
-    private static func ollamaVendor(_ lower: String) -> VendorInfo {
-        let base = lower.split(separator: ":").first.map(String.init) ?? lower
-        switch true {
-        case base.hasPrefix("llama"): return VendorInfo(vendor: "meta", display: "Meta", family: "Llama")
-        case base.hasPrefix("gemma"): return VendorInfo(vendor: "google", display: "Google", family: "Gemma")
-        case base.hasPrefix("qwen"): return VendorInfo(vendor: "qwen", display: "Qwen", family: "Qwen")
-        case base.hasPrefix("mistral"), base.hasPrefix("mixtral"):
-            return VendorInfo(vendor: "mistral", display: "Mistral", family: "Mistral")
-        case base.hasPrefix("phi"): return VendorInfo(vendor: "microsoft", display: "Microsoft", family: "Phi")
-        case base.hasPrefix("deepseek"): return VendorInfo(vendor: "deepseek", display: "DeepSeek", family: "DeepSeek")
-        case base.hasPrefix("nomic-"): return VendorInfo(vendor: "nomic", display: "Nomic", family: "Nomic Embed")
-        case base.hasPrefix("mxbai-"): return VendorInfo(vendor: "mixedbread", display: "Mixedbread", family: "mxbai")
-        case base.hasPrefix("snowflake-"): return VendorInfo(vendor: "snowflake", display: "Snowflake", family: "Arctic")
-        case base.hasPrefix("bge-"): return VendorInfo(vendor: "baai", display: "BAAI", family: "BGE")
-        case base.hasPrefix("all-minilm"): return VendorInfo(vendor: "sentence-transformers", display: "Sentence Transformers", family: "MiniLM")
-        default: return VendorInfo(vendor: "community", display: "Community", family: "")
-        }
-    }
-
-    private static func displayName(_ vendor: String) -> String {
-        switch vendor {
-        case "anthropic": return "Anthropic"
-        case "amazon": return "Amazon"
-        case "meta", "meta-llama": return "Meta"
-        case "mistral": return "Mistral"
-        case "cohere": return "Cohere"
-        case "ai21": return "AI21"
-        case "deepseek": return "DeepSeek"
-        case "moonshot", "moonshotai": return "Moonshot"
-        case "qwen": return "Qwen"
-        case "zai": return "Z.ai"
-        case "writer": return "Writer"
-        case "minimax": return "MiniMax"
-        case "nvidia": return "NVIDIA"
-        case "openai": return "OpenAI"
-        case "twelvelabs": return "TwelveLabs"
-        case "google": return "Google"
-        case "stability": return "Stability AI"
-        default:
-            return vendor.prefix(1).uppercased() + vendor.dropFirst()
-        }
-    }
-}
-
-/// VersionSortKey mirrors Go's ai.VersionSortKey: pad every number run
-/// to 8 digits, concat, then lowercase the whole ID for a deterministic
-/// tiebreak. "Larger" means "newer" for descending sort.
-func versionSortKey(_ modelID: String) -> String {
-    let lower = modelID.lowercased()
-    var result = ""
-    var i = lower.startIndex
-    while i < lower.endIndex {
-        let ch = lower[i]
-        if ch.isNumber {
-            var run = ""
-            while i < lower.endIndex && lower[i].isNumber {
-                run.append(lower[i])
-                i = lower.index(after: i)
-            }
-            if run.count < 8 {
-                run = String(repeating: "0", count: 8 - run.count) + run
-            }
-            result.append(run)
-        } else {
-            result.append(ch)
-            i = lower.index(after: i)
-        }
-    }
-    return result + "|" + lower
 }
 
 struct ProviderStatusInfo: Codable, Identifiable {
@@ -2234,32 +2277,121 @@ struct AIProbeResult: Codable {
 }
 
 struct CatalogModelInfo: Codable, Identifiable {
-    var id: String { modelID }
+    var id: String { provider + "|" + modelID }
     let modelID: String
     let name: String
     let provider: String
     let modelType: String
+    let vendor: String?
+    let vendorDisplay: String?
+    let family: String?
+    let versionSortKey: String?
     let dimensions: Int?
     let priceIn: Double?
     let priceOut: Double?
+    let priceRequest: Double?
+    let priceSource: String?
     let contextLen: Int?
+    let recommendedSimilarityThreshold: Double?
+    let local: Bool?
     let tier: String?
     let invokeStrategy: String?
     let enabled: Bool?
+    let active: Bool?
+    let configHint: String?
+    let notes: String?
     let testedAt: String?
+    let testLatencyMs: Int64?
+    let testError: String?
+    let benchmark: CatalogBenchmarkSummary?
+    let compatible: Bool?
+    let compatibilityReason: String?
 
     enum CodingKeys: String, CodingKey {
         case modelID = "id"
         case name, provider
         case modelType = "type"
+        case vendor
+        case vendorDisplay = "vendor_display"
+        case family
+        case versionSortKey = "version_sort_key"
         case dimensions
         case priceIn = "price_input_per_million"
         case priceOut = "price_output_per_million"
+        case priceRequest = "price_per_request"
+        case priceSource = "price_source"
         case contextLen = "context_length"
+        case recommendedSimilarityThreshold = "recommended_similarity_threshold"
+        case local
         case tier
         case invokeStrategy = "invoke_strategy"
         case enabled
+        case active
+        case configHint = "config_hint"
+        case notes
         case testedAt = "tested_at"
+        case testLatencyMs = "test_latency_ms"
+        case testError = "test_error"
+        case benchmark
+        case compatible
+        case compatibilityReason = "compatibility_reason"
+    }
+}
+
+struct CatalogBenchmarkSummary: Codable, Equatable {
+    let ranAt: String?
+    let avgLatencyMs: Int64?
+    let qualityScore: Double?
+    let vaultDocCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case ranAt = "ran_at"
+        case avgLatencyMs = "avg_latency_ms"
+        case qualityScore = "quality_score"
+        case vaultDocCount = "vault_doc_count"
+    }
+}
+
+struct BenchmarkEvent: Codable, Identifiable {
+    var id = UUID()
+    let event: String
+    let modelID: String?
+    let provider: String?
+    let modelType: String?
+    let probe: String?
+    let result: BenchmarkProbeResult?
+    let benchmark: CatalogBenchmarkSummary?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case event
+        case modelID = "model_id"
+        case provider
+        case modelType = "type"
+        case probe
+        case result
+        case benchmark
+        case message
+    }
+}
+
+struct BenchmarkProbeResult: Codable, Equatable {
+    let probe: String
+    let latencyMs: Int64
+    let ok: Bool
+    let skipped: Bool?
+    let detail: String?
+    let qualityScore: Double?
+    let vaultDocCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case probe
+        case latencyMs = "latency_ms"
+        case ok
+        case skipped
+        case detail
+        case qualityScore = "quality_score"
+        case vaultDocCount = "vault_doc_count"
     }
 }
 
@@ -2304,11 +2436,13 @@ struct OllamaReport: Codable {
 enum CLIError: LocalizedError {
     case noVault
     case nonZeroExit(Int32)
+    case indexRebuildInProgress
 
     var errorDescription: String? {
         switch self {
         case .noVault: return "No vault is open"
         case .nonZeroExit(let code): return "CLI exited with code \(code)"
+        case .indexRebuildInProgress: return "Index rebuild is in progress; wait for it to finish before changing the active model"
         }
     }
 }

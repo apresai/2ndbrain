@@ -89,6 +89,9 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
 	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)
 
+	applyCatalogUIFields(result.Verified)
+	applyCatalogUIFields(result.Unverified)
+
 	sortModels(result.Verified)
 	sortModels(result.Unverified)
 
@@ -262,4 +265,25 @@ func sortModels(models []ModelInfo) {
 		}
 		return models[i].ID < models[j].ID
 	})
+}
+
+func applyCatalogUIFields(models []ModelInfo) {
+	for i := range models {
+		vendor := VendorOf(models[i].ID, models[i].Provider)
+		models[i].Vendor = vendor.Vendor
+		models[i].VendorDisplay = vendor.Display
+		models[i].Family = vendor.Family
+		models[i].VersionSortKey = VersionSortKey(models[i].ID)
+		models[i].Compatible, models[i].CompatibilityReason = catalogCompatibility(models[i])
+	}
+}
+
+func catalogCompatibility(m ModelInfo) (bool, string) {
+	if m.Provider != "bedrock" {
+		return true, ""
+	}
+	if ok, reason := bedrockModelSupported(m.ID, m.Type); !ok {
+		return false, reason
+	}
+	return true, ""
 }

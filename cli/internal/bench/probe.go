@@ -3,6 +3,7 @@ package bench
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,28 +26,64 @@ type ProbeOpts struct {
 
 // ProbeResult is the outcome of a single probe execution.
 type ProbeResult struct {
-	Probe     string `json:"probe"`
-	LatencyMs int64  `json:"latency_ms"`
-	OK        bool   `json:"ok"`
-	Detail    string `json:"detail,omitempty"`
+	Probe         string  `json:"probe"`
+	LatencyMs     int64   `json:"latency_ms"`
+	OK            bool    `json:"ok"`
+	Skipped       bool    `json:"skipped,omitempty"`
+	Detail        string  `json:"detail,omitempty"`
+	QualityScore  float64 `json:"quality_score,omitempty"`
+	VaultDocCount int     `json:"vault_doc_count,omitempty"`
 }
 
 const (
-	embedText    = "The quick brown fox jumps over the lazy dog. This is a benchmark embedding probe for 2ndbrain knowledge base."
-	genPrompt    = "Summarize the purpose of a personal knowledge base in exactly two sentences."
-	searchQuery  = "knowledge management best practices"
-	ragQuestion  = "What are the main topics covered in this knowledge base?"
+	embedText   = "The quick brown fox jumps over the lazy dog. This is a benchmark embedding probe for 2ndbrain knowledge base."
+	genPrompt   = "Summarize the purpose of a personal knowledge base in exactly two sentences."
+	searchQuery = "knowledge management best practices"
+	ragQuestion = "What are the main topics covered in this knowledge base?"
 )
 
 // RunAll runs the appropriate probes based on model type.
 func RunAll(opts ProbeOpts) []ProbeResult {
 	if opts.ModelType == "embedding" {
-		return []ProbeResult{RunEmbed(opts)}
+		return []ProbeResult{RunEmbed(opts), RunRetrievalQuality(opts)}
 	}
 	return []ProbeResult{
 		RunGenerate(opts),
 		RunSearch(opts),
 		RunRAG(opts),
+	}
+}
+
+// RunRetrievalQuality benchmarks the current vault's semantic retrieval
+// quality against resolved wikilinks. It does not call an AI provider; it
+// scores the embeddings already stored in the index.
+func RunRetrievalQuality(opts ProbeOpts) ProbeResult {
+	start := time.Now()
+	if opts.SearchDB == nil {
+		return ProbeResult{Probe: "retrieval", OK: false, Detail: "no search database"}
+	}
+	result, err := RetrievalQualityProbe(opts.SearchDB)
+	ms := time.Since(start).Milliseconds()
+	if err != nil {
+		if errors.Is(err, ErrTooFewLinks) {
+			return ProbeResult{
+				Probe:         "retrieval",
+				LatencyMs:     ms,
+				OK:            false,
+				Skipped:       true,
+				Detail:        fmt.Sprintf("not enough linked docs: need at least %d resolved wikilinks, found %d usable pairs", MinLinksForRetrievalProbe, result.PairsUsed),
+				VaultDocCount: result.Documents,
+			}
+		}
+		return ProbeResult{Probe: "retrieval", LatencyMs: ms, OK: false, Detail: err.Error()}
+	}
+	return ProbeResult{
+		Probe:         "retrieval",
+		LatencyMs:     ms,
+		OK:            true,
+		Detail:        fmt.Sprintf("mrr@%d=%.3f recall@%d=%.3f pairs=%d", result.K, result.ScoreMRR, result.K, result.ScoreRecallAtK, result.PairsUsed),
+		QualityScore:  result.ScoreMRR,
+		VaultDocCount: result.Documents,
 	}
 }
 

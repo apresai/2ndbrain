@@ -90,6 +90,53 @@ func TestRunModelsAddExplicitZeroPriceSetsOverride(t *testing.T) {
 	}
 }
 
+func TestRunModelsAddPreservesCatalogStateWhenAddingThreshold(t *testing.T) {
+	setupModelsAddHome(t)
+	enabled := true
+	if err := ai.SaveUserCatalogEntry(ai.ScopeGlobal, "", ai.ModelInfo{
+		ID:            "embed.model",
+		Name:          "Existing Embed",
+		Provider:      "bedrock",
+		Type:          "embedding",
+		Tier:          ai.TierUserVerified,
+		Enabled:       &enabled,
+		TestedAt:      "2026-04-24T00:00:00Z",
+		TestLatencyMs: 123,
+		Benchmark: &ai.BenchmarkSummary{
+			RanAt:         "2026-04-24T00:01:00Z",
+			AvgLatencyMs:  456,
+			QualityScore:  0.78,
+			VaultDocCount: 12,
+		},
+	}); err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+
+	cmd := newTestModelsAddCommand()
+	if err := cmd.ParseFlags([]string{
+		"--provider", "bedrock",
+		"--type", "embedding",
+		"--similarity-threshold", "0.42",
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	if err := runModelsAdd(cmd, []string{"embed.model"}); err != nil {
+		t.Fatalf("runModelsAdd: %v", err)
+	}
+
+	models := ai.LoadUserCatalog("")
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	m := models[0]
+	if m.RecommendedSimilarityThreshold != 0.42 {
+		t.Fatalf("threshold = %g, want 0.42", m.RecommendedSimilarityThreshold)
+	}
+	if m.Enabled == nil || !*m.Enabled || m.TestedAt == "" || m.TestLatencyMs != 123 || m.Benchmark == nil {
+		t.Fatalf("catalog state was not preserved: %+v", m)
+	}
+}
+
 // newTestEnableDisableCommand builds a minimal cobra.Command wired to the
 // package-level enable/disable flag variables. The caller must set the vars
 // AFTER calling this function because cobra.StringVar initialises them to the

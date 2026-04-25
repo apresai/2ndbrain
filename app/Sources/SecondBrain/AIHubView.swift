@@ -20,6 +20,7 @@ struct AIHubView: View {
     @State private var errorMessage: String?
     @State private var filter = CatalogFilter()
     @State private var searchText: String = ""
+    @State private var pickerContext: ModelCatalogPickerContext?
     /// Group keys currently collapsed. Default is expanded so users
     /// immediately see their models; collapsing is an opt-in to
     /// reduce clutter on very large catalogs.
@@ -45,21 +46,38 @@ struct AIHubView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    providersSection
-                    activeSection
-                    catalogSection
+        ZStack {
+            VStack(spacing: 0) {
+                header
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        providersSection
+                        activeSection
+                        catalogSection
+                    }
+                    .padding()
                 }
+                Divider()
+                footer
+            }
+            .frame(width: 820, height: 640)
+
+            if let pickerContext {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                    .onTapGesture { self.pickerContext = nil }
+                ModelCatalogPickerView(
+                    models: models,
+                    aiStatus: aiStatus,
+                    initialType: pickerContext.typeScope,
+                    initialModelID: pickerContext.modelID,
+                    onClose: { self.pickerContext = nil },
+                    onReload: { await reload() }
+                )
                 .padding()
             }
-            Divider()
-            footer
         }
-        .frame(width: 820, height: 640)
         .task { await reload() }
         .onChange(of: appState.modelsCatalogVersion) { _, _ in
             Task { await reload() }
@@ -235,6 +253,13 @@ struct AIHubView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button {
+                pickerContext = ModelCatalogPickerContext(typeScope: type, modelID: entry?.modelID)
+            } label: {
+                Label("Change", systemImage: "chevron.down")
+            }
+            .controlSize(.small)
+            .buttonStyle(.bordered)
         }
         .padding(.vertical, 4)
     }
@@ -243,17 +268,24 @@ struct AIHubView: View {
         guard let m = entry else { return "untested" }
         var parts: [String] = []
         if let t = m.testedAt, !t.isEmpty { parts.append("tested " + t) }
-        if let bench = testResults[m.modelID]?.latency { parts.append(bench) }
+        if let latency = m.testLatencyMs, latency > 0 { parts.append("\(latency)ms test") }
+        if let bench = m.benchmark?.avgLatencyMs, bench > 0 { parts.append("\(bench)ms bench") }
         if let price = priceLabel(m) { parts.append(price) }
         return parts.isEmpty ? "no test data" : parts.joined(separator: " · ")
     }
 
     private func priceLabel(_ m: CatalogModelInfo) -> String? {
+        if let req = m.priceRequest, req > 0 {
+            return String(format: "$%.4f/request", req)
+        }
         if let pIn = m.priceIn, pIn > 0 {
             if let pOut = m.priceOut, pOut > 0 {
                 return String(format: "$%.2f/$%.2f per M", pIn, pOut)
             }
             return String(format: "$%.3f/M", pIn)
+        }
+        if m.local == true || m.priceSource != nil {
+            return "free"
         }
         return nil
     }
@@ -331,8 +363,13 @@ struct AIHubView: View {
             if filter.testedOnly && (m.testedAt ?? "").isEmpty { return false }
             if filter.enabledOnly && (m.enabled == false) { return false }
             if !needle.isEmpty {
-                let vendor = VendorInfo.from(modelID: m.modelID, provider: m.provider)
-                let haystack = (m.modelID + " " + vendor.display + " " + (m.name)).lowercased()
+                let haystack = [
+                    m.modelID,
+                    m.name,
+                    m.vendorDisplay ?? "",
+                    m.family ?? "",
+                    m.provider,
+                ].joined(separator: " ").lowercased()
                 if !haystack.contains(needle) { return false }
             }
             return true
@@ -378,14 +415,15 @@ struct AIHubView: View {
         var byKey: [String: [CatalogModelInfo]] = [:]
         var displayByKey: [String: (String, String, String)] = [:] // vendor, display, provider
         for m in ms {
-            let v = VendorInfo.from(modelID: m.modelID, provider: m.provider)
-            let k = groupKey(type: m.modelType, vendor: v.vendor, provider: m.provider)
+            let vendor = m.vendor ?? "other"
+            let display = m.vendorDisplay ?? "Other"
+            let k = groupKey(type: m.modelType, vendor: vendor, provider: m.provider)
             byKey[k, default: []].append(m)
-            displayByKey[k] = (v.vendor, v.display, m.provider)
+            displayByKey[k] = (vendor, display, m.provider)
         }
         let groups = byKey.map { (k, list) -> VendorGroup in
             let (vendor, display, provider) = displayByKey[k] ?? ("other", "Other", "")
-            let sorted = list.sorted { versionSortKey($0.modelID) > versionSortKey($1.modelID) }
+            let sorted = list.sorted { ($0.versionSortKey ?? $0.modelID) > ($1.versionSortKey ?? $1.modelID) }
             return VendorGroup(
                 key: k,
                 type: firstType,
@@ -473,8 +511,7 @@ struct AIHubView: View {
 
     private func modelRow(_ m: CatalogModelInfo) -> some View {
         let outcome = testResults[m.modelID]
-        let isActive = aiStatus?.provider == m.provider
-            && (m.modelID == aiStatus?.embeddingModel || m.modelID == aiStatus?.genModel)
+        let activeKinds = activeKinds(for: m)
         let disabledProvider = providerIsDisabled(m.provider)
         return HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -483,8 +520,8 @@ struct AIHubView: View {
                         .font(.body.monospaced())
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if isActive {
-                        Text("ACTIVE")
+                    ForEach(activeKinds, id: \.self) { kind in
+                        Text("ACTIVE \(kind)")
                             .font(.caption2.bold())
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
@@ -513,14 +550,31 @@ struct AIHubView: View {
             rowActions(m, disabled: disabledProvider)
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            pickerContext = ModelCatalogPickerContext(typeScope: m.modelType, modelID: m.modelID)
+        }
         .opacity(disabledProvider ? 0.55 : 1.0)
+    }
+
+    private func activeKinds(for m: CatalogModelInfo) -> [String] {
+        guard aiStatus?.provider == m.provider else { return [] }
+        var kinds: [String] = []
+        if m.modelID == aiStatus?.embeddingModel { kinds.append("embedding") }
+        if m.modelID == aiStatus?.genModel { kinds.append("generation") }
+        return kinds
     }
 
     private func metaLine(_ m: CatalogModelInfo) -> String {
         var parts: [String] = [m.provider, m.modelType]
+        if let family = m.family, !family.isEmpty { parts.append(family) }
         if let d = m.dimensions, d > 0 { parts.append("\(d)d") }
         if let c = m.contextLen, c > 0 { parts.append("\(c / 1000)k ctx") }
         if let p = priceLabel(m) { parts.append(p) }
+        if m.compatible == false { parts.append("incompatible") }
+        else if m.compatible == true { parts.append("compatible") }
+        if let err = m.testError, !err.isEmpty { parts.append("failed") }
+        else if let testedAt = m.testedAt, !testedAt.isEmpty { parts.append("tested") }
         if let strat = m.invokeStrategy, !strat.isEmpty { parts.append(strat) }
         return parts.joined(separator: " · ")
     }
@@ -542,11 +596,9 @@ struct AIHubView: View {
 
     private func rowActions(_ m: CatalogModelInfo, disabled: Bool) -> some View {
         HStack(spacing: 6) {
-            Button("Test") { Task { await testRow(m) } }
-                .controlSize(.small)
-                .buttonStyle(.borderless)
-                .disabled(disabled || testResults[m.modelID]?.running == true)
-            Button("Set active") { Task { await makeActive(m) } }
+            Button("Details") {
+                pickerContext = ModelCatalogPickerContext(typeScope: m.modelType, modelID: m.modelID)
+            }
                 .controlSize(.small)
                 .buttonStyle(.borderless)
                 .disabled(disabled)
@@ -628,7 +680,7 @@ struct AIHubView: View {
 
     private func makeActive(_ m: CatalogModelInfo) async {
         do {
-            try await appState.setActiveModel(type: m.modelType, modelID: m.modelID)
+            try await appState.setActiveModel(type: m.modelType, modelID: m.modelID, provider: m.provider)
             await reload()
         } catch {
             errorMessage = "Set active failed: \(error.localizedDescription)"

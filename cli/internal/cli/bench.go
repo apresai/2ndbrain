@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,16 +18,17 @@ import (
 )
 
 var (
-	benchModelFlag    string
-	benchProbeFlag    string
-	benchProviderFlag string
-	benchHistoryLimit int
+	benchModelFlag     string
+	benchProbeFlag     string
+	benchProviderFlag  string
+	benchSummaryScope  string
+	benchHistoryLimit  int
 )
 
 var benchCmd = &cobra.Command{
 	Use:   "bench",
 	Short: "Benchmark AI models against your vault",
-	Long:  "Runs embed, generate, search, and RAG probes against favorited models. Results are stored in .2ndbrain/bench.db for historical comparison.",
+	Long:  "Runs embed, generate, retrieval, search, and RAG probes against favorited models. Results are stored in .2ndbrain/bench.db for historical comparison.",
 	RunE:  runBench,
 }
 
@@ -65,12 +68,14 @@ var benchCompareCmd = &cobra.Command{
 
 func init() {
 	benchCmd.Flags().StringVar(&benchModelFlag, "model", "", "Bench a specific model instead of favorites")
-	benchCmd.Flags().StringVar(&benchProbeFlag, "probe", "", "Run only a specific probe: embed, generate, search, rag")
+	benchCmd.Flags().StringVar(&benchProbeFlag, "probe", "", "Run only a specific probe: embed, generate, retrieval, search, rag")
 	benchCmd.Flags().StringVar(&benchProviderFlag, "provider", "", "Provider override (auto-detected if omitted)")
+	benchCmd.Flags().StringVar(&benchSummaryScope, "summary-scope", "global", "Where to save the per-model benchmark summary: global or vault. Run history (.2ndbrain/bench.db) is unaffected.")
 	benchHistoryCmd.Flags().IntVar(&benchHistoryLimit, "limit", 20, "Number of runs to show")
 	_ = benchCmd.RegisterFlagCompletionFunc("model", completeModelIDs)
 	_ = benchCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = benchCmd.RegisterFlagCompletionFunc("probe", completeBenchProbes)
+	_ = benchCmd.RegisterFlagCompletionFunc("summary-scope", completeCatalogScopes)
 
 	benchCmd.AddCommand(benchFavCmd)
 	benchCmd.AddCommand(benchUnfavCmd)
@@ -91,6 +96,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
 	bdb, err := openBenchDB(v.DotDir)
 	if err != nil {
@@ -135,9 +141,25 @@ func runBench(cmd *cobra.Command, args []string) error {
 	}
 
 	ts := time.Now().UTC().Format(time.RFC3339)
+	jsonMode := getFormat(cmd) == output.FormatJSON
+	var enc *json.Encoder
+	if jsonMode {
+		enc = json.NewEncoder(os.Stdout)
+	}
 
 	for _, t := range targets {
-		fmt.Printf("\nBenchmarking %s (%s/%s)...\n", t.modelID, t.provider, t.modelType)
+		if jsonMode {
+			emitBenchEvent(enc, benchEvent{
+				Event:    "model_start",
+				ModelID:  t.modelID,
+				Provider: t.provider,
+				Type:     t.modelType,
+				Message:  "benchmark started",
+			})
+		} else {
+			fmt.Printf("\nBenchmarking %s (%s/%s)...\n", t.modelID, t.provider, t.modelType)
+		}
+		slog.Info("models bench start", "provider", t.provider, "model", t.modelID, "type", t.modelType, "probe", benchProbeFlag)
 
 		opts := bench.ProbeOpts{
 			Ctx:       ctx,
@@ -149,22 +171,9 @@ func runBench(cmd *cobra.Command, args []string) error {
 			VaultRoot: v.Root,
 		}
 
-		var results []bench.ProbeResult
-		if benchProbeFlag != "" {
-			switch benchProbeFlag {
-			case "embed":
-				results = []bench.ProbeResult{bench.RunEmbed(opts)}
-			case "generate":
-				results = []bench.ProbeResult{bench.RunGenerate(opts)}
-			case "search":
-				results = []bench.ProbeResult{bench.RunSearch(opts)}
-			case "rag":
-				results = []bench.ProbeResult{bench.RunRAG(opts)}
-			default:
-				return fmt.Errorf("unknown probe %q (use: embed, generate, search, rag)", benchProbeFlag)
-			}
-		} else {
-			results = bench.RunAll(opts)
+		results, err := runBenchProbes(opts, benchProbeFlag, enc)
+		if err != nil {
+			return err
 		}
 
 		for _, r := range results {
@@ -172,18 +181,27 @@ func runBench(cmd *cobra.Command, args []string) error {
 			if !r.OK {
 				status = "FAIL"
 			}
-			fmt.Printf("  %-10s %s  %dms", r.Probe, status, r.LatencyMs)
-			if r.Detail != "" {
-				detail := r.Detail
-				if len(detail) > 80 {
-					detail = detail[:80] + "..."
-				}
-				fmt.Printf("  %s", detail)
+			if r.Skipped {
+				status = "SKIP"
 			}
-			fmt.Println()
+			if !jsonMode {
+				fmt.Printf("  %-10s %s  %dms", r.Probe, status, r.LatencyMs)
+				if r.Detail != "" {
+					detail := r.Detail
+					if len(detail) > 80 {
+						detail = detail[:80] + "..."
+					}
+					fmt.Printf("  %s", detail)
+				}
+				fmt.Println()
+			}
 
 			// Store result.
-			bdb.InsertRun(&bench.Run{
+			runDocCount := docCount
+			if r.VaultDocCount > 0 {
+				runDocCount = r.VaultDocCount
+			}
+			if err := bdb.InsertRun(&bench.Run{
 				Timestamp:     ts,
 				Provider:      t.provider,
 				ModelID:       t.modelID,
@@ -191,11 +209,180 @@ func runBench(cmd *cobra.Command, args []string) error {
 				LatencyMs:     r.LatencyMs,
 				OK:            r.OK,
 				Detail:        r.Detail,
-				VaultDocCount: docCount,
+				VaultDocCount: runDocCount,
+			}); err != nil {
+				// A transient bench.db failure (WAL busy, disk full)
+				// shouldn't abort the run and discard subsequent
+				// models' summaries — log and continue.
+				slog.Error("store benchmark run failed", "provider", t.provider, "model", t.modelID, "probe", r.Probe, "err", err)
+			}
+			slog.Info("models bench result", "provider", t.provider, "model", t.modelID, "probe", r.Probe, "ok", r.OK, "skipped", r.Skipped, "latency_ms", r.LatencyMs)
+		}
+
+		summary := benchmarkSummary(ts, docCount, results)
+		summaryScope, summaryRoot, err := resolveBenchSummaryScope(v.Root, benchSummaryScope)
+		if err != nil {
+			return err
+		}
+		if err := saveBenchmarkSummary(ctx, cfg, summaryScope, summaryRoot, t.provider, t.modelID, t.modelType, summary); err != nil {
+			return fmt.Errorf("save benchmark summary: %w", err)
+		}
+		if jsonMode {
+			emitBenchEvent(enc, benchEvent{
+				Event:     "summary",
+				ModelID:   t.modelID,
+				Provider:  t.provider,
+				Type:      t.modelType,
+				Benchmark: summary,
+				Message:   "benchmark summary saved",
 			})
 		}
 	}
-	fmt.Println()
+	if jsonMode {
+		emitBenchEvent(enc, benchEvent{Event: "done", Message: "benchmark complete"})
+	} else {
+		fmt.Println()
+	}
+	return nil
+}
+
+type benchEvent struct {
+	Event     string               `json:"event"`
+	ModelID   string               `json:"model_id,omitempty"`
+	Provider  string               `json:"provider,omitempty"`
+	Type      string               `json:"type,omitempty"`
+	Probe     string               `json:"probe,omitempty"`
+	Result    *bench.ProbeResult   `json:"result,omitempty"`
+	Benchmark *ai.BenchmarkSummary `json:"benchmark,omitempty"`
+	Message   string               `json:"message,omitempty"`
+}
+
+func emitBenchEvent(enc *json.Encoder, e benchEvent) {
+	if enc != nil {
+		_ = enc.Encode(e)
+	}
+}
+
+func runBenchProbes(opts bench.ProbeOpts, only string, enc *json.Encoder) ([]bench.ProbeResult, error) {
+	runOne := func(probe string, fn func(bench.ProbeOpts) bench.ProbeResult) bench.ProbeResult {
+		emitBenchEvent(enc, benchEvent{
+			Event:    "probe_start",
+			ModelID:  opts.ModelID,
+			Provider: opts.Provider,
+			Type:     opts.ModelType,
+			Probe:    probe,
+			Message:  "probe started",
+		})
+		result := fn(opts)
+		emitBenchEvent(enc, benchEvent{
+			Event:    "probe_result",
+			ModelID:  opts.ModelID,
+			Provider: opts.Provider,
+			Type:     opts.ModelType,
+			Probe:    result.Probe,
+			Result:   &result,
+		})
+		return result
+	}
+
+	if only != "" {
+		switch only {
+		case "embed":
+			return []bench.ProbeResult{runOne("embed", bench.RunEmbed)}, nil
+		case "generate":
+			return []bench.ProbeResult{runOne("generate", bench.RunGenerate)}, nil
+		case "retrieval":
+			return []bench.ProbeResult{runOne("retrieval", bench.RunRetrievalQuality)}, nil
+		case "search":
+			return []bench.ProbeResult{runOne("search", bench.RunSearch)}, nil
+		case "rag":
+			return []bench.ProbeResult{runOne("rag", bench.RunRAG)}, nil
+		default:
+			return nil, fmt.Errorf("unknown probe %q (use: embed, generate, retrieval, search, rag)", only)
+		}
+	}
+
+	var results []bench.ProbeResult
+	if opts.ModelType == "embedding" {
+		results = append(results, runOne("embed", bench.RunEmbed))
+		results = append(results, runOne("retrieval", bench.RunRetrievalQuality))
+		return results, nil
+	}
+	results = append(results, runOne("generate", bench.RunGenerate))
+	results = append(results, runOne("search", bench.RunSearch))
+	results = append(results, runOne("rag", bench.RunRAG))
+	return results, nil
+}
+
+func benchmarkSummary(ts string, docCount int, results []bench.ProbeResult) *ai.BenchmarkSummary {
+	var totalLatency int64
+	var counted int64
+	var quality float64
+	for _, r := range results {
+		if r.OK && !r.Skipped {
+			totalLatency += r.LatencyMs
+			counted++
+		}
+		if r.QualityScore > 0 {
+			quality = r.QualityScore
+		}
+		if r.VaultDocCount > 0 {
+			docCount = r.VaultDocCount
+		}
+	}
+	if counted == 0 {
+		for _, r := range results {
+			totalLatency += r.LatencyMs
+			counted++
+		}
+	}
+	var avg int64
+	if counted > 0 {
+		avg = totalLatency / counted
+	}
+	return &ai.BenchmarkSummary{
+		RanAt:         ts,
+		AvgLatencyMs:  avg,
+		QualityScore:  quality,
+		VaultDocCount: docCount,
+	}
+}
+
+// resolveBenchSummaryScope picks the user-catalog scope for `models bench`
+// summary persistence. Unlike resolveCatalogScope it accepts the
+// already-open vault root so we don't reopen the vault for a one-line save.
+func resolveBenchSummaryScope(vaultRoot, scope string) (ai.UserCatalogScope, string, error) {
+	switch ai.UserCatalogScope(scope) {
+	case ai.ScopeGlobal:
+		return ai.ScopeGlobal, "", nil
+	case ai.ScopeVault:
+		return ai.ScopeVault, vaultRoot, nil
+	default:
+		return "", "", fmt.Errorf("--summary-scope must be %q or %q, got %q", ai.ScopeGlobal, ai.ScopeVault, scope)
+	}
+}
+
+func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCatalogScope, vaultRoot, provider, modelID, modelType string, summary *ai.BenchmarkSummary) error {
+	entry, ok := findModelInfo(ctx, cfg, vaultRoot, provider, modelID)
+	if !ok {
+		entry = ai.ModelInfo{
+			ID:       modelID,
+			Provider: provider,
+			Type:     modelType,
+			Tier:     ai.TierUserVerified,
+		}
+	}
+	entry.ID = modelID
+	entry.Provider = provider
+	entry.Type = modelType
+	entry.Benchmark = summary
+	if entry.Tier == "" {
+		entry.Tier = ai.TierUserVerified
+	}
+	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+		return err
+	}
+	slog.Info("models bench summary saved", "scope", string(scope), "vault_root", vaultRoot, "provider", provider, "model", modelID, "avg_latency_ms", summary.AvgLatencyMs, "quality_score", summary.QualityScore, "vault_doc_count", summary.VaultDocCount)
 	return nil
 }
 

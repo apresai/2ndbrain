@@ -104,3 +104,72 @@ func ollamaRequiresReady() {
 func bedrockAlwaysAllowed() {
     #expect(credentialsNextDisabled(provider: "bedrock", openrouterKey: "", ollamaStatus: "") == false)
 }
+
+// MARK: - Model Picker Logic
+
+struct PickerLogicModel {
+    let id: String
+    let local: Bool
+    let priceIn: Double?
+    let priceOut: Double?
+    let priceRequest: Double?
+    let priceSource: String?
+    let enabled: Bool?
+    let benchmarkMs: Int64?
+    let testMs: Int64?
+}
+
+func pickerEnableLabel(_ enabled: Bool?) -> String {
+    guard let enabled else { return "Default" }
+    return enabled ? "Enabled" : "Disabled"
+}
+
+func pickerPriceRank(_ model: PickerLogicModel) -> Double {
+    let hasTokenPrice = (model.priceIn ?? 0) > 0 || (model.priceOut ?? 0) > 0
+    let hasRequestPrice = (model.priceRequest ?? 0) > 0
+    if model.local || (model.priceSource != nil && !hasTokenPrice && !hasRequestPrice) {
+        return 0
+    }
+    if hasRequestPrice {
+        return 1 + (model.priceRequest ?? 0)
+    }
+    if hasTokenPrice {
+        return 10_000 + (model.priceIn ?? 0) + (model.priceOut ?? 0)
+    }
+    return Double.greatestFiniteMagnitude
+}
+
+func pickerFastestRank(_ model: PickerLogicModel) -> Int64 {
+    model.benchmarkMs ?? model.testMs ?? Int64.max
+}
+
+func pickerActiveKinds(provider: String, embeddingModel: String, generationModel: String, modelProvider: String, modelID: String) -> [String] {
+    guard provider == modelProvider else { return [] }
+    var kinds: [String] = []
+    if embeddingModel == modelID { kinds.append("embedding") }
+    if generationModel == modelID { kinds.append("generation") }
+    return kinds
+}
+
+@Test("Picker enable labels cover tri-state")
+func pickerEnableLabels() {
+    #expect(pickerEnableLabel(nil) == "Default")
+    #expect(pickerEnableLabel(true) == "Enabled")
+    #expect(pickerEnableLabel(false) == "Disabled")
+}
+
+@Test("Picker cheapest rank orders free, request, token, unknown")
+func pickerCheapestRank() {
+    let free = PickerLogicModel(id: "free", local: true, priceIn: nil, priceOut: nil, priceRequest: nil, priceSource: nil, enabled: nil, benchmarkMs: nil, testMs: nil)
+    let request = PickerLogicModel(id: "request", local: false, priceIn: nil, priceOut: nil, priceRequest: 0.01, priceSource: "vendor", enabled: nil, benchmarkMs: nil, testMs: nil)
+    let token = PickerLogicModel(id: "token", local: false, priceIn: 0.8, priceOut: 4.0, priceRequest: nil, priceSource: "vendor", enabled: nil, benchmarkMs: nil, testMs: nil)
+    let unknown = PickerLogicModel(id: "unknown", local: false, priceIn: nil, priceOut: nil, priceRequest: nil, priceSource: nil, enabled: nil, benchmarkMs: nil, testMs: nil)
+    let sorted = [unknown, token, request, free].sorted { pickerPriceRank($0) < pickerPriceRank($1) }.map(\.id)
+    #expect(sorted == ["free", "request", "token", "unknown"])
+}
+
+@Test("Picker active kind derives from shared provider")
+func pickerActiveKindsSharedProvider() {
+    #expect(pickerActiveKinds(provider: "bedrock", embeddingModel: "embed", generationModel: "gen", modelProvider: "bedrock", modelID: "embed") == ["embedding"])
+    #expect(pickerActiveKinds(provider: "bedrock", embeddingModel: "embed", generationModel: "gen", modelProvider: "openrouter", modelID: "gen").isEmpty)
+}

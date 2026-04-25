@@ -47,6 +47,42 @@ func TestBuildModelList_ActiveMarking(t *testing.T) {
 	}
 }
 
+func TestBuildModelList_DerivedPickerFields(t *testing.T) {
+	setupHome(t)
+	result, err := BuildModelList(context.Background(), MergedListOptions{Config: DefaultAIConfig()})
+	if err != nil {
+		t.Fatalf("BuildModelList: %v", err)
+	}
+	for _, m := range result.Verified {
+		if m.Vendor == "" {
+			t.Fatalf("%s missing Vendor", m.ID)
+		}
+		if m.VendorDisplay == "" {
+			t.Fatalf("%s missing VendorDisplay", m.ID)
+		}
+		if m.VersionSortKey == "" {
+			t.Fatalf("%s missing VersionSortKey", m.ID)
+		}
+		if !m.Compatible {
+			t.Fatalf("builtin model %s should be compatible: %s", m.ID, m.CompatibilityReason)
+		}
+	}
+}
+
+func TestCatalogCompatibility_BedrockUnsupportedReason(t *testing.T) {
+	ok, reason := catalogCompatibility(ModelInfo{
+		ID:       "amazon.nova-canvas-v1:0",
+		Provider: "bedrock",
+		Type:     "generation",
+	})
+	if ok {
+		t.Fatal("nova canvas should be incompatible with text generation")
+	}
+	if reason == "" {
+		t.Fatal("expected compatibility reason")
+	}
+}
+
 func TestBuildModelList_Sorting(t *testing.T) {
 	ctx := context.Background()
 	result, err := BuildModelList(ctx, MergedListOptions{

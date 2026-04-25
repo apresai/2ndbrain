@@ -52,12 +52,18 @@ const (
 // JSON is used for CLI --json output and vendor API payloads; YAML is used
 // for the user catalog file at ~/.config/2nb/models.yaml.
 type ModelInfo struct {
-	ID         string `json:"id" yaml:"id"`
-	Name       string `json:"name" yaml:"name,omitempty"`
-	Provider   string `json:"provider" yaml:"provider"`
-	Type       string `json:"type" yaml:"type"` // "embedding" or "generation"
-	Dimensions int    `json:"dimensions,omitempty" yaml:"dimensions,omitempty"`
-	ContextLen int    `json:"context_length,omitempty" yaml:"context_length,omitempty"`
+	ID       string `json:"id" yaml:"id"`
+	Name     string `json:"name" yaml:"name,omitempty"`
+	Provider string `json:"provider" yaml:"provider"`
+	Type     string `json:"type" yaml:"type"` // "embedding" or "generation"
+	// UI identity fields are derived at catalog-list time from ID+Provider.
+	// They are JSON-only so user catalogs keep the canonical minimal schema.
+	Vendor         string `json:"vendor,omitempty" yaml:"-"`
+	VendorDisplay  string `json:"vendor_display,omitempty" yaml:"-"`
+	Family         string `json:"family,omitempty" yaml:"-"`
+	VersionSortKey string `json:"version_sort_key,omitempty" yaml:"-"`
+	Dimensions     int    `json:"dimensions,omitempty" yaml:"dimensions,omitempty"`
+	ContextLen     int    `json:"context_length,omitempty" yaml:"context_length,omitempty"`
 	// RecommendedSimilarityThreshold is the suggested minimum cosine similarity
 	// for semantic search with this embedding model. Used when the vault's
 	// ai.similarity_threshold isn't explicitly set. Different embedding models
@@ -126,6 +132,11 @@ type ModelInfo struct {
 	// visible, unverified = hidden). Explicit false hides the model from
 	// dropdowns but keeps it in `2nb models list` for power users.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+
+	// Compatible reports whether this binary knows how to invoke the model's
+	// declared provider/type path. CompatibilityReason explains false values.
+	Compatible          bool   `json:"compatible" yaml:"-"`
+	CompatibilityReason string `json:"compatibility_reason,omitempty" yaml:"-"`
 }
 
 // BenchmarkSummary is the most-recent benchmark snapshot for a model,

@@ -92,19 +92,67 @@ private struct CatalogModelInfo: Codable {
     let name: String
     let provider: String
     let modelType: String
+    let vendor: String?
+    let vendorDisplay: String?
+    let family: String?
+    let versionSortKey: String?
     let dimensions: Int?
     let priceIn: Double?
     let priceOut: Double?
+    let priceRequest: Double?
+    let priceSource: String?
     let contextLen: Int?
+    let recommendedSimilarityThreshold: Double?
+    let tier: String?
+    let invokeStrategy: String?
+    let enabled: Bool?
+    let active: Bool?
+    let testedAt: String?
+    let testLatencyMs: Int64?
+    let testError: String?
+    let benchmark: CatalogBenchmarkSummary?
+    let compatible: Bool?
+    let compatibilityReason: String?
 
     enum CodingKeys: String, CodingKey {
         case modelID = "id"
         case name, provider
         case modelType = "type"
+        case vendor
+        case vendorDisplay = "vendor_display"
+        case family
+        case versionSortKey = "version_sort_key"
         case dimensions
         case priceIn = "price_input_per_million"
         case priceOut = "price_output_per_million"
+        case priceRequest = "price_per_request"
+        case priceSource = "price_source"
         case contextLen = "context_length"
+        case recommendedSimilarityThreshold = "recommended_similarity_threshold"
+        case tier
+        case invokeStrategy = "invoke_strategy"
+        case enabled
+        case active
+        case testedAt = "tested_at"
+        case testLatencyMs = "test_latency_ms"
+        case testError = "test_error"
+        case benchmark
+        case compatible
+        case compatibilityReason = "compatibility_reason"
+    }
+}
+
+private struct CatalogBenchmarkSummary: Codable {
+    let ranAt: String?
+    let avgLatencyMs: Int64?
+    let qualityScore: Double?
+    let vaultDocCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case ranAt = "ran_at"
+        case avgLatencyMs = "avg_latency_ms"
+        case qualityScore = "quality_score"
+        case vaultDocCount = "vault_doc_count"
     }
 }
 
@@ -281,6 +329,71 @@ func catalogGenerationModel() throws {
     #expect(model.dimensions == nil)
     #expect(model.priceIn == nil)
     #expect(model.contextLen == nil)
+}
+
+@Test("CatalogModelInfo decodes picker schema fields")
+func catalogPickerSchemaFields() throws {
+    let json = """
+    {
+        "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "name": "Claude Haiku 4.5",
+        "provider": "bedrock",
+        "type": "generation",
+        "vendor": "anthropic",
+        "vendor_display": "Anthropic",
+        "family": "Claude",
+        "version_sort_key": "us.anthropic.claude-haiku-00000004-00000005-20251001-v00000001:00000000|us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "context_length": 200000,
+        "price_input_per_million": 0.8,
+        "price_output_per_million": 4.0,
+        "price_source": "vendor",
+        "tier": "user_verified",
+        "invoke_strategy": "bedrock_converse",
+        "enabled": true,
+        "active": true,
+        "tested_at": "2026-04-24T12:00:00Z",
+        "test_latency_ms": 420,
+        "benchmark": {
+            "ran_at": "2026-04-24T12:05:00Z",
+            "avg_latency_ms": 380,
+            "quality_score": 0.72,
+            "vault_doc_count": 42
+        },
+        "compatible": true
+    }
+    """
+    let model = try JSONDecoder().decode(CatalogModelInfo.self, from: Data(json.utf8))
+    #expect(model.vendorDisplay == "Anthropic")
+    #expect(model.family == "Claude")
+    #expect(model.priceSource == "vendor")
+    #expect(model.tier == "user_verified")
+    #expect(model.invokeStrategy == "bedrock_converse")
+    #expect(model.enabled == true)
+    #expect(model.active == true)
+    #expect(model.testLatencyMs == 420)
+    #expect(model.benchmark?.qualityScore == 0.72)
+    #expect(model.compatible == true)
+}
+
+@Test("CatalogModelInfo decodes failed compatibility and request pricing")
+func catalogFailedCompatibilityAndRequestPrice() throws {
+    let json = """
+    {
+        "id": "twelvelabs.marengo-embed-3-0-v1:0",
+        "name": "Marengo Embed 3.0",
+        "provider": "bedrock",
+        "type": "embedding",
+        "price_per_request": 0.0077,
+        "compatible": false,
+        "compatibility_reason": "2nb doesn't support this Bedrock embedding invoke format yet",
+        "test_error": "rate limited"
+    }
+    """
+    let model = try JSONDecoder().decode(CatalogModelInfo.self, from: Data(json.utf8))
+    #expect(model.priceRequest == 0.0077)
+    #expect(model.compatible == false)
+    #expect(model.compatibilityReason?.contains("Bedrock") == true)
+    #expect(model.testError == "rate limited")
 }
 
 // MARK: - CLISearchResult Tests

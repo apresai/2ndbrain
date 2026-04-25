@@ -61,15 +61,19 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	flagPorcelain = false
 	flagVault = ""
 	flagVerbose = false
-	enableProvider, enableScope, enableVendor = "", "global", ""
-	disableProvider, disableScope, disableVendor = "", "global", ""
-	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "global"
+	enableProvider, enableScope, enableVendor = "", "vault", ""
+	disableProvider, disableScope, disableVendor = "", "vault", ""
+	enableStateProvider, enableStateScope, enableStateValue = "", "vault", ""
+	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "vault"
 	modelsDiscover, modelsFreeOnly, modelsPromote = false, false, false
 	modelsCheckStatus, modelsEnabledOnly = false, false
-	testProvider, testModelType, testSaveScope = "", "", "global"
+	testProvider, testModelType, testSaveScope = "", "", "vault"
 	testSave = false
 	costProvider, costProbeKind = "", "test"
 	costAll = false
+	benchModelFlag, benchProbeFlag, benchProviderFlag = "", "", ""
+	benchSummaryScope = "global"
+	benchHistoryLimit = 20
 
 	// Redirect os.Stdout so fmt.Printf in handlers lands in our buffer.
 	// Cobra's SetOut only covers its own output (help/usage text), not
@@ -290,6 +294,102 @@ func TestContract_ModelsListEnabledOnlyJSON(t *testing.T) {
 	}
 }
 
+func TestContract_ModelsListPickerSchemaJSON(t *testing.T) {
+	_, root := newContractVault(t)
+
+	got, err := runCLIArgs(t, root, "models", "list", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("models list --json: %v (out=%s)", err, truncate(got, 300))
+	}
+	var parsed []struct {
+		ID                    string `json:"id"`
+		Vendor                string `json:"vendor"`
+		VendorDisplay         string `json:"vendor_display"`
+		Family                string `json:"family"`
+		VersionSortKey        string `json:"version_sort_key"`
+		Compatible            *bool  `json:"compatible"`
+		CompatibilityReason   string `json:"compatibility_reason"`
+		PriceSource           string `json:"price_source"`
+		InvokeStrategy        string `json:"invoke_strategy"`
+		RecommendedSimilarity any    `json:"recommended_similarity_threshold"`
+	}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("models list picker schema parse: %v (body=%s)", err, truncate(got, 300))
+	}
+	if len(parsed) == 0 {
+		t.Fatal("expected at least one model")
+	}
+	foundDerived := false
+	for _, m := range parsed {
+		if m.Vendor != "" && m.VendorDisplay != "" && m.VersionSortKey != "" && m.Compatible != nil {
+			foundDerived = true
+		}
+		if m.ID == "amazon.nova-2-multimodal-embeddings-v1:0" && m.InvokeStrategy == "" {
+			t.Errorf("nova embed missing invoke_strategy")
+		}
+	}
+	if !foundDerived {
+		t.Fatalf("no model carried picker-derived fields: %+v", parsed[0])
+	}
+}
+
+func TestContract_ModelsEnableStateTriState(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if _, err := runCLIArgs(t, root,
+		"models", "enable-state", "some.model.id",
+		"--provider", "bedrock", "--state", "disabled"); err != nil {
+		t.Fatalf("enable-state disabled: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, ".2ndbrain", "models.yaml"))
+	if !strings.Contains(string(data), "enabled: false") {
+		t.Fatalf("expected enabled: false, got:\n%s", data)
+	}
+
+	if _, err := runCLIArgs(t, root,
+		"models", "enable-state", "some.model.id",
+		"--provider", "bedrock", "--state", "default"); err != nil {
+		t.Fatalf("enable-state default: %v", err)
+	}
+	data, _ = os.ReadFile(filepath.Join(root, ".2ndbrain", "models.yaml"))
+	if strings.Contains(string(data), "enabled:") {
+		t.Fatalf("expected enabled field removed for default state, got:\n%s", data)
+	}
+}
+
+func TestContract_ModelsTestSaveJSONPersistsFailure(t *testing.T) {
+	_, root := newContractVault(t)
+
+	got, err := runCLIArgs(t, root,
+		"models", "test", "amazon.nova-canvas-v1:0",
+		"--provider", "bedrock",
+		"--type", "generation",
+		"--save",
+		"--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("models test --save --json failed: %v (out=%s)", err, truncate(got, 500))
+	}
+	var result struct {
+		OK     bool   `json:"ok"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(got, &result); err != nil {
+		t.Fatalf("test result JSON parse: %v (body=%s)", err, truncate(got, 300))
+	}
+	if result.OK || !strings.Contains(result.Detail, "image-generation") {
+		t.Fatalf("expected static incompatibility failure, got %+v", result)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".2ndbrain", "models.yaml"))
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "tested_at:") || !strings.Contains(body, "test_error:") {
+		t.Fatalf("failure test result was not persisted:\n%s", body)
+	}
+}
+
 // --- Contract: models cost-preview ------------------------------------
 
 func TestContract_ModelsCostPreviewJSON(t *testing.T) {
@@ -321,7 +421,7 @@ func TestContract_ModelsCostPreviewJSON(t *testing.T) {
 
 func TestContract_CostPreviewAllProbeKinds(t *testing.T) {
 	_, root := newContractVault(t)
-	for _, probe := range []string{"test", "bench_embed", "bench_gen", "bench_rag"} {
+	for _, probe := range []string{"test", "bench_embed", "bench_gen", "bench_rag", "retrieval"} {
 		// --all avoids needing a specific model ID per probe type.
 		if _, err := runCLIArgs(t, root,
 			"models", "cost-preview", "--all",
@@ -331,6 +431,92 @@ func TestContract_CostPreviewAllProbeKinds(t *testing.T) {
 		); err != nil {
 			t.Errorf("cost-preview --probe %s: %v", probe, err)
 		}
+	}
+}
+
+func TestContract_ModelsBenchRetrievalJSONSkipAndSummary(t *testing.T) {
+	_, root := newContractVault(t)
+
+	got, err := runCLIArgs(t, root,
+		"models", "bench",
+		"--model", "amazon.nova-2-multimodal-embeddings-v1:0",
+		"--provider", "bedrock",
+		"--probe", "retrieval",
+		"--summary-scope", "vault",
+		"--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("bench retrieval json: %v (out=%s)", err, truncate(got, 500))
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(got), []byte("\n"))
+	if len(lines) == 0 {
+		t.Fatal("expected JSON-line benchmark events")
+	}
+	var sawSkip, sawSummary bool
+	for _, line := range lines {
+		var event struct {
+			Event  string `json:"event"`
+			Result *struct {
+				Probe   string `json:"probe"`
+				Skipped bool   `json:"skipped"`
+				Detail  string `json:"detail"`
+			} `json:"result"`
+			Benchmark *struct {
+				RanAt string `json:"ran_at"`
+			} `json:"benchmark"`
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("bench event parse: %v (line=%s)", err, line)
+		}
+		if event.Result != nil && event.Result.Probe == "retrieval" && event.Result.Skipped {
+			sawSkip = strings.Contains(event.Result.Detail, "not enough linked docs")
+		}
+		if event.Event == "summary" && event.Benchmark != nil && event.Benchmark.RanAt != "" {
+			sawSummary = true
+		}
+	}
+	if !sawSkip {
+		t.Fatalf("expected retrieval skip event, got:\n%s", got)
+	}
+	if !sawSummary {
+		t.Fatalf("expected benchmark summary event, got:\n%s", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".2ndbrain", "models.yaml"))
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	if !strings.Contains(string(data), "benchmark:") {
+		t.Fatalf("benchmark summary not saved to catalog:\n%s", data)
+	}
+}
+
+func TestContract_ModelsBenchSummaryDefaultsToGlobal(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if _, err := runCLIArgs(t, root,
+		"models", "bench",
+		"--model", "amazon.nova-2-multimodal-embeddings-v1:0",
+		"--provider", "bedrock",
+		"--probe", "retrieval",
+		"--json", "--porcelain"); err != nil {
+		t.Fatalf("bench default-global: %v", err)
+	}
+
+	// Default scope = global → vault catalog should NOT carry the benchmark.
+	if data, err := os.ReadFile(filepath.Join(root, ".2ndbrain", "models.yaml")); err == nil {
+		if strings.Contains(string(data), "benchmark:") {
+			t.Fatalf("vault catalog unexpectedly carries benchmark when --summary-scope defaults to global:\n%s", data)
+		}
+	}
+
+	globalPath := filepath.Join(os.Getenv("HOME"), ".config", "2nb", "models.yaml")
+	data, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("read global catalog at %s: %v", globalPath, err)
+	}
+	if !strings.Contains(string(data), "benchmark:") {
+		t.Fatalf("benchmark summary not saved to global catalog:\n%s", data)
 	}
 }
 

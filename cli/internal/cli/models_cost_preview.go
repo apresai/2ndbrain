@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -72,6 +73,7 @@ func runModelsCostPreview(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
 	list, err := ai.BuildModelList(context.Background(), ai.MergedListOptions{
 		Config:    v.Config.AI,
@@ -127,6 +129,7 @@ func runModelsCostPreview(cmd *cobra.Command, args []string) error {
 	}
 
 	estimates, total := ai.EstimateCosts(candidates, probe)
+	slog.Info("models cost-preview", "probe", probe, "models", len(estimates), "total_usd", total)
 
 	format := getFormat(cmd)
 	if format != "" {

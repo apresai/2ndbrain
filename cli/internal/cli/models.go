@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -56,6 +57,10 @@ var (
 	disableProvider string
 	disableScope    string
 	disableVendor   string
+
+	enableStateProvider string
+	enableStateScope    string
+	enableStateValue    string
 )
 
 var modelsCmd = &cobra.Command{
@@ -115,6 +120,14 @@ var modelsDisableCmd = &cobra.Command{
 	RunE:              runModelsDisable,
 }
 
+var modelsEnableStateCmd = &cobra.Command{
+	Use:               "enable-state <model-id>",
+	Short:             "Set a model's enabled tri-state: default, enabled, or disabled",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeModelIDs,
+	RunE:              runModelsEnableState,
+}
+
 func init() {
 	modelsListCmd.Flags().StringVar(&modelsTypeFilt, "type", "", "Filter by type: embed or generation")
 	modelsListCmd.Flags().BoolVar(&modelsFreeOnly, "free", false, "Show only free models")
@@ -122,7 +135,7 @@ func init() {
 	modelsListCmd.Flags().BoolVar(&modelsCheckStatus, "status", false, "Probe provider reachability and credentials")
 	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama")
 	modelsListCmd.Flags().BoolVar(&modelsPromote, "promote", false, "Test unverified discovered models and add those that pass (requires --discover)")
-	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "global", "Catalog scope for --promote: global or vault")
+	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "vault", "Catalog scope for --promote: vault or global")
 	modelsListCmd.Flags().BoolVar(&modelsEnabledOnly, "enabled-only", false, "Exclude models explicitly disabled by the user (use for GUI dropdowns)")
 	_ = modelsListCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
@@ -131,7 +144,7 @@ func init() {
 	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama (auto-detected if omitted)")
 	modelsTestCmd.Flags().StringVar(&testModelType, "type", "", "Model type: embedding or generation (auto-detected if omitted)")
 	modelsTestCmd.Flags().BoolVar(&testSave, "save", false, "Add model to user catalog if probe passes")
-	modelsTestCmd.Flags().StringVar(&testSaveScope, "scope", "global", "Catalog scope when --save is set: global or vault")
+	modelsTestCmd.Flags().StringVar(&testSaveScope, "scope", "vault", "Catalog scope when --save is set: vault or global")
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
@@ -146,7 +159,7 @@ func init() {
 	modelsAddCmd.Flags().Float64Var(&addPriceRequest, "price-request", 0, "Per-request price (USD)")
 	modelsAddCmd.Flags().StringVar(&addNotes, "notes", "", "Freeform notes")
 	modelsAddCmd.Flags().Float64Var(&addThreshold, "similarity-threshold", 0, "Recommended min cosine for semantic search (embedding models only, 0..1)")
-	modelsAddCmd.Flags().StringVar(&addScope, "scope", "global", "Scope: global (~/.config/2nb/models.yaml) or vault (.2ndbrain/models.yaml)")
+	modelsAddCmd.Flags().StringVar(&addScope, "scope", "vault", "Scope: vault (.2ndbrain/models.yaml) or global (~/.config/2nb/models.yaml)")
 	_ = modelsAddCmd.MarkFlagRequired("provider")
 	_ = modelsAddCmd.MarkFlagRequired("type")
 	_ = modelsAddCmd.RegisterFlagCompletionFunc("provider", completeProviders)
@@ -154,24 +167,32 @@ func init() {
 	_ = modelsAddCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsRemoveCmd.Flags().StringVar(&removeProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
-	modelsRemoveCmd.Flags().StringVar(&removeScope, "scope", "global", "Scope: global or vault")
+	modelsRemoveCmd.Flags().StringVar(&removeScope, "scope", "vault", "Scope: vault or global")
 	_ = modelsRemoveCmd.MarkFlagRequired("provider")
 	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsEnableCmd.Flags().StringVar(&enableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
-	modelsEnableCmd.Flags().StringVar(&enableScope, "scope", "global", "Scope: global or vault")
+	modelsEnableCmd.Flags().StringVar(&enableScope, "scope", "vault", "Scope: vault or global")
 	modelsEnableCmd.Flags().StringVar(&enableVendor, "vendor", "", "Apply to every model whose VendorOf() matches (e.g. anthropic, amazon, google). Omits <model-id>.")
 	_ = modelsEnableCmd.MarkFlagRequired("provider")
 	_ = modelsEnableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsEnableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsDisableCmd.Flags().StringVar(&disableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
-	modelsDisableCmd.Flags().StringVar(&disableScope, "scope", "global", "Scope: global or vault")
+	modelsDisableCmd.Flags().StringVar(&disableScope, "scope", "vault", "Scope: vault or global")
 	modelsDisableCmd.Flags().StringVar(&disableVendor, "vendor", "", "Apply to every model whose VendorOf() matches (e.g. anthropic, amazon, google). Omits <model-id>.")
 	_ = modelsDisableCmd.MarkFlagRequired("provider")
 	_ = modelsDisableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsDisableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
+
+	modelsEnableStateCmd.Flags().StringVar(&enableStateProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsEnableStateCmd.Flags().StringVar(&enableStateScope, "scope", "vault", "Scope: vault or global")
+	modelsEnableStateCmd.Flags().StringVar(&enableStateValue, "state", "", "State: default, enabled, disabled")
+	_ = modelsEnableStateCmd.MarkFlagRequired("provider")
+	_ = modelsEnableStateCmd.MarkFlagRequired("state")
+	_ = modelsEnableStateCmd.RegisterFlagCompletionFunc("provider", completeProviders)
+	_ = modelsEnableStateCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
 	modelsCmd.AddCommand(modelsListCmd)
 	modelsCmd.AddCommand(modelsTestCmd)
@@ -179,6 +200,7 @@ func init() {
 	modelsCmd.AddCommand(modelsRemoveCmd)
 	modelsCmd.AddCommand(modelsEnableCmd)
 	modelsCmd.AddCommand(modelsDisableCmd)
+	modelsCmd.AddCommand(modelsEnableStateCmd)
 	modelsCmd.GroupID = "ai"
 	rootCmd.AddCommand(modelsCmd)
 }
@@ -386,6 +408,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	setupFileLogging(v)
 
 	modelID := args[0]
 	ctx := context.Background()
@@ -397,6 +420,20 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	result, err := ai.TestProbeModel(ctx, v.Config.AI, modelID, testProvider, testModelType)
 	if err != nil {
 		return err
+	}
+	slog.Info("models test", "provider", result.Provider, "model", result.ModelID, "type", result.Type, "ok", result.OK, "save", testSave)
+
+	if testSave {
+		scope := ai.UserCatalogScope(testSaveScope)
+		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
+		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
+			if getFormat(cmd) != "" {
+				return fmt.Errorf("save test result: %w", err)
+			}
+			fmt.Printf("  warning: failed to save: %v\n", err)
+		} else {
+			slog.Info("models test saved", "provider", entry.Provider, "model", entry.ID, "type", entry.Type, "ok", result.OK, "scope", testSaveScope)
+		}
 	}
 
 	format := getFormat(cmd)
@@ -415,18 +452,14 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  response: %s\n", detail)
 		}
 		if testSave {
-			base := findBuiltinModel(result.Provider, result.ModelID)
-			entry := promotedEntry(base, result)
-			scope := ai.UserCatalogScope(testSaveScope)
-			if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
-				fmt.Printf("  warning: failed to save: %v\n", err)
-			} else {
-				fmt.Printf("  → saved to %s catalog\n", testSaveScope)
-			}
+			fmt.Printf("  → saved to %s catalog\n", testSaveScope)
 		}
 	} else {
 		fmt.Printf("FAIL  %s/%s  (%s, %s)\n", result.Provider, result.Type, result.Latency, result.ModelID)
 		fmt.Printf("  error: %s\n", result.Detail)
+		if testSave {
+			fmt.Printf("  → saved failure to %s catalog\n", testSaveScope)
+		}
 	}
 	return nil
 }
@@ -454,7 +487,8 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	if addType != "embedding" && addType != "generation" {
 		return fmt.Errorf("--type must be embedding or generation, got %q", addType)
 	}
-	if addThreshold != 0 {
+	thresholdChanged := cmd.Flags().Changed("similarity-threshold")
+	if thresholdChanged {
 		if addThreshold < 0 || addThreshold > 1 {
 			return fmt.Errorf("--similarity-threshold must be between 0 and 1, got %g", addThreshold)
 		}
@@ -481,15 +515,62 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	if priceOverride {
 		entry.PriceSource = "user"
 	}
-	if entry.Name == "" {
+	if existing, ok := findCurrentCatalogEntry(vaultRoot, addProvider, modelID); ok {
+		entry = mergeAddCatalogEntry(cmd, existing, entry, priceOverride)
+	} else if entry.Name == "" {
 		entry.Name = modelID
 	}
 
 	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 		return fmt.Errorf("save: %w", err)
 	}
+	slog.Info("models add", "provider", entry.Provider, "model", entry.ID, "type", entry.Type, "scope", scope)
 	fmt.Fprintf(cmd.ErrOrStderr(), "Added %s/%s to %s catalog\n", entry.Provider, entry.ID, scope)
 	return nil
+}
+
+func findCurrentCatalogEntry(vaultRoot, provider, modelID string) (ai.ModelInfo, bool) {
+	for _, m := range ai.LoadUserCatalog(vaultRoot) {
+		if m.Provider == provider && m.ID == modelID {
+			return m, true
+		}
+	}
+	return ai.ModelInfo{}, false
+}
+
+func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, priceOverride bool) ai.ModelInfo {
+	out := existing
+	out.ID = patch.ID
+	out.Provider = patch.Provider
+	out.Type = patch.Type
+	if patch.Name != "" {
+		out.Name = patch.Name
+	} else if out.Name == "" {
+		out.Name = patch.ID
+	}
+	if cmd.Flags().Changed("dimensions") || patch.Dimensions != 0 {
+		out.Dimensions = patch.Dimensions
+	}
+	if cmd.Flags().Changed("context-length") || patch.ContextLen != 0 {
+		out.ContextLen = patch.ContextLen
+	}
+	if priceOverride {
+		out.PriceIn = patch.PriceIn
+		out.PriceOut = patch.PriceOut
+		out.PriceRequest = patch.PriceRequest
+		out.PriceSource = "user"
+		out.PriceOverride = true
+	}
+	if patch.Notes != "" {
+		out.Notes = patch.Notes
+	}
+	if cmd.Flags().Changed("similarity-threshold") {
+		out.RecommendedSimilarityThreshold = patch.RecommendedSimilarityThreshold
+	}
+	if out.Tier == "" {
+		out.Tier = ai.TierUserVerified
+	}
+	return out
 }
 
 func runModelsRemove(cmd *cobra.Command, args []string) error {
@@ -501,6 +582,7 @@ func runModelsRemove(cmd *cobra.Command, args []string) error {
 	if err := ai.RemoveUserCatalogEntry(scope, vaultRoot, removeProvider, modelID); err != nil {
 		return fmt.Errorf("remove: %w", err)
 	}
+	slog.Info("models remove", "provider", removeProvider, "model", modelID, "scope", scope)
 	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s/%s from %s catalog\n", removeProvider, modelID, scope)
 	return nil
 }
@@ -511,6 +593,10 @@ func runModelsEnable(cmd *cobra.Command, args []string) error {
 
 func runModelsDisable(cmd *cobra.Command, args []string) error {
 	return runModelsEnableDisable(cmd, args, disableProvider, disableScope, disableVendor, false)
+}
+
+func runModelsEnableState(cmd *cobra.Command, args []string) error {
+	return setModelEnabledState(cmd, args[0], enableStateProvider, enableStateScope, enableStateValue)
 }
 
 // runModelsEnableDisable dispatches three call shapes:
@@ -595,6 +681,7 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 	if !enabled {
 		verb = "disabled"
 	}
+	slog.Info("models vendor enable-state", "provider", provider, "vendor", vendor, "state", verb, "scope", scope, "count", count)
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s %d %s model(s) from %s in %s catalog\n", verb, count, provider, vendor, scope)
 	return nil
 }
@@ -603,6 +690,23 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 // (provider, modelID). When no entry exists yet (builtin-only models), a
 // minimal entry is created so the flag persists without a prior `models add`.
 func setModelEnabled(cmd *cobra.Command, modelID, provider, scopeStr string, enabled bool) error {
+	return setModelEnabledPointer(cmd, modelID, provider, scopeStr, ai.Ptr(enabled), enabledStateLabel(enabled))
+}
+
+func setModelEnabledState(cmd *cobra.Command, modelID, provider, scopeStr, state string) error {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "default", "unset", "auto":
+		return setModelEnabledPointer(cmd, modelID, provider, scopeStr, nil, "default")
+	case "enabled", "enable", "true", "on":
+		return setModelEnabledPointer(cmd, modelID, provider, scopeStr, ai.Ptr(true), "enabled")
+	case "disabled", "disable", "false", "off":
+		return setModelEnabledPointer(cmd, modelID, provider, scopeStr, ai.Ptr(false), "disabled")
+	default:
+		return fmt.Errorf("--state must be default, enabled, or disabled, got %q", state)
+	}
+}
+
+func setModelEnabledPointer(cmd *cobra.Command, modelID, provider, scopeStr string, enabled *bool, label string) error {
 	scope, vaultRoot, err := resolveCatalogScope(scopeStr)
 	if err != nil {
 		return err
@@ -628,17 +732,78 @@ func setModelEnabled(cmd *cobra.Command, modelID, provider, scopeStr string, ena
 		}
 	}
 
-	entry.Enabled = ai.Ptr(enabled)
+	entry.Enabled = enabled
 	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 		return fmt.Errorf("save: %w", err)
 	}
 
-	verb := "enabled"
-	if !enabled {
-		verb = "disabled"
-	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog\n", verb, provider, modelID, scope)
+	slog.Info("models enable-state", "provider", provider, "model", modelID, "state", label, "scope", scope)
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog\n", label, provider, modelID, scope)
 	return nil
+}
+
+func enabledStateLabel(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot string, result *ai.TestProbeResult) ai.ModelInfo {
+	var base *ai.ModelInfo
+	if current, ok := findModelInfo(ctx, cfg, vaultRoot, result.Provider, result.ModelID); ok {
+		base = &current
+	} else {
+		base = findBuiltinModel(result.Provider, result.ModelID)
+	}
+
+	var entry ai.ModelInfo
+	if result.OK {
+		entry = promotedEntry(base, result)
+		entry.TestError = ""
+	} else if base != nil {
+		entry = *base
+		if entry.Tier == "" {
+			entry.Tier = ai.TierUnverified
+		}
+	} else {
+		entry = ai.ModelInfo{
+			ID:       result.ModelID,
+			Provider: result.Provider,
+			Type:     result.Type,
+			Tier:     ai.TierUnverified,
+		}
+	}
+
+	entry.ID = result.ModelID
+	entry.Provider = result.Provider
+	entry.Type = result.Type
+	entry.TestedAt = time.Now().UTC().Format(time.RFC3339)
+	entry.TestLatencyMs = latencyMs(result.Latency)
+	if !result.OK {
+		entry.TestError = result.Detail
+	}
+	return entry
+}
+
+func findModelInfo(ctx context.Context, cfg ai.AIConfig, vaultRoot, provider, id string) (ai.ModelInfo, bool) {
+	list, err := ai.BuildModelList(ctx, ai.MergedListOptions{
+		Config:    cfg,
+		VaultRoot: vaultRoot,
+	})
+	if err == nil {
+		for _, m := range list.Verified {
+			if m.Provider == provider && m.ID == id {
+				return m, true
+			}
+		}
+	}
+	for _, m := range ai.LoadUserCatalog(vaultRoot) {
+		if m.Provider == provider && m.ID == id {
+			return m, true
+		}
+	}
+	return ai.ModelInfo{}, false
 }
 
 // promotedEntry builds a user-catalog ModelInfo from a passing probe result.
@@ -646,11 +811,12 @@ func setModelEnabled(cmd *cobra.Command, modelID, provider, scopeStr string, ena
 // dimensions when available; Tier and TestedAt are always set from the promotion.
 func promotedEntry(base *ai.ModelInfo, result *ai.TestProbeResult) ai.ModelInfo {
 	entry := ai.ModelInfo{
-		ID:       result.ModelID,
-		Provider: result.Provider,
-		Type:     result.Type,
-		Tier:     ai.TierUserVerified,
-		TestedAt: time.Now().UTC().Format(time.RFC3339),
+		ID:            result.ModelID,
+		Provider:      result.Provider,
+		Type:          result.Type,
+		Tier:          ai.TierUserVerified,
+		TestedAt:      time.Now().UTC().Format(time.RFC3339),
+		TestLatencyMs: latencyMs(result.Latency),
 	}
 	if base != nil {
 		entry.Name = base.Name
@@ -711,6 +877,7 @@ func resolveCatalogScope(scope string) (ai.UserCatalogScope, string, error) {
 			return "", "", fmt.Errorf("vault scope: %w", err)
 		}
 		defer v.Close()
+		setupFileLogging(v)
 		return ai.ScopeVault, v.Root, nil
 	default:
 		return "", "", fmt.Errorf("--scope must be %q or %q, got %q", ai.ScopeGlobal, ai.ScopeVault, scope)
