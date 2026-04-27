@@ -74,6 +74,18 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	benchModelFlag, benchProbeFlag, benchProviderFlag = "", "", ""
 	benchSummaryScope = "global"
 	benchHistoryLimit = 20
+	createType, createTitle, createAllowDuplicate = "note", "", false
+	readChunk = ""
+	metaSet = nil
+	deleteForce = false
+	initPath = ""
+	indexDocFlag, indexForceReembed = "", false
+	searchType, searchStatus, searchTag = "", "", ""
+	searchLimit, searchBM25Only, searchThreshold = 20, false, 0
+	listType, listStatus, listTag, listSort = "", "", "", "modified"
+	listLimit = 100
+	relatedDepth = 2
+	staleSince = 90
 
 	// Redirect os.Stdout so fmt.Printf in handlers lands in our buffer.
 	// Cobra's SetOut only covers its own output (help/usage text), not

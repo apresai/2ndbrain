@@ -505,7 +505,7 @@ struct AIHubView: View {
             )
             await reload()
         } catch {
-            errorMessage = "Bulk toggle \(group.vendorDisplay) failed: \(error.localizedDescription)"
+            recordActionFailure("Bulk toggle \(group.vendorDisplay) failed", error: error)
         }
     }
 
@@ -629,8 +629,7 @@ struct AIHubView: View {
             models = try await modelsTask
             hubLog.info("AI Hub reload: \(self.models.count) models · \(self.aiStatus?.providers?.count ?? 0) providers")
         } catch {
-            errorMessage = "Failed to load AI state: \(error.localizedDescription)"
-            hubLog.error("AI Hub reload failed: \(error.localizedDescription)")
+            recordActionFailure("Failed to load AI state", error: error)
         }
     }
 
@@ -641,7 +640,7 @@ struct AIHubView: View {
         do {
             models = try await appState.fetchModelsForWizard()
         } catch {
-            errorMessage = "Discover failed: \(error.localizedDescription)"
+            recordActionFailure("Discover failed", error: error)
         }
     }
 
@@ -651,7 +650,7 @@ struct AIHubView: View {
             // FSEvents on config.yaml will refresh; also reload proactively.
             await reload()
         } catch {
-            errorMessage = "Toggle \(p.name) failed: \(error.localizedDescription)"
+            recordActionFailure("Toggle \(p.name) failed", error: error)
         }
     }
 
@@ -675,15 +674,7 @@ struct AIHubView: View {
             testResults[m.modelID] = TestOutcome(
                 running: false, ok: false, latency: nil, detail: error.localizedDescription
             )
-        }
-    }
-
-    private func makeActive(_ m: CatalogModelInfo) async {
-        do {
-            try await appState.setActiveModel(type: m.modelType, modelID: m.modelID, provider: m.provider)
-            await reload()
-        } catch {
-            errorMessage = "Set active failed: \(error.localizedDescription)"
+            recordActionFailure("Test \(m.modelID) failed", error: error)
         }
     }
 
@@ -695,7 +686,13 @@ struct AIHubView: View {
             )
             await reload()
         } catch {
-            errorMessage = "Toggle \(m.modelID) failed: \(error.localizedDescription)"
+            recordActionFailure("Toggle \(m.modelID) failed", error: error)
         }
+    }
+
+    private func recordActionFailure(_ message: String, error: Error) {
+        errorMessage = "\(message): \(error.localizedDescription)"
+        hubLog.error("\(message, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        appState.errorLogger?.log(message, error: error)
     }
 }

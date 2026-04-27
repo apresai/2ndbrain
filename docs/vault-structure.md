@@ -16,6 +16,8 @@ my-vault/
     ├── schemas.yaml              # Document type schemas
     ├── index.db                  # SQLite search index (FTS5 + metadata)
     ├── index.db-wal              # WAL file (multi-process access)
+    ├── bench.db                  # Benchmark history and favorites
+    ├── mcp/                      # Runtime status files for mcp-server processes
     ├── models/                   # Embedding models (future)
     ├── recovery/                 # Crash recovery snapshots
     └── logs/                     # Error logs
@@ -30,6 +32,19 @@ embedding:
   model: nomic-embed-text-v1.5.Q8_0.gguf
   dimensions: 768
   batch_size: 100
+ai:
+  provider: bedrock
+  embedding_model: amazon.nova-2-multimodal-embeddings-v1:0
+  generation_model: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  dimensions: 1024
+  similarity_threshold: 0
+  ollama:
+    endpoint: http://localhost:11434
+  bedrock:
+    profile: default
+    region: us-east-1
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
 ```
 
 ## Frontmatter Format
@@ -58,11 +73,12 @@ SQLite database shared by the Go CLI and Swift app via WAL mode.
 
 | Table | Purpose |
 |-------|---------|
-| `documents` | Document metadata (id, path, title, type, status, timestamps, frontmatter JSON) |
+| `documents` | Document metadata (id, path, title, type, status, timestamps, content_hash, frontmatter JSON, embedding, embedding_model, embedding_hash) |
 | `chunks` | Heading-based sections (heading path, level, content, content hash, line range) |
 | `chunks_fts` | FTS5 virtual table for BM25 keyword search |
 | `links` | Wikilink edges (source -> target, with resolution status) |
 | `tags` | Document tags for filtering |
+| `schema_version` | Single-row schema version; v2 adds document embedding columns |
 
 ## Ignored Paths
 

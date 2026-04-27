@@ -37,7 +37,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SecondBrainAppTests",
-            dependencies: ["SecondBrainCore"],
+            dependencies: ["SecondBrain", "SecondBrainCore"],
             path: "Tests/SecondBrainAppTests"
         ),
     ]

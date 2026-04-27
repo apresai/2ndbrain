@@ -183,6 +183,12 @@ struct SecondBrainApp: App {
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
 
+                Button("Properties Panel") {
+                    appState.showProperties = true
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(appState.currentDocument == nil)
+
                 Divider()
 
                 Button("Recent Activity") {
@@ -391,4 +397,3 @@ struct SecondBrainApp: App {
         }
     }
 }
-

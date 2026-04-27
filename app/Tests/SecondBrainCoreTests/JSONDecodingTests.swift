@@ -16,6 +16,8 @@ private struct AIStatusInfo: Codable {
     let genAvailable: Bool
     let embeddingCount: Int
     let documentCount: Int
+    let similarityThreshold: Double?
+    let similarityThresholdSource: String?
 
     enum CodingKeys: String, CodingKey {
         case provider
@@ -26,6 +28,8 @@ private struct AIStatusInfo: Codable {
         case genAvailable = "gen_available"
         case embeddingCount = "embedding_count"
         case documentCount = "document_count"
+        case similarityThreshold = "similarity_threshold"
+        case similarityThresholdSource = "similarity_threshold_source"
     }
 }
 
@@ -101,6 +105,11 @@ private struct CatalogModelInfo: Codable {
     let priceOut: Double?
     let priceRequest: Double?
     let priceSource: String?
+    let reachable: Bool?
+    let credentials: Bool?
+    let rateLimitRPS: Double?
+    let rateLimitTPM: Int?
+    let priceOverride: Bool?
     let contextLen: Int?
     let recommendedSimilarityThreshold: Double?
     let tier: String?
@@ -127,6 +136,11 @@ private struct CatalogModelInfo: Codable {
         case priceOut = "price_output_per_million"
         case priceRequest = "price_per_request"
         case priceSource = "price_source"
+        case reachable
+        case credentials
+        case rateLimitRPS = "rate_limit_rps"
+        case rateLimitTPM = "rate_limit_tpm"
+        case priceOverride = "price_override"
         case contextLen = "context_length"
         case recommendedSimilarityThreshold = "recommended_similarity_threshold"
         case tier
@@ -156,6 +170,35 @@ private struct CatalogBenchmarkSummary: Codable {
     }
 }
 
+private struct CostEstimate: Codable {
+    let modelID: String
+    let provider: String
+    let requests: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let probe: String
+    let usd: Double
+    let knownPricing: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+        case provider, requests, probe, usd
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
+        case knownPricing = "known_pricing"
+    }
+}
+
+private struct CostPreviewResponse: Codable {
+    let estimates: [CostEstimate]
+    let totalUSD: Double
+
+    enum CodingKeys: String, CodingKey {
+        case estimates
+        case totalUSD = "total_usd"
+    }
+}
+
 private struct OllamaReadiness: Codable {
     let installed: Bool
     let running: Bool
@@ -178,7 +221,9 @@ func aiStatusFullDecode() throws {
         "embed_available": true,
         "gen_available": true,
         "embedding_count": 42,
-        "document_count": 100
+        "document_count": 100,
+        "similarity_threshold": 0.35,
+        "similarity_threshold_source": "model"
     }
     """
     let status = try JSONDecoder().decode(AIStatusInfo.self, from: Data(json.utf8))
@@ -190,6 +235,8 @@ func aiStatusFullDecode() throws {
     #expect(status.genAvailable == true)
     #expect(status.embeddingCount == 42)
     #expect(status.documentCount == 100)
+    #expect(status.similarityThreshold == 0.35)
+    #expect(status.similarityThresholdSource == "model")
 }
 
 @Test("AIStatusInfo decodes when AI is not configured")
@@ -347,6 +394,11 @@ func catalogPickerSchemaFields() throws {
         "price_input_per_million": 0.8,
         "price_output_per_million": 4.0,
         "price_source": "vendor",
+        "price_override": true,
+        "reachable": true,
+        "credentials": true,
+        "rate_limit_rps": 0.5,
+        "rate_limit_tpm": 120000,
         "tier": "user_verified",
         "invoke_strategy": "bedrock_converse",
         "enabled": true,
@@ -366,6 +418,11 @@ func catalogPickerSchemaFields() throws {
     #expect(model.vendorDisplay == "Anthropic")
     #expect(model.family == "Claude")
     #expect(model.priceSource == "vendor")
+    #expect(model.priceOverride == true)
+    #expect(model.reachable == true)
+    #expect(model.credentials == true)
+    #expect(model.rateLimitRPS == 0.5)
+    #expect(model.rateLimitTPM == 120000)
     #expect(model.tier == "user_verified")
     #expect(model.invokeStrategy == "bedrock_converse")
     #expect(model.enabled == true)
@@ -394,6 +451,30 @@ func catalogFailedCompatibilityAndRequestPrice() throws {
     #expect(model.compatible == false)
     #expect(model.compatibilityReason?.contains("Bedrock") == true)
     #expect(model.testError == "rate limited")
+}
+
+@Test("Cost preview decodes probe field")
+func costPreviewDecodesProbe() throws {
+    let json = """
+    {
+        "estimates": [
+            {
+                "model_id": "claude-haiku",
+                "provider": "bedrock",
+                "requests": 1,
+                "input_tokens": 1200,
+                "output_tokens": 200,
+                "probe": "bench_rag",
+                "usd": 0.00176,
+                "known_pricing": true
+            }
+        ],
+        "total_usd": 0.00176
+    }
+    """
+    let preview = try JSONDecoder().decode(CostPreviewResponse.self, from: Data(json.utf8))
+    #expect(preview.estimates.first?.probe == "bench_rag")
+    #expect(preview.totalUSD == 0.00176)
 }
 
 // MARK: - CLISearchResult Tests

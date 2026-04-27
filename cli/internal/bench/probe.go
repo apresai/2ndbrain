@@ -243,7 +243,7 @@ func RunRAG(opts ProbeOpts) ProbeResult {
 		seen[r.Path] = true
 		content, err := os.ReadFile(filepath.Join(opts.VaultRoot, r.Path))
 		if err != nil {
-			continue
+			return ProbeResult{Probe: "rag", LatencyMs: time.Since(start).Milliseconds(), OK: false, Detail: fmt.Sprintf("read context %s: %v", r.Path, err)}
 		}
 		runes := []rune(string(content))
 		if len(runes) > 2000 {
@@ -254,6 +254,9 @@ func RunRAG(opts ProbeOpts) ProbeResult {
 			text += "..."
 		}
 		chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: text})
+	}
+	if len(chunks) == 0 {
+		return ProbeResult{Probe: "rag", LatencyMs: time.Since(start).Milliseconds(), OK: false, Detail: "no readable context sources"}
 	}
 
 	// Generate

@@ -512,6 +512,118 @@ func TestHandleKBIndex(t *testing.T) {
 	}
 }
 
+func TestMCPToolRegistrationsIncludesAllTools(t *testing.T) {
+	h, _ := makeHandlers(t)
+	regs := mcpToolRegistrations(h)
+	if len(regs) != 16 {
+		t.Fatalf("registered tools = %d, want 16", len(regs))
+	}
+	names := make(map[string]bool, len(regs))
+	for _, reg := range regs {
+		names[reg.tool.Name] = true
+		if reg.timeout <= 0 {
+			t.Fatalf("tool %s has non-positive timeout %s", reg.tool.Name, reg.timeout)
+		}
+	}
+	for _, name := range []string{
+		"kb_info", "kb_search", "kb_ask", "kb_read", "kb_list", "kb_create",
+		"kb_update_meta", "kb_related", "kb_structure", "kb_delete", "kb_index",
+		"kb_suggest_links", "kb_polish", "kb_git_activity", "kb_git_diff", "kb_git_status",
+	} {
+		if !names[name] {
+			t.Fatalf("missing MCP tool registration %q", name)
+		}
+	}
+}
+
+func TestHandleKBRelated(t *testing.T) {
+	h, v := makeHandlers(t)
+	ctx := context.Background()
+	target := testutil.CreateAndIndex(t, v, "Target Doc", "note", "target body")
+	source := testutil.CreateAndIndex(t, v, "Source Doc", "note", "See [[Target Doc]] for more.")
+	if _, err := v.DB.Conn().Exec(
+		`INSERT INTO links (source_id, target_id, target_raw, resolved) VALUES (?, ?, ?, 1)`,
+		source.ID, target.ID, "Target Doc",
+	); err != nil {
+		t.Fatalf("seed resolved link: %v", err)
+	}
+
+	res, err := h.handleKBRelated(ctx, makeRequest(map[string]any{
+		"path":  source.Path,
+		"depth": float64(1),
+	}))
+	if err != nil {
+		t.Fatalf("handleKBRelated returned error: %v", err)
+	}
+	text := resultText(t, res)
+	if res.IsError {
+		t.Fatalf("result is an error: %s", text)
+	}
+	if !strings.Contains(text, "Target Doc") {
+		t.Fatalf("related result missing target doc:\n%s", text)
+	}
+}
+
+func TestHandleKBAskRequiresQuestion(t *testing.T) {
+	h, _ := makeHandlers(t)
+	res, err := h.handleKBAsk(context.Background(), makeRequest(nil))
+	if err != nil {
+		t.Fatalf("handleKBAsk returned error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(resultText(t, res), "question is required") {
+		t.Fatalf("expected question-required error, got %+v", res)
+	}
+}
+
+func TestHandleKBPolishRequiresPath(t *testing.T) {
+	h, _ := makeHandlers(t)
+	res, err := h.handleKBPolish(context.Background(), makeRequest(nil))
+	if err != nil {
+		t.Fatalf("handleKBPolish returned error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(resultText(t, res), "path is required") {
+		t.Fatalf("expected path-required error, got %+v", res)
+	}
+}
+
+func TestHandleKBSuggestLinksRequiresPath(t *testing.T) {
+	h, _ := makeHandlers(t)
+	res, err := h.handleKBSuggestLinks(context.Background(), makeRequest(nil))
+	if err != nil {
+		t.Fatalf("handleKBSuggestLinks returned error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(resultText(t, res), "path is required") {
+		t.Fatalf("expected path-required error, got %+v", res)
+	}
+}
+
+func TestHandleKBGitHandlersNonRepo(t *testing.T) {
+	h, _ := makeHandlers(t)
+	ctx := context.Background()
+	for name, call := range map[string]func() (*mcplib.CallToolResult, error){
+		"activity": func() (*mcplib.CallToolResult, error) {
+			return h.handleKBGitActivity(ctx, makeRequest(nil))
+		},
+		"diff": func() (*mcplib.CallToolResult, error) {
+			return h.handleKBGitDiff(ctx, makeRequest(map[string]any{"path": "note.md"}))
+		},
+		"status": func() (*mcplib.CallToolResult, error) {
+			return h.handleKBGitStatus(ctx, makeRequest(nil))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := call()
+			if err != nil {
+				t.Fatalf("git handler returned error: %v", err)
+			}
+			text := resultText(t, res)
+			if res.IsError || !strings.Contains(text, `"git_repo": false`) {
+				t.Fatalf("expected non-repo JSON response, got error=%v text=%s", res.IsError, text)
+			}
+		})
+	}
+}
+
 func TestHandlers_ThresholdCachesOnce(t *testing.T) {
 	// handlers.threshold() uses sync.Once to memoize the resolved
 	// AIConfig.SimilarityThreshold for the MCP session. Subsequent vault

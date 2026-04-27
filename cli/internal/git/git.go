@@ -26,15 +26,6 @@ func IsRepo(root string) bool {
 	return cmd.Run() == nil
 }
 
-// RepoRoot returns the top-level of the git repository containing root.
-func RepoRoot(root string) (string, error) {
-	out, err := runGit(root, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
-}
-
 // FileStatus describes a file's state in a single-letter porcelain code.
 type FileStatus string
 
@@ -127,11 +118,11 @@ type CommitStats struct {
 // Diff == "" and Binary == true so the UI can render a placeholder
 // instead of attempting syntax highlighting.
 type CommitFile struct {
-	Path       string `json:"path"`
-	Additions  int    `json:"additions"`
-	Deletions  int    `json:"deletions"`
-	Binary     bool   `json:"binary"`
-	Diff       string `json:"diff"`
+	Path      string `json:"path"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Binary    bool   `json:"binary"`
+	Diff      string `json:"diff"`
 }
 
 // Show returns the full detail for a commit identified by hash. Hash may

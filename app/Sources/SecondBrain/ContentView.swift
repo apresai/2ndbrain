@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
-    @State private var showProperties = false
     @State private var focusChromeVisible = false
 
     private var anyOverlayVisible: Bool {
@@ -36,7 +35,13 @@ struct ContentView: View {
                     NSApp.keyWindow?.makeFirstResponder(nil)
                 }
             }
-            .modifier(PrimarySheetsModifier(appState: appState, showProperties: $showProperties))
+            .modifier(PrimarySheetsModifier(
+                appState: appState,
+                showProperties: Binding(
+                    get: { appState.showProperties },
+                    set: { appState.showProperties = $0 }
+                )
+            ))
             .modifier(SecondarySheetsModifier(appState: appState))
             .alert("Crash Recovery", isPresented: Binding(
                 get: { appState.showRecoveryDialog },

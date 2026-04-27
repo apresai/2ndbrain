@@ -216,7 +216,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ai embed <text>` | Generate embedding vector (debug) |
 | `models list [--discover] [--status] [--provider] [--promote] [--enabled-only]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass; `--enabled-only` filters out user-disabled models (dropdowns use this) |
 | `models test <model-id> [--save] [--scope global\|vault]` | Smoke-test any model (embed or generate probe); `--save` adds the model to your catalog if it passes |
-| `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (layered into `models list`) |
+| `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (per-vault by default, or global with `--scope global`) |
 | `models remove <id> --provider [--scope global\|vault]` | Remove a model from your user catalog |
 | `models enable <id> --provider [--scope global\|vault]` | Mark a model enabled so it appears in dropdowns |
 | `models disable <id> --provider [--scope global\|vault]` | Hide a model from dropdowns; still listed by bare `models list` |

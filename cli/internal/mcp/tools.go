@@ -131,10 +131,10 @@ func (h *handlers) handleKBInfo(ctx context.Context, request mcplib.CallToolRequ
 	}
 
 	info := map[string]any{
-		"vault_name":     cfg.Name,
+		"vault_name":      cfg.Name,
 		"total_documents": totalDocs,
-		"document_types": schemas,
-		"ai":             aiStatus,
+		"document_types":  schemas,
+		"ai":              aiStatus,
 		"usage_tips": []string{
 			"Use kb_search to find documents by topic",
 			"Use kb_ask to get AI-synthesized answers with source citations",
@@ -312,21 +312,39 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 	}
 
 	var results []search.Result
+	var warnings []string
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
-	embCount, _ := h.vault.DB.EmbeddingCount()
+	embCount, countErr := h.vault.DB.EmbeddingCount()
+	if countErr != nil {
+		slog.Warn("mcp kb_ask embedding count failed", "err", countErr)
+		warnings = append(warnings, fmt.Sprintf("embedding count failed: %v", countErr))
+	}
 
-	if embErr == nil && embedder.Available(ctx) && embCount > 0 {
+	if embErr == nil && countErr == nil && embedder.Available(ctx) && embCount > 0 {
 		// Apply timeout to embedding call
 		embedCtx, embedCancel := context.WithTimeout(ctx, 60*time.Second)
 		defer embedCancel()
 		queryVecs, err := embedder.Embed(embedCtx, []string{question})
 		if err == nil && len(queryVecs) > 0 {
-			docIDs, embeddings, _ := h.getCachedEmbeddings()
-			results, _, _ = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
+			docIDs, embeddings, err := h.getCachedEmbeddings()
+			if err != nil {
+				slog.Warn("mcp kb_ask embedding load failed", "err", err)
+				warnings = append(warnings, fmt.Sprintf("semantic retrieval disabled: failed to load embeddings (%v)", err))
+			} else if results, _, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings); err != nil {
+				slog.Warn("mcp kb_ask hybrid search failed", "err", err)
+				warnings = append(warnings, fmt.Sprintf("semantic retrieval disabled: hybrid search failed (%v)", err))
+				results = nil
+			}
+		} else if err != nil {
+			slog.Warn("mcp kb_ask query embedding failed", "err", err)
+			warnings = append(warnings, fmt.Sprintf("semantic retrieval disabled: embedder returned error (%v)", err))
 		}
 	}
 	if results == nil {
-		results, _ = engine.Search(opts)
+		results, err = engine.Search(opts)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
+		}
 	}
 
 	// Build RAG context from search results
@@ -343,8 +361,14 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 					runes = runes[:2000]
 				}
 				chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: string(runes)})
+			} else {
+				slog.Warn("mcp kb_ask context read failed", "path", r.Path, "err", err)
+				warnings = append(warnings, fmt.Sprintf("failed to read context source %s: %v", r.Path, err))
 			}
 		}
+	}
+	if len(chunks) == 0 {
+		return mcplib.NewToolResultError("failed to build RAG context from search results"), nil
 	}
 
 	result, err := ai.RAG(ctx, generator, question, chunks)
@@ -352,7 +376,16 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		return mcplib.NewToolResultError(fmt.Sprintf("RAG failed: %v", err)), nil
 	}
 
-	data, _ := json.MarshalIndent(result, "", "  ")
+	type askResponse struct {
+		Warnings []string `json:"warnings,omitempty"`
+		Answer   string   `json:"answer"`
+		Sources  []string `json:"sources"`
+	}
+	data, _ := json.MarshalIndent(askResponse{
+		Warnings: warnings,
+		Answer:   result.Answer,
+		Sources:  result.Sources,
+	}, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil
 }
 

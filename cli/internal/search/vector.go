@@ -29,13 +29,6 @@ func CosineSimilarity(a, b []float32) float64 {
 	return dot / denom
 }
 
-// VectorSearch performs brute-force cosine similarity search over all embeddings.
-// Backwards-compatible wrapper — does not apply a similarity threshold.
-// New callers should prefer VectorSearchThreshold to filter out noise neighbors.
-func VectorSearch(query []float32, docIDs []string, embeddings [][]float32, limit int) []ScoredDoc {
-	return VectorSearchThreshold(query, docIDs, embeddings, limit, 0)
-}
-
 // VectorSearchThreshold performs brute-force cosine similarity search and
 // drops any hit below minScore before sorting. minScore <= 0 means "no filter".
 // Use ai.AIConfig.ResolveSimilarityThreshold() to pick a default.

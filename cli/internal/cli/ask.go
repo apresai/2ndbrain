@@ -82,6 +82,10 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	var results []search.Result
 	var warnings []string
 	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
+	addWarning := func(msg string) {
+		fmt.Fprintln(os.Stderr, "  "+msg)
+		warnings = append(warnings, msg)
+	}
 
 	// Same compat gate as `2nb search` — if VectorCompat fails, we warn
 	// once and fall back to BM25-only retrieval. The generator still runs
@@ -90,8 +94,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	useHybrid := true
 	if ready, msg := VectorCompat(ctx, v, embedder); !ready {
 		if msg != "" {
-			fmt.Fprintln(os.Stderr, "  "+msg)
-			warnings = append(warnings, msg)
+			addWarning(msg)
 		}
 		useHybrid = false
 	}
@@ -99,16 +102,34 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	if useHybrid {
 		queryVecs, err := embedder.Embed(ctx, []string{question})
 		if err == nil && len(queryVecs) > 0 {
-			docIDs, embeddings, _ := v.DB.AllEmbeddings()
-			results, _, _ = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
+			docIDs, embeddings, err := v.DB.AllEmbeddings()
+			if err != nil {
+				msg := fmt.Sprintf("semantic retrieval disabled: failed to load embeddings (%v)", err)
+				slog.Warn("ask semantic retrieval disabled: load embeddings failed", "err", err)
+				addWarning(msg)
+			} else {
+				var mode search.SearchMode
+				results, mode, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
+				if err != nil {
+					msg := fmt.Sprintf("semantic retrieval disabled: hybrid search failed (%v)", err)
+					slog.Warn("ask semantic retrieval disabled: hybrid search failed", "err", err)
+					addWarning(msg)
+					results = nil
+				} else if mode != search.ModeHybrid {
+					useHybrid = false
+				}
+			}
 		} else if err != nil {
 			msg := fmt.Sprintf("semantic retrieval disabled: embedder returned error (%v)", err)
-			fmt.Fprintln(os.Stderr, "  "+msg)
-			warnings = append(warnings, msg)
+			slog.Warn("ask semantic retrieval disabled: embedder failed", "err", err)
+			addWarning(msg)
 		}
 	}
 	if results == nil {
-		results, _ = engine.Search(opts)
+		results, err = engine.Search(opts)
+		if err != nil {
+			return fmt.Errorf("search: %w", err)
+		}
 	}
 
 	if len(results) == 0 {
@@ -125,6 +146,9 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		seen[r.Path] = true
 		content, err := os.ReadFile(filepath.Join(v.Root, r.Path))
 		if err != nil {
+			msg := fmt.Sprintf("failed to read context source %s: %v", r.Path, err)
+			slog.Warn("ask context read failed", "path", r.Path, "err", err)
+			addWarning(msg)
 			continue
 		}
 		// Truncate to first 2000 runes (M3: rune-safe)
@@ -137,6 +161,9 @@ func runAsk(cmd *cobra.Command, args []string) error {
 			text += "..."
 		}
 		chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: text})
+	}
+	if len(chunks) == 0 {
+		return fmt.Errorf("failed to build RAG context from %d search result(s); see warnings for unreadable sources", len(results))
 	}
 
 	if !flagPorcelain {

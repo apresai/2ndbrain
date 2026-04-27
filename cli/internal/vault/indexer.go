@@ -2,6 +2,7 @@ package vault
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +61,7 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 
 		if err := indexFile(v.DB, path, relPath); err != nil {
 			stats.Errors++
+			slog.Warn("index file failed", "path", relPath, "err", err)
 			fmt.Fprintf(os.Stderr, "warning: index %s: %v\n", relPath, err)
 			return nil
 		}
@@ -74,12 +76,17 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 
 	// Resolve wikilinks now that all documents are indexed
 	if err := v.DB.ResolveLinks(); err != nil {
+		slog.Warn("resolve links failed", "err", err)
 		fmt.Fprintf(os.Stderr, "warning: resolve links: %v\n", err)
 	}
 
 	// Count chunks and links
-	stats.ChunksCreated = countRows(v.DB, "chunks")
-	stats.LinksFound = countRows(v.DB, "links")
+	if stats.ChunksCreated, err = countRows(v.DB, "chunks"); err != nil {
+		return stats, err
+	}
+	if stats.LinksFound, err = countRows(v.DB, "links"); err != nil {
+		return stats, err
+	}
 
 	return stats, nil
 }
@@ -169,6 +176,7 @@ func purgeStale(v *Vault) error {
 	for rows.Next() {
 		var id, path string
 		if err := rows.Scan(&id, &path); err != nil {
+			slog.Warn("purge stale scan failed", "err", err)
 			fmt.Fprintf(os.Stderr, "warning: purgeStale scan: %v\n", err)
 			continue
 		}
@@ -180,14 +188,17 @@ func purgeStale(v *Vault) error {
 	if err := rows.Err(); err != nil {
 		// Cursor aborted mid-scan; the stale list is partial. Warn but
 		// proceed with what we have so we don't leave the user stuck.
+		slog.Warn("purge stale iteration incomplete", "err", err)
 		fmt.Fprintf(os.Stderr, "warning: purgeStale iteration incomplete: %v\n", err)
 	}
 
 	for _, id := range stale {
 		if err := v.DB.DeleteDocument(id); err != nil {
+			slog.Warn("purge stale delete failed", "id", id, "err", err)
 			fmt.Fprintf(os.Stderr, "warning: purgeStale delete %s: %v\n", id, err)
 			continue
 		}
+		slog.Info("purged stale document", "id", id)
 		fmt.Fprintf(os.Stderr, "  purged stale: %s\n", id)
 	}
 	return nil
@@ -195,13 +206,15 @@ func purgeStale(v *Vault) error {
 
 // countRows returns the row count for a known table. The table parameter
 // must be one of the whitelisted names to prevent SQL injection.
-func countRows(db *store.DB, table string) int {
+func countRows(db *store.DB, table string) (int, error) {
 	allowed := map[string]bool{"chunks": true, "links": true, "documents": true, "tags": true}
 	if !allowed[table] {
-		return 0
+		return 0, fmt.Errorf("count rows: table %q is not allowed", table)
 	}
 	var count int
 	row := db.Conn().QueryRow("SELECT COUNT(*) FROM " + table)
-	row.Scan(&count)
-	return count
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("count rows in %s: %w", table, err)
+	}
+	return count, nil
 }

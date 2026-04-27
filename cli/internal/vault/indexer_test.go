@@ -113,6 +113,17 @@ func TestPurgeStale_ReturnsErrorOnClosedDB(t *testing.T) {
 	}
 }
 
+func TestCountRows_ReturnsScanError(t *testing.T) {
+	v := initTestVault(t)
+	if err := v.DB.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if _, err := countRows(v.DB, "chunks"); err == nil {
+		t.Fatal("countRows on closed DB should return error")
+	}
+}
+
 // TestPurgeStale_RemovesMissingFiles exercises the happy path: a doc
 // indexed but whose file was later deleted from disk should be removed
 // from the documents table on the next purge.

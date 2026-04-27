@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,11 +19,11 @@ import (
 )
 
 var (
-	benchModelFlag     string
-	benchProbeFlag     string
-	benchProviderFlag  string
-	benchSummaryScope  string
-	benchHistoryLimit  int
+	benchModelFlag    string
+	benchProbeFlag    string
+	benchProviderFlag string
+	benchSummaryScope string
+	benchHistoryLimit int
 )
 
 var benchCmd = &cobra.Command{
@@ -69,7 +70,7 @@ var benchCompareCmd = &cobra.Command{
 func init() {
 	benchCmd.Flags().StringVar(&benchModelFlag, "model", "", "Bench a specific model instead of favorites")
 	benchCmd.Flags().StringVar(&benchProbeFlag, "probe", "", "Run only a specific probe: embed, generate, retrieval, search, rag")
-	benchCmd.Flags().StringVar(&benchProviderFlag, "provider", "", "Provider override (auto-detected if omitted)")
+	benchCmd.PersistentFlags().StringVar(&benchProviderFlag, "provider", "", "Provider override (auto-detected if omitted)")
 	benchCmd.Flags().StringVar(&benchSummaryScope, "summary-scope", "global", "Where to save the per-model benchmark summary: global or vault. Run history (.2ndbrain/bench.db) is unaffected.")
 	benchHistoryCmd.Flags().IntVar(&benchHistoryLimit, "limit", 20, "Number of runs to show")
 	_ = benchCmd.RegisterFlagCompletionFunc("model", completeModelIDs)
@@ -90,6 +91,14 @@ func openBenchDB(dotDir string) (*bench.DB, error) {
 	return bench.Open(filepath.Join(dotDir, "bench.db"))
 }
 
+func benchVaultDocCount(db *sql.DB) (int, error) {
+	var docCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM documents").Scan(&docCount); err != nil {
+		return 0, err
+	}
+	return docCount, nil
+}
+
 func runBench(cmd *cobra.Command, args []string) error {
 	v, err := openVault()
 	if err != nil {
@@ -106,8 +115,10 @@ func runBench(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 	cfg := v.Config.AI
-	var docCount int
-	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents").Scan(&docCount)
+	docCount, err := benchVaultDocCount(v.DB.Conn())
+	if err != nil {
+		return fmt.Errorf("count indexed documents: %w", err)
+	}
 
 	// Determine which models to bench.
 	type target struct {

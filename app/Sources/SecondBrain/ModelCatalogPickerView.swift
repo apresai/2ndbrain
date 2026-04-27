@@ -249,6 +249,10 @@ struct ModelCatalogPickerView: View {
                 factRow("Output price", value: priceValue(model.priceOut, suffix: "/M tokens"))
                 factRow("Request price", value: priceValue(model.priceRequest, suffix: "/request"))
                 factRow("Price source", value: model.priceSource ?? "-")
+                factRow("Price override", value: boolValue(model.priceOverride))
+                factRow("Credentials", value: boolValue(model.credentials))
+                factRow("Reachable", value: boolValue(model.reachable))
+                factRow("Rate limit", value: formatRateLimit(model))
                 factRow("Invoke", value: model.invokeStrategy ?? "-")
                 factRow("Local", value: model.local == true ? "yes" : "no")
                 if let notes = model.notes, !notes.isEmpty {
@@ -354,7 +358,8 @@ struct ModelCatalogPickerView: View {
                     .disabled(isCosting)
                 }
                 if let cost = costPreview?.estimates.first {
-                    Text(String(format: "$%.6f · %@ pricing · %d input · %d output · %d request(s)",
+                    Text(String(format: "%@ · $%.6f · %@ pricing · %d input · %d output · %d request(s)",
+                                cost.probe,
                                 cost.usd,
                                 cost.knownPricing ? "known" : "unknown",
                                 cost.inputTokens,
@@ -626,6 +631,22 @@ struct ModelCatalogPickerView: View {
         guard let value else { return "-" }
         if value == 0 { return "free" }
         return String(format: "$%.4f%@", value, suffix)
+    }
+
+    private func boolValue(_ value: Bool?) -> String {
+        guard let value else { return "-" }
+        return value ? "yes" : "no"
+    }
+
+    private func formatRateLimit(_ model: CatalogModelInfo) -> String {
+        var parts: [String] = []
+        if let rps = model.rateLimitRPS, rps > 0 {
+            parts.append(String(format: "%.2g rps", rps))
+        }
+        if let tpm = model.rateLimitTPM, tpm > 0 {
+            parts.append("\(tpm) tpm")
+        }
+        return parts.isEmpty ? "-" : parts.joined(separator: " / ")
     }
 
     private func formatThreshold(_ value: Double?) -> String {

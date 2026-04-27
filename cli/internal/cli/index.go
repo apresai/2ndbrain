@@ -47,6 +47,12 @@ type IndexDocResult struct {
 	DurationMs int64  `json:"duration_ms"`
 }
 
+type embeddingRunStats struct {
+	Attempted int
+	Embedded  int
+	Failed    int
+}
+
 func runIndex(cmd *cobra.Command, args []string) error {
 	v, err := openVaultAndSetActive()
 	if err != nil {
@@ -89,22 +95,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	// --force-reembed clears embedding_hash on every embedded row so
-	// DocumentsNeedingEmbedding returns all of them. Used when the
-	// user intentionally switches providers and wants a full rebuild
-	// immediately instead of per-document drift re-embedding.
 	if indexForceReembed {
-		n, err := v.DB.InvalidateAllEmbeddings()
-		if err != nil {
-			return fmt.Errorf("invalidate embeddings: %w", err)
+		if err := forceReembedDocuments(ctx, v, cfg); err != nil {
+			slog.Error("force-reembed failed", "error", err)
+			return err
 		}
-		slog.Info("force-reembed: invalidated embeddings", "count", n)
-		if !flagPorcelain {
-			fmt.Fprintf(os.Stderr, "  force-reembed: invalidated %d embeddings, re-embedding...\n", n)
-		}
-	}
-
-	if err := embedDocuments(ctx, v, cfg); err != nil {
+	} else if stats, err := embedDocuments(ctx, v, cfg); err != nil {
 		slog.Debug("embedding skipped", "reason", err.Error())
 		if !flagPorcelain {
 			// When no provider is configured at all, guide the user
@@ -117,6 +113,8 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "  embedding skipped: %v\n", err)
 			}
 		}
+	} else if stats.Failed > 0 {
+		slog.Warn("embedding completed with document failures", "embedded", stats.Embedded, "attempted", stats.Attempted, "failed", stats.Failed)
 	}
 
 	format := getFormat(cmd)
@@ -157,10 +155,10 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) error 
 	ctx := context.Background()
 	cfg := v.Config.AI
 	embedded := false
-	if err := embedDocuments(ctx, v, cfg); err != nil {
+	if stats, err := embedDocuments(ctx, v, cfg); err != nil {
 		slog.Debug("incremental embed skipped", "reason", err.Error())
 	} else {
-		embedded = true
+		embedded = stats.Embedded > 0
 	}
 
 	result := IndexDocResult{
@@ -184,28 +182,82 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) error 
 	return nil
 }
 
-func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error {
+func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.EmbeddingProvider, error) {
 	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if err != nil {
-		return fmt.Errorf("no embedding provider %q", cfg.Provider)
+		return nil, fmt.Errorf("no embedding provider %q", cfg.Provider)
 	}
 
 	if !embedder.Available(ctx) {
-		return fmt.Errorf("provider %q not available", cfg.Provider)
+		return nil, fmt.Errorf("provider %q not available", cfg.Provider)
+	}
+	return embedder, nil
+}
+
+func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error {
+	embedder, err := validateEmbeddingProvider(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("force-reembed preflight: %w", err)
 	}
 
-	model := cfg.EmbeddingModel
-	docs, err := v.DB.DocumentsNeedingEmbedding(model)
+	snapshot, err := v.DB.SnapshotEmbeddings()
 	if err != nil {
 		return err
 	}
+
+	// --force-reembed clears embedding_hash on every embedded row so
+	// DocumentsNeedingEmbedding returns all of them. Used when the
+	// user intentionally switches providers and wants a full rebuild
+	// immediately instead of per-document drift re-embedding.
+	n, err := v.DB.InvalidateAllEmbeddings()
+	if err != nil {
+		return fmt.Errorf("invalidate embeddings: %w", err)
+	}
+	slog.Info("force-reembed: invalidated embeddings", "count", n)
+	if !flagPorcelain {
+		fmt.Fprintf(os.Stderr, "  force-reembed: invalidated %d embeddings, re-embedding...\n", n)
+	}
+
+	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder)
+	if err == nil && (stats.Failed > 0 || stats.Embedded < stats.Attempted) {
+		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, stats.Attempted, stats.Failed)
+	}
+	if err == nil {
+		return nil
+	}
+
+	slog.Warn("force-reembed failed; restoring previous embeddings", "error", err, "embedded", stats.Embedded, "attempted", stats.Attempted, "failed", stats.Failed)
+	if restoreErr := v.DB.RestoreEmbeddings(snapshot); restoreErr != nil {
+		return fmt.Errorf("%w; failed to restore previous embeddings: %v", err, restoreErr)
+	}
+	if !flagPorcelain {
+		fmt.Fprintln(os.Stderr, "  force-reembed failed; restored previous embeddings")
+	}
+	return err
+}
+
+func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
+	embedder, err := validateEmbeddingProvider(ctx, cfg)
+	if err != nil {
+		return embeddingRunStats{}, err
+	}
+	return embedDocumentsWithProvider(ctx, v, cfg, embedder)
+}
+
+func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, embedder ai.EmbeddingProvider) (embeddingRunStats, error) {
+	model := cfg.EmbeddingModel
+	docs, err := v.DB.DocumentsNeedingEmbedding(model)
+	if err != nil {
+		return embeddingRunStats{}, err
+	}
+	stats := embeddingRunStats{Attempted: len(docs)}
 
 	if len(docs) == 0 {
 		slog.Debug("all embeddings up to date", "model", model)
 		if !flagPorcelain {
 			fmt.Fprintln(os.Stderr, "  all embeddings up to date")
 		}
-		return nil
+		return stats, nil
 	}
 
 	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider)
@@ -226,24 +278,38 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 		absPath := filepath.Join(v.Root, doc.Path)
 		parsed, err := document.ParseFile(absPath)
 		if err != nil {
+			stats.Failed++
+			slog.Warn("embedding skipped: parse failed", "path", doc.Path, "err", err)
 			fmt.Fprintf(os.Stderr, "  skip %s: %v\n", doc.Path, err)
 			continue
 		}
 
 		vecs, err := embedder.Embed(ctx, []string{parsed.Body})
 		if err != nil {
+			stats.Failed++
+			slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
+			fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
+			continue
+		}
+		if len(vecs) == 0 || len(vecs[0]) == 0 {
+			stats.Failed++
+			err := fmt.Errorf("provider returned empty embedding")
+			slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
 			fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
 			continue
 		}
 
 		parsed.ComputeContentHash()
 		if err := v.DB.SetEmbedding(doc.ID, vecs[0], model, parsed.ContentHash); err != nil {
+			stats.Failed++
+			slog.Warn("store embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
 			fmt.Fprintf(os.Stderr, "  store error %s: %v\n", doc.Path, err)
 			continue
 		}
 
 		totalChars += len(parsed.Body)
 		embedded++
+		stats.Embedded++
 
 		if !flagPorcelain {
 			fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", i+1, len(docs), doc.Path)
@@ -271,6 +337,6 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error 
 		}
 	}
 
-	slog.Info("embedding complete", "embedded", embedded, "total", len(docs), "elapsed", time.Since(embedStart))
-	return nil
+	slog.Info("embedding complete", "embedded", embedded, "total", len(docs), "failed", stats.Failed, "elapsed", time.Since(embedStart))
+	return stats, nil
 }

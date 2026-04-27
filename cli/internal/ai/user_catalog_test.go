@@ -3,6 +3,7 @@ package ai
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -72,6 +73,74 @@ func TestSaveAndLoad_ReplacesExisting(t *testing.T) {
 	}
 	if models[0].PriceIn != 2.0 {
 		t.Fatalf("expected updated price 2.0, got %v", models[0].PriceIn)
+	}
+}
+
+func TestSaveUserCatalogEntry_ConcurrentWritesPreserveEntries(t *testing.T) {
+	setupHome(t)
+
+	const total = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, total)
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+				ID:       "concurrent-" + string(rune('a'+i)),
+				Provider: "openrouter",
+				Type:     "generation",
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("save failed: %v", err)
+		}
+	}
+
+	models := LoadUserCatalog("")
+	if len(models) != total {
+		t.Fatalf("loaded %d models, want %d: %+v", len(models), total, models)
+	}
+	seen := make(map[string]bool, total)
+	for _, m := range models {
+		seen[m.ID] = true
+	}
+	for i := 0; i < total; i++ {
+		id := "concurrent-" + string(rune('a'+i))
+		if !seen[id] {
+			t.Fatalf("missing concurrently saved model %q", id)
+		}
+	}
+}
+
+func TestSaveUserCatalogEntry_CorruptCatalogQuarantineFailureDoesNotOverwrite(t *testing.T) {
+	home := setupHome(t)
+	path := filepath.Join(home, ".config", "2nb", userCatalogFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	corrupt := []byte("models: [\n")
+	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	if err := os.Mkdir(path+".bak", 0o755); err != nil {
+		t.Fatalf("mkdir bak blocker: %v", err)
+	}
+
+	err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{ID: "new", Provider: "bedrock", Type: "generation"})
+	if err == nil {
+		t.Fatal("expected save to fail when corrupt catalog cannot be quarantined")
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("catalog should remain readable after failed save: %v", readErr)
+	}
+	if string(after) != string(corrupt) {
+		t.Fatalf("corrupt catalog was overwritten after quarantine failure\nbefore: %q\nafter: %q", corrupt, after)
 	}
 }
 

@@ -38,6 +38,7 @@ final class AppState {
     var showQuickOpen = false
     var showCommandPalette = false
     var showAskAI = false
+    var showProperties = false
     var typewriterModeActive = false
     var showTemplatePicker = false
     // AI Hub is the single merged sheet for provider control, active
@@ -66,6 +67,8 @@ final class AppState {
 
     // Merge conflict controllers (one per active dialog, retained so the NSWindow stays alive)
     private var mergeControllers: [MergeConflictController] = []
+    private let selfWriteSuppressionInterval: TimeInterval = 2
+    private var recentSelfWrites: [String: Date] = [:]
 
     // In-flight incremental re-embed tasks keyed by vault-relative path, so a
     // second save for the same file queues behind the first instead of
@@ -943,6 +946,7 @@ final class AppState {
             try tab.content.write(to: tab.url, atomically: true, encoding: .utf8)
             openDocuments[tabIdx].isDirty = false
             openDocuments[tabIdx].lastSavedContent = tab.content
+            markSelfWrite(path: tab.url.path)
             crashJournal?.clearSnapshotSync(documentID: tab.document.id)
             log.debug("\(isAutosave ? "Autosaved" : "Saved"): \(tab.url.lastPathComponent)")
             triggerIncrementalReindex(for: tab.url)
@@ -998,6 +1002,23 @@ final class AppState {
         formatter.allowedUnits = [.useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
+    }
+
+    private func markSelfWrite(path: String) {
+        recentSelfWrites[path] = Date().addingTimeInterval(selfWriteSuppressionInterval)
+    }
+
+    private func shouldSuppressSelfWrite(path: String, diskContent: String, tab: DocumentTab) -> Bool {
+        let now = Date()
+        recentSelfWrites = recentSelfWrites.filter { $0.value > now }
+        guard let expiresAt = recentSelfWrites[path], expiresAt > now else {
+            return false
+        }
+        if diskContent == tab.lastSavedContent || diskContent == tab.content {
+            recentSelfWrites.removeValue(forKey: path)
+            return true
+        }
+        return false
     }
 
     private func uniqueFilename(base: String, in dir: URL) -> URL {
@@ -1089,6 +1110,9 @@ final class AppState {
             return
         }
         let tab = openDocuments[idx]
+        if shouldSuppressSelfWrite(path: path, diskContent: diskContent, tab: tab) {
+            return
+        }
         // No external change if disk matches what we last saw.
         if diskContent == tab.lastSavedContent {
             return
@@ -1160,7 +1184,7 @@ final class AppState {
             self.aiStatus = status
             log.info("AI status: provider=\(status.provider) embed=\(status.embedAvailable) gen=\(status.genAvailable) docs=\(status.documentCount) embeddings=\(status.embeddingCount)")
         } catch {
-            log.debug("AI status unavailable: \(error.localizedDescription)")
+            log.warning("AI status unavailable: \(error.localizedDescription)")
             self.aiStatus = nil
         }
     }
@@ -1378,7 +1402,7 @@ final class AppState {
             vaultIsGitRepo = true
             gitFileStatus = decoded
         } catch {
-            log.debug("git status unavailable: \(error.localizedDescription)")
+            log.warning("git status unavailable: \(error.localizedDescription)")
             vaultIsGitRepo = false
             gitFileStatus = [:]
         }
@@ -1413,7 +1437,7 @@ final class AppState {
             vaultIsGitRepo = true
             gitActivity = (try JSONDecoder().decode([GitChangeInfo]?.self, from: data)) ?? []
         } catch {
-            log.debug("git activity unavailable: \(error.localizedDescription)")
+            log.warning("git activity unavailable: \(error.localizedDescription)")
             gitActivity = []
         }
     }
@@ -1543,7 +1567,7 @@ final class AppState {
                 gitDiffText = ""
             }
         } catch {
-            log.debug("git diff unavailable: \(error.localizedDescription)")
+            log.warning("git diff unavailable: \(error.localizedDescription)")
             gitDiffText = ""
         }
     }
@@ -1590,7 +1614,7 @@ final class AppState {
             let statuses = try JSONDecoder().decode([MCPServerStatusInfo]?.self, from: data) ?? []
             mcpStatuses = statuses
         } catch {
-            log.debug("MCP status unavailable: \(error.localizedDescription)")
+            log.warning("MCP status unavailable: \(error.localizedDescription)")
             mcpStatuses = []
         }
     }
@@ -1855,8 +1879,8 @@ final class AppState {
             let state = LineBuffer()
             stdout.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
-                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                for line in state.append(text) {
+                guard !data.isEmpty else { return }
+                for line in state.append(data) {
                     if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
                         Task { @MainActor in onEvent(event) }
                     }
@@ -1865,11 +1889,9 @@ final class AppState {
 
             process.terminationHandler = { proc in
                 stdout.fileHandleForReading.readabilityHandler = nil
-                if let text = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) {
-                    for line in state.append(text) {
-                        if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
-                            Task { @MainActor in onEvent(event) }
-                        }
+                for line in state.append(stdout.fileHandleForReading.readDataToEndOfFile()) {
+                    if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
+                        Task { @MainActor in onEvent(event) }
                     }
                 }
                 for line in state.finish() {
@@ -2079,32 +2101,6 @@ final class PipeDrain: @unchecked Sendable {
     }
 }
 
-final class LineBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = ""
-
-    func append(_ text: String) -> [String] {
-        lock.lock(); defer { lock.unlock() }
-        buffer += text
-        var lines: [String] = []
-        while let range = buffer.range(of: "\n") {
-            let line = String(buffer[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !line.isEmpty {
-                lines.append(line)
-            }
-            buffer.removeSubrange(buffer.startIndex...range.lowerBound)
-        }
-        return lines
-    }
-
-    func finish() -> [String] {
-        lock.lock(); defer { lock.unlock() }
-        let line = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        buffer = ""
-        return line.isEmpty ? [] : [line]
-    }
-}
-
 // MARK: - AI Types
 
 struct AIStatusInfo: Codable {
@@ -2116,6 +2112,8 @@ struct AIStatusInfo: Codable {
     let genAvailable: Bool
     let embeddingCount: Int
     let documentCount: Int
+    let similarityThreshold: Double?
+    let similarityThresholdSource: String?
 
     // Portability — the vault's self-reported embedding state from the
     // DB (source of truth), plus a derived status label. Optional for
@@ -2141,6 +2139,8 @@ struct AIStatusInfo: Codable {
         case genAvailable = "gen_available"
         case embeddingCount = "embedding_count"
         case documentCount = "document_count"
+        case similarityThreshold = "similarity_threshold"
+        case similarityThresholdSource = "similarity_threshold_source"
         case vaultEmbeddingModels = "vault_embedding_models"
         case vaultEmbeddingDim = "vault_embedding_dim"
         case vaultTotalDocs = "vault_total_docs"
@@ -2291,6 +2291,11 @@ struct CatalogModelInfo: Codable, Identifiable {
     let priceOut: Double?
     let priceRequest: Double?
     let priceSource: String?
+    let reachable: Bool?
+    let credentials: Bool?
+    let rateLimitRPS: Double?
+    let rateLimitTPM: Int?
+    let priceOverride: Bool?
     let contextLen: Int?
     let recommendedSimilarityThreshold: Double?
     let local: Bool?
@@ -2320,6 +2325,11 @@ struct CatalogModelInfo: Codable, Identifiable {
         case priceOut = "price_output_per_million"
         case priceRequest = "price_per_request"
         case priceSource = "price_source"
+        case reachable
+        case credentials
+        case rateLimitRPS = "rate_limit_rps"
+        case rateLimitTPM = "rate_limit_tpm"
+        case priceOverride = "price_override"
         case contextLen = "context_length"
         case recommendedSimilarityThreshold = "recommended_similarity_threshold"
         case local
@@ -2402,12 +2412,13 @@ struct CostEstimate: Codable, Identifiable {
     let requests: Int
     let inputTokens: Int
     let outputTokens: Int
+    let probe: String
     let usd: Double
     let knownPricing: Bool
 
     enum CodingKeys: String, CodingKey {
         case modelID = "model_id"
-        case provider, requests, usd
+        case provider, requests, probe, usd
         case inputTokens = "input_tokens"
         case outputTokens = "output_tokens"
         case knownPricing = "known_pricing"

@@ -242,6 +242,9 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	}
 
 	// Pretty table output.
+	for _, warning := range merged.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 	// Verified section.
@@ -514,6 +517,8 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	}
 	if priceOverride {
 		entry.PriceSource = "user"
+		warnSuspiciousPerMillionPrice(cmd, "price-in", addPriceIn)
+		warnSuspiciousPerMillionPrice(cmd, "price-out", addPriceOut)
 	}
 	if existing, ok := findCurrentCatalogEntry(vaultRoot, addProvider, modelID); ok {
 		entry = mergeAddCatalogEntry(cmd, existing, entry, priceOverride)
@@ -527,6 +532,15 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	slog.Info("models add", "provider", entry.Provider, "model", entry.ID, "type", entry.Type, "scope", scope)
 	fmt.Fprintf(cmd.ErrOrStderr(), "Added %s/%s to %s catalog\n", entry.Provider, entry.ID, scope)
 	return nil
+}
+
+func warnSuspiciousPerMillionPrice(cmd *cobra.Command, flagName string, value float64) {
+	if !cmd.Flags().Changed(flagName) || value <= 0 || value >= 0.001 {
+		return
+	}
+	msg := fmt.Sprintf("--%s is interpreted as USD per million tokens; %.8g looks unusually low", flagName, value)
+	slog.Warn("suspicious per-million token price", "flag", flagName, "value", value)
+	fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s. If you meant per-token pricing, multiply by 1,000,000.\n", msg)
 }
 
 func findCurrentCatalogEntry(vaultRoot, provider, modelID string) (ai.ModelInfo, bool) {

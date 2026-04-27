@@ -1,0 +1,116 @@
+import Foundation
+import SecondBrainCore
+import Testing
+@testable import SecondBrain
+
+@MainActor
+private func withOpenAppStateVault(_ body: (AppState, URL) async throws -> Void) async throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("SecondBrainAppStateTests-\(UUID().uuidString)")
+    try VaultManager.initializeVault(at: root)
+    let state = AppState()
+    state.openVault(at: root)
+    try await body(state, root)
+}
+
+@Test("AppState.runCLI executes CLI with vault argument")
+@MainActor
+func appStateRunCLI() async throws {
+    try await withOpenAppStateVault { state, root in
+        let data = try await state.runCLI(["config", "get", "ai.provider"], cwd: root)
+        let provider = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(provider == "bedrock")
+    }
+}
+
+@Test("AppState.setActiveModel updates config")
+@MainActor
+func appStateSetActiveModel() async throws {
+    try await withOpenAppStateVault { state, root in
+        try await state.setActiveModel(type: "embedding", modelID: "app.embed.model", provider: "bedrock")
+        let data = try await state.runCLI(["config", "get", "ai.embedding_model"], cwd: root)
+        let model = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(model == "app.embed.model")
+    }
+}
+
+@Test("AppState.setModelEnableState writes user catalog")
+@MainActor
+func appStateSetModelEnableState() async throws {
+    try await withOpenAppStateVault { state, root in
+        try await state.setModelEnableState("app.gen.model", provider: "bedrock", scope: "vault", state: "disabled")
+        let yaml = try String(contentsOf: root.appendingPathComponent(".2ndbrain/models.yaml"), encoding: .utf8)
+        #expect(yaml.contains("app.gen.model"))
+        #expect(yaml.contains("enabled: false"))
+    }
+}
+
+@Test("AppState.setModelSimilarityThreshold writes threshold without price flags")
+@MainActor
+func appStateSetModelSimilarityThreshold() async throws {
+    try await withOpenAppStateVault { state, root in
+        let model = CatalogModelInfo(
+            modelID: "app.embed.threshold",
+            name: "App Embed Threshold",
+            provider: "bedrock",
+            modelType: "embedding",
+            vendor: nil,
+            vendorDisplay: nil,
+            family: nil,
+            versionSortKey: nil,
+            dimensions: 1024,
+            priceIn: 1.0,
+            priceOut: nil,
+            priceRequest: nil,
+            priceSource: "vendor",
+            reachable: nil,
+            credentials: nil,
+            rateLimitRPS: nil,
+            rateLimitTPM: nil,
+            priceOverride: nil,
+            contextLen: nil,
+            recommendedSimilarityThreshold: nil,
+            local: nil,
+            tier: nil,
+            invokeStrategy: nil,
+            enabled: nil,
+            active: nil,
+            configHint: nil,
+            notes: nil,
+            testedAt: nil,
+            testLatencyMs: nil,
+            testError: nil,
+            benchmark: nil,
+            compatible: nil,
+            compatibilityReason: nil
+        )
+        try await state.setModelSimilarityThreshold(model, threshold: 0.42, scope: "vault")
+        let yaml = try String(contentsOf: root.appendingPathComponent(".2ndbrain/models.yaml"), encoding: .utf8)
+        #expect(yaml.contains("app.embed.threshold"))
+        #expect(yaml.contains("recommended_similarity_threshold: 0.42"))
+        #expect(!yaml.contains("price_source: user"))
+    }
+}
+
+@Test("AppState provider-dependent methods fail without vault")
+@MainActor
+func appStateNoVaultErrors() async {
+    let state = AppState()
+    var testAndSaveNoVault = false
+    do {
+        _ = try await state.testAndSave(modelID: "m", provider: "bedrock", type: "generation", scope: "vault")
+    } catch CLIError.noVault {
+        testAndSaveNoVault = true
+    } catch {}
+    #expect(testAndSaveNoVault)
+
+    var benchmarkNoVault = false
+    do {
+        try await state.benchmarkModel(modelID: "m", provider: "bedrock", type: "generation", probe: "generate") { _ in }
+    } catch CLIError.noVault {
+        benchmarkNoVault = true
+    } catch {}
+    #expect(benchmarkNoVault)
+}

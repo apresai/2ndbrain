@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"sync"
@@ -27,6 +29,7 @@ type MergedListOptions struct {
 type MergedModelList struct {
 	Verified   []ModelInfo `json:"verified"`
 	Unverified []ModelInfo `json:"unverified,omitempty"`
+	Warnings   []string    `json:"warnings,omitempty"`
 }
 
 // BuildModelList produces a unified model catalog by merging these layers
@@ -73,7 +76,8 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 
 	// Layer 4: vendor discovery. Only add entries not already in the merged catalog.
 	if opts.Discover {
-		vendorModels := discoverVendorModels(ctx, opts.Config)
+		vendorModels, warnings := discoverVendorModels(ctx, opts.Config)
+		result.Warnings = append(result.Warnings, warnings...)
 		idx := catalogIndex(catalog)
 		for _, m := range vendorModels {
 			if !idx[catalogKey(m.Provider, m.ID)] {
@@ -160,23 +164,38 @@ func applyStatusChecks(ctx context.Context, catalog []ModelInfo, cfg AIConfig) {
 }
 
 // discoverVendorModels queries all provider APIs for their full model catalogs
-// in parallel. Errors are silently ignored (provider may be unreachable or lack credentials).
-func discoverVendorModels(ctx context.Context, cfg AIConfig) []ModelInfo {
+// in parallel. Errors are returned as warnings so callers can explain why a
+// provider contributed no discovered rows.
+func discoverVendorModels(ctx context.Context, cfg AIConfig) ([]ModelInfo, []string) {
 	var (
-		mu  sync.Mutex
-		all []ModelInfo
-		wg  sync.WaitGroup
+		mu       sync.Mutex
+		all      []ModelInfo
+		warnings []string
+		wg       sync.WaitGroup
 	)
+	addWarning := func(provider string, err error) {
+		if err == nil {
+			return
+		}
+		msg := fmt.Sprintf("%s discovery failed: %v", provider, err)
+		slog.Warn("vendor discovery failed", "provider", provider, "err", err)
+		mu.Lock()
+		warnings = append(warnings, msg)
+		mu.Unlock()
+	}
 
 	// Bedrock vendor discovery.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if models, err := ListBedrockVendorModels(ctx, cfg.Bedrock); err == nil {
-			mu.Lock()
-			all = append(all, models...)
-			mu.Unlock()
+		models, err := ListBedrockVendorModels(ctx, cfg.Bedrock)
+		if err != nil {
+			addWarning("bedrock", err)
+			return
 		}
+		mu.Lock()
+		all = append(all, models...)
+		mu.Unlock()
 	}()
 
 	// OpenRouter vendor discovery.
@@ -185,10 +204,16 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig) []ModelInfo {
 		defer wg.Done()
 		key, err := GetAPIKey("openrouter")
 		if err != nil || key == "" {
+			if err != nil {
+				addWarning("openrouter", err)
+			} else {
+				addWarning("openrouter", fmt.Errorf("API key not configured"))
+			}
 			return
 		}
 		models, err := ListOpenRouterModels(ctx, key, "")
 		if err != nil {
+			addWarning("openrouter", err)
 			return
 		}
 		for i := range models {
@@ -210,6 +235,7 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig) []ModelInfo {
 		}
 		models, err := ListOllamaModels(ctx, http.DefaultClient, endpoint)
 		if err != nil {
+			addWarning("ollama", err)
 			return
 		}
 		for i := range models {
@@ -222,7 +248,7 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig) []ModelInfo {
 	}()
 
 	wg.Wait()
-	return all
+	return all, warnings
 }
 
 // filterEnabled removes entries that are explicitly disabled (Enabled != nil &&

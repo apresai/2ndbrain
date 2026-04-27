@@ -7,6 +7,16 @@ import (
 	"math"
 )
 
+// EmbeddingSnapshot captures the embedding-related columns for one document.
+// It is used by callers that need to roll back a bulk re-embedding attempt
+// after a provider or network failure.
+type EmbeddingSnapshot struct {
+	DocID string
+	Blob  []byte
+	Model string
+	Hash  string
+}
+
 // SetEmbedding stores a document's embedding vector.
 func (db *DB) SetEmbedding(docID string, embedding []float32, model string, contentHash string) error {
 	blob := float32sToBytes(embedding)
@@ -166,6 +176,65 @@ func (db *DB) InvalidateAllEmbeddings() (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// SnapshotEmbeddings returns the current embedding columns for every document.
+// Rows with NULL embeddings are included so a failed bulk re-embed can also
+// clear any partial embedding written for a previously-unembedded document.
+func (db *DB) SnapshotEmbeddings() ([]EmbeddingSnapshot, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, embedding, COALESCE(embedding_model, ''), COALESCE(embedding_hash, '')
+		FROM documents
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []EmbeddingSnapshot
+	for rows.Next() {
+		var s EmbeddingSnapshot
+		if err := rows.Scan(&s.DocID, &s.Blob, &s.Model, &s.Hash); err != nil {
+			return nil, fmt.Errorf("scan embedding snapshot: %w", err)
+		}
+		if s.Blob != nil {
+			s.Blob = append([]byte(nil), s.Blob...)
+		}
+		snapshots = append(snapshots, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding snapshot: %w", err)
+	}
+	return snapshots, nil
+}
+
+// RestoreEmbeddings restores embedding columns captured by SnapshotEmbeddings.
+func (db *DB) RestoreEmbeddings(snapshots []EmbeddingSnapshot) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin restore embeddings: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		UPDATE documents
+		SET embedding = ?, embedding_model = ?, embedding_hash = ?
+		WHERE id = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare restore embeddings: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, s := range snapshots {
+		if _, err := stmt.Exec(s.Blob, s.Model, s.Hash, s.DocID); err != nil {
+			return fmt.Errorf("restore embedding %s: %w", s.DocID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit restore embeddings: %w", err)
+	}
+	return nil
 }
 
 func float32sToBytes(fs []float32) []byte {

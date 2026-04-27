@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +20,19 @@ func TestBuildModelList_VerifiedOnly(t *testing.T) {
 	}
 	if len(result.Unverified) != 0 {
 		t.Errorf("expected no unverified models without --discover, got %d", len(result.Unverified))
+	}
+}
+
+func TestMergedModelListJSONIncludesWarnings(t *testing.T) {
+	data, err := json.Marshal(MergedModelList{
+		Verified: []ModelInfo{{ID: "m", Provider: "bedrock", Type: "generation"}},
+		Warnings: []string{"openrouter discovery failed: bad key"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"warnings"`) {
+		t.Fatalf("warnings missing from JSON: %s", data)
 	}
 }
 

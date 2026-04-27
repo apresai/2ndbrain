@@ -272,6 +272,58 @@ func TestInvalidateAllEmbeddings(t *testing.T) {
 	}
 }
 
+func TestSnapshotAndRestoreEmbeddings(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Conn().Exec(`INSERT INTO documents (id, path, title, content_hash) VALUES ('a', 'a.md', 'A', 'content-v1')`); err != nil {
+		t.Fatal(err)
+	}
+	original := []float32{0.25, 0.5, 0.75}
+	if err := db.SetEmbedding("a", original, "model-v1", "content-v1"); err != nil {
+		t.Fatalf("set original: %v", err)
+	}
+
+	snapshot, err := db.SnapshotEmbeddings()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snapshot) != 1 {
+		t.Fatalf("snapshot rows = %d, want 1", len(snapshot))
+	}
+
+	if err := db.SetEmbedding("a", []float32{9, 8, 7}, "model-v2", "content-v2"); err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if err := db.RestoreEmbeddings(snapshot); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	got, err := db.GetEmbedding("a")
+	if err != nil {
+		t.Fatalf("get restored embedding: %v", err)
+	}
+	if len(got) != len(original) {
+		t.Fatalf("restored dims = %d, want %d", len(got), len(original))
+	}
+	for i := range original {
+		if math.Abs(float64(got[i]-original[i])) > 1e-6 {
+			t.Fatalf("restored dim %d = %v, want %v", i, got[i], original[i])
+		}
+	}
+
+	var model, hash string
+	if err := db.Conn().QueryRow(`SELECT embedding_model, embedding_hash FROM documents WHERE id = 'a'`).Scan(&model, &hash); err != nil {
+		t.Fatalf("query restored metadata: %v", err)
+	}
+	if model != "model-v1" || hash != "content-v1" {
+		t.Fatalf("restored metadata = (%q, %q), want (model-v1, content-v1)", model, hash)
+	}
+}
+
 func TestMigrateSchemaVersionCeiling(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "ceiling.db")
 	db, err := Open(dbPath)

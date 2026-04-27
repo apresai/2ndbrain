@@ -26,6 +26,43 @@ func withTimeout(d time.Duration, inner server.ToolHandlerFunc) server.ToolHandl
 	}
 }
 
+type toolRegistration struct {
+	tool    mcplib.Tool
+	timeout time.Duration
+	handler server.ToolHandlerFunc
+}
+
+func mcpToolRegistrations(h *handlers) []toolRegistration {
+	// Per-tool timeouts. Cheap metadata/graph calls: 10s. Search + suggest:
+	// 60s (includes one embed call). Generation-bound tools: 120s. Create:
+	// 30s (may embed the new doc). Full reindex: 300s.
+	const (
+		tCheap    = 10 * time.Second
+		tCreate   = 30 * time.Second
+		tSearch   = 60 * time.Second
+		tGenerate = 120 * time.Second
+		tIndex    = 300 * time.Second
+	)
+	return []toolRegistration{
+		{kbInfoTool(), tCheap, h.handleKBInfo},
+		{kbSearchTool(), tSearch, h.handleKBSearch},
+		{kbAskTool(), tGenerate, h.handleKBAsk},
+		{kbReadTool(), tCheap, h.handleKBRead},
+		{kbListTool(), tCheap, h.handleKBList},
+		{kbCreateTool(), tCreate, h.handleKBCreate},
+		{kbUpdateMetaTool(), tCheap, h.handleKBUpdateMeta},
+		{kbRelatedTool(), tCheap, h.handleKBRelated},
+		{kbStructureTool(), tCheap, h.handleKBStructure},
+		{kbDeleteTool(), tCheap, h.handleKBDelete},
+		{kbIndexTool(), tIndex, h.handleKBIndex},
+		{kbSuggestLinksTool(), tSearch, h.handleKBSuggestLinks},
+		{kbPolishTool(), tGenerate, h.handleKBPolish},
+		{kbGitActivityTool(), tCheap, h.handleKBGitActivity},
+		{kbGitDiffTool(), tCheap, h.handleKBGitDiff},
+		{kbGitStatusTool(), tCheap, h.handleKBGitStatus},
+	}
+}
+
 func Start(v *vault.Vault, version string) error {
 	s := server.NewMCPServer(
 		"2ndbrain",
@@ -52,32 +89,9 @@ func Start(v *vault.Vault, version string) error {
 		s.AddTool(tool, handler)
 	}
 
-	// Per-tool timeouts. Cheap metadata/graph calls: 10s. Search + suggest:
-	// 60s (includes one embed call). Generation-bound tools: 120s. Create:
-	// 30s (may embed the new doc). Full reindex: 300s.
-	const (
-		tCheap = 10 * time.Second
-		tCreate = 30 * time.Second
-		tSearch = 60 * time.Second
-		tGenerate = 120 * time.Second
-		tIndex = 300 * time.Second
-	)
-	addTool(kbInfoTool(), withTimeout(tCheap, h.handleKBInfo))
-	addTool(kbSearchTool(), withTimeout(tSearch, h.handleKBSearch))
-	addTool(kbAskTool(), withTimeout(tGenerate, h.handleKBAsk))
-	addTool(kbReadTool(), withTimeout(tCheap, h.handleKBRead))
-	addTool(kbListTool(), withTimeout(tCheap, h.handleKBList))
-	addTool(kbCreateTool(), withTimeout(tCreate, h.handleKBCreate))
-	addTool(kbUpdateMetaTool(), withTimeout(tCheap, h.handleKBUpdateMeta))
-	addTool(kbRelatedTool(), withTimeout(tCheap, h.handleKBRelated))
-	addTool(kbStructureTool(), withTimeout(tCheap, h.handleKBStructure))
-	addTool(kbDeleteTool(), withTimeout(tCheap, h.handleKBDelete))
-	addTool(kbIndexTool(), withTimeout(tIndex, h.handleKBIndex))
-	addTool(kbSuggestLinksTool(), withTimeout(tSearch, h.handleKBSuggestLinks))
-	addTool(kbPolishTool(), withTimeout(tGenerate, h.handleKBPolish))
-	addTool(kbGitActivityTool(), withTimeout(tCheap, h.handleKBGitActivity))
-	addTool(kbGitDiffTool(), withTimeout(tCheap, h.handleKBGitDiff))
-	addTool(kbGitStatusTool(), withTimeout(tCheap, h.handleKBGitStatus))
+	for _, reg := range mcpToolRegistrations(h) {
+		addTool(reg.tool, withTimeout(reg.timeout, reg.handler))
+	}
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)

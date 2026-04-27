@@ -2,8 +2,10 @@ package ai
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +28,8 @@ const (
 const userCatalogFileName = "models.yaml"
 const userCatalogVersion = 1
 
+var userCatalogMu sync.Mutex
+
 // UserCatalog is the YAML shape for both global and per-vault catalog files.
 type UserCatalog struct {
 	Version int         `yaml:"version"`
@@ -39,6 +43,9 @@ type UserCatalog struct {
 // Missing files are not errors. A corrupt file is renamed to .bak and treated
 // as empty so a malformed catalog never blocks the CLI.
 func LoadUserCatalog(vaultRoot string) []ModelInfo {
+	userCatalogMu.Lock()
+	defer userCatalogMu.Unlock()
+
 	global := readCatalog(globalCatalogPath(), true).Models
 	perVault := readCatalog(vaultCatalogPath(vaultRoot), true).Models
 
@@ -55,11 +62,17 @@ func LoadUserCatalog(vaultRoot string) []ModelInfo {
 // file is created if it doesn't exist; an existing entry with the same
 // (provider, id) is replaced in place.
 func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelInfo) error {
+	userCatalogMu.Lock()
+	defer userCatalogMu.Unlock()
+
 	path, err := catalogPathForScope(scope, vaultRoot)
 	if err != nil {
 		return err
 	}
-	cat := readCatalog(path, false)
+	cat, err := readCatalogForWrite(path)
+	if err != nil {
+		return err
+	}
 
 	replaced := false
 	for i := range cat.Models {
@@ -80,11 +93,17 @@ func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelI
 // at `scope`. Returns nil if the entry was not present — no empty catalog file
 // is written in that case.
 func RemoveUserCatalogEntry(scope UserCatalogScope, vaultRoot, provider, id string) error {
+	userCatalogMu.Lock()
+	defer userCatalogMu.Unlock()
+
 	path, err := catalogPathForScope(scope, vaultRoot)
 	if err != nil {
 		return err
 	}
-	cat := readCatalog(path, false)
+	cat, err := readCatalogForWrite(path)
+	if err != nil {
+		return err
+	}
 
 	kept := cat.Models[:0]
 	removed := false
@@ -159,12 +178,20 @@ func readCatalog(path string, quarantineCorrupt bool) UserCatalog {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("read user catalog failed", "path", path, "err", err)
+		}
 		return empty
 	}
 	var cat UserCatalog
 	if err := yaml.Unmarshal(data, &cat); err != nil {
+		slog.Warn("parse user catalog failed", "path", path, "err", err)
 		if quarantineCorrupt {
-			_ = os.Rename(path, path+".bak")
+			if renameErr := os.Rename(path, path+".bak"); renameErr != nil {
+				slog.Warn("quarantine corrupt user catalog failed", "path", path, "backup", path+".bak", "err", renameErr)
+			} else {
+				slog.Warn("quarantined corrupt user catalog", "path", path, "backup", path+".bak")
+			}
 		}
 		return empty
 	}
@@ -172,6 +199,36 @@ func readCatalog(path string, quarantineCorrupt bool) UserCatalog {
 		cat.Version = userCatalogVersion
 	}
 	return cat
+}
+
+func readCatalogForWrite(path string) (UserCatalog, error) {
+	empty := UserCatalog{Version: userCatalogVersion}
+	if path == "" {
+		return empty, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return empty, nil
+		}
+		slog.Warn("read user catalog failed", "path", path, "err", err)
+		return empty, fmt.Errorf("read catalog: %w", err)
+	}
+	var cat UserCatalog
+	if err := yaml.Unmarshal(data, &cat); err != nil {
+		backup := path + ".bak"
+		slog.Warn("parse user catalog failed before write", "path", path, "backup", backup, "err", err)
+		if renameErr := os.Rename(path, backup); renameErr != nil {
+			slog.Warn("quarantine corrupt user catalog failed before write", "path", path, "backup", backup, "err", renameErr)
+			return empty, fmt.Errorf("catalog %s is corrupt and could not be moved to %s: %w", path, backup, renameErr)
+		}
+		slog.Warn("quarantined corrupt user catalog before write", "path", path, "backup", backup)
+		return empty, nil
+	}
+	if cat.Version == 0 {
+		cat.Version = userCatalogVersion
+	}
+	return cat, nil
 }
 
 func writeCatalog(path string, cat UserCatalog) error {

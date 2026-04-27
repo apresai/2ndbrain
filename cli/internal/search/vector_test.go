@@ -30,16 +30,16 @@ func TestCosineSimilarity(t *testing.T) {
 	}
 }
 
-func TestVectorSearch(t *testing.T) {
+func TestVectorSearchThreshold(t *testing.T) {
 	query := []float32{1, 0, 0}
 	docIDs := []string{"a", "b", "c"}
 	embeddings := [][]float32{
-		{0, 1, 0},   // orthogonal to query
-		{1, 0, 0},   // identical to query
+		{0, 1, 0},     // orthogonal to query
+		{1, 0, 0},     // identical to query
 		{0.7, 0.7, 0}, // similar to query
 	}
 
-	results := VectorSearch(query, docIDs, embeddings, 3)
+	results := VectorSearchThreshold(query, docIDs, embeddings, 3, 0)
 
 	if len(results) != 3 {
 		t.Fatalf("got %d results, want 3", len(results))
@@ -69,7 +69,7 @@ func TestVectorSearchLimit(t *testing.T) {
 	docIDs := []string{"a", "b", "c"}
 	embeddings := [][]float32{{1, 0}, {0, 1}, {0.5, 0.5}}
 
-	results := VectorSearch(query, docIDs, embeddings, 2)
+	results := VectorSearchThreshold(query, docIDs, embeddings, 2, 0)
 	if len(results) != 2 {
 		t.Fatalf("got %d results, want 2", len(results))
 	}
