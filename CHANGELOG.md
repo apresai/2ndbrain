@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.4.3] - 2026-05-17
+
+### Fixed
+- Release workflow now stages `VERSION` and `Version.swift` in the release commit, preventing version drift between tagged releases and source files.
+
+
 ## [0.4.2] - 2026-05-17
 
 ### Added
