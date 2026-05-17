@@ -91,10 +91,8 @@ func BuiltinCatalog() []ModelInfo {
 		notes      string
 	}{
 		{"us.anthropic.claude-haiku-4-5-20251001-v1:0", "Claude Haiku 4.5", 200000, 0.80, 4.00, ""},
-		{"us.anthropic.claude-sonnet-4-20250514-v1:0", "Claude Sonnet 4", 200000, 3.00, 15.00, ""},
-		{"us.anthropic.claude-opus-4-20250514-v1:0", "Claude Opus 4", 200000, 15.00, 75.00, ""},
-		{"us.anthropic.claude-3-5-haiku-20241022-v1:0", "Claude 3.5 Haiku", 200000, 0.80, 4.00, ""},
-		{"us.anthropic.claude-3-5-sonnet-20241022-v2:0", "Claude 3.5 Sonnet v2", 200000, 3.00, 15.00, ""},
+		{"us.anthropic.claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 3.00, 15.00, "1M context"},
+		{"us.anthropic.claude-opus-4-6-v1", "Claude Opus 4.6", 1000000, 15.00, 75.00, "1M context; Opus 4.7 is Mantle-only and not reachable via Converse"},
 		{"amazon.nova-micro-v1:0", "Amazon Nova Micro", 128000, 0.035, 0.14, "text-only, fastest"},
 		{"amazon.nova-lite-v1:0", "Amazon Nova Lite", 300000, 0.06, 0.24, ""},
 		{"amazon.nova-pro-v1:0", "Amazon Nova Pro", 300000, 0.80, 3.20, ""},
@@ -148,8 +146,8 @@ func BuiltinCatalog() []ModelInfo {
 		{"meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B (free)", 131072, 0, 0},
 		{"qwen/qwen3.6-plus", "Qwen 3.6 Plus", 1000000, 0.33, 1.95},
 		{"anthropic/claude-haiku-4-5", "Claude Haiku 4.5", 200000, 0.80, 4.00},
-		{"anthropic/claude-sonnet-4", "Claude Sonnet 4", 200000, 3.00, 15.00},
-		{"anthropic/claude-opus-4", "Claude Opus 4", 200000, 15.00, 75.00},
+		{"anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 3.00, 15.00},
+		{"anthropic/claude-opus-4-7", "Claude Opus 4.7", 1000000, 15.00, 75.00},
 		{"openai/gpt-4o-mini", "GPT-4o Mini", 128000, 0.15, 0.60},
 		{"openai/gpt-4o", "GPT-4o", 128000, 2.50, 10.00},
 	} {
