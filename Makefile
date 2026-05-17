@@ -112,7 +112,7 @@ release:
 	@echo "Step 2: Checking for uncommitted changes..."
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "Found changes, committing..."; \
-		git add CHANGELOG.md; \
+		git add CHANGELOG.md VERSION app/Sources/SecondBrain/Version.swift; \
 		git commit -m "Release v$(VERSION)"; \
 		git push origin main; \
 		echo "Changes committed and pushed"; \
