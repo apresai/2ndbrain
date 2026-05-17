@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.4.2] - 2026-05-17
+
+### Added
+- AI Hub model catalog picker (`ModelCatalogPickerView`) with sidebar+detail layout, filters (type/provider/tier/enabled/tested/compatible), and Best/Cheapest/Fastest/Newest/Name sort modes
+- Retrieval-quality probe for `models bench` that scores stored embeddings against resolved wikilinks (MRR@K, Recall@K) with zero API cost
+- `SecondBrainCore.LineBuffer` utility extracted for streaming line buffering
+- Extensive test coverage across CLI and app: AI Hub contract, core commands contract, catalog merge, user catalog, bench probes, MCP tools, force-reembed, embedding store, JSON decoding, wizard logic, view construction
+
+### Changed
+- Claude model defaults bumped to 4.6/4.7
+- Safer `models test`/`bench`/`set-active` flows: `Set Active` gated on indexing state to prevent mixed-model embeddings; benchmark and cost-preview paths hardened
+- CLAUDE.md trimmed and reorganized
+
+### Removed
+- Claude 3.5 entries dropped from default catalog
+
+
 ## [0.4.1] - 2026-04-24
 
 ### Fixed
