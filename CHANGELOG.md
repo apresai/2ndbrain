@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.5.1] - 2026-06-06
+
 ### Fixed
 - `2nb lint` now recurses into subdirectories. The previous top-level `*.md` glob silently checked only files in the vault root and skipped every note (and every broken wikilink) in a subfolder.
 - `2nb lint` no longer reports a missing frontmatter `id` as an error, consistent with the path-based identity model (a document's identity is its path; `id` is read if present but never required).
