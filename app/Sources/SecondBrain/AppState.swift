@@ -22,25 +22,6 @@ final class AppState {
     var openDocuments: [DocumentTab] = []
     var activeTabIndex: Int = 0
 
-    // Sidebar
-    var sidebarVisible = true
-    var focusModeActive = false
-    var showGraphView = false
-
-    // Bumped every time FSEvents fires or the index rebuilds. GraphView
-    // observes this counter and rebuilds its model on change; using a token
-    // rather than a boolean means rapid successive changes all get seen
-    // without relying on the view being in-flight to handle each one.
-    var graphNeedsRebuild: Int = 0
-
-    // Overlay panels
-    var showSearch = false
-    var showQuickOpen = false
-    var showCommandPalette = false
-    var showAskAI = false
-    var showProperties = false
-    var typewriterModeActive = false
-    var showTemplatePicker = false
     // AI Hub is the single merged sheet for provider control, active
     // model selection, and the model catalog. Replaces three earlier
     // flags (showAISetupWizard, showModelWizard, showAITest), kept
@@ -56,7 +37,6 @@ final class AppState {
         get { showAIHub }
         set { showAIHub = newValue }
     }
-    var inlineRenderingEnabled = false
     var editorFontSize: CGFloat = UserDefaults.standard.object(forKey: "editorFontSize") as? CGFloat ?? 14
     var editorFontFamily: String = UserDefaults.standard.string(forKey: "editorFontFamily") ?? "System Mono"
 
@@ -75,16 +55,6 @@ final class AppState {
     // racing the database.
     private var reindexTasks: [String: Task<Void, Never>] = [:]
 
-    // Suggest Links state
-    var showSuggestLinks = false
-    var suggestLinks: [SuggestLinkInfo] = []
-    var suggestLinksLoading = false
-    var suggestLinksError: String?
-
-    // Polish state
-    var showPolish = false
-    var polishState: PolishState = .idle
-
     // Current document metrics (chunk count is refreshed on open/switch/reindex;
     // token estimate is computed live from content.count / 4)
     var currentDocumentChunkCount: Int = 0
@@ -96,10 +66,6 @@ final class AppState {
     var gitActivityLoading: Bool = false
     var gitActivityDays: Int = UserDefaults.standard.object(forKey: "gitActivityDays") as? Int ?? 7
     var showGitActivity: Bool = false
-    var showGitDiff: Bool = false
-    var gitDiffPath: String = ""
-    var gitDiffText: String = ""
-    var gitDiffLoading: Bool = false
 
     // AI state
     var aiStatus: AIStatusInfo?
@@ -122,7 +88,6 @@ final class AppState {
     var embeddingProgress: EmbeddingProgress?
     var indexProgress: IndexProgress?
     var showIndexProgress = false
-    var pendingFindSimilarQuery: String?
 
     // Vault Status panel
     var showVaultStatus: Bool = false
@@ -131,9 +96,6 @@ final class AppState {
     var showLintResults = false
     var isLinting = false
     var lintReport: LintReport?
-    var showSkillsInstall = false
-    var isInstallingSkills = false
-    var skillsInstallResult: String?
     var showMCPSetup = false
     var mcpSetupText: String?
     var showMCPStatus = false
@@ -156,14 +118,6 @@ final class AppState {
     // next updateNSView tick. Set by openDocument so focus lands in the
     // editor after opening a file.
     var pendingFirstResponder: Bool = false
-
-    // A pending request to switch the sidebar to a specific panel (files,
-    // outline, backlinks, tags). Set by Cmd+1/2/3/4 shortcut handlers in
-    // ContentView; consumed and cleared by SidebarView. Kept as an enum
-    // rather than a direct @State binding because menu commands live in
-    // a different view hierarchy than the SidebarView that owns the
-    // picker's State.
-    var requestedSidebarPanel: SidebarPanel?
 
     // Commit detail modal — loaded lazily via `2nb git show --json <hash>`
     // when the user clicks a commit in GitActivityView. The modal presents
@@ -285,10 +239,6 @@ final class AppState {
                     for path in mdPaths {
                         self?.reloadIfOpen(path: path)
                     }
-                    // Bump the graph rebuild signal so an open GraphView
-                    // refreshes against the current index. Cheap token — the
-                    // view only rebuilds once per bump, not per file path.
-                    self?.graphNeedsRebuild += 1
                 }
                 if catalogChanged || configChanged {
                     // Both feed the AI Hub: catalog for model rows,
@@ -886,9 +836,6 @@ final class AppState {
 
             isIndexing = false
             embeddingProgress = nil
-            // Nudge any open GraphView to rebuild its model against the
-            // freshly indexed links/tags.
-            graphNeedsRebuild += 1
             await refreshAIStatus()
         }
     }
@@ -1197,24 +1144,6 @@ final class AppState {
         return AIAskResult(answer: response.answer, sources: response.sources)
     }
 
-    func searchSemantic(query: String) async throws -> [SearchResultItem] {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["search", "--json", "--porcelain", query], cwd: vault.rootURL)
-        let response = try JSONDecoder().decode(CLISearchResponse.self, from: data)
-        self.lastSemanticWarnings = response.warnings ?? []
-        return response.results.map { r in
-            SearchResultItem(
-                id: r.docID,
-                path: r.path,
-                title: r.title,
-                docType: r.docType ?? "",
-                headingPath: r.headingPath ?? "",
-                score: r.score,
-                status: r.status ?? ""
-            )
-        }
-    }
-
     // MARK: - Tools Integration
 
     func runLint() async {
@@ -1236,24 +1165,6 @@ final class AppState {
             lintReport = LintReport(issues: [], filesChecked: 0, errors: 0, warnings: 0)
         }
         isLinting = false
-    }
-
-    func installSkills() async {
-        guard let vault else { return }
-        isInstallingSkills = true
-        skillsInstallResult = nil
-        log.info("Installing AI agent skills")
-        do {
-            let data = try await runCLI(["skills", "install", "--all", "--force"], cwd: vault.rootURL)
-            let output = String(data: data, encoding: .utf8) ?? ""
-            skillsInstallResult = output.isEmpty ? "Skills installed for all supported agents." : output
-            log.info("Skills installed successfully")
-        } catch {
-            log.error("Skills installation failed: \(error.localizedDescription)")
-            errorLogger?.log("Skills installation failed", error: error)
-            skillsInstallResult = "Installation failed: \(error.localizedDescription)"
-        }
-        isInstallingSkills = false
     }
 
     func loadMCPSetup() async {
@@ -1290,87 +1201,6 @@ final class AppState {
             self.reindexTasks.removeValue(forKey: relPath)
         }
         reindexTasks[relPath] = task
-    }
-
-    // MARK: - Suggest Links
-
-    func openSuggestLinks() {
-        suggestLinks = []
-        suggestLinksError = nil
-        showSuggestLinks = true
-        Task { await loadSuggestLinks() }
-    }
-
-    func loadSuggestLinks() async {
-        guard let vault, let tab = currentDocument else {
-            suggestLinksError = "No document open."
-            return
-        }
-        suggestLinksLoading = true
-        defer { suggestLinksLoading = false }
-        let relPath = vault.relativePath(for: tab.url)
-        do {
-            let data = try await runCLI(
-                ["suggest-links", relPath, "--json", "--porcelain"],
-                cwd: vault.rootURL
-            )
-            if data.isEmpty {
-                suggestLinks = []
-                return
-            }
-            suggestLinks = (try JSONDecoder().decode([SuggestLinkInfo]?.self, from: data)) ?? []
-        } catch {
-            suggestLinksError = "Could not generate suggestions: \(error.localizedDescription). Ensure an AI provider is configured."
-        }
-    }
-
-    func insertWikilink(for suggestion: SuggestLinkInfo) {
-        guard let idx = validTabIndex else { return }
-        let linkText = "[[\(suggestion.title)]]"
-        openDocuments[idx].content.append(linkText)
-        openDocuments[idx].isDirty = true
-        updateOutline()
-    }
-
-    // MARK: - Polish
-
-    func openPolish() {
-        polishState = .idle
-        showPolish = true
-    }
-
-    func runPolish() async {
-        guard let vault, let tab = currentDocument else {
-            polishState = .error("No document open.")
-            return
-        }
-        polishState = .loading
-        let relPath = vault.relativePath(for: tab.url)
-        do {
-            let data = try await runCLI(
-                ["polish", relPath, "--json", "--porcelain"],
-                cwd: vault.rootURL
-            )
-            let result = try JSONDecoder().decode(PolishResultInfo.self, from: data)
-            polishState = .loaded(result)
-        } catch {
-            polishState = .error("Could not polish document: \(error.localizedDescription). Ensure an AI generation provider is configured.")
-        }
-    }
-
-    func acceptPolishedRevision() {
-        guard case .loaded(let result) = polishState else { return }
-        guard let idx = validTabIndex else { return }
-        let tab = openDocuments[idx]
-        // Preserve frontmatter; replace only the body.
-        let (frontmatter, _) = FrontmatterParser.parse(tab.content)
-        openDocuments[idx].content = FrontmatterParser.serialize(
-            frontmatter: frontmatter,
-            body: result.polished
-        )
-        openDocuments[idx].isDirty = true
-        updateOutline()
-        polishState = .idle
     }
 
     // MARK: - Git Integration
@@ -1444,12 +1274,6 @@ final class AppState {
 
     func openGitActivity() {
         showGitActivity = true
-    }
-
-    func openGitDiff(for relPath: String) {
-        gitDiffPath = relPath
-        gitDiffText = ""
-        showGitDiff = true
     }
 
     /// Opens the commit detail modal for `hash`. Loads the commit lazily
@@ -1550,51 +1374,6 @@ final class AppState {
             jumpToHeadingPath(heading)
         }
         log.info("openWikilink: target=\(name) heading=\(heading ?? "")")
-    }
-
-    func loadGitDiff(for relPath: String) async {
-        guard let vault else { return }
-        gitDiffLoading = true
-        defer { gitDiffLoading = false }
-        do {
-            let data = try await runCLI(
-                ["git", "diff", relPath, "--json", "--porcelain"],
-                cwd: vault.rootURL
-            )
-            if let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
-                gitDiffText = decoded["diff"] ?? ""
-            } else {
-                gitDiffText = ""
-            }
-        } catch {
-            log.warning("git diff unavailable: \(error.localizedDescription)")
-            gitDiffText = ""
-        }
-    }
-
-    func openPolishedAsNewTab() {
-        guard case .loaded(let result) = polishState else { return }
-        guard let vault, let tab = currentDocument else { return }
-        // Write the polished version to a sibling file with a -polished suffix
-        // so the user can diff and manually merge without losing the original.
-        let parent = tab.url.deletingLastPathComponent()
-        let stem = tab.url.deletingPathExtension().lastPathComponent
-        let ext = tab.url.pathExtension
-        let candidate = "\(stem)-polished.\(ext)"
-        let target = uniqueFilename(base: candidate, in: parent)
-        let (frontmatter, _) = FrontmatterParser.parse(tab.content)
-        let content = FrontmatterParser.serialize(frontmatter: frontmatter, body: result.polished)
-        do {
-            try content.write(to: target, atomically: true, encoding: .utf8)
-            refreshFiles()
-            openDocument(at: target)
-            log.info("Polished revision opened as \(target.lastPathComponent)")
-        } catch {
-            log.error("Failed to open polished revision: \(error.localizedDescription)")
-            errorLogger?.log("Failed to open polished revision", error: error)
-        }
-        _ = vault // silence unused warning; kept for future path joins
-        polishState = .idle
     }
 
     // MARK: - MCP Observability

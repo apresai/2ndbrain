@@ -4,7 +4,8 @@
 
 **Product**: 2ndbrain — A native macOS markdown editor built for joint AI-human use.
 
-**System Name**: "the editor" (used consistently throughout all requirements)
+**System Name**: "the editor" (used consistently throughout all legacy requirements). 
+*Note on System Name Convention*: With the introduction of Obsidian-Native requirements (`OBN-*`), requirements reference "the CLI" and "the MCP server" or the unified tool name "2nb". Section 0 needs to resolve whether to explicitly define these multiple system names or standardize all requirements on "2nb" as the single system name.
 
 ### EARS Pattern Reference
 
@@ -501,29 +502,75 @@
 
 ---
 
-## 15. Obsidian Vault Conversion
+## 15. Obsidian Migration (legacy)
 
-**OBS-EV-001**: When the user selects "Import Obsidian Vault", the editor shall scan the selected directory for `.obsidian/` and all `.md` files, generate UUIDs for documents missing an `id` frontmatter field, set `type: note` for documents without a `type` field, normalize inline `#tag` syntax to frontmatter `tags` array, initialize a `.2ndbrain/` directory, and build the full search index.
+**OBS-EV-001**: [SUPERSEDED by OBN-DET-*] When the user selects "Import Obsidian Vault", the editor shall scan the selected directory for `.obsidian/` and all `.md` files, generate UUIDs for documents missing an `id` frontmatter field, set `type: note` for documents without a `type` field, normalize inline `#tag` syntax to frontmatter `tags` array, initialize a `.2ndbrain/` directory, and build the full search index.
+*Pointer:* Replaced by the zero-configuration vault detection and sidecar model detailed in [vault-coexistence.md](docs/obsidian/vault-coexistence.md).
 
-**OBS-EV-002**: When the user selects "Export to Obsidian", the editor shall copy all vault markdown files to the selected directory, create an `.obsidian/` directory with default configuration, convert UUID-based wikilink references to filename-based wikilinks, and optionally strip 2ndbrain-specific frontmatter fields (`id`, `type`).
+**OBS-EV-002**: [SUPERSEDED by OBN-DET-*] When the user selects "Export to Obsidian", the editor shall copy all vault markdown files to the selected directory, create an `.obsidian/` directory with default configuration, convert UUID-based wikilink references to filename-based wikilinks, and optionally strip 2ndbrain-specific frontmatter fields (`id`, `type`).
+*Pointer:* In 0.5.0, 2ndbrain operates directly on the native vault, rendering export operations obsolete.
 
-**OBS-EV-003**: When importing an Obsidian vault, the editor shall preserve all existing frontmatter fields not defined in the 2ndbrain schema as custom metadata.
+**OBS-EV-003**: [SURVIVES / FORMAT FIDELITY] When importing an Obsidian vault, the editor shall preserve all existing frontmatter fields not defined in the 2ndbrain schema as custom metadata.
 
-**OBS-EV-004**: When importing an Obsidian vault, the editor shall map Obsidian `aliases` frontmatter to wikilink alias resolution during index building.
+**OBS-EV-004**: [SURVIVES / FORMAT FIDELITY] When importing an Obsidian vault, the editor shall map Obsidian `aliases` frontmatter to wikilink alias resolution during index building.
 
-**OBS-EV-005**: When importing an Obsidian vault containing `.canvas` files, the editor shall preserve them as-is without modification.
+**OBS-EV-005**: [SURVIVES / FORMAT FIDELITY] When importing an Obsidian vault containing `.canvas` files, the editor shall preserve them as-is without modification.
 
-**OBS-EV-006**: When the user runs `2nb import-obsidian <path>`, the CLI shall perform the same import operation as the GUI, outputting progress to stderr and a summary to stdout.
+**OBS-EV-006**: [SUPERSEDED by OBN-MIG-001] When the user runs `2nb import-obsidian <path>`, the CLI shall perform the same import operation as the GUI, outputting progress to stderr and a summary to stdout.
+*Pointer:* Replaced by `2nb migrate` for legacy vaults as detailed in [migration-guide.md](docs/obsidian/migration-guide.md).
 
-**OBS-EV-007**: When the user runs `2nb export-obsidian <path>`, the CLI shall perform the same export operation as the GUI with an optional `--strip-ids` flag to remove 2ndbrain-specific frontmatter fields.
+**OBS-EV-007**: [SUPERSEDED by OBN-DET-*] When the user runs `2nb export-obsidian <path>`, the CLI shall perform the same export operation as the GUI with an optional `--strip-ids` flag to remove 2ndbrain-specific frontmatter fields.
+*Pointer:* Replaced by the non-mutating, zero-configuration native vault operation.
 
-**OBS-ST-001**: While importing an Obsidian vault, the editor shall display a progress indicator showing the number of documents processed out of total.
+**OBS-ST-001**: [SUPERSEDED by OBN-DET-*] While importing an Obsidian vault, the editor shall display a progress indicator showing the number of documents processed out of total.
+*Pointer:* Progress tracking is handled via the CLI indexing progress bar.
 
-**OBS-UW-001**: If an Obsidian vault contains documents with conflicting filenames in different subdirectories, then the editor shall resolve wikilinks using the shortest unique path and log any ambiguous references.
+**OBS-UW-001**: [SURVIVES / FORMAT FIDELITY] If an Obsidian vault contains documents with conflicting filenames in different subdirectories, then the editor shall resolve wikilinks using the shortest unique path and log any ambiguous references.
 
-**OBS-UW-002**: If an Obsidian vault uses Obsidian-specific syntax (block references `^block-id`, embedded transclusions `![[note]]`), then the editor shall preserve the raw syntax and log unsupported features.
+**OBS-UW-002**: [SUPERSEDED by OBN-PAR-*] If an Obsidian vault uses Obsidian-specific syntax (block references `^block-id`, embedded transclusions `![[note]]`), then the editor shall preserve the raw syntax and log unsupported features.
+*Pointer:* Replaced by native support for OFM block references and transclusions detailed in [ofm-syntax.md](docs/obsidian/ofm-syntax.md).
 
-**OBS-UW-003**: If an imported document's frontmatter contains YAML parsing errors, then the editor shall skip that document, log the error, and continue processing remaining files.
+**OBS-UW-003**: [SURVIVES / FORMAT FIDELITY] If an imported document's frontmatter contains YAML parsing errors, then the editor shall skip that document, log the error, and continue processing remaining files.
+
+---
+
+## 15a. Obsidian-Native Operation
+
+The following requirements outline the system behavior for the 0.5.0 Obsidian-native architecture. Detailed specifications for these capabilities are written in the `docs/obsidian/` folder:
+* Vault detection via `.obsidian/` is specified in [vault-coexistence.md](docs/obsidian/vault-coexistence.md).
+* Path/basename identity model is specified in [identity-model.md](docs/obsidian/identity-model.md).
+* Non-mutating frontmatter guarantee is specified in [vault-coexistence.md](docs/obsidian/vault-coexistence.md).
+* Obsidian Flavored Markdown (OFM) parsing is specified in [ofm-syntax.md](docs/obsidian/ofm-syntax.md).
+* Wikilink path resolution is specified in [wikilink-resolution.md](docs/obsidian/wikilink-resolution.md).
+* Canvas and Bases read-only support is specified in [canvas-and-bases.md](docs/obsidian/canvas-and-bases.md).
+
+**OBN-UB-001**: As a developer, I want to use my existing Obsidian vault directly with 2nb without modifying any frontmatter, so my files remain fully standard.
+
+**OBN-UB-002**: As a developer, I want to perform RAG queries and semantic searches over my vault using a local-only AI model (Ollama) so my data never leaves my machine.
+
+**OBN-EV-001**: When the CLI runs, it shall detect an Obsidian vault by checking for the presence of a `.obsidian/` folder in the working directory or parent directories.
+
+**OBN-EV-002**: When the CLI initializes a vault, it shall store all database and cache files in a `.2ndbrain/` subdirectory within the vault root and append `.2ndbrain/` to the vault's `.gitignore` file.
+
+**OBN-EV-003**: When parsing markdown documents, the CLI shall extract standard Obsidian wikilinks (`[[target]]`), aliased links (`[[target|display]]`), and heading/block anchors (`[[target#heading]]`).
+
+**OBN-EV-004**: When updating document frontmatter via the CLI, the system shall modify the YAML AST using `yaml.Node` to preserve existing comments, key order, and spacing.
+
+**OBN-EV-005**: When indexing, the system shall parse `.canvas` files to extract card text and link connections, representing them in the links database.
+
+**OBN-EV-006**: When indexing, the system shall parse `.base` YAML files to extract nested keys and values as dot-notated configuration properties.
+
+**OBN-EV-007**: When a RAG query is executed via `2nb ask`, the system shall perform hybrid search (BM25 keyword + semantic vector similarity) to retrieve relevant context.
+
+**OBN-EV-008**: When a legacy 2ndbrain vault is detected, the user shall be able to run `2nb migrate` to convert the legacy vault to the native Obsidian format without mutating source markdown files.
+
+**OBN-ST-001**: While the CLI is indexing, the database shall remain read-only for external readers and guarantee transactional rollback on any indexing failure.
+
+**OBN-UW-001**: If a wikilink target matches multiple files with the same name, the system shall resolve the link using the shortest unique path suffix.
+
+**OBN-UW-002**: If an invalid absolute path or file URL is encountered in links, the system shall ignore it to prevent false broken-link warnings.
+
+**OBN-OF-001**: The local indexing, embedding, search, and RAG operations shall function entirely offline without requiring internet access or sending data to cloud providers when configured with local models.
 
 ---
 
@@ -557,6 +604,7 @@
 | Performance | 3 | 3 | 2 | 2 | 0 | 0 | **10** |
 | Security & Privacy | 2 | 3 | 1 | 2 | 0 | 0 | **8** |
 | Error Handling & Recovery | 2 | 3 | 1 | 4 | 0 | 0 | **10** |
-| Obsidian Vault Conversion | 0 | 7 | 1 | 3 | 0 | 0 | **11** |
+| Obsidian Vault Conversion (legacy) | 0 | 7 | 1 | 3 | 0 | 0 | **11** |
+| Obsidian-Native Operation (OBN) | 2 | 8 | 1 | 2 | 1 | 0 | **14** |
 | Testing & Quality | 2 | 1 | 0 | 1 | 0 | 0 | **4** |
-| **Total** | **48** | **96** | **25** | **35** | **6** | **6** | **216** |
+| **Total** | **50** | **104** | **26** | **37** | **7** | **6** | **230** |

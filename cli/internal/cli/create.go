@@ -160,7 +160,7 @@ func embedNewDocument(v *vault.Vault, doc *document.Document) {
 		return
 	}
 
-	vecs, err := embedder.Embed(ctx, []string{doc.Body})
+	vecs, err := embedder.Embed(ctx, []string{doc.IndexableBody()})
 	if err != nil {
 		return
 	}

@@ -10,10 +10,9 @@ import (
 )
 
 type VaultConfig struct {
-	Name    string          `yaml:"name" json:"name"`
-	Version string          `yaml:"version" json:"version"`
-	Embed   EmbeddingConfig `yaml:"embedding" json:"embedding"`
-	AI      ai.AIConfig     `yaml:"ai,omitempty" json:"ai,omitempty"`
+	Name    string      `yaml:"name" json:"name"`
+	Version string      `yaml:"version" json:"version"`
+	AI      ai.AIConfig `yaml:"ai,omitempty" json:"ai,omitempty"`
 
 	// Recovered is set transiently when LoadConfig had to regenerate
 	// the config from defaults (missing file or corrupt YAML). Not
@@ -23,22 +22,11 @@ type VaultConfig struct {
 	Recovered string `yaml:"-" json:"-"`
 }
 
-type EmbeddingConfig struct {
-	Model      string `yaml:"model" json:"model"`
-	Dimensions int    `yaml:"dimensions" json:"dimensions"`
-	BatchSize  int    `yaml:"batch_size" json:"batch_size"`
-}
-
 func DefaultConfig(name string) *VaultConfig {
 	return &VaultConfig{
 		Name:    name,
 		Version: "1",
-		Embed: EmbeddingConfig{
-			Model:      "nomic-embed-text-v1.5.Q8_0.gguf",
-			Dimensions: 768,
-			BatchSize:  100,
-		},
-		AI: ai.DefaultAIConfig(),
+		AI:      ai.DefaultAIConfig(),
 	}
 }
 

@@ -99,3 +99,16 @@ var schemaV2Statements = []string{
 	`ALTER TABLE documents ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE documents ADD COLUMN embedding_hash TEXT NOT NULL DEFAULT ''`,
 }
+
+var schemaV3Statements = []string{
+	`CREATE TABLE IF NOT EXISTS aliases (
+		doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+		alias  TEXT NOT NULL,
+		PRIMARY KEY (doc_id, alias)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_aliases_alias ON aliases(alias)`,
+	`ALTER TABLE chunks ADD COLUMN block_id TEXT`,
+	`CREATE INDEX IF NOT EXISTS idx_chunks_block_id ON chunks(block_id)`,
+	`ALTER TABLE links ADD COLUMN block_id TEXT`,
+	`CREATE INDEX IF NOT EXISTS idx_links_block_id ON links(block_id)`,
+}

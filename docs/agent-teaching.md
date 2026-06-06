@@ -161,6 +161,19 @@ Add `test-battery` to `test-all` so CI runs it by default.
 | `TestBattery_MCPLifecycle` | Spawn `2nb mcp-server` → invoke `kb_info` via stdio → read sidecar → kill → respawn | Sidecar at `.2ndbrain/mcp/<pid>.json` exists with invocation logged (tool name, timestamp, ok, duration_ms). `2nb mcp status --json` reports the live server. Stale sidecars cleaned on next spawn. |
 | `TestBattery_SkillsRoundtrip` | `skills install claude-code --user` → `skills list` → `skills uninstall` | File at `~/.claude/skills/2nb/SKILL.md` appears, `skills list` marks installed, uninstall removes the file. Don't clobber the user's real skill dir — the test should use a temp `HOME`. |
 
+#### Obsidian-native additions (0.5.0)
+
+These scenarios prove an LLM client can drive the tool against a real Obsidian vault. They live in `cli/battery_obsidian_test.go` (same `e2e_test` package + harness).
+
+| Scenario | What it exercises | What it asserts |
+|---|---|---|
+| `TestBattery_MCPStdioDriveTools` | Spawn `2nb mcp-server`, speak MCP over **real stdio** (mcp-go client): `initialize` → `kb_create` → `kb_info` → `kb_search` | The JSON-RPC handshake + marshal boundary works (not just direct handler calls): the created note is reported by `kb_info` and surfaced by `kb_search`. This is the genuine "an LLM client drives the server" proof. |
+| `TestBattery_Migrate` / `TestBattery_MigrateDryRun` | Build a legacy schema-v2 `index.db` → `2nb migrate` (and `--dry-run`) | Schema upgrades v2→v3; source markdown is byte-for-byte unchanged (non-mutating guarantee); `--dry-run` reports v2 and changes nothing. |
+| `TestBattery_ObsidianNativeRAG` | `.obsidian` vault with wikilinks, `aliases`, inline `#tag` → `index` → `search --json` → `list --tag` → (gated) `ask --json` | `search --json` returns the pinned `{mode,warnings,results}` envelope (BM25, ungated); inline `#design` tag is indexed (`list --tag design` finds it); grounded `ask --json` returns a non-empty `answer` + string `sources` when a provider is configured. |
+| `TestBattery_CanvasBaseIndexing` | Write `.canvas` (JSON) + `.base` (YAML) → `index` → `list --json` | Both appear as first-class indexed documents. |
+
+The JSON envelope is the contract for every consumer (the Obsidian plugin, the Swift app). `cli/internal/cli/contract_envelope_test.go` pins the `search` envelope shape and that `ask` `sources` is a `[]string` (the exact shape the plugin parses) — without needing a provider.
+
 ### Gap-filler tests
 
 These aren't in the battery — they go in existing (or new) test files targeted at specific modules:

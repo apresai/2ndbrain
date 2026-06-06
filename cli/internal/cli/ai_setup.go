@@ -56,9 +56,9 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	provider := setupProvider
 	if provider == "" {
 		fmt.Println("Select AI provider:")
-		fmt.Println("  1) bedrock     — AWS Bedrock (Claude, Nova, Llama — uses AWS credentials)")
-		fmt.Println("  2) openrouter  — OpenRouter API (many models, pay-per-token)")
-		fmt.Println("  3) ollama      — Local models via Ollama (free, private)")
+		fmt.Println("  1) bedrock     — AWS Bedrock: Claude Haiku 4.5 + Nova embeddings (default, recommended)")
+		fmt.Println("  2) openrouter  — OpenRouter API (opt-in; many models, pay-per-token)")
+		fmt.Println("  3) ollama      — Local models via Ollama (opt-in; free + private, requires install)")
 		choice := promptChoice(scanner, "Choice", 3)
 		provider = []string{"bedrock", "openrouter", "ollama"}[choice-1]
 	}
@@ -69,6 +69,16 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid provider %q (use: bedrock, openrouter, ollama)", provider)
 	}
 	cfg.Provider = provider
+	// Enable the chosen provider: Ollama and OpenRouter ship disabled (opt-in),
+	// so selecting one here makes its models visible in selection UIs.
+	switch provider {
+	case "bedrock":
+		cfg.Bedrock.Disabled = false
+	case "openrouter":
+		cfg.OpenRouter.Disabled = false
+	case "ollama":
+		cfg.Ollama.Disabled = false
+	}
 	fmt.Printf("\nProvider: %s\n", provider)
 
 	// Step 2: Validate credentials.
@@ -206,6 +216,7 @@ func setupBedrock(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig)
 	if ai.CheckBedrockCredentials(ctx, cfg.Bedrock) {
 		fmt.Printf("  Found credentials (profile: %s, region: %s)\n", cfg.Bedrock.Profile, cfg.Bedrock.Region)
 		if promptYN(scanner, "Use these?", true) {
+			printBedrockModelAccessHint(cfg.Bedrock.Region)
 			return nil
 		}
 	}
@@ -222,11 +233,25 @@ func setupBedrock(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig)
 
 	fmt.Println("  Validating credentials...")
 	if !ai.CheckBedrockCredentials(ctx, cfg.Bedrock) {
-		return fmt.Errorf("AWS credentials not valid for profile=%s region=%s\n  Run `aws configure` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY",
-			cfg.Bedrock.Profile, cfg.Bedrock.Region)
+		return fmt.Errorf("AWS credentials not found for profile=%s region=%s.\n"+
+			"  Fix one of:\n"+
+			"    • run `aws configure` (or `aws configure --profile %s`)\n"+
+			"    • set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (and AWS_REGION)\n"+
+			"    • set AWS_PROFILE to an existing profile",
+			cfg.Bedrock.Profile, cfg.Bedrock.Region, cfg.Bedrock.Profile)
 	}
 	fmt.Println("  AWS credentials validated.")
+	printBedrockModelAccessHint(cfg.Bedrock.Region)
 	return nil
+}
+
+// printBedrockModelAccessHint reminds the user about the most common Bedrock
+// gotcha: credentials can be valid while model access is still locked. If the
+// model probe later returns AccessDenied, this is why.
+func printBedrockModelAccessHint(region string) {
+	fmt.Printf("  Note: Bedrock requires per-model access. If a model test fails with\n"+
+		"  \"AccessDenied\", enable Claude + Nova in the AWS console:\n"+
+		"    Bedrock → Model access (region: %s)\n", region)
 }
 
 func setupOpenRouter(scanner *bufio.Scanner) error {
@@ -320,7 +345,6 @@ func pickModel(scanner *bufio.Scanner, catalog []ai.ModelInfo, provider, modelTy
 	return selected.ID, selected.Dimensions
 }
 
-
 func ollamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 	ctx := context.Background()
 	models, err := ai.ListOllamaModels(ctx, http.DefaultClient, "http://localhost:11434")
@@ -408,7 +432,10 @@ func promptYN(scanner *bufio.Scanner, prompt string, defaultYes bool) bool {
 func easyModeDefaults(provider string) (embedID, genID string, dims int) {
 	switch provider {
 	case "bedrock":
-		return "amazon.nova-2-multimodal-embeddings-v1:0", "amazon.nova-micro-v1:0", 1024
+		// Single source of truth: the same Bedrock default the vault ships with
+		// (Nova-2 embeddings + Claude Haiku 4.5), not a divergent nova-micro.
+		d := ai.DefaultAIConfig()
+		return d.EmbeddingModel, d.GenerationModel, d.Dimensions
 	case "openrouter":
 		return "nvidia/llama-nemotron-embed-vl-1b-v2:free", "google/gemma-4-31b-it:free", 1024
 	case "ollama":

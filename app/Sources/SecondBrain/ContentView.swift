@@ -2,328 +2,61 @@ import SwiftUI
 import SecondBrainCore
 import UniformTypeIdentifiers
 
+enum DashboardTab: String, CaseIterable, Identifiable {
+    case status = "Vault Status"
+    case aiSettings = "AI Settings"
+    case mcpServer = "MCP Server"
+    case gitIntegration = "Git Integration"
+    case validation = "Validation"
+
+    var id: String { self.rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .status: return "externaldrive"
+        case .aiSettings: return "bolt.horizontal"
+        case .mcpServer: return "server.rack"
+        case .gitIntegration: return "sourcecontrol"
+        case .validation: return "checkmark.seal"
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(AppState.self) var appState
-    @State private var focusChromeVisible = false
-
-    private var anyOverlayVisible: Bool {
-        appState.showSearch || appState.showQuickOpen || appState.showCommandPalette || appState.showAskAI || appState.showTemplatePicker || appState.showAIHub
-    }
-
-    /// Handle .md files dropped onto the editor window. We load each URL
-    /// asynchronously (loadObject is off the main thread) and then jump back
-    /// to MainActor to mutate AppState.
-    private func handleFileDrop(providers: [NSItemProvider]) -> Bool {
-        var handled = false
-        for provider in providers {
-            guard provider.canLoadObject(ofClass: URL.self) else { continue }
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url, url.pathExtension.lowercased() == "md" else { return }
-                Task { @MainActor in
-                    appState.openDocument(at: url)
-                }
-            }
-            handled = true
-        }
-        return handled
-    }
+    @State private var selection: DashboardTab = .status
 
     var body: some View {
-        overlayStack
-            .onChange(of: anyOverlayVisible) { _, visible in
-                if visible {
-                    NSApp.keyWindow?.makeFirstResponder(nil)
+        mainLayout
+            .onChange(of: appState.showAIHub) { _, show in
+                if show {
+                    selection = .aiSettings
+                    appState.showAIHub = false
                 }
             }
-            .modifier(PrimarySheetsModifier(
-                appState: appState,
-                showProperties: Binding(
-                    get: { appState.showProperties },
-                    set: { appState.showProperties = $0 }
-                )
-            ))
-            .modifier(SecondarySheetsModifier(appState: appState))
-            .alert("Crash Recovery", isPresented: Binding(
-                get: { appState.showRecoveryDialog },
-                set: { appState.showRecoveryDialog = $0 }
-            )) {
-                Button("Recover All") {
-                    for entry in appState.recoveryEntries {
-                        appState.recoverDocument(entry)
-                    }
-                    appState.showRecoveryDialog = false
-                }
-                Button("Discard", role: .destructive) {
-                    appState.dismissRecovery()
-                }
-            } message: {
-                Text("\(appState.recoveryEntries.count) document(s) have unsaved changes from a previous session.")
-            }
-    }
-
-    @ViewBuilder
-    private var overlayStack: some View {
-        ZStack {
-            mainContent
-                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                    handleFileDrop(providers: providers)
-                }
-
-            if appState.showSearch {
-                overlayBackground { appState.showSearch = false }
-                SearchPanelView(isPresented: Binding(
-                    get: { appState.showSearch },
-                    set: { appState.showSearch = $0 }
-                ))
-            }
-            if appState.showQuickOpen {
-                overlayBackground { appState.showQuickOpen = false }
-                QuickOpenView(isPresented: Binding(
-                    get: { appState.showQuickOpen },
-                    set: { appState.showQuickOpen = $0 }
-                ))
-            }
-            if appState.showCommandPalette {
-                overlayBackground { appState.showCommandPalette = false }
-                CommandPaletteView(isPresented: Binding(
-                    get: { appState.showCommandPalette },
-                    set: { appState.showCommandPalette = $0 }
-                ))
-            }
-            if appState.showAskAI {
-                overlayBackground { appState.showAskAI = false }
-                AskAIView(isPresented: Binding(
-                    get: { appState.showAskAI },
-                    set: { appState.showAskAI = $0 }
-                ))
-            }
-            if appState.showTemplatePicker {
-                overlayBackground { appState.showTemplatePicker = false }
-                TemplatePicker(isPresented: Binding(
-                    get: { appState.showTemplatePicker },
-                    set: { appState.showTemplatePicker = $0 }
-                ))
-            }
-            // The AI Hub is the single surface for provider control, active
-            // model selection, and the catalog. showAISetupWizard and
-            // showModelWizard are computed aliases on showAIHub so any
-            // caller (Command Palette, status bar popover, Vault Status
-            // button, AI menu) opens the same sheet.
-            if appState.showAIHub {
-                overlayBackground { appState.showAIHub = false }
-                AIHubView(onClose: { appState.showAIHub = false })
-                    .background(Color(nsColor: .windowBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .shadow(radius: 20)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var mainContent: some View {
-        if appState.focusModeActive {
-            // Focus mode: just the editor. Chrome (tab bar + breadcrumb)
-            // auto-reveals when the mouse reaches the top edge, then fades
-            // out when the user moves back into the body.
-            ZStack(alignment: .top) {
-                Group {
-                    if appState.openDocuments.isEmpty {
-                        WelcomeView()
-                    } else {
-                        EditorArea()
-                    }
-                }
-
-                if focusChromeVisible && !appState.openDocuments.isEmpty {
-                    VStack(spacing: 0) {
-                        TabBarView()
-                        BreadcrumbBar()
-                    }
-                    .background(.regularMaterial)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+            .onChange(of: appState.showMCPStatus) { _, show in
+                if show {
+                    selection = .mcpServer
+                    appState.showMCPStatus = false
                 }
             }
-            .onContinuousHover { phase in
-                guard case .active(let location) = phase else {
-                    if focusChromeVisible {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            focusChromeVisible = false
-                        }
-                    }
-                    return
-                }
-                let shouldShow = location.y < 50
-                if shouldShow != focusChromeVisible {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        focusChromeVisible = shouldShow
-                    }
+            .onChange(of: appState.showGitActivity) { _, show in
+                if show {
+                    selection = .gitIntegration
+                    appState.showGitActivity = false
                 }
             }
-        } else {
-            NavigationSplitView {
-                SidebarView()
-            } detail: {
-                Group {
-                    if appState.openDocuments.isEmpty {
-                        WelcomeView()
-                    } else {
-                        VStack(spacing: 0) {
-                            TabBarView()
-                            BreadcrumbBar()
-                            EditorArea()
-                            StatusBarView()
-                        }
-                    }
-                }
-                .toolbar {
-                    ToolbarItemGroup(placement: .navigation) {
-                        Button {
-                            appState.showTemplatePicker = true
-                        } label: {
-                            Label("New Note", systemImage: "doc.badge.plus")
-                        }
-                        .disabled(appState.vault == nil)
-                        .help("New Note (⌘N)")
-
-                        Button {
-                            appState.showSearch.toggle()
-                        } label: {
-                            Label("Search", systemImage: "magnifyingglass")
-                        }
-                        .disabled(appState.vault == nil)
-                        .help("Search Vault (⌘⇧F)")
-
-                        Button {
-                            appState.showQuickOpen.toggle()
-                        } label: {
-                            Label("Quick Open", systemImage: "square.on.square")
-                        }
-                        .disabled(appState.vault == nil)
-                        .help("Quick Open (⌘P)")
-                    }
+            .onChange(of: appState.showLintResults) { _, show in
+                if show {
+                    selection = .validation
+                    appState.showLintResults = false
                 }
             }
-            .navigationSplitViewStyle(.balanced)
-        }
-    }
-
-    private func overlayBackground(onTap: @escaping () -> Void) -> some View {
-        Color.black.opacity(0.3)
-            .ignoresSafeArea()
-            .onTapGesture(perform: onTap)
-    }
-}
-
-// MARK: - Welcome View
-
-struct WelcomeView: View {
-    @Environment(AppState.self) var appState
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 64))
-                .foregroundStyle(.secondary)
-
-            Text("2ndbrain")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-
-            Text("AI-Native Markdown Editor")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-
-            if appState.vault == nil {
-                Button("Open Vault") {
-                    openVaultPanel()
+            .onChange(of: appState.showVaultStatus) { _, show in
+                if show {
+                    selection = .status
+                    appState.showVaultStatus = false
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.top, 8)
-            } else {
-                Text("Select a document from the sidebar or create a new one.")
-                    .foregroundStyle(.tertiary)
-                Button {
-                    appState.showTemplatePicker = true
-                } label: {
-                    Label("New Note", systemImage: "doc.badge.plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.top, 8)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func openVaultPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            appState.openVault(at: url)
-            UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
-        }
-    }
-}
-
-// MARK: - Sheet Modifiers
-//
-// SwiftUI's body type-checker struggles with long chains of .sheet(). Splitting
-// the sheets across two ViewModifier structs keeps each sub-expression small
-// enough to compile.
-
-private struct PrimarySheetsModifier: ViewModifier {
-    @Bindable var appState: AppState
-    @Binding var showProperties: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .sheet(isPresented: Binding(
-                get: { appState.showGraphView },
-                set: { appState.showGraphView = $0 }
-            )) {
-                GraphView()
-                    .environment(appState)
-                    .frame(minWidth: 900, minHeight: 600, idealHeight: 700)
-                    .overlay(alignment: .topLeading) {
-                        Button {
-                            appState.showGraphView = false
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .keyboardShortcut(.cancelAction)
-                        .padding(8)
-                    }
-            }
-            .sheet(isPresented: $showProperties) {
-                PropertiesView(isPresented: $showProperties)
-                    .environment(appState)
-            }
-            .sheet(isPresented: Binding(
-                get: { appState.showLintResults },
-                set: { appState.showLintResults = $0 }
-            )) {
-                LintResultsView(isPresented: Binding(
-                    get: { appState.showLintResults },
-                    set: { appState.showLintResults = $0 }
-                ))
-                .environment(appState)
-                .onAppear { Task { await appState.runLint() } }
-            }
-            .sheet(isPresented: Binding(
-                get: { appState.showSkillsInstall },
-                set: { appState.showSkillsInstall = $0 }
-            )) {
-                SkillsInstallView(isPresented: Binding(
-                    get: { appState.showSkillsInstall },
-                    set: { appState.showSkillsInstall = $0 }
-                ))
-                .environment(appState)
             }
             .sheet(isPresented: Binding(
                 get: { appState.showMCPSetup },
@@ -336,89 +69,11 @@ private struct PrimarySheetsModifier: ViewModifier {
                 .environment(appState)
             }
             .sheet(isPresented: Binding(
-                get: { appState.showMCPStatus },
-                set: { appState.showMCPStatus = $0 }
-            )) {
-                MCPStatusView(isPresented: Binding(
-                    get: { appState.showMCPStatus },
-                    set: { appState.showMCPStatus = $0 }
-                ))
-                .environment(appState)
-            }
-            .sheet(isPresented: Binding(
-                get: { appState.showSuggestLinks },
-                set: { appState.showSuggestLinks = $0 }
-            )) {
-                SuggestLinksView(isPresented: Binding(
-                    get: { appState.showSuggestLinks },
-                    set: { appState.showSuggestLinks = $0 }
-                ))
-                .environment(appState)
-            }
-            .sheet(isPresented: Binding(
-                get: { appState.showPolish },
-                set: { appState.showPolish = $0 }
-            )) {
-                PolishView(isPresented: Binding(
-                    get: { appState.showPolish },
-                    set: { appState.showPolish = $0 }
-                ))
-                .environment(appState)
-            }
-    }
-}
-
-private struct SecondarySheetsModifier: ViewModifier {
-    @Bindable var appState: AppState
-
-    func body(content: Content) -> some View {
-        content
-            .sheet(isPresented: Binding(
-                get: { appState.showGitActivity },
-                set: { appState.showGitActivity = $0 }
-            )) {
-                GitActivityView(isPresented: Binding(
-                    get: { appState.showGitActivity },
-                    set: { appState.showGitActivity = $0 }
-                ))
-                .environment(appState)
-            }
-            .sheet(isPresented: Binding(
-                get: { appState.showGitDiff },
-                set: { appState.showGitDiff = $0 }
-            )) {
-                GitDiffView(
-                    isPresented: Binding(
-                        get: { appState.showGitDiff },
-                        set: { appState.showGitDiff = $0 }
-                    ),
-                    relPath: appState.gitDiffPath
-                )
-                .environment(appState)
-            }
-            .sheet(isPresented: Binding(
-                get: { appState.showVaultStatus },
-                set: { appState.showVaultStatus = $0 }
-            )) {
-                VaultStatusView(isPresented: Binding(
-                    get: { appState.showVaultStatus },
-                    set: { appState.showVaultStatus = $0 }
-                ))
-                .environment(appState)
-            }
-            // showAITest is a computed alias on showAIHub; the AI Hub
-            // overlay above renders the merged view for all three old
-            // entry points (AI Setup, Test AI Connection, Model Wizard).
-            .sheet(isPresented: Binding(
                 get: { appState.showCommitDetail },
                 set: { newValue in
                     if newValue {
                         appState.showCommitDetail = true
                     } else {
-                        // Any dismissal (Done button, Escape, SwiftUI drag,
-                        // outside-click) flows through this setter. Route
-                        // through closeCommitDetail so the in-flight git-show
-                        // Task gets cancelled before a reopen can race it.
                         appState.closeCommitDetail()
                     }
                 }
@@ -439,5 +94,83 @@ private struct SecondarySheetsModifier: ViewModifier {
                 ))
                 .environment(appState)
             }
+    }
+
+    @ViewBuilder
+    private var mainLayout: some View {
+        if appState.vault == nil {
+            WelcomeView()
+        } else {
+            NavigationSplitView {
+                List(selection: $selection) {
+                    ForEach(DashboardTab.allCases) { tab in
+                        NavigationLink(value: tab) {
+                            Label(tab.rawValue, systemImage: tab.systemImage)
+                        }
+                    }
+                }
+                .navigationTitle("2ndbrain")
+                .listStyle(.sidebar)
+            } detail: {
+                Group {
+                    switch selection {
+                    case .status:
+                        VaultStatusView(isPresented: .constant(true), isInline: true)
+                    case .aiSettings:
+                        AIHubView(onClose: {}, isInline: true)
+                    case .mcpServer:
+                        MCPStatusView(isPresented: .constant(true), isInline: true)
+                    case .gitIntegration:
+                        GitActivityView(isPresented: .constant(true), isInline: true)
+                    case .validation:
+                        LintResultsView(isPresented: .constant(true), isInline: true)
+                    }
+                }
+                .navigationTitle(selection.rawValue)
+                .background(Color(nsColor: .windowBackgroundColor))
+            }
+            .navigationSplitViewStyle(.balanced)
+        }
+    }
+}
+
+// MARK: - Welcome View
+
+struct WelcomeView: View {
+    @Environment(AppState.self) var appState
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 64))
+                .foregroundStyle(.secondary)
+
+            Text("2ndbrain")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+
+            Text("AI Companion & Configuration Dashboard")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+
+            Button("Open Vault") {
+                openVaultPanel()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.top, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func openVaultPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            appState.openVault(at: url)
+            UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+        }
     }
 }

@@ -109,3 +109,30 @@ func TestExtractWikiLinks_MultipleInlineCodeMixed(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractWikiLinks_MarkdownLinksAndEmbeds(t *testing.T) {
+	body := "Here is a standard markdown link [to doc](docs/notes.md#heading), an external one [Google](https://google.com), and an embed ![[my-image.png]]."
+	links := ExtractWikiLinks(body)
+
+	// We expect two links extracted (the standard markdown link and the embed wikilink).
+	// The external Google link is ignored.
+	if len(links) != 2 {
+		t.Fatalf("expected 2 links, got %d: %+v", len(links), links)
+	}
+
+	// First link (extracted first via wikilink/embed regex): ![[my-image.png]]
+	if links[0].Target != "my-image.png" {
+		t.Errorf("expected target 'my-image.png', got %q", links[0].Target)
+	}
+
+	// Second link (extracted second via markdown link regex): [to doc](docs/notes.md#heading)
+	if links[1].Target != "docs/notes.md" {
+		t.Errorf("expected target 'docs/notes.md', got %q", links[1].Target)
+	}
+	if links[1].Heading != "heading" {
+		t.Errorf("expected heading 'heading', got %q", links[1].Heading)
+	}
+	if links[1].Alias != "to doc" {
+		t.Errorf("expected alias 'to doc', got %q", links[1].Alias)
+	}
+}

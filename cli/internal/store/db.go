@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -16,7 +17,7 @@ import (
 // newer 2nb and will be refused at open time with an upgrade hint — this
 // is cheaper than risking silent corruption if a future migration adds
 // required columns or behavior.
-const MaxSchemaVersion = 2
+const MaxSchemaVersion = 3
 
 type DB struct {
 	conn *sql.DB
@@ -67,41 +68,16 @@ func (db *DB) migrate() error {
 	}
 
 	if version < 2 {
-		// Use EXCLUSIVE lock to prevent concurrent migration races (C1 fix)
-		if _, err := db.conn.Exec("BEGIN EXCLUSIVE"); err != nil {
-			return fmt.Errorf("migrate lock: %w", err)
+		if err := db.applyMigration(2, schemaV2Statements, func(_ string, err error) bool {
+			return isDuplicateColumn(err)
+		}); err != nil {
+			return err
 		}
+	}
 
-		// Compute migration outcome inside the transaction. ROLLBACK and
-		// COMMIT are driven by whether migrateErr is set — emitting both
-		// (old code) leaves SQLite in "no active transaction" state and the
-		// subsequent COMMIT fails, which used to surface as a spurious error
-		// on the duplicate-column success path.
-		var migrateErr error
-		if err := db.conn.QueryRow("SELECT version FROM schema_version").Scan(&version); err != nil {
-			migrateErr = fmt.Errorf("migrate re-read version: %w", err)
-		} else if version < 2 {
-			for _, stmt := range schemaV2Statements {
-				if _, err := db.conn.Exec(stmt); err != nil && !isDuplicateColumn(err) {
-					migrateErr = fmt.Errorf("migrate v1→v2: %w", err)
-					break
-				}
-			}
-			if migrateErr == nil {
-				if _, err := db.conn.Exec("UPDATE schema_version SET version = 2"); err != nil {
-					migrateErr = fmt.Errorf("migrate v1→v2 bump version: %w", err)
-				}
-			}
-		}
-
-		if migrateErr != nil {
-			if _, rbErr := db.conn.Exec("ROLLBACK"); rbErr != nil {
-				slog.Warn("migrate rollback failed", "err", rbErr)
-			}
-			return migrateErr
-		}
-		if _, err := db.conn.Exec("COMMIT"); err != nil {
-			return fmt.Errorf("migrate commit: %w", err)
+	if version < 3 {
+		if err := db.applyMigration(3, schemaV3Statements, isDuplicateColumnOrTable); err != nil {
+			return err
 		}
 	}
 
@@ -116,6 +92,67 @@ func (db *DB) migrate() error {
 	return nil
 }
 
+// applyMigration runs stmts and bumps schema_version to targetVersion while
+// holding a SQLite EXCLUSIVE lock. Every statement (BEGIN/DDL/UPDATE/COMMIT)
+// runs on a single pinned *sql.Conn so the transaction can't be split across
+// the *sql.DB connection pool — a raw "BEGIN EXCLUSIVE" Exec on the pool can
+// land on a different connection than the matching COMMIT, leaving the lock
+// stuck on an idle connection and the COMMIT erroring with "no transaction".
+// Idempotent: re-reads the version inside the lock and skips if another
+// process already migrated, and tolerates duplicate column/table errors (a
+// half-applied prior run) via isDup.
+func (db *DB) applyMigration(targetVersion int, stmts []string, isDup func(stmt string, err error) bool) error {
+	ctx := context.Background()
+	conn, err := db.conn.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate v%d acquire conn: %w", targetVersion, err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+		return fmt.Errorf("migrate v%d lock: %w", targetVersion, err)
+	}
+
+	migrateErr := func() error {
+		var version int
+		if err := conn.QueryRowContext(ctx, "SELECT version FROM schema_version").Scan(&version); err != nil {
+			return fmt.Errorf("migrate re-read version: %w", err)
+		}
+		if version >= targetVersion {
+			return nil // another process won the race; nothing to do
+		}
+		for _, stmt := range stmts {
+			if _, err := conn.ExecContext(ctx, stmt); err != nil && !isDup(stmt, err) {
+				return fmt.Errorf("migrate to v%d: %w", targetVersion, err)
+			}
+		}
+		if _, err := conn.ExecContext(ctx, "UPDATE schema_version SET version = ?", targetVersion); err != nil {
+			return fmt.Errorf("migrate to v%d bump version: %w", targetVersion, err)
+		}
+		return nil
+	}()
+
+	if migrateErr != nil {
+		if _, rbErr := conn.ExecContext(ctx, "ROLLBACK"); rbErr != nil {
+			slog.Warn("migrate rollback failed", "err", rbErr)
+		}
+		return migrateErr
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("migrate v%d commit: %w", targetVersion, err)
+	}
+	return nil
+}
+
 func isDuplicateColumn(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "duplicate column name:")
+}
+
+func isDuplicateColumnOrTable(stmt string, err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column name:") ||
+		strings.Contains(msg, "already exists")
 }

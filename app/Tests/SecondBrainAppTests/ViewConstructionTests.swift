@@ -1,7 +1,7 @@
 import Testing
 @testable import SecondBrain
 
-@Test("Primary SwiftUI AI and graph views can be constructed")
+@Test("Primary SwiftUI AI views can be constructed")
 @MainActor
 func primaryViewsConstruct() {
     let model = CatalogModelInfo(
@@ -49,9 +49,7 @@ func primaryViewsConstruct() {
         onReload: {}
     )
     let hub = AIHubView(onClose: {})
-    let graph = GraphView()
 
     #expect(String(describing: type(of: picker)) == "ModelCatalogPickerView")
     #expect(String(describing: type(of: hub)) == "AIHubView")
-    #expect(String(describing: type(of: graph)) == "GraphView")
 }

@@ -260,7 +260,7 @@ func kbUpdateMetaTool() mcplib.Tool {
 
 Jumping over a state (e.g., proposed → superseded directly) will be rejected. Walk the transitions.
 
-Do NOT modify the "modified" timestamp manually — it's maintained automatically and hand-edits can desync with the content hash and cause spurious re-embeds. If you need to touch the body, use a regular file-edit tool and the save path will update the timestamp.
+This tool preserves the existing frontmatter verbatim (comments, key order, and the "modified" value) and updates only the fields you set — it does NOT bump "modified" automatically. If you want to record an edit time, set "modified" explicitly. To change the body, use a regular file-edit tool.
 
 Example prompts that should trigger this tool:
 - "Mark the JWT ADR as accepted"

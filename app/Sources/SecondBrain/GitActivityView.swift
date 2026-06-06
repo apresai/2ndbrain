@@ -13,6 +13,7 @@ struct GitChangeInfo: Codable, Identifiable {
 struct GitActivityView: View {
     @Environment(AppState.self) var appState
     @Binding var isPresented: Bool
+    var isInline: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,14 +39,16 @@ struct GitActivityView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(appState.gitActivityLoading)
-                Button("Done") { isPresented = false }
-                    .keyboardShortcut(.defaultAction)
+                if !isInline {
+                    Button("Done") { isPresented = false }
+                        .keyboardShortcut(.defaultAction)
+                }
             }
             .padding()
 
             Divider()
 
-            if appState.gitActivityLoading {
+            if appState.gitActivityLoading && appState.gitActivity.isEmpty {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !appState.vaultIsGitRepo {
                 VStack(spacing: 8) {
@@ -63,11 +66,14 @@ struct GitActivityView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if appState.gitActivity.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.system(size: 28))
+                    Image(systemName: "clock")
+                        .font(.system(size: 32))
                         .foregroundStyle(.secondary)
-                    Text("No commits in the last \(appState.gitActivityDays) day\(appState.gitActivityDays == 1 ? "" : "s")")
+                    Text("No recent activity")
                         .font(.headline)
+                    Text("Git commit activity within the selected window will appear here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

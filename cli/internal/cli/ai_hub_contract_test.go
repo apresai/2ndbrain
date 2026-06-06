@@ -125,31 +125,40 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 func TestContract_ProviderDisabledToggleRoundtrip(t *testing.T) {
 	_, root := newContractVault(t)
 
-	providers := []string{"bedrock", "openrouter", "ollama"}
-	for _, p := range providers {
+	// Bedrock is the default provider (enabled); Ollama and OpenRouter are
+	// opt-in, so they ship disabled.
+	defaults := map[string]string{
+		"bedrock":    "false",
+		"openrouter": "true",
+		"ollama":     "true",
+	}
+	for p, want := range defaults {
 		key := "ai." + p + ".disabled"
 
-		// Default is "false".
 		got, err := runCLIArgs(t, root, "config", "get", key)
 		if err != nil {
 			t.Fatalf("initial get %s: %v (out=%s)", key, err, got)
 		}
-		if !strings.Contains(string(got), "false") {
-			t.Errorf("%s initial value should contain 'false', got %q", key, got)
+		if !strings.Contains(string(got), want) {
+			t.Errorf("%s initial value should contain %q, got %q", key, want, got)
 		}
 
-		// Set true.
-		if _, err := runCLIArgs(t, root, "config", "set", key, "true"); err != nil {
-			t.Fatalf("set %s true: %v", key, err)
+		// Toggle to the opposite value and confirm it sticks.
+		other := "true"
+		if want == "true" {
+			other = "false"
+		}
+		if _, err := runCLIArgs(t, root, "config", "set", key, other); err != nil {
+			t.Fatalf("set %s %s: %v", key, other, err)
 		}
 		got, _ = runCLIArgs(t, root, "config", "get", key)
-		if !strings.Contains(string(got), "true") {
-			t.Errorf("%s after set-true: got %q", key, got)
+		if !strings.Contains(string(got), other) {
+			t.Errorf("%s after set-%s: got %q", key, other, got)
 		}
 
-		// Set false to restore.
-		if _, err := runCLIArgs(t, root, "config", "set", key, "false"); err != nil {
-			t.Fatalf("set %s false: %v", key, err)
+		// Restore the default.
+		if _, err := runCLIArgs(t, root, "config", "set", key, want); err != nil {
+			t.Fatalf("set %s %s: %v", key, want, err)
 		}
 	}
 }

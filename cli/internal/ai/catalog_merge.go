@@ -23,6 +23,12 @@ type MergedListOptions struct {
 	// as visible so builtin models without an explicit user override remain
 	// present. Use this to produce the subset shown in GUI dropdowns.
 	EnabledOnly bool
+	// IncludeDisabledProviders keeps models from providers the user has
+	// silenced via ai.<provider>.disabled. The setup wizard sets this: it is
+	// the surface where a user enables an opt-in provider (Ollama/OpenRouter
+	// ship disabled), so hiding disabled-but-reachable providers there would
+	// dead-end onboarding for anyone without Bedrock credentials.
+	IncludeDisabledProviders bool
 }
 
 // MergedModelList is the output of BuildModelList.
@@ -70,8 +76,11 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// Provider-level disable trumps everything: if the user silenced a
 	// provider (e.g. Ollama isn't running and they don't want it in the
 	// catalog), drop every entry from that provider regardless of tier
-	// or Enabled state.
-	catalog = filterDisabledProviders(catalog, opts.Config)
+	// or Enabled state. The setup wizard opts out (IncludeDisabledProviders)
+	// because it's where opt-in providers get enabled.
+	if !opts.IncludeDisabledProviders {
+		catalog = filterDisabledProviders(catalog, opts.Config)
+	}
 	result.Verified = catalog
 
 	// Layer 4: vendor discovery. Only add entries not already in the merged catalog.
@@ -87,7 +96,9 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 		if opts.EnabledOnly {
 			result.Unverified = filterEnabled(result.Unverified)
 		}
-		result.Unverified = filterDisabledProviders(result.Unverified, opts.Config)
+		if !opts.IncludeDisabledProviders {
+			result.Unverified = filterDisabledProviders(result.Unverified, opts.Config)
+		}
 	}
 
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)

@@ -110,6 +110,13 @@ func ParseFile(path string) (*Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".canvas") {
+		return ParseCanvas(path, content)
+	}
+	if strings.HasSuffix(lower, ".base") {
+		return ParseBase(path, content)
+	}
 	return Parse(path, content)
 }
 
@@ -140,13 +147,45 @@ func NewDocument(title, docType, templateBody string) *Document {
 	}
 }
 
+// IsReadOnlyType reports whether a document type is a synthetic, read-only view
+// produced by parsing a non-Markdown Obsidian file (.canvas JSON, .base YAML).
+// These must never be written back: Serialize would emit the synthesized
+// markdown body over the original JSON/YAML and corrupt the file.
+func IsReadOnlyType(docType string) bool {
+	return docType == "canvas" || docType == "base"
+}
+
 func (d *Document) Serialize() ([]byte, error) {
+	// Defense-in-depth: refuse to serialize a synthetic .canvas/.base view.
+	// Callers (meta, kb_update_meta) guard earlier with a clearer message;
+	// this catches any future write path before it can corrupt the file.
+	if IsReadOnlyType(d.Type) {
+		return nil, fmt.Errorf("refusing to write read-only %s document %q (.canvas/.base files are indexed read-only)", d.Type, d.Path)
+	}
+
 	// Clone frontmatter to avoid mutating the receiver as a side effect.
 	fm := make(map[string]any, len(d.Frontmatter))
 	for k, v := range d.Frontmatter {
 		fm[k] = v
 	}
-	fm["modified"] = time.Now().UTC().Format(time.RFC3339)
+
+	// Try to update existing file frontmatter surgically to preserve comments
+	// and layout. The body comes from d.Body (in-memory), not the freshly
+	// re-read disk body, so a caller that edited the body has its changes
+	// persisted rather than silently discarded. For meta-only edits d.Body
+	// equals the on-disk body (both came from the same ParseFile), so this is
+	// a no-op for the common path.
+	if d.Path != "" {
+		if content, err := os.ReadFile(d.Path); err == nil {
+			if _, _, perr := ParseFrontmatter(content); perr == nil {
+				updated, err := UpdateDocumentFrontmatterAST(content, fm, d.Body)
+				if err == nil {
+					return updated, nil
+				}
+			}
+		}
+	}
+
 	return SerializeDocument(fm, d.Body)
 }
 
@@ -223,6 +262,36 @@ func extractTags(meta map[string]any) []string {
 		return v
 	case string:
 		// `tags: foo` in YAML parses as a bare string; treat it as one tag.
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	default:
+		return nil
+	}
+}
+
+func ExtractAliases(meta map[string]any) []string {
+	if meta == nil {
+		return nil
+	}
+	raw, ok := meta["aliases"]
+	if !ok {
+		return nil
+	}
+
+	switch v := raw.(type) {
+	case []any:
+		aliases := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				aliases = append(aliases, s)
+			}
+		}
+		return aliases
+	case []string:
+		return v
+	case string:
 		if v == "" {
 			return nil
 		}

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/document"
 )
 
 // initTestVault mirrors testutil.NewTestVault but lives in-package so we can
@@ -73,21 +75,31 @@ func TestIndexSingleFile_IndexesWikilinks(t *testing.T) {
 func TestIndexFile_RollsBackOnFailure(t *testing.T) {
 	v := initTestVault(t)
 
+	// Pre-insert doc1 with path "bad.md" and ID "id-1"
+	doc1 := &document.Document{
+		ID: "id-1", Path: "bad.md", Title: "First",
+		Type: "note", Status: "draft", CreatedAt: "2025-01-01T00:00:00Z",
+		ModifiedAt: "2025-01-01T00:00:00Z", Frontmatter: map[string]any{},
+	}
+	if err := v.DB.UpsertDocument(doc1); err != nil {
+		t.Fatal(err)
+	}
+
 	abs := filepath.Join(v.Root, "bad.md")
-	// Missing id field — indexFile returns an error before transactional
-	// writes.
-	content := "---\ntitle: Bad\ntype: note\nstatus: draft\n---\nbody"
+	// Write content for bad.md with a different ID "id-2".
+	// This causes a UNIQUE path constraint violation on indexing.
+	content := "---\nid: id-2\ntitle: Bad\ntype: note\nstatus: draft\n---\nbody"
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	err := indexFile(v.DB, abs, "bad.md")
 	if err == nil {
-		t.Fatal("expected error from indexFile with missing id")
+		t.Fatal("expected error from indexFile with path collision")
 	}
 
-	// Confirm no rows leaked into documents/chunks/tags/links.
-	for _, table := range []string{"documents", "chunks", "tags", "links"} {
+	// Confirm that the transaction rolled back and no chunks/tags/links leaked.
+	for _, table := range []string{"chunks", "tags", "links"} {
 		var count int
 		if err := v.DB.Conn().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -146,5 +158,87 @@ func TestPurgeStale_RemovesMissingFiles(t *testing.T) {
 	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents WHERE id = ?", "id-gone").Scan(&count)
 	if count != 0 {
 		t.Errorf("documents still has id-gone after purge (count=%d)", count)
+	}
+}
+
+func TestIndex_CanvasAndBase(t *testing.T) {
+	v := initTestVault(t)
+
+	// Write a dummy markdown target so canvas link has something to resolve to
+	writeDoc(t, v, "engineering/auth-model.md", "id-auth", "Auth Model", "Auth details")
+
+	// Write canvas
+	canvasJSON := `{
+		"nodes": [
+			{"id": "n1", "type": "text", "text": "Core auth logic"},
+			{"id": "n2", "type": "file", "file": "engineering/auth-model.md"}
+		],
+		"edges": [
+			{"id": "e1", "fromNode": "n1", "toNode": "n2"}
+		]
+	}`
+	absCanvas := filepath.Join(v.Root, "board.canvas")
+	if err := os.WriteFile(absCanvas, []byte(canvasJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write base
+	baseYAML := `
+base:
+  name: Prod Settings
+  timeout: 500
+`
+	absBase := filepath.Join(v.Root, "config.base")
+	if err := os.WriteFile(absBase, []byte(baseYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := IndexVault(v, nil)
+	if err != nil {
+		t.Fatalf("IndexVault: %v", err)
+	}
+
+	if stats.DocsIndexed < 3 {
+		t.Errorf("expected at least 3 docs indexed, got %d", stats.DocsIndexed)
+	}
+
+	// Verify canvas in DB
+	var cType string
+	err = v.DB.Conn().QueryRow("SELECT doc_type FROM documents WHERE path = ?", "board.canvas").Scan(&cType)
+	if err != nil {
+		t.Fatalf("query board.canvas: %v", err)
+	}
+	if cType != "canvas" {
+		t.Errorf("expected doc_type = canvas, got %q", cType)
+	}
+
+	// Verify base in DB
+	var bType string
+	err = v.DB.Conn().QueryRow("SELECT doc_type FROM documents WHERE path = ?", "config.base").Scan(&bType)
+	if err != nil {
+		t.Fatalf("query config.base: %v", err)
+	}
+	if bType != "base" {
+		t.Errorf("expected doc_type = base, got %q", bType)
+	}
+
+	// Verify chunks for canvas (text node)
+	var canvasChunks int
+	err = v.DB.Conn().QueryRow("SELECT COUNT(*) FROM chunks WHERE doc_id = (SELECT id FROM documents WHERE path = ?)", "board.canvas").Scan(&canvasChunks)
+	if err != nil {
+		t.Fatalf("query canvas chunks: %v", err)
+	}
+	if canvasChunks == 0 {
+		t.Error("expected board.canvas chunks, got 0")
+	}
+
+	// Verify chunks for base (flattened properties)
+	var baseChunks int
+	err = v.DB.Conn().QueryRow("SELECT COUNT(*) FROM chunks WHERE doc_id = (SELECT id FROM documents WHERE path = ?)", "config.base").Scan(&baseChunks)
+	if err != nil {
+		t.Fatalf("query base chunks: %v", err)
+	}
+	if baseChunks == 0 {
+		t.Error("expected config.base chunks, got 0")
 	}
 }

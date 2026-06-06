@@ -68,17 +68,23 @@ func runLint(cmd *cobra.Command, args []string) error {
 	report := &LintReport{}
 	allDocs := make(map[string]bool)
 
-	// First pass: collect all known doc titles/filenames for link resolution
+	// First pass: collect all known doc filenames for link resolution. Markdown
+	// plus the Obsidian file types 2nb now indexes (.canvas/.base) so links to
+	// them aren't reported as broken.
 	filepath.Walk(v.Root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(strings.ToLower(path), ".md") {
-			rel := v.RelPath(path)
-			base := strings.TrimSuffix(filepath.Base(rel), ".md")
-			allDocs[base] = true
-			allDocs[rel] = true
-			allDocs[strings.TrimSuffix(rel, ".md")] = true
+		lower := strings.ToLower(path)
+		for _, ext := range []string{".md", ".canvas", ".base"} {
+			if strings.HasSuffix(lower, ext) {
+				rel := v.RelPath(path)
+				allDocs[strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))] = true // basename, no ext
+				allDocs[filepath.Base(rel)] = true                                        // basename, with ext
+				allDocs[rel] = true                                                       // rel path, with ext
+				allDocs[strings.TrimSuffix(rel, ext)] = true                              // rel path, no ext
+				break
+			}
 		}
 		return nil
 	})
@@ -148,10 +154,16 @@ func runLint(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Check: broken wikilinks
+		// Check: broken wikilinks. Skip anchor-only links ([x](#section), empty
+		// target) and embedded assets ([alt](img.png), ![[img.png]]) — Obsidian
+		// vaults are image- and anchor-heavy, and treating those as broken notes
+		// makes lint noisy to useless.
 		links := document.ExtractWikiLinks(doc.Body)
 		for _, link := range links {
 			target := link.Target
+			if isAssetOrAnchorTarget(target) {
+				continue
+			}
 			if !allDocs[target] {
 				report.Issues = append(report.Issues, LintIssue{
 					Path: relPath, Level: "warning",
@@ -183,4 +195,23 @@ func runLint(cmd *cobra.Command, args []string) error {
 		os.Exit(ExitValidation)
 	}
 	return nil
+}
+
+// isAssetOrAnchorTarget reports whether a link target should be excluded from
+// the broken-wikilink check. An empty target is an anchor-only / same-document
+// link ([x](#section)). A target with a non-note extension is an embedded asset
+// (image, pdf, audio, ...) — only .md/.canvas/.base are resolvable notes that
+// warrant a broken-link warning.
+func isAssetOrAnchorTarget(target string) bool {
+	if target == "" {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(target)) {
+	case "":
+		return false // bare note reference like [[note]]
+	case ".md", ".canvas", ".base":
+		return false // resolvable note types — do check these
+	default:
+		return true // asset (png/jpg/pdf/...) — skip
+	}
 }

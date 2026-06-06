@@ -1,5 +1,8 @@
 # Vault Structure
 
+> [!IMPORTANT]
+> The directory layout and UUID-first frontmatter format described in this document are superseded for 0.5.0 by the Obsidian-native coexistence and path-based identity models. See [docs/obsidian/vault-coexistence.md](obsidian/vault-coexistence.md) and [docs/obsidian/identity-model.md](obsidian/identity-model.md) for details.
+
 A 2ndbrain vault is a directory containing plain markdown files and a `.2ndbrain/` configuration directory.
 
 ## Directory Layout
@@ -28,10 +31,6 @@ my-vault/
 ```yaml
 name: my-vault
 version: "1"
-embedding:
-  model: nomic-embed-text-v1.5.Q8_0.gguf
-  dimensions: 768
-  batch_size: 100
 ai:
   provider: bedrock
   embedding_model: amazon.nova-2-multimodal-embeddings-v1:0
@@ -40,11 +39,13 @@ ai:
   similarity_threshold: 0
   ollama:
     endpoint: http://localhost:11434
+    disabled: true       # Ollama is opt-in; the setup wizard enables it
   bedrock:
     profile: default
     region: us-east-1
   openrouter:
     api_key_env: OPENROUTER_API_KEY
+    disabled: true       # OpenRouter is opt-in
 ```
 
 ## Frontmatter Format

@@ -1,5 +1,8 @@
 # 2ndbrain: The Markdown Editor That Makes Your Knowledge Base AI-Native
 
+> [!IMPORTANT]
+> The product vision, architecture, and editor-centric model described in this press release are superseded for the 0.5.0 milestone. See [docs/obsidian/press-release.md](docs/obsidian/press-release.md) for the updated Obsidian-native AI companion vision.
+
 **The first macOS markdown editor designed from the ground up for AI-assisted development — shipping with a built-in MCP server, hybrid semantic search, and a CLI that speaks JSON.**
 
 ---
@@ -36,7 +39,7 @@ The editor ships with three interfaces:
 
 **Write naturally, index automatically.** Create documents using built-in templates for ADRs, runbooks, postmortems, and project notes. Each template enforces a frontmatter schema with typed properties — status fields with valid transitions, enumerated tags, required relationships. The editor validates as you write, so your knowledge base stays structured without extra effort.
 
-**Search by meaning, not just keywords.** Type "how do we handle auth token refresh?" and get ranked results from across your vault — even if no document contains that exact phrase. The hybrid search engine combines keyword precision with semantic understanding, all running locally on your machine using GGUF embedding models. No API keys. No cloud. No token costs.
+**Search by meaning, not just keywords.** Type "how do we handle auth token refresh?" and get ranked results from across your vault — even if no document contains that exact phrase. The hybrid search engine combines keyword precision with semantic understanding. By default the AI layer runs on AWS Bedrock (Claude Haiku 4.5 generation plus Amazon Nova embeddings) via your own AWS credentials; local models through Ollama are opt-in for a fully on-device, no-cloud setup.
 
 **Connect to your AI tools in one line.** Add `2nb mcp-server` to your Claude Code config and your vault becomes a first-class context source. Claude can search your ADRs before suggesting an architecture, read your runbooks before debugging an incident, check your conventions before writing code. The MCP server exposes `kb_search`, `kb_read`, `kb_related`, `kb_create`, and `kb_update_meta` as tools — the exact operations AI coding assistants need.
 
@@ -48,14 +51,14 @@ The editor ships with three interfaces:
 
 - **Native macOS**: SwiftUI + AppKit. Spotlight search, Quick Look, Touch ID, Handoff. Sandboxed and notarized.
 - **Plain markdown files**: No database, no proprietary format. Your files work with git, grep, and every other tool you already use.
-- **Hybrid search**: BM25 + vector embeddings with Reciprocal Rank Fusion. Local GGUF models — no API keys.
+- **Hybrid search**: BM25 + vector embeddings with Reciprocal Rank Fusion. AWS Bedrock by default (Claude Haiku 4.5 + Nova embeddings); local Ollama and OpenRouter are opt-in.
 - **Structured frontmatter**: Schema validation, typed properties, status state machines. Your metadata is always clean.
 - **Stable UUIDs**: Every document gets a persistent ID that survives renames. AI-generated cross-references don't break.
 - **Built-in MCP server**: stdio transport, no plugins needed. Works with Claude Code, Claude Desktop, Cursor, and any MCP client.
 - **CLI-first**: `2nb` outputs JSON, YAML, CSV, or plain text. Scriptable, pipeable, AI-friendly.
 - **Knowledge graph**: Wikilinks, backlinks, graph visualization. Resolve by UUID first, filename second.
 - **Document templates**: ADR, runbook, postmortem, service doc — each with enforced schemas.
-- **Local-first privacy**: All data on your machine. All AI features run locally. Nothing leaves your disk unless you choose to push it.
+- **Local-first data**: Your markdown and search index live on your machine. AI runs on AWS Bedrock by default (your AWS account); choose local Ollama for a fully on-device setup where nothing leaves your disk.
 
 ## Availability
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/document"
@@ -36,6 +37,15 @@ func (db *DB) UpsertDocument(doc *document.Document) error {
 	return err
 }
 
+// nullIfEmpty returns nil for an empty string so an optional TEXT column stores
+// SQL NULL rather than "", keeping "block_id IS NOT NULL" filters meaningful.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func (db *DB) UpsertChunks(chunks []document.Chunk) error {
 	tx, err := db.conn.Begin()
 	if err != nil {
@@ -44,14 +54,15 @@ func (db *DB) UpsertChunks(chunks []document.Chunk) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO chunks (id, doc_id, heading_path, level, content, content_hash, start_line, end_line, sort_order)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO chunks (id, doc_id, heading_path, level, content, content_hash, start_line, end_line, sort_order, block_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			content = excluded.content,
 			content_hash = excluded.content_hash,
 			start_line = excluded.start_line,
 			end_line = excluded.end_line,
-			sort_order = excluded.sort_order
+			sort_order = excluded.sort_order,
+			block_id = excluded.block_id
 	`)
 	if err != nil {
 		return err
@@ -59,7 +70,7 @@ func (db *DB) UpsertChunks(chunks []document.Chunk) error {
 	defer stmt.Close()
 
 	for _, c := range chunks {
-		if _, err := stmt.Exec(c.ID, c.DocID, c.HeadingPath, c.Level, c.Content, c.ContentHash, c.StartLine, c.EndLine, c.SortOrder); err != nil {
+		if _, err := stmt.Exec(c.ID, c.DocID, c.HeadingPath, c.Level, c.Content, c.ContentHash, c.StartLine, c.EndLine, c.SortOrder, nullIfEmpty(c.BlockID)); err != nil {
 			return fmt.Errorf("upsert chunk %s: %w", c.ID, err)
 		}
 	}
@@ -104,14 +115,14 @@ func (db *DB) UpsertLinks(docID string, links []document.WikiLink) error {
 		return err
 	}
 
-	stmt, err := tx.Prepare("INSERT INTO links (source_id, target_raw, heading, alias) VALUES (?, ?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT INTO links (source_id, target_raw, heading, alias, block_id) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	for _, link := range links {
-		if _, err := stmt.Exec(docID, link.Target, link.Heading, link.Alias); err != nil {
+		if _, err := stmt.Exec(docID, link.Target, link.Heading, link.Alias, nullIfEmpty(link.Block)); err != nil {
 			return fmt.Errorf("insert link to %s: %w", link.Target, err)
 		}
 	}
@@ -140,27 +151,204 @@ func (db *DB) GetDocumentByPath(path string) (*document.Document, error) {
 	return &doc, nil
 }
 
-// linkMatchClause is the per-link match predicate shared by ResolveLinks'
-// two correlated subqueries. Keeping it in one place guarantees the SELECT
-// that picks the target and the COUNT that gates ambiguity stay in sync.
-const linkMatchClause = `links.target_raw = replace(d.path, '.md', '')
-	OR links.target_raw = d.title
-	OR links.target_raw = d.path`
-
-// ResolveLinks matches unresolved wikilinks to existing documents by path or
-// title, but only when exactly one document matches. Ambiguous links (two
-// documents sharing a title / filename) are left unresolved for `2nb lint`
-// to surface, rather than silently wiring up an arbitrary winner.
+// ResolveLinks matches unresolved wikilinks to existing documents by path,
+// title, or alias, using a shortest-unique-path disambiguation algorithm.
 func (db *DB) ResolveLinks() error {
-	q := fmt.Sprintf(`
-		UPDATE links
-		SET target_id = (SELECT d.id FROM documents d WHERE %[1]s LIMIT 1),
-		    resolved = 1
-		WHERE resolved = 0
-		  AND (SELECT COUNT(DISTINCT d.id) FROM documents d WHERE %[1]s) = 1
-	`, linkMatchClause)
-	_, err := db.conn.Exec(q)
-	return err
+	// 1. Fetch all documents
+	rows, err := db.conn.Query("SELECT id, path, title FROM documents")
+	if err != nil {
+		return fmt.Errorf("resolve links query docs: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []docInfo
+	for rows.Next() {
+		var d docInfo
+		if err := rows.Scan(&d.id, &d.path, &d.title); err != nil {
+			return err
+		}
+		docs = append(docs, d)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// 2. Fetch all aliases
+	aliasRows, err := db.conn.Query("SELECT doc_id, alias FROM aliases")
+	if err != nil {
+		return fmt.Errorf("resolve links query aliases: %w", err)
+	}
+	defer aliasRows.Close()
+
+	aliases := make(map[string][]string) // alias -> docIDs
+	for aliasRows.Next() {
+		var docID, alias string
+		if err := aliasRows.Scan(&docID, &alias); err != nil {
+			return err
+		}
+		aliases[alias] = append(aliases[alias], docID)
+	}
+	if err := aliasRows.Err(); err != nil {
+		return fmt.Errorf("resolve links iterate aliases: %w", err)
+	}
+
+	// 3. Build in-memory lookup indexes once.
+	//    - exactPaths: full vault-relative path -> docID (path is UNIQUE).
+	//    - nameIndex:  every resolvable name (full path, basename, and each
+	//      "/"-delimited path suffix, with and without the .md extension) ->
+	//      set of docIDs. This replaces the old per-link O(docs) suffix scan
+	//      with O(1) lookups, making ResolveLinks O(links + paths) rather than
+	//      O(links × docs), and subsumes the old separate basename branch.
+	exactPaths := make(map[string]string)
+	nameIndex := make(map[string]map[string]struct{})
+	titles := make(map[string][]string)
+
+	addName := func(name, id string) {
+		if name == "" {
+			return
+		}
+		set := nameIndex[name]
+		if set == nil {
+			set = make(map[string]struct{})
+			nameIndex[name] = set
+		}
+		set[id] = struct{}{}
+	}
+
+	for _, d := range docs {
+		exactPaths[d.path] = d.id
+
+		// Full path and the path with its .md extension stripped.
+		addName(d.path, d.id)
+		addName(strings.TrimSuffix(d.path, ".md"), d.id)
+
+		// Every "/"-delimited suffix (the basename is the shortest), with and
+		// without the .md extension — covers shortest-unique-path resolution.
+		for i := 0; i < len(d.path); i++ {
+			if d.path[i] == '/' {
+				suffix := d.path[i+1:]
+				addName(suffix, d.id)
+				addName(strings.TrimSuffix(suffix, ".md"), d.id)
+			}
+		}
+
+		if d.title != "" {
+			titles[d.title] = append(titles[d.title], d.id)
+		}
+	}
+
+	// 4. Fetch all links
+	linkRows, err := db.conn.Query("SELECT id, target_raw FROM links")
+	if err != nil {
+		return fmt.Errorf("resolve links query links: %w", err)
+	}
+	defer linkRows.Close()
+
+	type linkItem struct {
+		id        int
+		targetRaw string
+	}
+	var links []linkItem
+	for linkRows.Next() {
+		var l linkItem
+		if err := linkRows.Scan(&l.id, &l.targetRaw); err != nil {
+			return err
+		}
+		links = append(links, l)
+	}
+	if err := linkRows.Err(); err != nil {
+		return fmt.Errorf("resolve links iterate links: %w", err)
+	}
+
+	// 5. Resolve each link
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	setStmt, err := tx.Prepare("UPDATE links SET target_id = ?, resolved = 1 WHERE id = ?")
+	if err != nil {
+		return err
+	}
+	defer setStmt.Close()
+
+	// Unresolved links are still marked resolved=1 with target_id=NULL so a
+	// later pass doesn't keep re-scanning them; graph/retrieval/lint consumers
+	// all gate on target_id IS NOT NULL, so this is safe.
+	clearStmt, err := tx.Prepare("UPDATE links SET target_id = NULL, resolved = 1 WHERE id = ?")
+	if err != nil {
+		return err
+	}
+	defer clearStmt.Close()
+
+	// uniqueDocID returns the single docID indexed under name, or false if the
+	// name is absent or ambiguous (maps to multiple docs).
+	uniqueDocID := func(name string) (string, bool) {
+		set := nameIndex[name]
+		if len(set) != 1 {
+			return "", false
+		}
+		for id := range set {
+			return id, true
+		}
+		return "", false
+	}
+
+	for _, l := range links {
+		// Normalize path slashes and strip any leading slash. The heading/block
+		// anchor was already split off by document.ExtractWikiLinks.
+		target := strings.ReplaceAll(l.targetRaw, "\\", "/")
+		target = strings.TrimPrefix(target, "/")
+
+		var resolvedID string
+
+		// A. Exact full-path match (path is unique).
+		if id, ok := exactPaths[target]; ok {
+			resolvedID = id
+		} else if id, ok := exactPaths[target+".md"]; ok {
+			resolvedID = id
+		}
+
+		// B. Shortest-unique-name match (path suffix or basename).
+		if resolvedID == "" {
+			if id, ok := uniqueDocID(target); ok {
+				resolvedID = id
+			} else if id, ok := uniqueDocID(target + ".md"); ok {
+				resolvedID = id
+			}
+		}
+
+		// C. Title match.
+		if resolvedID == "" {
+			if ids, ok := titles[target]; ok && len(ids) == 1 {
+				resolvedID = ids[0]
+			}
+		}
+
+		// D. Alias match.
+		if resolvedID == "" {
+			if ids, ok := aliases[target]; ok && len(ids) == 1 {
+				resolvedID = ids[0]
+			}
+		}
+
+		if resolvedID != "" {
+			if _, err := setStmt.Exec(resolvedID, l.id); err != nil {
+				return fmt.Errorf("update link target: %w", err)
+			}
+		} else if _, err := clearStmt.Exec(l.id); err != nil {
+			return fmt.Errorf("clear link target: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+type docInfo struct {
+	id    string
+	path  string
+	title string
 }
 
 // FindByContentHash returns the path of an existing document with the same content hash,
@@ -223,14 +411,15 @@ func (db *DB) UpsertDocumentTx(tx *sql.Tx, doc *document.Document) error {
 // UpsertChunksTx inserts chunks within an existing transaction.
 func (db *DB) UpsertChunksTx(tx *sql.Tx, chunks []document.Chunk) error {
 	stmt, err := tx.Prepare(`
-		INSERT INTO chunks (id, doc_id, heading_path, level, content, content_hash, start_line, end_line, sort_order)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO chunks (id, doc_id, heading_path, level, content, content_hash, start_line, end_line, sort_order, block_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			content = excluded.content,
 			content_hash = excluded.content_hash,
 			start_line = excluded.start_line,
 			end_line = excluded.end_line,
-			sort_order = excluded.sort_order
+			sort_order = excluded.sort_order,
+			block_id = excluded.block_id
 	`)
 	if err != nil {
 		return err
@@ -238,7 +427,7 @@ func (db *DB) UpsertChunksTx(tx *sql.Tx, chunks []document.Chunk) error {
 	defer stmt.Close()
 
 	for _, c := range chunks {
-		if _, err := stmt.Exec(c.ID, c.DocID, c.HeadingPath, c.Level, c.Content, c.ContentHash, c.StartLine, c.EndLine, c.SortOrder); err != nil {
+		if _, err := stmt.Exec(c.ID, c.DocID, c.HeadingPath, c.Level, c.Content, c.ContentHash, c.StartLine, c.EndLine, c.SortOrder, nullIfEmpty(c.BlockID)); err != nil {
 			return fmt.Errorf("upsert chunk %s: %w", c.ID, err)
 		}
 	}
@@ -265,20 +454,40 @@ func (db *DB) UpsertTagsTx(tx *sql.Tx, docID string, tags []string) error {
 	return nil
 }
 
+// UpsertAliasesTx replaces aliases for a doc within an existing transaction.
+func (db *DB) UpsertAliasesTx(tx *sql.Tx, docID string, aliases []string) error {
+	if _, err := tx.Exec("DELETE FROM aliases WHERE doc_id = ?", docID); err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare("INSERT INTO aliases (doc_id, alias) VALUES (?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, alias := range aliases {
+		if _, err := stmt.Exec(docID, alias); err != nil {
+			return fmt.Errorf("insert alias %s: %w", alias, err)
+		}
+	}
+	return nil
+}
+
 // UpsertLinksTx replaces links for a doc within an existing transaction.
 func (db *DB) UpsertLinksTx(tx *sql.Tx, docID string, links []document.WikiLink) error {
 	if _, err := tx.Exec("DELETE FROM links WHERE source_id = ?", docID); err != nil {
 		return err
 	}
 
-	stmt, err := tx.Prepare("INSERT INTO links (source_id, target_raw, heading, alias) VALUES (?, ?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT INTO links (source_id, target_raw, heading, alias, block_id) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	for _, link := range links {
-		if _, err := stmt.Exec(docID, link.Target, link.Heading, link.Alias); err != nil {
+		if _, err := stmt.Exec(docID, link.Target, link.Heading, link.Alias, nullIfEmpty(link.Block)); err != nil {
 			return fmt.Errorf("insert link to %s: %w", link.Target, err)
 		}
 	}

@@ -551,7 +551,7 @@ func TestResolveInvokeStrategy_BuiltinLookups(t *testing.T) {
 		{"bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", StrategyBedrockConverse},
 		// Inference-profile prefix should resolve to the non-prefixed builtin.
 		{"bedrock", "eu.anthropic.claude-haiku-4-5-20251001-v1:0", StrategyBedrockConverse},
-		{"openrouter", "anthropic/claude-sonnet-4", StrategyOpenRouterChat},
+		{"openrouter", "anthropic/claude-sonnet-4-6", StrategyOpenRouterChat},
 		{"ollama", "nomic-embed-text", StrategyOllamaEmbeddings},
 		{"bedrock", "not.a.known.model", ""},
 	}
