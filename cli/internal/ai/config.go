@@ -2,10 +2,10 @@ package ai
 
 // AIConfig holds AI provider configuration from vault config.yaml.
 type AIConfig struct {
-	Provider        string           `yaml:"provider" json:"provider"` // ollama, bedrock, openrouter
-	EmbeddingModel  string           `yaml:"embedding_model" json:"embedding_model"`
-	GenerationModel string           `yaml:"generation_model" json:"generation_model"`
-	Dimensions      int              `yaml:"dimensions" json:"dimensions"`
+	Provider        string `yaml:"provider" json:"provider"` // ollama, bedrock, openrouter
+	EmbeddingModel  string `yaml:"embedding_model" json:"embedding_model"`
+	GenerationModel string `yaml:"generation_model" json:"generation_model"`
+	Dimensions      int    `yaml:"dimensions" json:"dimensions"`
 	// SimilarityThreshold is the minimum cosine similarity for a vector
 	// search hit to be included in results. Below this, results are
 	// treated as noise and dropped from the RRF merge so they don't pad
@@ -73,8 +73,14 @@ func DefaultAIConfig() AIConfig {
 		EmbeddingModel:  "amazon.nova-2-multimodal-embeddings-v1:0",
 		GenerationModel: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 		Dimensions:      1024,
+		// Ollama (local) and OpenRouter are opt-in: disabled by default so a
+		// fresh vault presents only the Bedrock default in selection UIs. The
+		// setup wizard / AI Hub clears Disabled when the user enables them.
+		// (Disabled only hides a provider's models from catalog dropdowns; it
+		// does not prevent an explicitly-chosen active provider from running.)
 		Ollama: OllamaConfig{
 			Endpoint: "http://localhost:11434",
+			Disabled: true,
 		},
 		Bedrock: BedrockConfig{
 			Profile: "default",
@@ -82,6 +88,7 @@ func DefaultAIConfig() AIConfig {
 		},
 		OpenRouter: OpenRouterConfig{
 			APIKeyEnv: "OPENROUTER_API_KEY",
+			Disabled:  true,
 		},
 	}
 }

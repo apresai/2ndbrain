@@ -185,11 +185,11 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) error 
 func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.EmbeddingProvider, error) {
 	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if err != nil {
-		return nil, fmt.Errorf("no embedding provider %q", cfg.Provider)
+		return nil, fmt.Errorf("no embedding provider %q configured — run `2nb ai setup`", cfg.Provider)
 	}
 
 	if !embedder.Available(ctx) {
-		return nil, fmt.Errorf("provider %q not available", cfg.Provider)
+		return nil, fmt.Errorf("embedding provider %q is not ready (check credentials) — run `2nb ai setup`", cfg.Provider)
 	}
 	return embedder, nil
 }
@@ -284,7 +284,7 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 			continue
 		}
 
-		vecs, err := embedder.Embed(ctx, []string{parsed.Body})
+		vecs, err := embedder.Embed(ctx, []string{parsed.IndexableBody()})
 		if err != nil {
 			stats.Failed++
 			slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)

@@ -54,6 +54,12 @@ func runMeta(cmd *cobra.Command, args []string) error {
 }
 
 func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absPath string) error {
+	// .canvas/.base files are parsed into a read-only synthetic view. Writing
+	// one back would overwrite the original JSON/YAML with markdown.
+	if document.IsReadOnlyType(doc.Type) {
+		return exitWithError(ExitValidation, fmt.Sprintf("error: cannot edit metadata of a read-only %s file (%s); .canvas/.base files are indexed read-only", doc.Type, doc.Path))
+	}
+
 	for _, kv := range metaSet {
 		parts := strings.SplitN(kv, "=", 2)
 		if len(parts) != 2 {
@@ -76,8 +82,13 @@ func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 		doc.SetMeta(key, value)
 	}
 
-	// Write back
+	// Write back. Serialize reads the on-disk file (by doc.Path) to surgically
+	// preserve YAML comments and key order; point it at the absolute path so
+	// this works from any cwd, then restore the vault-relative path for indexing.
+	rel := doc.Path
+	doc.Path = absPath
 	content, err := doc.Serialize()
+	doc.Path = rel
 	if err != nil {
 		return fmt.Errorf("serialize document: %w", err)
 	}

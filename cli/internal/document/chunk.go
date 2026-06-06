@@ -3,8 +3,13 @@ package document
 import (
 	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// blockRefRe matches a trailing Obsidian block-reference marker, e.g. a line
+// ending in " ^abc-123". The id is letters, digits, and hyphens.
+var blockRefRe = regexp.MustCompile(`(?m)(?:^|\s)\^([A-Za-z0-9-]+)[ \t]*$`)
 
 type Chunk struct {
 	ID          string `json:"id"`
@@ -16,11 +21,16 @@ type Chunk struct {
 	StartLine   int    `json:"start_line"`
 	EndLine     int    `json:"end_line"`
 	SortOrder   int    `json:"sort_order"`
+	// BlockID is the last Obsidian block-reference id (^id) found in the chunk,
+	// best-effort: a heading-bounded chunk can hold several, so the last wins.
+	BlockID string `json:"block_id,omitempty"`
 }
 
-// ChunkDocument splits a document into chunks at heading boundaries.
+// ChunkDocument splits a document into chunks at heading boundaries. Obsidian
+// comments are stripped first so they don't leak into FTS/search/read; newline
+// count is preserved so chunk line numbers stay accurate.
 func ChunkDocument(doc *Document) []Chunk {
-	lines := strings.Split(doc.Body, "\n")
+	lines := strings.Split(StripComments(doc.Body), "\n")
 	var chunks []Chunk
 	var headingStack []string
 
@@ -49,6 +59,7 @@ func ChunkDocument(doc *Document) []Chunk {
 			StartLine:   startLine,
 			EndLine:     endLine,
 			SortOrder:   order,
+			BlockID:     lastBlockID(content),
 		})
 		order++
 	}
@@ -79,6 +90,16 @@ func ChunkDocument(doc *Document) []Chunk {
 
 	flushChunk(len(lines))
 	return chunks
+}
+
+// lastBlockID returns the id of the last trailing "^block-id" marker in the
+// content, or "" if there is none.
+func lastBlockID(content string) string {
+	matches := blockRefRe.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[len(matches)-1][1]
 }
 
 func headingLevel(line string) int {

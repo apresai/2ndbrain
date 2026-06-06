@@ -94,6 +94,47 @@ jobs:
           # Attach to the GitHub Release that GoReleaser created
           gh release upload "v${VERSION}" "${ZIP_NAME}"
 
+      # --- Obsidian plugin (BRAT-installable, no local npm build required) ---
+      # Runs AFTER GoReleaser, which owns and creates the GitHub release in its
+      # `release:` block. Steps within a job are sequential, so the release
+      # `v${VERSION}` already exists by the time we upload here — same proven
+      # pattern as the SecondBrain.zip step above. No race with GoReleaser.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build Obsidian plugin
+        run: |
+          cd plugins/obsidian-2ndbrain
+          # legacy-peer-deps is set in .npmrc; package-lock.json is committed.
+          npm ci
+          # Produces the 3 distributable files: manifest.json, main.js, styles.css
+          npm run build
+
+          # Keep versions.json (BRAT/Obsidian compatibility map) in sync with the
+          # manifest at release time: merge the current plugin version ->
+          # minAppVersion into any committed history so the release asset always
+          # reflects what is actually shipping, even if the committed copy lagged.
+          node -e "const m=require('./manifest.json');const fs=require('fs');let v={};try{v=require('./versions.json')}catch(e){}v[m.version]=m.minAppVersion;fs.writeFileSync('versions.json', JSON.stringify(v,null,2)+'\n')"
+
+          # Confirm the asset paths the upload step references actually exist.
+          ls -l manifest.json main.js styles.css versions.json
+
+      - name: Upload Obsidian plugin assets to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Run from the workspace root with explicit paths so `gh`'s repo
+          # auto-detection is unambiguous. --clobber makes re-runs idempotent
+          # (overwrites assets if a previous attempt already uploaded them).
+          gh release upload "v${VERSION}" \
+            plugins/obsidian-2ndbrain/manifest.json \
+            plugins/obsidian-2ndbrain/main.js \
+            plugins/obsidian-2ndbrain/styles.css \
+            plugins/obsidian-2ndbrain/versions.json \
+            --clobber
+
       - name: Update Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

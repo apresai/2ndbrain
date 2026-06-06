@@ -1,6 +1,8 @@
 package document
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -142,5 +144,59 @@ func TestSlugify(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("slugify(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestSerialize_SurgicalASTPreservesCommentsAndOrder(t *testing.T) {
+	// 1. Create a temporary file representing the original note on disk
+	tmpFile := filepath.Join(t.TempDir(), "note.md")
+	originalContent := "---\n# Important note configuration\nid: test-id\ntitle: Original Title\n# The status determines lifecycle\nstatus: draft\ntags:\n  - testing\n---\n# Heading\nBody content here."
+
+	if err := os.WriteFile(tmpFile, []byte(originalContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Parse the document
+	doc, err := ParseFile(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Modify a metadata field
+	doc.SetMeta("title", "Updated Title")
+	doc.SetMeta("status", "complete")
+
+	// 4. Serialize
+	serialized, err := doc.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 5. Verify the comments and key ordering are preserved
+	serializedStr := string(serialized)
+
+	// Verify title was updated
+	if !strings.Contains(serializedStr, "title: Updated Title") {
+		t.Errorf("expected updated title, got:\n%s", serializedStr)
+	}
+	// Verify status was updated
+	if !strings.Contains(serializedStr, "status: complete") {
+		t.Errorf("expected updated status, got:\n%s", serializedStr)
+	}
+
+	// Verify comments are still present
+	if !strings.Contains(serializedStr, "# Important note configuration") {
+		t.Errorf("missing config comment, got:\n%s", serializedStr)
+	}
+	if !strings.Contains(serializedStr, "# The status determines lifecycle") {
+		t.Errorf("missing status comment, got:\n%s", serializedStr)
+	}
+
+	// Verify order is preserved (id should still be before title, and status after title)
+	idIdx := strings.Index(serializedStr, "id:")
+	titleIdx := strings.Index(serializedStr, "title:")
+	statusIdx := strings.Index(serializedStr, "status:")
+	if idIdx > titleIdx || titleIdx > statusIdx {
+		t.Errorf("ordering was not preserved, got:\n%s", serializedStr)
 	}
 }

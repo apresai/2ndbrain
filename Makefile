@@ -6,7 +6,7 @@ MINOR := $(word 2,$(subst ., ,$(VERSION)))
 BUILD := $(word 3,$(subst ., ,$(VERSION)))
 
 version-swift:
-	@echo '// Auto-generated from VERSION file — do not edit manually.' > app/Sources/SecondBrain/Version.swift
+	@echo '// Auto-generated from VERSION file - do not edit manually.' > app/Sources/SecondBrain/Version.swift
 	@echo 'let appVersion = "$(VERSION)"' >> app/Sources/SecondBrain/Version.swift
 
 build-cli:

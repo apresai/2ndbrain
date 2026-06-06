@@ -23,4 +23,7 @@ app/*.xcworkspace/xcuserdata/
 # at cli/internal/vault or the Swift module at
 # app/Sources/SecondBrainCore/Vault (both tracked).
 /vault/
-.2ndbrain/          # includes index.db, bench.db, models/, recovery/
+# .2ndbrain/ holds the SQLite index.db, bench.db, models/, recovery/, logs/ —
+# machine-local derived state, never commit. (git has no trailing-inline-comment
+# support, so this comment must sit on its own line above the bare pattern.)
+.2ndbrain/

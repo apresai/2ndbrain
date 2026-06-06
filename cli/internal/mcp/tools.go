@@ -193,7 +193,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 			if err != nil {
 				continue
 			}
-			vecs, err := embedder.Embed(ctx, []string{parsed.Body})
+			vecs, err := embedder.Embed(ctx, []string{parsed.IndexableBody()})
 			if err != nil {
 				continue
 			}
@@ -496,7 +496,7 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 	cfg := h.vault.Config.AI
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if embErr == nil && embedder.Available(ctx) {
-		if vecs, err := embedder.Embed(ctx, []string{doc.Body}); err == nil {
+		if vecs, err := embedder.Embed(ctx, []string{doc.IndexableBody()}); err == nil {
 			h.vault.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash)
 		}
 		h.invalidateEmbeddings()
@@ -534,6 +534,12 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 	}
 	doc.Path = path
 
+	// .canvas/.base files are parsed into a read-only synthetic view; writing
+	// one back would overwrite the original JSON/YAML with markdown.
+	if document.IsReadOnlyType(doc.Type) {
+		return mcplib.NewToolResultError(fmt.Sprintf("cannot edit metadata of a read-only %s file (%s); .canvas/.base files are indexed read-only", doc.Type, path)), nil
+	}
+
 	for k, v := range fieldsRaw {
 		if err := h.vault.Schemas.ValidateField(doc.Type, k, v); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("validation error: %v", err)), nil
@@ -548,7 +554,12 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 		doc.SetMeta(k, v)
 	}
 
+	// Serialize reads the on-disk file (by doc.Path) to preserve YAML comments
+	// and key order; point it at the absolute path so it doesn't depend on the
+	// server's cwd, then restore the vault-relative path for indexing.
+	doc.Path = absPath
 	content, err := doc.Serialize()
+	doc.Path = path
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("serialize failed: %v", err)), nil
 	}
@@ -562,7 +573,9 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 		return mcplib.NewToolResultError(fmt.Sprintf("rename failed: %v", err)), nil
 	}
 
-	h.vault.DB.UpsertDocument(doc)
+	if err := h.vault.DB.UpsertDocument(doc); err != nil {
+		slog.Warn("kb_update_meta: failed to update index", "path", path, "err", err)
+	}
 
 	data, _ := json.MarshalIndent(doc.Frontmatter, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil

@@ -3,6 +3,7 @@ package vault
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 const DotDirName = ".2ndbrain"
 
 var (
-	ErrNotAVault   = errors.New("not a 2ndbrain vault (missing .2ndbrain directory)")
+	ErrNotAVault   = errors.New("not an Obsidian vault (missing .obsidian directory)")
 	ErrAlreadyInit = errors.New("vault already initialized")
 )
 
@@ -39,14 +40,33 @@ func Open(dir string) (*Vault, error) {
 
 	dotDir := filepath.Join(root, DotDirName)
 
+	// Automatically initialize .2ndbrain/ sidecar if missing in a native Obsidian vault
+	if _, err := os.Stat(dotDir); os.IsNotExist(err) {
+		for _, sub := range []string{"", "models", "recovery", "logs"} {
+			if err := os.MkdirAll(filepath.Join(dotDir, sub), 0o755); err != nil {
+				return nil, fmt.Errorf("create sidecar %s: %w", sub, err)
+			}
+		}
+
+		name := filepath.Base(root)
+		cfg := DefaultConfig(name)
+		if err := cfg.Save(dotDir); err != nil {
+			return nil, fmt.Errorf("save config: %w", err)
+		}
+
+		schemas := DefaultSchemas()
+		if err := schemas.Save(dotDir); err != nil {
+			return nil, fmt.Errorf("save schemas: %w", err)
+		}
+
+		ensureGitignore(root)
+	}
+
 	cfg, err := LoadConfig(dotDir)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	// Surface config self-healing so the user sees it happened without
-	// having to dig through logs. stderr only — this is operational
-	// information, not an error, and the command the user ran still
-	// proceeds normally.
+
 	switch cfg.Recovered {
 	case "config_missing":
 		fmt.Fprintln(os.Stderr, "  .2ndbrain/config.yaml was missing — regenerated with defaults")
@@ -59,9 +79,6 @@ func Open(dir string) (*Vault, error) {
 		return nil, fmt.Errorf("load schemas: %w", err)
 	}
 
-	// Detect a missing index.db specifically — the user likely deleted
-	// it thinking it was a cache. Recreate an empty DB and tell them
-	// to rebuild. The vault still opens; markdown files are intact.
 	indexPath := filepath.Join(dotDir, "index.db")
 	indexWasMissing := false
 	if _, statErr := os.Stat(indexPath); os.IsNotExist(statErr) {
@@ -92,12 +109,20 @@ func Init(dir string) (*Vault, error) {
 		return nil, err
 	}
 
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create directory: %w", err)
+	}
+
+	obsidianDir := filepath.Join(absDir, ".obsidian")
+	if err := os.MkdirAll(obsidianDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create .obsidian: %w", err)
+	}
+
 	dotDir := filepath.Join(absDir, DotDirName)
 	if _, err := os.Stat(dotDir); err == nil {
 		return nil, ErrAlreadyInit
 	}
 
-	// Create directory structure
 	for _, sub := range []string{"", "models", "recovery", "logs"} {
 		if err := os.MkdirAll(filepath.Join(dotDir, sub), 0o755); err != nil {
 			return nil, fmt.Errorf("create %s: %w", sub, err)
@@ -120,6 +145,8 @@ func Init(dir string) (*Vault, error) {
 		return nil, fmt.Errorf("create index: %w", err)
 	}
 
+	ensureGitignore(absDir)
+
 	return &Vault{
 		Root:    absDir,
 		DotDir:  dotDir,
@@ -127,6 +154,35 @@ func Init(dir string) (*Vault, error) {
 		Schemas: schemas,
 		DB:      db,
 	}, nil
+}
+
+func ensureGitignore(root string) {
+	gitignorePath := filepath.Join(root, ".gitignore")
+	content, err := os.ReadFile(gitignorePath)
+	switch {
+	case err == nil:
+		for _, line := range strings.Split(string(content), "\n") {
+			if t := strings.TrimSpace(line); t == ".2ndbrain/" || t == ".2ndbrain" {
+				return // already ignored
+			}
+		}
+		f, oerr := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0o644)
+		if oerr != nil {
+			// Loud, not silent: this guard is what keeps index.db out of git.
+			slog.Warn("could not open .gitignore to ignore .2ndbrain/; the sidecar may be committed", "path", gitignorePath, "err", oerr)
+			return
+		}
+		defer f.Close()
+		if _, werr := f.WriteString("\n# 2ndbrain sidecar directory\n.2ndbrain/\n"); werr != nil {
+			slog.Warn("could not append .2ndbrain/ to .gitignore; the sidecar may be committed", "path", gitignorePath, "err", werr)
+		}
+	case os.IsNotExist(err):
+		if werr := os.WriteFile(gitignorePath, []byte("# 2ndbrain sidecar directory\n.2ndbrain/\n"), 0o644); werr != nil {
+			slog.Warn("could not create .gitignore for .2ndbrain/; the sidecar may be committed", "path", gitignorePath, "err", werr)
+		}
+	default:
+		slog.Warn("could not read .gitignore to ensure .2ndbrain/ is ignored", "path", gitignorePath, "err", err)
+	}
 }
 
 func (v *Vault) Close() error {
@@ -179,6 +235,9 @@ func (v *Vault) ContainsPath(absPath string) bool {
 // vault root without paying for a full Open.
 func FindVaultRoot(dir string) string {
 	for {
+		if _, err := os.Stat(filepath.Join(dir, ".obsidian")); err == nil {
+			return dir
+		}
 		if _, err := os.Stat(filepath.Join(dir, DotDirName)); err == nil {
 			return dir
 		}

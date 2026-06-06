@@ -39,6 +39,7 @@ struct MCPToolInvocationInfo: Codable, Identifiable {
 struct MCPStatusView: View {
     @Environment(AppState.self) var appState
     @Binding var isPresented: Bool
+    var isInline: Bool = false
     @State private var expanded: Set<Int> = []
 
     var body: some View {
@@ -53,8 +54,10 @@ struct MCPStatusView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.plain)
-                Button("Done") { isPresented = false }
-                    .keyboardShortcut(.defaultAction)
+                if !isInline {
+                    Button("Done") { isPresented = false }
+                        .keyboardShortcut(.defaultAction)
+                }
             }
             .padding()
 
@@ -72,11 +75,13 @@ struct MCPStatusView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
-                    Button("Connect AI Tools...") {
-                        isPresented = false
-                        appState.showMCPSetup = true
+                    if !isInline {
+                        Button("Connect AI Tools...") {
+                            isPresented = false
+                            appState.showMCPSetup = true
+                        }
+                        .padding(.top, 4)
                     }
-                    .padding(.top, 4)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()
@@ -89,7 +94,7 @@ struct MCPStatusView: View {
                 .listStyle(.inset)
             }
         }
-        .frame(width: 640, height: 480)
+        .frame(width: isInline ? nil : 640, height: isInline ? nil : 480)
         .onAppear {
             Task { await appState.refreshMCPStatus() }
         }

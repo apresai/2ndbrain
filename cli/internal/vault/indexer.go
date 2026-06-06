@@ -9,6 +9,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/store"
+	"github.com/google/uuid"
 )
 
 type IndexStats struct {
@@ -44,8 +45,9 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 			return nil
 		}
 
-		// Only markdown files
-		if !strings.HasSuffix(strings.ToLower(path), ".md") {
+		// Only markdown, canvas, or base files
+		lower := strings.ToLower(path)
+		if !strings.HasSuffix(lower, ".md") && !strings.HasSuffix(lower, ".canvas") && !strings.HasSuffix(lower, ".base") {
 			return nil
 		}
 
@@ -118,9 +120,15 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 	doc.Path = relPath
 	doc.ComputeContentHash()
 
-	// Ensure document has an ID
+	// Ensure document has an ID (look up existing surrogate ID or generate a new one)
 	if doc.ID == "" {
-		return fmt.Errorf("document %s has no id in frontmatter", relPath)
+		var existingID string
+		err := db.Conn().QueryRow("SELECT id FROM documents WHERE path = ?", relPath).Scan(&existingID)
+		if err == nil {
+			doc.ID = existingID
+		} else {
+			doc.ID = uuid.New().String()
+		}
 	}
 
 	// Wrap all DB operations in a single transaction so a partial
@@ -147,18 +155,50 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 		return fmt.Errorf("upsert chunks: %w", err)
 	}
 
-	// Tags
-	if err := db.UpsertTagsTx(tx, doc.ID, doc.Tags); err != nil {
+	// Index against the comment-stripped body so %% comments %% never
+	// contribute tags or links.
+	indexBody := doc.IndexableBody()
+
+	// Tags: frontmatter tags merged with inline body #tags (deduped,
+	// frontmatter first).
+	tags := mergeTags(doc.Tags, document.ExtractInlineTags(indexBody))
+	if err := db.UpsertTagsTx(tx, doc.ID, tags); err != nil {
 		return fmt.Errorf("upsert tags: %w", err)
 	}
 
+	// Aliases
+	aliases := document.ExtractAliases(doc.Frontmatter)
+	if err := db.UpsertAliasesTx(tx, doc.ID, aliases); err != nil {
+		return fmt.Errorf("upsert aliases: %w", err)
+	}
+
 	// Links
-	links := document.ExtractWikiLinks(doc.Body)
+	links := document.ExtractWikiLinks(indexBody)
 	if err := db.UpsertLinksTx(tx, doc.ID, links); err != nil {
 		return fmt.Errorf("upsert links: %w", err)
 	}
 
 	return tx.Commit()
+}
+
+// mergeTags concatenates frontmatter and inline tags, preserving order
+// (frontmatter first) and dropping duplicates.
+func mergeTags(frontmatter, inline []string) []string {
+	merged := make([]string, 0, len(frontmatter)+len(inline))
+	seen := make(map[string]bool, len(frontmatter)+len(inline))
+	for _, t := range frontmatter {
+		if !seen[t] {
+			seen[t] = true
+			merged = append(merged, t)
+		}
+	}
+	for _, t := range inline {
+		if !seen[t] {
+			seen[t] = true
+			merged = append(merged, t)
+		}
+	}
+	return merged
 }
 
 // purgeStale removes index entries for files that no longer exist on disk.

@@ -16,7 +16,10 @@ func requireOpenRouterKey(t *testing.T) string {
 	return key
 }
 
-// skipOnTransient skips the test if the error is a transient API issue (rate limit, empty response, timeout).
+// skipOnTransient skips the test if the error is a transient or
+// account-availability API issue (rate limit, spend-limit/billing, empty
+// response, timeout, or model offline) — i.e. "provider unavailable" per the
+// No-Mock test policy, not a code defect.
 func skipOnTransient(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -24,9 +27,13 @@ func skipOnTransient(t *testing.T, err error) {
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "status 429") ||
+		strings.Contains(msg, "status 404") ||
+		strings.Contains(msg, "status 402") || // payment required: key spend limit reached
+		strings.Contains(msg, "spend limit") ||
+		strings.Contains(msg, "No endpoints found") ||
 		strings.Contains(msg, "empty response") ||
 		strings.Contains(msg, "context deadline exceeded") {
-		t.Skipf("skipped: transient API error — %v", err)
+		t.Skipf("skipped: provider unavailable / transient API error - %v", err)
 	}
 }
 
@@ -76,7 +83,7 @@ func TestOpenRouterEmbedSingle(t *testing.T) {
 func TestOpenRouterGenerate(t *testing.T) {
 	key := requireOpenRouterKey(t)
 
-	gen := NewOpenRouterGenerator(key, "google/gemma-3-4b-it:free")
+	gen := NewOpenRouterGenerator(key, "meta-llama/llama-3.3-70b-instruct:free")
 	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10})
 	skipOnTransient(t, err)
 	if err != nil {

@@ -18,6 +18,7 @@ struct SheetSectionHeader: View {
 struct VaultStatusView: View {
     @Environment(AppState.self) var appState
     @Binding var isPresented: Bool
+    var isInline: Bool = false
 
     @State private var staleCount: Int = 0
     @State private var staleLoading: Bool = true
@@ -42,9 +43,11 @@ struct VaultStatusView: View {
                 .padding(20)
             }
 
-            footer
+            if !isInline {
+                footer
+            }
         }
-        .frame(width: 560, height: 620)
+        .frame(width: isInline ? nil : 560, height: isInline ? nil : 620)
         .task {
             await refresh()
         }

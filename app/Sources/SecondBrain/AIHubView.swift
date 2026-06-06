@@ -11,6 +11,7 @@ private let hubLog = Logger(subsystem: "dev.apresai.2ndbrain", category: "aihub"
 struct AIHubView: View {
     @Environment(AppState.self) var appState
     let onClose: () -> Void
+    var isInline: Bool = false
 
     @State private var aiStatus: AIStatusInfo?
     @State private var models: [CatalogModelInfo] = []
@@ -61,7 +62,7 @@ struct AIHubView: View {
                 Divider()
                 footer
             }
-            .frame(width: 820, height: 640)
+            .frame(width: isInline ? nil : 820, height: isInline ? nil : 640)
 
             if let pickerContext {
                 Color.black.opacity(0.18)
@@ -115,8 +116,10 @@ struct AIHubView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("Close") { onClose() }
-                .keyboardShortcut(.cancelAction)
+            if !isInline {
+                Button("Close") { onClose() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding()
     }

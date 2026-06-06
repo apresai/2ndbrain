@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -19,7 +20,13 @@ func requireOllama(t *testing.T) {
 	if err != nil {
 		t.Skip("Ollama not running at localhost:11434")
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	buf := make([]byte, 100)
+	n, _ := resp.Body.Read(buf)
+	bodyStr := string(buf[:n])
+	if !strings.Contains(bodyStr, "Ollama is running") {
+		t.Skip("Ollama not running at localhost:11434 (port open but not Ollama)")
+	}
 }
 
 func requireOllamaModel(t *testing.T, model string) {
@@ -56,8 +63,13 @@ func TestOllamaEmbed(t *testing.T) {
 	requireOllamaModel(t, "embeddinggemma")
 
 	emb := NewOllamaEmbedder(ollamaTestEndpoint, "embeddinggemma", 768)
-	vecs, err := emb.Embed(context.Background(), []string{"hello world", "semantic search test"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	vecs, err := emb.Embed(ctx, []string{"hello world", "semantic search test"})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") {
+			t.Skip("Ollama embed timed out (model load or network issue)")
+		}
 		t.Fatalf("Embed: %v", err)
 	}
 	if len(vecs) != 2 {
@@ -73,8 +85,13 @@ func TestOllamaGenerate(t *testing.T) {
 	requireOllamaModel(t, "qwen2.5:0.5b")
 
 	gen := NewOllamaGenerator(ollamaTestEndpoint, "qwen2.5:0.5b")
-	result, err := gen.Generate(context.Background(), "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := gen.Generate(ctx, "What is 2+2? Reply with just the number.", GenOpts{MaxTokens: 10})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") {
+			t.Skip("Ollama generate timed out (model load or network issue)")
+		}
 		t.Fatalf("Generate: %v", err)
 	}
 	if result == "" {
@@ -87,11 +104,16 @@ func TestOllamaGenerateWithSystemPrompt(t *testing.T) {
 	requireOllamaModel(t, "qwen2.5:0.5b")
 
 	gen := NewOllamaGenerator(ollamaTestEndpoint, "qwen2.5:0.5b")
-	result, err := gen.Generate(context.Background(), "What color is the sky?", GenOpts{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := gen.Generate(ctx, "What color is the sky?", GenOpts{
 		SystemPrompt: "Reply with exactly one word.",
 		MaxTokens:    10,
 	})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") {
+			t.Skip("Ollama generate timed out (model load or network issue)")
+		}
 		t.Fatalf("Generate: %v", err)
 	}
 	if result == "" {

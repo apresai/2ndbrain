@@ -101,11 +101,14 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no providers available — configure at least one before running the wizard")
 	}
 
-	// Step 2: build the candidate list.
+	// Step 2: build the candidate list. IncludeDisabledProviders so the wizard
+	// can surface opt-in providers (Ollama/OpenRouter ship disabled) — it's the
+	// place to enable them.
 	list, err := ai.BuildModelList(ctx, ai.MergedListOptions{
-		Config:    v.Config.AI,
-		VaultRoot: v.Root,
-		Discover:  !wizardSkipDiscover,
+		Config:                   v.Config.AI,
+		VaultRoot:                v.Root,
+		Discover:                 !wizardSkipDiscover,
+		IncludeDisabledProviders: true,
 	})
 	if err != nil {
 		return fmt.Errorf("build model list: %w", err)
@@ -121,7 +124,7 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 	})
 
 	if len(candidates) == 0 {
-		return fmt.Errorf("no candidate models for the selected filter")
+		return fmt.Errorf("no reachable models to set up. Connect a provider first: run `2nb ai setup` (AWS Bedrock by default), or enable a local/opt-in provider, e.g. `2nb config set ai.ollama.disabled false` after installing Ollama")
 	}
 
 	// Step 3: pick models. Easy-mode pre-selects the recommended embedding
@@ -232,7 +235,9 @@ func probeProviderStatus(ctx context.Context, cfg ai.AIConfig) []providerStatus 
 	// Quick, cheap probes: check for creds/endpoint configuration, not
 	// live API health. Live reachability is exercised by the test step.
 	out := []providerStatus{
-		{Name: "bedrock", Available: ai.HasAPIKey("bedrock") || cfg.Bedrock.Region != ""},
+		// Bedrock has no API key — readiness is whether AWS credentials actually
+		// resolve, not HasAPIKey("bedrock") (which always returns true).
+		{Name: "bedrock", Available: ai.CheckBedrockCredentials(ctx, cfg.Bedrock)},
 		{Name: "openrouter", Available: ai.HasAPIKey("openrouter")},
 		{Name: "ollama", Available: true}, // local; reachability deferred to test
 	}
