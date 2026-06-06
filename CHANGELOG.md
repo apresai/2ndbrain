@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.0] - 2026-06-06
+
+Obsidian-native pivot: Obsidian stays the editor, the `2nb` CLI plus MCP server is the engine, and the macOS app becomes a configuration dashboard. Notes are never rewritten; all derived state lives in a gitignored `.2ndbrain/` sidecar.
+
+### Added
+- Read-only indexing of `.canvas` (JSON Canvas) and `.base` (YAML Bases) files as synthetic views; `meta` and `kb_update_meta` refuse to write them.
+- Obsidian Flavored Markdown parsing: embeds, `[[note#^block]]` block references, `^block-id` definitions, inline `#tags`, `%% comment %%` stripping, and markdown-link extraction.
+- `2nb migrate` to upgrade a legacy 2ndbrain vault to the Obsidian-native format (schema v3), with `--dry-run`; source markdown is never modified.
+- Automatic `.obsidian` vault detection and sidecar creation, shortest-unique-path plus alias resolution, and YAML-AST frontmatter preservation.
+- Schema v3: `aliases` table and `block_id` columns on `chunks` and `links`.
+- Obsidian plugin (`obsidian-2ndbrain`): a thin wrapper over `2nb` that downloads and manages the CLI binary itself, ships a first-run setup wizard, and installs via BRAT with no npm build. Release CI now publishes plugin assets and `versions.json`.
+- LLM-facing test battery (real-stdio MCP, migrate, RAG, canvas/base), JSON-envelope contract tests, and OFM unit tests.
+
+### Changed
+- AWS Bedrock is now the default provider: Claude Haiku 4.5 for generation and Amazon Nova-2 for embeddings.
+- Ollama and OpenRouter are opt-in (disabled by default); the setup wizard enables them.
+- Path-based identity: UUIDs in frontmatter are read for backward compatibility but never written, generated, or required.
+- The macOS app is now a `NavigationSplitView` configuration and companion dashboard rather than an editor.
+- Documentation (getting-started, user guide, plugin README, `CLAUDE.md`) synced to the shipped behavior.
+
+### Removed
+- Editor views from the macOS app (editor area, graph, sidebar, tabs, search panel, and related surfaces).
+- The dead `embedding:` configuration block.
+
 ## [0.4.3] - 2026-05-17
 
 ### Fixed
