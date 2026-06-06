@@ -49,20 +49,44 @@ func runLint(cmd *cobra.Command, args []string) error {
 	setupFileLogging(v)
 
 	startTime := time.Now()
-	pattern := "*.md"
+
+	lintPattern := "**/*.md (recursive)"
 	if len(args) > 0 {
-		pattern = args[0]
+		lintPattern = args[0]
 	}
-	slog.Info("lint started", "vault", v.Root, "pattern", pattern)
+	slog.Info("lint started", "vault", v.Root, "pattern", lintPattern)
 
-	matches, err := filepath.Glob(filepath.Join(v.Root, pattern))
-	if err != nil {
-		return fmt.Errorf("glob: %w", err)
-	}
-
-	// Also try recursive if no matches
-	if len(matches) == 0 {
-		matches, _ = filepath.Glob(filepath.Join(v.Root, "**", pattern))
+	// Collect the markdown files to lint. An explicit glob argument is honoured
+	// verbatim (relative to the vault root). With no argument we walk the whole
+	// vault recursively: filepath.Glob does not support "**", so the old "*.md"
+	// pattern silently linted only top-level files and skipped every note in a
+	// subdirectory.
+	var matches []string
+	if len(args) > 0 {
+		matches, err = filepath.Glob(filepath.Join(v.Root, args[0]))
+		if err != nil {
+			return fmt.Errorf("glob: %w", err)
+		}
+	} else {
+		if werr := filepath.Walk(v.Root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				// Skip dot-directories (.git, .obsidian, .2ndbrain, .trash, ...).
+				// IsIgnored only inspects basenames, so it can't prune subtrees.
+				if path != v.Root && strings.HasPrefix(filepath.Base(path), ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(strings.ToLower(path), ".md") {
+				matches = append(matches, path)
+			}
+			return nil
+		}); werr != nil {
+			return fmt.Errorf("walk: %w", werr)
+		}
 	}
 
 	report := &LintReport{}
@@ -94,24 +118,30 @@ func runLint(cmd *cobra.Command, args []string) error {
 		if vault.IsIgnored(relPath) {
 			continue
 		}
-		report.Files++
 
 		doc, err := document.ParseFile(path)
 		if err != nil {
+			// Obsidian template files carry unresolved {{placeholder}} tokens in
+			// their frontmatter (e.g. `date: {{date}}`) that are deliberately
+			// invalid YAML. They are scaffolding, not notes — the indexer skips
+			// them too — so a parse failure there is not a real lint error.
+			if raw, rerr := os.ReadFile(path); rerr == nil && hasTemplatePlaceholders(raw) {
+				slog.Debug("lint skipping template (unresolved {{placeholders}} in frontmatter)", "path", relPath)
+				continue
+			}
+			report.Files++
 			report.Issues = append(report.Issues, LintIssue{
 				Path: relPath, Level: "error", Message: fmt.Sprintf("parse error: %v", err),
 			})
 			report.Errors++
 			continue
 		}
+		report.Files++
 
-		// Check: document has an ID
-		if doc.ID == "" {
-			report.Issues = append(report.Issues, LintIssue{
-				Path: relPath, Level: "error", Message: "missing 'id' in frontmatter",
-			})
-			report.Errors++
-		}
+		// Note: no 'id' check. Under the path-based identity model
+		// (docs/obsidian/identity-model.md) a document's identity is its path;
+		// frontmatter 'id' is read if present but never required, so a missing
+		// id is not a lint error. Vanilla Obsidian notes carry no id at all.
 
 		// Check: required fields
 		if schema, ok := v.Schemas.Types[doc.Type]; ok {
@@ -195,6 +225,24 @@ func runLint(cmd *cobra.Command, args []string) error {
 		os.Exit(ExitValidation)
 	}
 	return nil
+}
+
+// hasTemplatePlaceholders reports whether a file's YAML frontmatter contains
+// unresolved {{...}} template tokens (Obsidian core Templates / Templater).
+// Such files are scaffolding, not notes; their frontmatter is deliberately not
+// valid YAML, so lint skips them rather than reporting a false-positive parse
+// error. Only the frontmatter block is inspected so a body that merely mentions
+// {{ }} (e.g. a note about templating) is never mistaken for a template.
+func hasTemplatePlaceholders(raw []byte) bool {
+	s := string(raw)
+	if !strings.HasPrefix(s, "---") {
+		return false
+	}
+	rest := s[3:]
+	if end := strings.Index(rest, "\n---"); end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.Contains(rest, "{{")
 }
 
 // isAssetOrAnchorTarget reports whether a link target should be excluded from
