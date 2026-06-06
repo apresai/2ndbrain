@@ -266,7 +266,7 @@ func lintReportWithIssues() throws {
     let json = """
     {
         "issues": [
-            {"path": "adr/use-jwt.md", "level": "error", "message": "missing 'id' in frontmatter"},
+            {"path": "adr/use-jwt.md", "level": "error", "message": "missing required field 'status' for type 'adr'"},
             {"path": "notes/draft.md", "line": 15, "level": "warning", "message": "broken wikilink: [[nonexistent]]"}
         ],
         "files_checked": 12,
