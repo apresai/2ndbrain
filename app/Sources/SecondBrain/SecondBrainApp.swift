@@ -12,7 +12,14 @@ struct SecondBrainApp: App {
                 .environment(appState)
                 .frame(minWidth: 800, minHeight: 500)
                 .onAppear {
-                    if let lastVault = UserDefaults.standard.string(forKey: "lastVaultPath") {
+                    // Bind to the vault Obsidian currently has open (the source
+                    // of truth), so the dashboard follows Obsidian. Fall back to
+                    // the last-used vault when Obsidian isn't installed or has no
+                    // open vault.
+                    if let obsidian = ObsidianRegistry.load()?.openVault, obsidian.exists {
+                        appState.openVault(at: obsidian.url)
+                        UserDefaults.standard.set(obsidian.path, forKey: "lastVaultPath")
+                    } else if let lastVault = UserDefaults.standard.string(forKey: "lastVaultPath") {
                         appState.openVault(at: URL(fileURLWithPath: lastVault))
                     }
                 }
@@ -145,8 +152,7 @@ struct SecondBrainApp: App {
         panel.prompt = "Open Vault"
 
         if panel.runModal() == .OK, let url = panel.url {
-            appState.openVault(at: url)
-            UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+            appState.openPickedVault(at: url)
         }
     }
 

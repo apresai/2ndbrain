@@ -109,7 +109,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .navigationTitle("2ndbrain")
+                .navigationTitle(appState.vault?.rootURL.lastPathComponent ?? "2ndbrain")
                 .listStyle(.sidebar)
             } detail: {
                 Group {
@@ -153,12 +153,28 @@ struct WelcomeView: View {
                 .font(.title3)
                 .foregroundStyle(.secondary)
 
-            Button("Open Vault") {
-                openVaultPanel()
+            // Default to the vault Obsidian currently has open so the dashboard
+            // binds to the same vault you're editing in Obsidian.
+            if let obsidian = ObsidianRegistry.load()?.openVault, obsidian.exists {
+                Button("Open your Obsidian vault: \(obsidian.name)") {
+                    appState.openPickedVault(at: obsidian.url)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.top, 8)
+
+                Button("Open a different vault…") {
+                    openVaultPanel()
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button("Open Vault") {
+                    openVaultPanel()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.top, 8)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -169,8 +185,7 @@ struct WelcomeView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            appState.openVault(at: url)
-            UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+            appState.openPickedVault(at: url)
         }
     }
 }

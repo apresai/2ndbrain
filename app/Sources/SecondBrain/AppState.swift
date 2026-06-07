@@ -164,6 +164,35 @@ final class AppState {
         return openDocuments[idx]
     }
 
+    /// Opens a user-picked folder as a vault after validating it is a real
+    /// Obsidian vault and warning when it isn't the vault Obsidian currently has
+    /// open. This is the single entry point for the "Open Vault" panels, so the
+    /// dashboard stays joined to the correct Obsidian vault rather than silently
+    /// operating on an arbitrary folder. Returns whether the vault was opened.
+    @discardableResult
+    func openPickedVault(at url: URL) -> Bool {
+        let vm = VaultManager(rootURL: url)
+        if !vm.isObsidianVault {
+            let alert = NSAlert()
+            alert.messageText = "Not an Obsidian vault"
+            alert.informativeText = "“\(url.lastPathComponent)” has no .obsidian folder, so Obsidian doesn't manage it as a vault. Open it anyway?"
+            alert.addButton(withTitle: "Open Anyway")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        } else if let open = ObsidianRegistry.load()?.openVault,
+                  ObsidianRegistry.normalizedPath(open.url) != ObsidianRegistry.normalizedPath(url) {
+            let alert = NSAlert()
+            alert.messageText = "Different vault than Obsidian has open"
+            alert.informativeText = "Obsidian currently has “\(open.name)” open, but you're opening “\(url.lastPathComponent)”. 2ndbrain works best on the vault you're editing in Obsidian. Open this one anyway?"
+            alert.addButton(withTitle: "Open This Vault")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        }
+        openVault(at: url)
+        UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+        return true
+    }
+
     func openVault(at url: URL) {
         log.info("Opening vault at \(url.path)")
         let vm = VaultManager(rootURL: url)
