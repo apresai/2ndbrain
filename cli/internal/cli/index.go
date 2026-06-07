@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -51,6 +52,11 @@ type embeddingRunStats struct {
 	Attempted int
 	Embedded  int
 	Failed    int
+	// Skipped counts documents with no embeddable text (empty or
+	// whitespace/comment-only bodies). These are not failures — there is
+	// simply nothing to embed — and embedding providers like Amazon Nova-2
+	// reject empty input (minLength: 1), so we never send them.
+	Skipped int
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
@@ -219,8 +225,11 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	}
 
 	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder)
-	if err == nil && (stats.Failed > 0 || stats.Embedded < stats.Attempted) {
-		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, stats.Attempted, stats.Failed)
+	// Skipped (empty) documents are not embeddable, so "complete" means every
+	// non-skipped document embedded. Without subtracting Skipped here a vault
+	// with even one blank note would always report force-reembed as incomplete.
+	if err == nil && (stats.Failed > 0 || stats.Embedded < stats.Attempted-stats.Skipped) {
+		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, stats.Attempted-stats.Skipped, stats.Failed)
 	}
 	if err == nil {
 		return nil
@@ -284,7 +293,23 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 			continue
 		}
 
-		vecs, err := embedder.Embed(ctx, []string{parsed.IndexableBody()})
+		// Empty or whitespace-only notes (e.g. a blank "Untitled.md") have
+		// nothing to embed, and providers like Amazon Nova-2 reject empty
+		// input with a 400 ValidationException. Skip them — counted as
+		// skipped, not failed, so a vault full of blank notes still reports a
+		// clean (exit 0) index instead of a perpetual failure that wedges the
+		// app's progress UI.
+		body := parsed.IndexableBody()
+		if strings.TrimSpace(body) == "" {
+			stats.Skipped++
+			slog.Debug("embedding skipped: empty document", "path", doc.Path)
+			if !flagPorcelain {
+				fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", doc.Path)
+			}
+			continue
+		}
+
+		vecs, err := embedder.Embed(ctx, []string{body})
 		if err != nil {
 			stats.Failed++
 			slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
@@ -337,6 +362,9 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		}
 	}
 
-	slog.Info("embedding complete", "embedded", embedded, "total", len(docs), "failed", stats.Failed, "elapsed", time.Since(embedStart))
+	slog.Info("embedding complete", "embedded", embedded, "total", len(docs), "failed", stats.Failed, "skipped", stats.Skipped, "elapsed", time.Since(embedStart))
+	if !flagPorcelain && stats.Skipped > 0 {
+		fmt.Fprintf(os.Stderr, "  skipped %d empty document(s)\n", stats.Skipped)
+	}
 	return stats, nil
 }

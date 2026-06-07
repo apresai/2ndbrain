@@ -756,8 +756,21 @@ final class AppState {
         showIndexProgress = true
     }
 
+    /// True once the current index run has reached a terminal phase. Late
+    /// stderr-progress updates check this so they can't flip a finished run back
+    /// to `.embedding` and re-wedge the progress sheet on "Running…".
+    private var indexReachedTerminalPhase: Bool {
+        indexProgress?.phase == .complete || indexProgress?.phase == .failed
+    }
+
     func startIndex() {
         guard let vault else { return }
+        // One index at a time. A second Rebuild fired while one is still
+        // running (e.g. a stray double-click) would spawn an overlapping
+        // `2nb index` whose late progress and terminal-phase updates race the
+        // first run's — the exact cause of the progress sheet getting stuck on
+        // "Running…" and never reaching .complete.
+        guard !isIndexing else { return }
         isIndexing = true
         indexError = nil
         embeddingProgress = nil
@@ -768,94 +781,153 @@ final class AppState {
         let startTime = CFAbsoluteTimeGetCurrent()
 
         Task {
+            // Run the CLI without blocking the main actor. `AppState` is
+            // @MainActor, so the old `process.waitUntilExit()` froze the UI for
+            // the whole index and starved the @MainActor progress updates. This
+            // mirrors `runCLI`: stream stderr for progress, resume on the
+            // process's terminationHandler, and always land on a terminal phase
+            // keyed off the *exit code* (never off progress reaching total —
+            // after the CLI skips empty notes the embed legitimately ends below
+            // total with no final "embedded N/N" line).
             do {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-                let subArgs = forceReembed ? ["index", "--force-reembed"] : ["index"]
-                process.arguments = CLIPath.args(subArgs, vault: vault.rootURL)
-                process.currentDirectoryURL = vault.rootURL
-                let stderrPipe = Pipe()
-                let stdoutPipe = Pipe()
-                process.standardError = stderrPipe
-                process.standardOutput = stdoutPipe
+                let result = try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<(exitCode: Int32, stdout: String, stderr: String), Error>) in
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+                    let subArgs = forceReembed ? ["index", "--force-reembed"] : ["index"]
+                    process.arguments = CLIPath.args(subArgs, vault: vault.rootURL)
+                    process.currentDirectoryURL = vault.rootURL
+                    let stderrPipe = Pipe()
+                    let stdoutPipe = Pipe()
+                    process.standardError = stderrPipe
+                    process.standardOutput = stdoutPipe
+                    let drain = PipeDrain()
 
-                // Parse progress from stderr
-                stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                    let data = handle.availableData
-                    guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-
-                    for line in text.split(separator: "\n") {
-                        let l = String(line).trimmingCharacters(in: .whitespaces)
-
-                        // Embedding progress: "embedded N/M: path" or "embedding N documents..."
-                        let embedPattern = /[Ee]mbed\w*\s+(\d+)\/(\d+)/
-                        if let match = l.firstMatch(of: embedPattern) {
-                            let current = Int(match.1) ?? 0
-                            let total = Int(match.2) ?? 0
-                            Task { @MainActor [weak self] in
-                                self?.embeddingProgress = EmbeddingProgress(current: current, total: total)
-                                self?.indexProgress?.phase = .embedding
-                                self?.indexProgress?.embeddingCurrent = current
-                                self?.indexProgress?.embeddingTotal = total
-                            }
-                            continue
+                    // Drain stdout so a large summary can't fill the pipe buffer
+                    // and deadlock the child before it exits.
+                    stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+                        let chunk = handle.availableData
+                        if chunk.isEmpty {
+                            handle.readabilityHandler = nil
+                        } else {
+                            drain.appendStdout(chunk)
                         }
+                    }
 
-                        // Embedding count: "embedding N documents..."
-                        let embedCountPattern = /embedding\s+(\d+)\s+documents/
-                        if let match = l.firstMatch(of: embedCountPattern) {
-                            let total = Int(match.1) ?? 0
-                            Task { @MainActor [weak self] in
-                                self?.indexProgress?.phase = .embedding
-                                self?.indexProgress?.embeddingTotal = total
-                            }
-                            continue
+                    // Parse progress from stderr (and retain it so a failed run
+                    // can surface the real CLI error instead of a bare code).
+                    stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                        let data = handle.availableData
+                        if data.isEmpty {
+                            handle.readabilityHandler = nil
+                            return
                         }
+                        drain.appendStderr(data)
+                        guard let text = String(data: data, encoding: .utf8) else { return }
 
-                        // File indexed: "  path/to/file.md" (indented path)
-                        if l.hasSuffix(".md") && !l.contains(":") {
-                            let fileName = l
-                            Task { @MainActor [weak self] in
-                                self?.indexProgress?.currentFile = fileName
-                                self?.indexProgress?.filesIndexed += 1
+                        for line in text.split(separator: "\n") {
+                            let l = String(line).trimmingCharacters(in: .whitespaces)
+
+                            // Embedding progress: "embedded N/M: path"
+                            let embedPattern = /[Ee]mbed\w*\s+(\d+)\/(\d+)/
+                            if let match = l.firstMatch(of: embedPattern) {
+                                let current = Int(match.1) ?? 0
+                                let total = Int(match.2) ?? 0
+                                Task { @MainActor [weak self] in
+                                    // Don't let a late progress update flip a
+                                    // run that already finished back to
+                                    // .embedding and re-wedge the sheet.
+                                    guard let self, !self.indexReachedTerminalPhase else { return }
+                                    self.embeddingProgress = EmbeddingProgress(current: current, total: total)
+                                    self.indexProgress?.phase = .embedding
+                                    self.indexProgress?.embeddingCurrent = current
+                                    self.indexProgress?.embeddingTotal = total
+                                }
+                                continue
+                            }
+
+                            // Embedding count: "embedding N documents..."
+                            let embedCountPattern = /embedding\s+(\d+)\s+documents/
+                            if let match = l.firstMatch(of: embedCountPattern) {
+                                let total = Int(match.1) ?? 0
+                                Task { @MainActor [weak self] in
+                                    guard let self, !self.indexReachedTerminalPhase else { return }
+                                    self.indexProgress?.phase = .embedding
+                                    self.indexProgress?.embeddingTotal = total
+                                }
+                                continue
+                            }
+
+                            // File indexed: "  path/to/file.md" (indented path)
+                            if l.hasSuffix(".md") && !l.contains(":") {
+                                let fileName = l
+                                Task { @MainActor [weak self] in
+                                    guard let self, !self.indexReachedTerminalPhase else { return }
+                                    self.indexProgress?.currentFile = fileName
+                                    self.indexProgress?.filesIndexed += 1
+                                }
                             }
                         }
                     }
+
+                    process.terminationHandler = { proc in
+                        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                        stderrPipe.fileHandleForReading.readabilityHandler = nil
+                        drain.appendStdout(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+                        drain.appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                        let out = String(data: drain.stdoutData, encoding: .utf8) ?? ""
+                        let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
+                        continuation.resume(returning: (proc.terminationStatus, out, err))
+                    }
+
+                    do {
+                        try process.run()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
                 }
 
-                try process.run()
-                process.waitUntilExit()
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-
-                let exitCode = process.terminationStatus
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
 
                 // Parse stdout summary: "Indexed N files, N chunks, N links"
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                if let summary = String(data: stdoutData, encoding: .utf8) {
-                    let statsPattern = /Indexed\s+(\d+)\s+files?,\s+(\d+)\s+chunks?,\s+(\d+)\s+links?/
-                    if let match = summary.firstMatch(of: statsPattern) {
-                        indexProgress?.docsIndexed = Int(match.1) ?? 0
-                        indexProgress?.chunksCreated = Int(match.2) ?? 0
-                        indexProgress?.linksFound = Int(match.3) ?? 0
-                    }
+                let statsPattern = /Indexed\s+(\d+)\s+files?,\s+(\d+)\s+chunks?,\s+(\d+)\s+links?/
+                if let match = result.stdout.firstMatch(of: statsPattern) {
+                    indexProgress?.docsIndexed = Int(match.1) ?? 0
+                    indexProgress?.chunksCreated = Int(match.2) ?? 0
+                    indexProgress?.linksFound = Int(match.3) ?? 0
                 }
 
                 indexProgress?.elapsed = elapsed
-                if exitCode == 0 {
+                if result.exitCode == 0 {
                     indexProgress?.phase = .complete
                     log.info("Index rebuild completed in \(String(format: "%.1f", elapsed))s (exit 0)")
                 } else {
+                    // Surface the actual CLI failure (last stderr line) rather
+                    // than a bare exit code. Only the error line goes to the
+                    // system-wide unified log as .public — the full stderr
+                    // (which includes every indexed note's path) is kept in the
+                    // per-vault ErrorLogger file, not broadcast system-wide.
+                    let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let lastLine = detail.split(separator: "\n").last.map(String.init) ?? ""
                     indexProgress?.phase = .failed
-                    indexProgress?.error = "CLI exited with code \(exitCode)"
-                    log.warning("Index rebuild finished with exit code \(exitCode) in \(String(format: "%.1f", elapsed))s")
+                    indexProgress?.error = lastLine.isEmpty ? "CLI exited with code \(result.exitCode)" : lastLine
+                    log.warning("Index rebuild finished with exit code \(result.exitCode) in \(String(format: "%.1f", elapsed))s: \(lastLine, privacy: .public)")
+                    errorLogger?.log("Index rebuild exited \(result.exitCode): \(detail)")
                 }
 
-                // Reopen database to pick up changes
-                self.database = try DatabaseManager(path: vault.indexDBPath)
+                // Reopen the database to pick up changes. A reopen failure does
+                // not undo a successful index, so log it without overwriting the
+                // completion phase.
+                do {
+                    self.database = try DatabaseManager(path: vault.indexDBPath)
+                } catch {
+                    log.error("Failed to reopen index database after rebuild: \(error.localizedDescription)")
+                    errorLogger?.log("Failed to reopen index database after rebuild", error: error)
+                }
             } catch {
+                // Launch failure (process never started).
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-                log.error("Index rebuild failed after \(String(format: "%.1f", elapsed))s: \(error.localizedDescription)")
+                log.error("Index rebuild failed to launch after \(String(format: "%.1f", elapsed))s: \(error.localizedDescription)")
                 errorLogger?.log("Failed to rebuild index", error: error)
                 indexError = error.localizedDescription
                 indexProgress?.phase = .failed

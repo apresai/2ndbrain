@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **Rebuild Index no longer hangs, and a vault with empty notes indexes cleanly.** Two bugs compounded: (1) `2nb index` tried to embed empty/whitespace-only notes (e.g. a blank `Untitled.md`), which Amazon Nova-2 rejects with a 400 `ValidationException` (`minLength: 1`) — so the embed count stayed pinned below 100% and `--force-reembed` reported "incomplete"; (2) the macOS app's `startIndex` blocked the main actor with `process.waitUntilExit()` and had no guard against overlapping runs, so the rebuild-progress sheet could freeze on "Running…" and never reach "Done". The CLI now **skips** empty documents (counted as skipped, not failed; nothing is sent to the provider), and the app runs `2nb index` without blocking the main actor, guards against concurrent rebuilds, keys the terminal phase off the process exit code, and surfaces the actual CLI error (not a bare exit code) on failure.
 
 ## [0.5.4] - 2026-06-07
 
