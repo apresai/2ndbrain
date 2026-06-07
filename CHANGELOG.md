@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.9] - 2026-06-07
+
+### Fixed
+- **GUI now shows the real reason a `2nb` action failed, not flag-help noise.** When a command failed at runtime (e.g. a re-embed that couldn't complete), the CLI printed the error followed by its entire flag listing, and the macOS app — which scrapes the last line of stderr — displayed a stray flag description ("--yaml … Output as YAML") instead of the actual error. The CLI now sets cobra's `SilenceUsage`, so a runtime failure prints only the error message (and its "To fix" hints); genuine bad-flag mistakes still surface a clear "Error: unknown flag …" line.
+
+### Added
+- **macOS app warns when your `2nb` CLI is older than the app.** `brew upgrade --cask secondbrain` bumps the app but not the `twonb` formula, so you could silently run a new app against an old CLI — which is what made a re-embed fail with no obvious cause. Home now shows an orange banner when the installed CLI is behind, with the `brew upgrade apresai/tap/twonb` command to fix it.
+
 ## [0.5.8] - 2026-06-07
 
 ### Changed
