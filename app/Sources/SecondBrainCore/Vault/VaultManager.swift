@@ -17,6 +17,17 @@ public final class VaultManager: @unchecked Sendable {
         FileManager.default.fileExists(atPath: dotDirURL.path)
     }
 
+    /// True when the folder is a real Obsidian vault — it contains an
+    /// `.obsidian/` config directory. 2ndbrain operates on Obsidian vaults; a
+    /// bare folder that merely has (or could get) a `.2ndbrain/` sidecar is not
+    /// one, and opening it is almost always a mistake.
+    public var isObsidianVault: Bool {
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent(".obsidian").path, isDirectory: &isDir)
+        return exists && isDir.boolValue
+    }
+
     /// Initialize a new vault at the given directory by shelling out to
     /// `2nb vault create`, so config.yaml and schemas.yaml always match what
     /// the CLI considers canonical. The prior hand-rolled YAML here drifted

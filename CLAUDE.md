@@ -292,7 +292,7 @@ Tests use `t.TempDir()` for isolated vaults; each creates its own SQLite DB. Run
 **Dependencies:** GRDB.swift (SQLite), Yams (YAML), swift-markdown
 **Architecture:** MVVM with `@Observable`
 
-The macOS app is a **configuration and companion dashboard, not an editor**: Obsidian is the editor. It reads the same `.2ndbrain/index.db` the CLI writes (WAL mode) and shells out to `2nb` for all AI / index / lint / git work. Open a vault (any folder; `Vault > Open Vault…`, Cmd+Shift+O) and the window is a `NavigationSplitView` with five sidebar tabs (`DashboardTab` in `ContentView.swift`):
+The macOS app is a **configuration and companion dashboard, not an editor**: Obsidian is the editor. It reads the same `.2ndbrain/index.db` the CLI writes (WAL mode) and shells out to `2nb` for all AI / index / lint / git work. On launch it **binds to the vault Obsidian currently has open** — read from Obsidian's own registry `~/Library/Application Support/obsidian/obsidian.json` via `ObsidianRegistry` (`SecondBrainCore/Vault/ObsidianRegistry.swift`) — so the dashboard and Obsidian stay on the same vault. The Welcome screen offers **"Open your Obsidian vault: \<name\>"**, and the `Vault > Open Vault…` panel (Cmd+Shift+O) validates the chosen folder is a real Obsidian vault (has `.obsidian/`, via `VaultManager.isObsidianVault`) and warns when it isn't the one Obsidian has open. The window/sidebar title shows the active vault name. The window is a `NavigationSplitView` with five sidebar tabs (`DashboardTab` in `ContentView.swift`):
 
 | Tab | View | Purpose |
 |-----|------|---------|
