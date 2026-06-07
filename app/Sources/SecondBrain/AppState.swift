@@ -1785,7 +1785,7 @@ final class AppState {
                     let errMsg = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
-                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus))
+                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
                 }
             }
 
@@ -1893,7 +1893,7 @@ final class AppState {
                     if !errMsg.isEmpty {
                         log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
                     }
-                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus))
+                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
                 }
             }
 
@@ -2326,13 +2326,18 @@ struct OllamaReport: Codable {
 
 enum CLIError: LocalizedError {
     case noVault
-    case nonZeroExit(Int32)
+    /// A `2nb` invocation exited non-zero. Carries the trimmed stderr so the
+    /// real reason (e.g. "bedrock not ready: AccessDeniedException…") reaches
+    /// the user instead of a bare exit code.
+    case nonZeroExit(Int32, message: String)
     case indexRebuildInProgress
 
     var errorDescription: String? {
         switch self {
         case .noVault: return "No vault is open"
-        case .nonZeroExit(let code): return "CLI exited with code \(code)"
+        case .nonZeroExit(let code, let message):
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "CLI exited with code \(code)" : trimmed
         case .indexRebuildInProgress: return "Index rebuild is in progress; wait for it to finish before changing the active model"
         }
     }

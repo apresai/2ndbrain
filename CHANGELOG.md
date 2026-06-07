@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **macOS app now shows *why* a CLI action failed.** Every `2nb` call that exits non-zero previously surfaced a useless "CLI exited with code 1" — so a failed Save/Test on the Home screen (or any AI Hub action) told you nothing. `CLIError.nonZeroExit` now carries the trimmed `2nb` stderr, so the actual reason (e.g. "bedrock not ready: AccessDeniedException…") reaches the error banner; an empty stderr still falls back to the exit code. Home also clears a stale failure message when you start a new Rebuild / Re-embed.
 
 ## [0.5.5] - 2026-06-07
 

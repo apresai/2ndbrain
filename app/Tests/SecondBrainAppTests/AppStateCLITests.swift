@@ -114,3 +114,18 @@ func appStateNoVaultErrors() async {
     } catch {}
     #expect(benchmarkNoVault)
 }
+
+@Test("CLIError.nonZeroExit surfaces the CLI stderr, falling back to the exit code")
+func cliErrorSurfacesStderr() {
+    // The real reason reaches the user instead of a bare exit code.
+    #expect(CLIError.nonZeroExit(1, message: "Error: bedrock not ready: AccessDeniedException").errorDescription
+        == "Error: bedrock not ready: AccessDeniedException")
+
+    // Empty / whitespace-only stderr falls back to the exit code.
+    #expect(CLIError.nonZeroExit(2, message: "   \n").errorDescription == "CLI exited with code 2")
+    #expect(CLIError.nonZeroExit(3, message: "").errorDescription == "CLI exited with code 3")
+
+    // A multi-line message is preserved, trimmed at the ends.
+    #expect(CLIError.nonZeroExit(1, message: "\nfirst\nError: real reason\n").errorDescription
+        == "first\nError: real reason")
+}

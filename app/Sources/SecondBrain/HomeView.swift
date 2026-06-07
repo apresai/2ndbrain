@@ -173,8 +173,8 @@ struct HomeView: View {
             LabeledContent("Documents", value: "\(docs)")
             LabeledContent("Embedded", value: "\(embedded) / \(docs)")
             HStack {
-                Button("Rebuild Index") { appState.rebuildIndex() }
-                Button("Re-embed All…") { appState.rebuildIndex(forceReembed: true) }
+                Button("Rebuild Index") { actionMessage = nil; appState.rebuildIndex() }
+                Button("Re-embed All…") { actionMessage = nil; appState.rebuildIndex(forceReembed: true) }
             }
             .disabled(appState.vault == nil || appState.isIndexing)
             .padding(.top, 4)
