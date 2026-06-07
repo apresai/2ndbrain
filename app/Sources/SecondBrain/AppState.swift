@@ -69,6 +69,10 @@ final class AppState {
 
     // AI state
     var aiStatus: AIStatusInfo?
+    // Installed `2nb` CLI version ("X.Y.Z"), or nil if it couldn't be read.
+    // Home compares this against `appVersion` to warn on a stale CLI — see
+    // CLIVersion and refreshCLIVersion().
+    var cliVersion: String?
     // showAITest is kept as an alias for the AI Hub so the status bar
     // AI popover and Vault Status's "Test Connection" button open the
     // same unified sheet. Retiring the name entirely would force those
@@ -1234,6 +1238,41 @@ final class AppState {
         } catch {
             log.warning("AI status unavailable: \(error.localizedDescription)")
             self.aiStatus = nil
+        }
+    }
+
+    /// Reads `2nb --version` and stores the parsed version on `cliVersion`.
+    /// Needs no vault (cobra resolves `--version` before vault lookup) and is
+    /// best-effort: a launch failure leaves `cliVersion` nil and is logged, not
+    /// surfaced. Kept off `runCLI` because that always injects `--vault`.
+    func refreshCLIVersion() async {
+        let logger = self.errorLogger
+        let raw: String? = await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.arguments = ["--version"]
+            let stdout = Pipe()
+            process.standardOutput = stdout
+            process.standardError = Pipe()
+            // `--version` prints a single short line, so there's no pipe-buffer
+            // deadlock risk; read to end once the process has exited. If run()
+            // throws the process never launches, so terminationHandler never
+            // fires — exactly one resume either way.
+            process.terminationHandler = { _ in
+                let data = stdout.fileHandleForReading.readDataToEndOfFile()
+                continuation.resume(returning: String(data: data, encoding: .utf8))
+            }
+            do {
+                try process.run()
+            } catch {
+                logger?.log("2nb --version failed to launch: \(error.localizedDescription)")
+                continuation.resume(returning: nil)
+            }
+        }
+        if let parsed = CLIVersion.parse(raw) {
+            cliVersion = "\(parsed.0).\(parsed.1).\(parsed.2)"
+        } else {
+            cliVersion = nil
         }
     }
 

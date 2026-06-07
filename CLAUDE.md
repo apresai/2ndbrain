@@ -298,7 +298,7 @@ The macOS app is a **configuration and companion dashboard, not an editor**: Obs
 
 | Tab | View | Purpose |
 |-----|------|---------|
-| **Home** (default) | HomeView.swift | Consolidated common-case surface: Vault card (name/path + an Obsidian-match badge confirming this is the vault Obsidian has open), AI card (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2 with a ready/not-ready dot and Save-as-default / Test buttons), and Index card (doc + embedding counts with Rebuild Index / Re-embed All). The catalog/benchmark/MCP/git/lint depth lives under Advanced. |
+| **Home** (default) | HomeView.swift | Consolidated common-case surface: Vault card (name/path + an Obsidian-match badge confirming this is the vault Obsidian has open), AI card (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2 with a ready/not-ready dot and Save-as-default / Test buttons), and Index card (doc + embedding counts with Rebuild Index / Re-embed All). An orange banner warns when the installed `2nb` CLI is older than the app (`CLIVersion`/`refreshCLIVersion`), since `brew upgrade --cask` bumps the app but not the `twonb` formula. The catalog/benchmark/MCP/git/lint depth lives under Advanced. |
 
 Advanced section:
 
