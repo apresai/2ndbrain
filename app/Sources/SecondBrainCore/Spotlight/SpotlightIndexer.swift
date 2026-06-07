@@ -53,31 +53,40 @@ public final class SpotlightIndexer: @unchecked Sendable {
 
     /// Index all documents from the vault manager.
     public func indexAll(vault: VaultManager) {
-        let files = vault.listMarkdownFiles()
-        var items: [CSSearchableItem] = []
+        // Run the file-read + parse loop off the main thread. indexAll is called
+        // from AppState.openVault (@MainActor); on a large vault the per-note
+        // disk read + YAML parse would freeze the UI during open. The final
+        // indexSearchableItems is already async, and nothing depends on this
+        // finishing synchronously. SpotlightIndexer and VaultManager are
+        // Sendable and FrontmatterParser is a pure static enum, so the work is
+        // safe off the main actor.
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let files = vault.listMarkdownFiles()
+            var items: [CSSearchableItem] = []
 
-        for url in files {
-            guard let doc = try? FrontmatterParser.loadDocument(from: url) else { continue }
+            for url in files {
+                guard let doc = try? FrontmatterParser.loadDocument(from: url) else { continue }
 
-            let attributeSet = CSSearchableItemAttributeSet(contentType: UTType.utf8PlainText)
-            attributeSet.title = doc.title
-            attributeSet.contentDescription = String(doc.body.prefix(500))
-            attributeSet.keywords = doc.tags + [doc.docType]
-            attributeSet.contentModificationDate = doc.modifiedAt
-            attributeSet.path = url.path
+                let attributeSet = CSSearchableItemAttributeSet(contentType: UTType.utf8PlainText)
+                attributeSet.title = doc.title
+                attributeSet.contentDescription = String(doc.body.prefix(500))
+                attributeSet.keywords = doc.tags + [doc.docType]
+                attributeSet.contentModificationDate = doc.modifiedAt
+                attributeSet.path = url.path
 
-            let item = CSSearchableItem(
-                uniqueIdentifier: doc.id,
-                domainIdentifier: bundleIdentifier,
-                attributeSet: attributeSet
-            )
-            item.expirationDate = Date.distantFuture
-            items.append(item)
-        }
+                let item = CSSearchableItem(
+                    uniqueIdentifier: doc.id,
+                    domainIdentifier: bundleIdentifier,
+                    attributeSet: attributeSet
+                )
+                item.expirationDate = Date.distantFuture
+                items.append(item)
+            }
 
-        searchableIndex.indexSearchableItems(items) { error in
-            if let error {
-                print("Spotlight batch index error: \(error)")
+            searchableIndex.indexSearchableItems(items) { error in
+                if let error {
+                    print("Spotlight batch index error: \(error)")
+                }
             }
         }
     }
