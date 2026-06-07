@@ -11,7 +11,7 @@ struct IndexProgressView: View {
                 Image(systemName: phaseIcon)
                     .font(.title2)
                     .foregroundStyle(phaseColor)
-                Text("Rebuild Index")
+                Text(isReembed ? "Re-embed All" : "Rebuild Index")
                     .font(.headline)
                 Spacer()
             }
@@ -122,9 +122,13 @@ struct IndexProgressView: View {
 
     /// Whether the pending run is a full "Re-embed All" (clears and regenerates
     /// every embedding) rather than an incremental "Rebuild Index". Drives the
-    /// confirm copy so the user knows it re-runs paid embedding calls.
+    /// header, confirm copy, and warning so the user knows it re-runs paid
+    /// embedding calls. Read from the live progress struct (which keeps the flag
+    /// for the whole run) and falls back to `pendingForceReembed` only before a
+    /// run exists, so the title/copy stay accurate through every phase rather
+    /// than flipping back to "Rebuild Index" once `pendingForceReembed` clears.
     private var isReembed: Bool {
-        appState.pendingForceReembed
+        appState.indexProgress?.forceReembed ?? appState.pendingForceReembed
     }
 
     private var phaseIcon: String {

@@ -40,3 +40,27 @@ func homeAIDefaults() {
     #expect(HomeAI.embedModel == "amazon.nova-2-multimodal-embeddings-v1:0")
     #expect(HomeAI.dims == 1024)
 }
+
+@Test("HomeAI.reembedHintAfterSave nudges only on a model/dimension mismatch")
+func homeAIReembedHintAfterSave() {
+    // nil status (no AI info yet) → no hint, plain confirmation shows instead.
+    #expect(HomeAI.reembedHintAfterSave(nil) == nil)
+
+    // Healthy vault (embeddings match the active model) → no hint.
+    let ok = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10,"portability_status":"ok"}"#)
+    #expect(HomeAI.reembedHintAfterSave(ok) == nil)
+
+    // Unindexed / no-provider states are not a "wrong embeddings" problem → no hint.
+    for status in ["unindexed", "no_provider", "provider_unavailable", "stale"] {
+        let s = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":0,"document_count":10,"portability_status":"\#(status)"}"#)
+        #expect(HomeAI.reembedHintAfterSave(s) == nil, "\(status) should not prompt a re-embed")
+    }
+
+    // The three mismatch states each prompt a Re-embed All nudge.
+    for status in ["dimension_break", "mixed", "model_mismatch"] {
+        let s = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10,"portability_status":"\#(status)"}"#)
+        let hint = HomeAI.reembedHintAfterSave(s)
+        #expect(hint != nil, "\(status) should prompt a re-embed")
+        #expect(hint?.contains("Re-embed All") == true, "\(status) hint should name the Re-embed All action")
+    }
+}

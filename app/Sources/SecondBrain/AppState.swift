@@ -752,7 +752,7 @@ final class AppState {
     func rebuildIndex(forceReembed: Bool = false) {
         guard vault != nil else { return }
         pendingForceReembed = forceReembed
-        indexProgress = IndexProgress(phase: .ready)
+        indexProgress = IndexProgress(phase: .ready, forceReembed: forceReembed)
         showIndexProgress = true
     }
 
@@ -774,9 +774,9 @@ final class AppState {
         isIndexing = true
         indexError = nil
         embeddingProgress = nil
-        indexProgress = IndexProgress(phase: .indexingFiles)
         let forceReembed = pendingForceReembed
         pendingForceReembed = false
+        indexProgress = IndexProgress(phase: .indexingFiles, forceReembed: forceReembed)
         log.info("Index rebuild started for vault: \(vault.rootURL.lastPathComponent) forceReembed=\(forceReembed)")
         let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -2115,6 +2115,11 @@ enum IndexPhase: String {
 
 struct IndexProgress {
     var phase: IndexPhase = .indexingFiles
+    // True when this run is a full "Re-embed All" (`2nb index --force-reembed`)
+    // rather than an incremental rebuild. Carried on the progress struct — not
+    // read from `pendingForceReembed`, which is cleared the moment the run
+    // begins — so the sheet's title and copy stay accurate through every phase.
+    var forceReembed: Bool = false
     var currentFile: String = ""
     var filesIndexed: Int = 0
     var embeddingCurrent: Int = 0
