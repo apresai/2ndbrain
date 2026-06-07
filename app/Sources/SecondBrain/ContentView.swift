@@ -3,6 +3,7 @@ import SecondBrainCore
 import UniformTypeIdentifiers
 
 enum DashboardTab: String, CaseIterable, Identifiable {
+    case home = "Home"
     case status = "Vault Status"
     case aiSettings = "AI Settings"
     case mcpServer = "MCP Server"
@@ -11,8 +12,14 @@ enum DashboardTab: String, CaseIterable, Identifiable {
 
     var id: String { self.rawValue }
 
+    /// The power-user tabs, demoted under an "Advanced" sidebar section. Home
+    /// surfaces the common-case essentials (vault, AI, index); everything else
+    /// lives here.
+    static var advanced: [DashboardTab] { [.status, .aiSettings, .mcpServer, .gitIntegration, .validation] }
+
     var systemImage: String {
         switch self {
+        case .home: return "house"
         case .status: return "externaldrive"
         case .aiSettings: return "bolt.horizontal"
         case .mcpServer: return "server.rack"
@@ -24,7 +31,7 @@ enum DashboardTab: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
-    @State private var selection: DashboardTab = .status
+    @State private var selection: DashboardTab = .home
 
     var body: some View {
         mainLayout
@@ -103,9 +110,14 @@ struct ContentView: View {
         } else {
             NavigationSplitView {
                 List(selection: $selection) {
-                    ForEach(DashboardTab.allCases) { tab in
-                        NavigationLink(value: tab) {
-                            Label(tab.rawValue, systemImage: tab.systemImage)
+                    NavigationLink(value: DashboardTab.home) {
+                        Label(DashboardTab.home.rawValue, systemImage: DashboardTab.home.systemImage)
+                    }
+                    Section("Advanced") {
+                        ForEach(DashboardTab.advanced) { tab in
+                            NavigationLink(value: tab) {
+                                Label(tab.rawValue, systemImage: tab.systemImage)
+                            }
                         }
                     }
                 }
@@ -114,6 +126,8 @@ struct ContentView: View {
             } detail: {
                 Group {
                     switch selection {
+                    case .home:
+                        HomeView()
                     case .status:
                         VaultStatusView(isPresented: .constant(true), isInline: true)
                     case .aiSettings:

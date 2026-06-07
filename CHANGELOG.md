@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **macOS app: a consolidated Home screen is now the default.** Home answers the three common-case questions on one surface — is this the vault Obsidian has open (a match badge), is AI set up and working (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2, with a ready dot plus Save-as-default and Test buttons), and is the vault indexed (doc/embedding counts with Rebuild Index / Re-embed All). The five existing tabs (Vault Status, AI Settings, MCP Server, Git Integration, Validation) move under an **Advanced** sidebar section; nothing is removed.
+
 ### Fixed
 - **Rebuild Index no longer hangs, and a vault with empty notes indexes cleanly.** Two bugs compounded: (1) `2nb index` tried to embed empty/whitespace-only notes (e.g. a blank `Untitled.md`), which Amazon Nova-2 rejects with a 400 `ValidationException` (`minLength: 1`) — so the embed count stayed pinned below 100% and `--force-reembed` reported "incomplete"; (2) the macOS app's `startIndex` blocked the main actor with `process.waitUntilExit()` and had no guard against overlapping runs, so the rebuild-progress sheet could freeze on "Running…" and never reach "Done". The CLI now **skips** empty documents (counted as skipped, not failed; nothing is sent to the provider), and the app runs `2nb index` without blocking the main actor, guards against concurrent rebuilds, keys the terminal phase off the process exit code, and surfaces the actual CLI error (not a bare exit code) on failure.
 
