@@ -17,21 +17,22 @@ import process from 'process';
 
 interface BrainSettings {
 	cliPath: string;
-	customVaultPath: string;
 	firstRunComplete: boolean;
 }
 
 const DEFAULT_SETTINGS: BrainSettings = {
 	cliPath: '2nb',
-	customVaultPath: '',
 	firstRunComplete: false,
 };
 
 // AIStatus is the subset of `2nb ai status --json` the plugin reads.
 interface AIStatus {
 	provider?: string;
+	embedding_model?: string;
 	embed_available?: boolean;
 	gen_available?: boolean;
+	document_count?: number;
+	embedding_count?: number;
 	providers?: { name: string; reachable: boolean; reason?: string }[];
 }
 
@@ -72,6 +73,25 @@ export function resolveCliPath(
 	}
 
 	return '2nb';
+}
+
+// pinVaultArgs prefixes a 2nb invocation with `--vault <path>` — the CLI's
+// highest-priority vault source (root.go). The plugin ALWAYS pins commands to
+// the open Obsidian vault's path so 2nb can never resolve a different vault from
+// a stale ~/.2ndbrain-active-vault file or the process cwd. The Obsidian vault
+// and the 2nb vault stay joined at the hip.
+export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
+	return ['--vault', vaultPath, ...args];
+}
+
+// formatIndexState turns embedding coverage into a plain-language verdict for
+// the settings / wizard UI: is this vault embedded, partially embedded, not
+// indexed yet, or empty?
+export function formatIndexState(documentCount: number, embeddingCount: number): string {
+	if (documentCount <= 0) return 'empty vault — no documents yet';
+	if (embeddingCount <= 0) return `not indexed yet (${documentCount} documents) — run "Rebuild AI Index"`;
+	if (embeddingCount < documentCount) return `partially embedded (${embeddingCount} / ${documentCount} documents)`;
+	return `embedded (${embeddingCount} / ${documentCount} documents)`;
 }
 
 // filepathBase returns the final path segment of a vault-relative path.
@@ -358,7 +378,10 @@ export default class BrainPlugin extends Plugin {
 				reject(new Error("Vault is not stored on a local filesystem."));
 				return;
 			}
-			const cwd = this.settings.customVaultPath || adapter.getBasePath();
+			// The open Obsidian vault is the only vault 2nb may touch. Pin every
+			// command to its path via --vault (pinVaultArgs) so the CLI can never
+			// resolve a different vault from ~/.2ndbrain-active-vault or the cwd.
+			const vaultPath = adapter.getBasePath();
 
 			// maxBuffer: the 1 MB default truncates large search/ask output and
 			// rejects with a buffer error.
@@ -367,9 +390,9 @@ export default class BrainPlugin extends Plugin {
 			// killing it mid-run would leave the index partially embedded.
 			// Interactive search/ask are bounded so a hung CLI can't block the UI.
 			const isIndex = args[0] === 'index';
-			const options = { cwd, maxBuffer: 16 * 1024 * 1024, timeout: isIndex ? 0 : 120000 };
+			const options = { cwd: vaultPath, maxBuffer: 16 * 1024 * 1024, timeout: isIndex ? 0 : 120000 };
 
-			execFile(cliPath, args, options, (error, stdout, stderr) => {
+			execFile(cliPath, pinVaultArgs(vaultPath, args), options, (error, stdout, stderr) => {
 				if (error) {
 					if ((error as any).code === 'ENOENT') {
 						reject(new Error(`Could not find 2nb CLI at "${cliPath}". Please ensure it is installed or configure the path in settings.`));
@@ -611,16 +634,22 @@ class BrainSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
-			.setName('Custom Vault Path')
-			.setDesc('Optional: Absolute path to the vault on disk if not the current active vault directory.')
-			.addText(text => text
-				.setPlaceholder('/absolute/path/to/vault')
-				.setValue(this.plugin.settings.customVaultPath)
-				.onChange(async (value) => {
-					this.plugin.settings.customVaultPath = value.trim();
-					await this.plugin.saveSettings();
-				}));
+		// Which vault 2nb operates on — always the open Obsidian vault — and its
+		// index state. Read-only and verifiable: 2nb is pinned to this path via
+		// --vault on every call, so the Obsidian vault and the 2nb vault cannot
+		// diverge (no "custom vault path" override exists by design).
+		const adapter = this.plugin.app.vault.adapter;
+		const vaultPath = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : '(vault is not on a local filesystem)';
+		const vaultName = this.plugin.app.vault.getName();
+		const vaultSetting = new Setting(containerEl)
+			.setName('Vault')
+			.setDesc(`${vaultName} — ${vaultPath} · checking index…`);
+		this.plugin.aiStatus().then(status => {
+			const state = status
+				? formatIndexState(status.document_count ?? 0, status.embedding_count ?? 0)
+				: 'index state unavailable (2nb CLI not reachable)';
+			vaultSetting.setDesc(`${vaultName} — ${vaultPath} · ${state}`);
+		});
 	}
 }
 
@@ -691,11 +720,19 @@ class SetupWizardModal extends Modal {
 			v.addEventListener('click', () => void this.render());
 		}
 
-		// Step 3 — Index.
+		// Step 3 — Index. Reuse the ai status from step 2 to show whether THIS
+		// vault is already embedded, so the user knows if they still need to index.
 		const s3 = contentEl.createDiv({ cls: 'brain-wizard-step' });
-		s3.createEl('h3', { text: '3. Index your vault' });
-		s3.createEl('p', { text: 'Build the search index over your notes. Re-run any time from the command palette.' });
-		const ix = s3.createEl('button', { text: 'Index now' });
+		const docs = status?.document_count ?? 0;
+		const embedded = status?.embedding_count ?? 0;
+		const alreadyIndexed = docs > 0 && embedded >= docs;
+		s3.createEl('h3', { text: alreadyIndexed ? '✓ 3. Vault indexed' : '3. Index your vault' });
+		s3.createEl('p', {
+			text: status
+				? `Current: ${formatIndexState(docs, embedded)}. Re-run any time from the command palette.`
+				: 'Build the search index over your notes. Re-run any time from the command palette.',
+		});
+		const ix = s3.createEl('button', { text: alreadyIndexed ? 'Re-index' : 'Index now' });
 		ix.addEventListener('click', async () => {
 			ix.disabled = true;
 			ix.textContent = 'Indexing…';

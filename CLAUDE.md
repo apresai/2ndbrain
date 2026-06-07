@@ -339,7 +339,7 @@ Replaces the AI Setup Wizard, Test AI Connection, and Model Wizard. Observes `mo
 
 A thin wrapper that shells out to the `2nb` CLI; Obsidian remains the editor. Command-palette prefix is **"2ndbrain AI:"**. Commands: Semantic Search, Ask AI (RAG Q&A), Find Similar Notes, Rebuild AI Index, and Setup wizard. It can **download and manage the `2nb` binary itself** (macOS only; resolves the latest GitHub release tag at runtime, ad-hoc signs it, and strips the quarantine xattr because the release isn't notarized) and opens a **first-run setup wizard** (Download CLI → Connect AI → Index).
 
-Install via **BRAT** (`apresai/2ndbrain`) or copy `manifest.json` / `main.js` / `styles.css` from a GitHub release, with **no npm build needed** by end users. Settings: "Download / update CLI", "2nb CLI Path" (defaults to `2nb`; probes Homebrew + `~/go/bin` + PATH), and "Custom Vault Path". Source of record: `plugins/obsidian-2ndbrain/main.ts`.
+Install via **BRAT** (`apresai/2ndbrain`) or copy `manifest.json` / `main.js` / `styles.css` from a GitHub release, with **no npm build needed** by end users. Settings: "Download / update CLI", "2nb CLI Path" (defaults to `2nb`; probes Homebrew + `~/go/bin` + PATH), and a read-only **"Vault"** line (open Obsidian vault path + index state). Every CLI call is **pinned to the open Obsidian vault via `--vault adapter.getBasePath()`** (`pinVaultArgs`), so 2nb can never resolve a different vault from `~/.2ndbrain-active-vault` or cwd — the Obsidian vault and the 2nb vault stay joined. Source of record: `plugins/obsidian-2ndbrain/main.ts`.
 
 ## Vault Format
 
