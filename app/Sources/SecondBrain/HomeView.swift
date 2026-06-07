@@ -125,7 +125,10 @@ struct HomeView: View {
             )
             await appState.refreshAIStatus()
             actionIsError = false
-            actionMessage = "Saved: AWS Bedrock · Claude Haiku 4.5 · Amazon Nova-2."
+            // If the just-saved model no longer matches the vault's stored
+            // embeddings, nudge toward Re-embed All; otherwise plain confirm.
+            actionMessage = HomeAI.reembedHintAfterSave(appState.aiStatus)
+                ?? "Saved: AWS Bedrock · Claude Haiku 4.5 · Amazon Nova-2."
         } catch {
             actionIsError = true
             actionMessage = "Save failed: \(error.localizedDescription)"
@@ -198,5 +201,26 @@ enum HomeAI {
             return "Not ready — \(reason)"
         }
         return "Not ready — check AWS credentials"
+    }
+
+    /// After saving the default config, the vault's stored embeddings may no
+    /// longer match the active embedding model — different dimensions
+    /// (`dimension_break`), a mix of models (`mixed`), or a straight model swap
+    /// (`model_mismatch`). In those cases search silently falls back to keyword
+    /// matching until the embeddings are regenerated, so return a gentle, fully
+    /// self-contained "Saved…" message that points the user at Re-embed All.
+    /// Returns `nil` when the embeddings are fine and the plain confirmation
+    /// should show instead.
+    static func reembedHintAfterSave(_ status: AIStatusInfo?) -> String? {
+        switch status?.portabilityStatus {
+        case "dimension_break", "mixed", "model_mismatch":
+            // "less accurate" is the honest framing across all three: a
+            // dimension break forces keyword-only search, while a same-dim
+            // mismatch/mix keeps semantic search running but on vectors from a
+            // different model — degraded relevance, not zero results.
+            return "Saved. This vault's embeddings were made with a different model, so semantic search may be less accurate until you regenerate them. Run Re-embed All when you have a moment."
+        default:
+            return nil
+        }
     }
 }
