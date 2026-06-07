@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.2] - 2026-06-06
+
+The Obsidian vault and the 2nb vault are now joined at the hip: every client operates on the vault you have open in Obsidian, never a different one.
+
+### Changed
+- **Obsidian plugin** pins every `2nb` command to the open Obsidian vault via `--vault`, so it can no longer resolve a different vault from a stale active-vault file or the working directory. Settings and the setup wizard now show the bound vault and its index state.
+- **macOS app** binds to the vault Obsidian currently has open (read from Obsidian's own `obsidian.json`) on launch, leads the Welcome screen with "Open your Obsidian vault", validates that an opened folder is a real Obsidian vault (has `.obsidian/`) and warns when it isn't the one Obsidian has open, and shows the active vault name in the sidebar.
+
+### Removed
+- The Obsidian plugin's "Custom Vault Path" setting — it was the only way the Obsidian vault and the 2nb vault could diverge.
+
 ## [0.5.1] - 2026-06-06
 
 ### Fixed
