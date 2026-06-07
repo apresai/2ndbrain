@@ -82,12 +82,25 @@ func parseTemplatePlaceholders() {
 @Test("parse degrades gracefully on duplicate keys (no crash)")
 func parseDuplicateKeys() {
     // Yams.load TRAPS on some malformed mappings; the compose-based parser must
-    // never crash. The composer rejects duplicate keys, so the block degrades to
-    // no usable frontmatter — but the call still returns instead of aborting.
+    // never crash. Whether the composer rejects duplicate keys (empty frontmatter)
+    // or keeps the last value is a Yams detail — either way it returns, and never
+    // surfaces the shadowed first value.
     let input = "---\ntitle: First\ntitle: Second\nstatus: draft\n---\nBody"
     let (fm, body) = FrontmatterParser.parse(input)
-    #expect(fm.isEmpty)
+    #expect(fm["title"] as? String != "First")
     #expect(body.contains("Body"))
+}
+
+@Test("parse preserves scalar types (string/int/bool) and null fallback")
+func parseScalarTypes() {
+    let input = "---\ntitle: Note\ncount: 5\npinned: true\nid:\n---\nBody"
+    let (fm, _) = FrontmatterParser.parse(input)
+    #expect(fm["title"] as? String == "Note")
+    #expect(fm["count"] as? Int == 5)
+    #expect(fm["pinned"] as? Bool == true)
+    // An empty value resolves to NSNull (not ""), so `id as? String` is nil and
+    // loadDocument falls back to a generated UUID rather than an empty id.
+    #expect(fm["id"] as? String == nil)
 }
 
 @Test("loadDocument creates MarkdownDocument from URL")

@@ -32,15 +32,22 @@ public enum FrontmatterParser {
         return ([:], content)
     }
 
-    /// Convert a Yams `Node` (AST) into Foundation values without invoking
-    /// Yams's Constructor. Scalars become Strings (every downstream consumer —
-    /// title/type/status/tags/dates and the JSON serializer — wants strings or
-    /// arrays of strings), sequences become arrays, mappings become dictionaries
-    /// with last-value-wins on duplicate keys. Nothing here can trap.
+    /// Convert a Yams `Node` (AST) into Foundation values WITHOUT invoking Yams's
+    /// mapping Constructor (the thing that traps). Scalars resolve to their
+    /// natural type — Bool / Int / Double / NSNull / String — via the per-scalar
+    /// `Node` accessors, which call only the single-scalar constructors and so
+    /// preserve the same types `Yams.load` produced (an empty value stays
+    /// `NSNull`, so `loadDocument`'s `?? UUID()` / `?? filename` fallbacks still
+    /// fire). Sequences become arrays; mappings are built by hand (last
+    /// assignment wins). Nothing on this path can trap.
     private static func nodeToValue(_ node: Yams.Node) -> Any {
         switch node {
-        case .scalar(let scalar):
-            return scalar.string
+        case .scalar:
+            if let b = node.bool { return b }
+            if let i = node.int { return i }
+            if let d = node.float { return d }
+            if let n = node.null { return n }
+            return node.string ?? ""
         case .sequence(let sequence):
             return sequence.map { nodeToValue($0) }
         case .mapping(let mapping):
