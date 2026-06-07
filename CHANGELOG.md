@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.4] - 2026-06-07
+
+### Fixed
+- **macOS app AI now works.** A GUI app launched by launchd has no shell environment, so the user's AWS credentials (shell env vars, no `~/.aws/credentials`) were invisible to the `2nb` it spawned and every AI action failed with "bedrock not ready", while the CLI worked in a terminal. The Amazon Bedrock **API key** (bearer token) can now be stored env-independently with `2nb config set-key bedrock <token>` (macOS Keychain); `loadBedrockAWSConfig` exports it for the AWS SDK when `AWS_BEARER_TOKEN_BEDROCK` isn't already set (macOS only; env wins; SigV4 fallback unchanged).
+
+### Changed
+- macOS app: `SpotlightIndexer.indexAll` runs its file-read + YAML-parse loop on a background queue instead of the main thread, so opening a large vault no longer freezes the UI.
+- `FrontmatterParser` bounds its YAML-AST walk with a recursion-depth guard against pathologically deep frontmatter.
+
 ## [0.5.3] - 2026-06-06
 
 ### Fixed
