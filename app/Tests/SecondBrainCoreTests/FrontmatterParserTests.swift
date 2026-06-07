@@ -66,6 +66,43 @@ func parseSpecialChars() {
     #expect(fm["title"] != nil)
 }
 
+@Test("parse does not crash on Obsidian template placeholders")
+func parseTemplatePlaceholders() {
+    // `date: {{date}}` parses as a YAML mapping keyed by a mapping; Yams.load
+    // TRAPS on it (force-unwrap nil in its Constructor), which used to crash the
+    // whole app while indexing a vault that contained template files. The
+    // compose-based parser must survive it and still expose the simple fields.
+    let input = "---\ntitle:\ndate: {{date}}\ntags: [daily]\nstatus: draft\n---\n# {{title}}\n"
+    let (fm, body) = FrontmatterParser.parse(input)
+    #expect(fm["status"] as? String == "draft")
+    #expect((fm["tags"] as? [String])?.contains("daily") == true)
+    #expect(body.contains("{{title}}"))
+}
+
+@Test("parse degrades gracefully on duplicate keys (no crash)")
+func parseDuplicateKeys() {
+    // Yams.load TRAPS on some malformed mappings; the compose-based parser must
+    // never crash. Whether the composer rejects duplicate keys (empty frontmatter)
+    // or keeps the last value is a Yams detail — either way it returns, and never
+    // surfaces the shadowed first value.
+    let input = "---\ntitle: First\ntitle: Second\nstatus: draft\n---\nBody"
+    let (fm, body) = FrontmatterParser.parse(input)
+    #expect(fm["title"] as? String != "First")
+    #expect(body.contains("Body"))
+}
+
+@Test("parse preserves scalar types (string/int/bool) and null fallback")
+func parseScalarTypes() {
+    let input = "---\ntitle: Note\ncount: 5\npinned: true\nid:\n---\nBody"
+    let (fm, _) = FrontmatterParser.parse(input)
+    #expect(fm["title"] as? String == "Note")
+    #expect(fm["count"] as? Int == 5)
+    #expect(fm["pinned"] as? Bool == true)
+    // An empty value resolves to NSNull (not ""), so `id as? String` is nil and
+    // loadDocument falls back to a generated UUID rather than an empty id.
+    #expect(fm["id"] as? String == nil)
+}
+
 @Test("loadDocument creates MarkdownDocument from URL")
 func loadDocumentFromFile() throws {
     let tmp = FileManager.default.temporaryDirectory

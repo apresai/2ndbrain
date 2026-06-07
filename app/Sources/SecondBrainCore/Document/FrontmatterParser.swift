@@ -15,15 +15,51 @@ public enum FrontmatterParser {
         let yamlString = String(rest[rest.startIndex..<endIndex.lowerBound])
         let bodyStart = rest[endIndex.upperBound...]
 
-        do {
-            if let parsed = try Yams.load(yaml: yamlString) as? [String: Any] {
-                return (parsed, String(bodyStart))
-            }
-        } catch {
-            // Malformed YAML - return raw content
+        // Parse via the Node AST (compose) and convert it ourselves. `Yams.load`
+        // eagerly constructs Swift values through Yams's Constructor, which can
+        // TRAP (a fatalError — uncatchable, not a thrown error) on inputs such as
+        // Obsidian template placeholders (`date: {{date}}` parses as a mapping
+        // keyed by a mapping → force-unwrap nil in Constructor.swift) or mappings
+        // with duplicate keys. That crash took down the whole app during vault
+        // indexing. `compose` only builds the AST (and throws — recoverably — on
+        // things like duplicate keys), so walking it ourselves is trap-free;
+        // anything it rejects simply degrades to no frontmatter.
+        if let node = try? Yams.compose(yaml: yamlString),
+           let dict = nodeToValue(node) as? [String: Any] {
+            return (dict, String(bodyStart))
         }
 
         return ([:], content)
+    }
+
+    /// Convert a Yams `Node` (AST) into Foundation values WITHOUT invoking Yams's
+    /// mapping Constructor (the thing that traps). Scalars resolve to their
+    /// natural type — Bool / Int / Double / NSNull / String — via the per-scalar
+    /// `Node` accessors, which call only the single-scalar constructors and so
+    /// preserve the same types `Yams.load` produced (an empty value stays
+    /// `NSNull`, so `loadDocument`'s `?? UUID()` / `?? filename` fallbacks still
+    /// fire). Sequences become arrays; mappings are built by hand (last
+    /// assignment wins). Nothing on this path can trap.
+    private static func nodeToValue(_ node: Yams.Node) -> Any {
+        switch node {
+        case .scalar:
+            if let b = node.bool { return b }
+            if let i = node.int { return i }
+            if let d = node.float { return d }
+            if let n = node.null { return n }
+            return node.string ?? ""
+        case .sequence(let sequence):
+            return sequence.map { nodeToValue($0) }
+        case .mapping(let mapping):
+            var dict = [String: Any](minimumCapacity: mapping.count)
+            for (keyNode, valueNode) in mapping {
+                let key = keyNode.string ?? String(describing: nodeToValue(keyNode))
+                dict[key] = nodeToValue(valueNode)
+            }
+            return dict
+        @unknown default:
+            return node.string ?? ""
+        }
     }
 
     /// Returns the length (in UTF-16 code units) of the leading frontmatter
