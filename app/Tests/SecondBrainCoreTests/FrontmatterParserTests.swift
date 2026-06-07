@@ -66,6 +66,30 @@ func parseSpecialChars() {
     #expect(fm["title"] != nil)
 }
 
+@Test("parse does not crash on Obsidian template placeholders")
+func parseTemplatePlaceholders() {
+    // `date: {{date}}` parses as a YAML mapping keyed by a mapping; Yams.load
+    // TRAPS on it (force-unwrap nil in its Constructor), which used to crash the
+    // whole app while indexing a vault that contained template files. The
+    // compose-based parser must survive it and still expose the simple fields.
+    let input = "---\ntitle:\ndate: {{date}}\ntags: [daily]\nstatus: draft\n---\n# {{title}}\n"
+    let (fm, body) = FrontmatterParser.parse(input)
+    #expect(fm["status"] as? String == "draft")
+    #expect((fm["tags"] as? [String])?.contains("daily") == true)
+    #expect(body.contains("{{title}}"))
+}
+
+@Test("parse degrades gracefully on duplicate keys (no crash)")
+func parseDuplicateKeys() {
+    // Yams.load TRAPS on some malformed mappings; the compose-based parser must
+    // never crash. The composer rejects duplicate keys, so the block degrades to
+    // no usable frontmatter — but the call still returns instead of aborting.
+    let input = "---\ntitle: First\ntitle: Second\nstatus: draft\n---\nBody"
+    let (fm, body) = FrontmatterParser.parse(input)
+    #expect(fm.isEmpty)
+    #expect(body.contains("Body"))
+}
+
 @Test("loadDocument creates MarkdownDocument from URL")
 func loadDocumentFromFile() throws {
     let tmp = FileManager.default.temporaryDirectory

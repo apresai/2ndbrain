@@ -15,15 +15,44 @@ public enum FrontmatterParser {
         let yamlString = String(rest[rest.startIndex..<endIndex.lowerBound])
         let bodyStart = rest[endIndex.upperBound...]
 
-        do {
-            if let parsed = try Yams.load(yaml: yamlString) as? [String: Any] {
-                return (parsed, String(bodyStart))
-            }
-        } catch {
-            // Malformed YAML - return raw content
+        // Parse via the Node AST (compose) and convert it ourselves. `Yams.load`
+        // eagerly constructs Swift values through Yams's Constructor, which can
+        // TRAP (a fatalError — uncatchable, not a thrown error) on inputs such as
+        // Obsidian template placeholders (`date: {{date}}` parses as a mapping
+        // keyed by a mapping → force-unwrap nil in Constructor.swift) or mappings
+        // with duplicate keys. That crash took down the whole app during vault
+        // indexing. `compose` only builds the AST (and throws — recoverably — on
+        // things like duplicate keys), so walking it ourselves is trap-free;
+        // anything it rejects simply degrades to no frontmatter.
+        if let node = try? Yams.compose(yaml: yamlString),
+           let dict = nodeToValue(node) as? [String: Any] {
+            return (dict, String(bodyStart))
         }
 
         return ([:], content)
+    }
+
+    /// Convert a Yams `Node` (AST) into Foundation values without invoking
+    /// Yams's Constructor. Scalars become Strings (every downstream consumer —
+    /// title/type/status/tags/dates and the JSON serializer — wants strings or
+    /// arrays of strings), sequences become arrays, mappings become dictionaries
+    /// with last-value-wins on duplicate keys. Nothing here can trap.
+    private static func nodeToValue(_ node: Yams.Node) -> Any {
+        switch node {
+        case .scalar(let scalar):
+            return scalar.string
+        case .sequence(let sequence):
+            return sequence.map { nodeToValue($0) }
+        case .mapping(let mapping):
+            var dict = [String: Any](minimumCapacity: mapping.count)
+            for (keyNode, valueNode) in mapping {
+                let key = keyNode.string ?? String(describing: nodeToValue(keyNode))
+                dict[key] = nodeToValue(valueNode)
+            }
+            return dict
+        @unknown default:
+            return node.string ?? ""
+        }
     }
 
     /// Returns the length (in UTF-16 code units) of the leading frontmatter
