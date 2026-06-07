@@ -11,11 +11,16 @@
 # never enters the repo.
 #
 # Usage:
-#   scripts/release-app-local.sh   build + sign + notarize + staple + zip
+#   scripts/release-app-local.sh            build + sign + notarize + staple + zip
+#   scripts/release-app-local.sh --publish  also upload the zip to the existing
+#                                            GitHub release v<VERSION> and update
+#                                            the Homebrew cask (version + sha256)
 #
-# Produces SecondBrain-<VERSION>-arm64.zip in the repo root. Uploading it to a
-# release and updating the Homebrew cask is a separate step (see the release
-# docs) so this script stays focused on producing a verified notarized artifact.
+# The --publish step requires the release v<VERSION> to already exist — it is
+# created by CI (GoReleaser) on tag push, which also ships the CLI + plugin. Run
+# this after that CI run completes. Both publish actions are idempotent (safe to
+# re-run): `gh release upload --clobber` and a cask commit only when the sha
+# actually changed.
 #
 set -euo pipefail
 
@@ -45,6 +50,16 @@ fi
 VERSION="$(tr -d '\n' < VERSION)"
 BUNDLE="app/.build/arm64-apple-macosx/release/SecondBrain.app"
 ZIP="SecondBrain-${VERSION}-arm64.zip"
+
+# When publishing, verify the release exists up front — BEFORE the slow
+# build+sign+notarize — so running too early (CI/GoReleaser hasn't created
+# release v<VERSION> yet) fails fast instead of burning a notarization.
+if [ "${1:-}" = "--publish" ] && ! gh release view "v${VERSION}" >/dev/null 2>&1; then
+  echo "error: GitHub release v${VERSION} not found." >&2
+  echo "       Push the tag first (\`make release\`) and let CI create the release," >&2
+  echo "       then re-run \`make release-app\`." >&2
+  exit 1
+fi
 
 echo "==> Building release app (v${VERSION})"
 make build-app-release >/dev/null
@@ -83,5 +98,39 @@ echo ""
 echo "Notarized and stapled — Gatekeeper accepted:"
 echo "  artifact : ${ZIP}"
 echo "  sha256   : ${SHA256}"
+
+if [ "${1:-}" != "--publish" ]; then
+  echo ""
+  echo "Next: re-run with --publish to upload + update the cask, or do it by hand."
+  exit 0
+fi
+
+# --- publish: attach the notarized zip to the release, then point the cask at it.
+# (Release existence was already verified up front, before the notarization.)
 echo ""
-echo "Next: attach ${ZIP} to the GitHub release and update the cask sha256."
+echo "==> Uploading ${ZIP} to release v${VERSION}"
+gh release upload "v${VERSION}" "$ZIP" --clobber
+
+# Update the cask AFTER the asset is in place, so the cask never points at a
+# sha whose zip isn't uploaded yet. (A brief window where the asset is new but
+# the cask sha is old is unavoidable without atomic publish; this step is
+# idempotent, so a re-run reconciles it.)
+echo "==> Updating the Homebrew cask (version ${VERSION}, sha ${SHA256:0:12})"
+TAP="$TMP/homebrew-tap"
+gh repo clone apresai/homebrew-tap "$TAP" -- --depth 1 --quiet
+mkdir -p "$TAP/Casks"
+sed -e "s/CASK_VERSION/${VERSION}/g" -e "s/CASK_SHA256/${SHA256}/g" \
+  casks/secondbrain.rb.tmpl > "$TAP/Casks/secondbrain.rb"
+# Stage first, then check the index — detects a new (untracked) cask too, which
+# `git diff` against the worktree alone would miss.
+( cd "$TAP" && git add Casks/secondbrain.rb )
+if ( cd "$TAP" && git diff --cached --quiet ); then
+  echo "Cask already up to date — nothing to push."
+else
+  ( cd "$TAP" \
+    && git commit -q -m "SecondBrain v${VERSION}: notarized cask (sha ${SHA256:0:12})" \
+    && git push )
+  echo "Cask updated and pushed."
+fi
+echo ""
+echo "Published: brew install --cask apresai/tap/secondbrain  →  v${VERSION} (notarized)."
