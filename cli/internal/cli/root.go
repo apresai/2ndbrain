@@ -46,7 +46,15 @@ Quick start:
   2nb search "authentication"       # keyword + semantic search
   2nb ask "what did we decide?"     # RAG Q&A
   2nb mcp-server                    # start MCP for Claude Code, Cursor, etc.`,
-	RunE: runRoot,
+	// Don't dump the full usage/help text when a command fails at runtime
+	// (a RunE error, e.g. "force-reembed incomplete"). Cobra otherwise prints
+	// the error followed by the entire flag listing, so a caller that scrapes
+	// the last stderr line (like the macOS app's index sheet) shows a stray
+	// flag description instead of the real error. Errors themselves still print
+	// (SilenceErrors stays false); only the usage dump is suppressed. Genuine
+	// arg-parse mistakes still surface a clear "Error: unknown flag …" line.
+	SilenceUsage: true,
+	RunE:         runRoot,
 }
 
 func init() {

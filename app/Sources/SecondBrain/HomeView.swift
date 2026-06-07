@@ -20,6 +20,9 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if let warning = cliVersionWarning {
+                    cliWarningBanner(warning)
+                }
                 vaultCard
                 Divider()
                 aiCard
@@ -43,8 +46,38 @@ struct HomeView: View {
             // correct immediately, rather than flashing "unknown" while the
             // slower `2nb ai status` shell-out runs.
             obsidianOpenVault = ObsidianRegistry.load()?.openVault
+            await appState.refreshCLIVersion()
             await appState.refreshAIStatus()
         }
+    }
+
+    // MARK: - CLI version drift
+
+    /// A warning when the installed `2nb` is older than this app, else nil.
+    /// A stale CLI is what made the 0.5.8 re-embed fail silently, so surface it
+    /// before the user hits an action that depends on a newer CLI.
+    private var cliVersionWarning: String? {
+        guard CLIVersion.isOlder(cli: appState.cliVersion, thanApp: appVersion) else { return nil }
+        return "Your 2nb CLI (\(appState.cliVersion ?? "unknown")) is older than this app (\(appVersion)). Some actions may fail until you update it."
+    }
+
+    @ViewBuilder
+    private func cliWarningBanner(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.callout)
+            }
+            Text("brew upgrade apresai/tap/twonb")
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Vault
