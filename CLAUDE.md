@@ -38,14 +38,14 @@ brew install --cask apresai/tap/secondbrain     # macOS dashboard app (depends o
 
 1. `make bump-build` (or `bump-minor`/`bump-major`) — increment `VERSION`, regenerate `Version.swift`.
 2. `make release` — updates `CHANGELOG.md`, commits, tags `v<VERSION>`, pushes tag.
-3. GitHub Actions (`.github/workflows/release.yml`) on tag push: macos-latest arm64, CGO_ENABLED=1; GoReleaser builds CLI for arm64+x86_64 and pushes formula `twonb.rb` to `apresai/homebrew-tap`; Swift builds `SecondBrain.app`, ad-hoc codesigns, packages as `SecondBrain-<VERSION>-arm64.zip`, pushes cask `secondbrain.rb`.
+3. GitHub Actions (`.github/workflows/release.yml`) on tag push: macos-latest arm64, CGO_ENABLED=1; GoReleaser builds CLI for arm64+x86_64 and pushes formula `twonb.rb` to `apresai/homebrew-tap`; Swift builds `SecondBrain.app`, signs it with the **Developer ID Application** cert + hardened runtime, **notarizes via `notarytool` and staples the ticket** (when the `MACOS_DEVID_*` / `ASC_NOTARY_*` secrets are present — ad-hoc fallback otherwise), packages as `SecondBrain-<VERSION>-arm64.zip`, pushes cask `secondbrain.rb`.
 4. `make release-local` — same flow locally, CLI only (no app build).
 
 Key files: `.goreleaser.yaml`, `.github/workflows/release.yml`, `casks/secondbrain.rb.tmpl` (with `CASK_VERSION`/`CASK_SHA256` tokens), `scripts/update-changelog.sh`, `CHANGELOG.md`.
 
-The `apresai` GitHub environment provides `HOMEBREW_TAP_TOKEN` (PAT for `apresai/homebrew-tap`).
+The `apresai` GitHub environment provides `HOMEBREW_TAP_TOKEN` (PAT for `apresai/homebrew-tap`) and the macOS code-signing/notarization secrets: `MACOS_DEVID_P12_BASE64` + `MACOS_DEVID_P12_PASSWORD` (the Developer ID Application cert+key), `MACOS_KEYCHAIN_PASSWORD` (throwaway, for the ephemeral CI keychain), and `ASC_NOTARY_KEY_P8_BASE64` + `ASC_NOTARY_KEY_ID` + `ASC_NOTARY_ISSUER_ID` (App Store Connect API key for `notarytool`). If the Developer ID secret is absent the release step degrades to ad-hoc signing and skips notarization.
 
-The macOS app is distributed as an arm64 ad-hoc signed `.app` bundle (not Apple-notarized), so users must right-click > Open on first launch. The cask `depends_on formula: "apresai/tap/twonb"` because the app shells out to `2nb` for AI/indexing/lint.
+The macOS app is distributed as an arm64 **Developer ID-signed, Apple-notarized** `.app` bundle, so it launches with no Gatekeeper prompt even when Homebrew's cask install quarantines it. (Local debug builds via the Makefile are still ad-hoc signed; that's separate from the release pipeline.) The cask `depends_on formula: "apresai/tap/twonb"` because the app shells out to `2nb` for AI/indexing/lint; note that a cask upgrade does **not** bump the formula, so the app warns on Home when the CLI has drifted behind.
 
 ## Build
 

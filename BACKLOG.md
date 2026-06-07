@@ -2,6 +2,15 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Release pipeline — notarization hardening (from PR review, 2026-06-07)
+
+The MEDIUM (signing key live during the later `npm ci`) was fixed in the notarization PR by deleting the keychain before the Node steps. Remaining LOW hardening:
+
+- **LOW — decoded `.p12`/`.p8` cleanup isn't in a `trap`.** They're `rm -f`'d at each step's end but a mid-step failure (e.g. `notarytool --wait` erroring) leaves the key in `$RUNNER_TEMP` until the ephemeral runner is torn down. Add `trap 'rm -f "${KEY_PATH}"' EXIT` for defense in depth.
+- **LOW — `security import -A` grants any-app ACL** to the imported key. Acceptable for an ephemeral CI keychain that's deleted before untrusted code runs, but tightening the ACL would be cleaner.
+- **LOW — add `npm ci --ignore-scripts`** to the Obsidian-plugin build step as defense in depth against dependency install-script execution (verify the esbuild build still works without lifecycle scripts first).
+- **LOW — pin GoReleaser action** (`goreleaser/goreleaser-action@v6` uses `version: latest` for the GoReleaser binary) and consider an environment protection rule (required reviewers) on `apresai`, since anyone who can push a `v*` tag runs the release with the signing + tap secrets.
+
 ## macOS app — Consolidated Home follow-ups (from PR review, 2026-06-07)
 
 Resolved in 0.5.6 / the Home-polish batch (PR #11 + `polish/home-followups`): CLI errors now surface the real `2nb` stderr; every CLI failure is recorded to `.2ndbrain/logs/`; the Re-embed confirmation warns it's a paid full regen; the per-render `ObsidianRegistry.load()` is cached in `.task`; `friendlyModel`/`statusLine` are extracted to `HomeAI` and unit-tested; index buttons clear a stale `actionMessage`.

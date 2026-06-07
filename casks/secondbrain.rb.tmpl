@@ -12,7 +12,13 @@ cask "secondbrain" do
   app "SecondBrain.app"
 
   caveats <<~EOS
-    On first launch, macOS will block the app because it is not notarized.
-    Right-click SecondBrain.app and choose "Open" to bypass the warning.
+    SecondBrain shells out to the `2nb` CLI, installed automatically as a
+    dependency. `brew upgrade --cask secondbrain` does NOT bump the CLI, so
+    after upgrading the app run:
+
+      brew upgrade apresai/tap/twonb
+
+    to keep the two in step. The app warns on its Home screen when the CLI is
+    behind.
   EOS
 end

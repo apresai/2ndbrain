@@ -38,6 +38,45 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+      # Import the Developer ID Application cert into an ephemeral keychain so
+      # the build step below can sign with it. Conditional: if the cert secret
+      # isn't set (a fork, or before secrets are configured), fall back to the
+      # previous ad-hoc signing and skip notarization — the release still ships,
+      # just un-notarized (first-launch right-click required).
+      - name: Import signing certificate
+        id: codesign_setup
+        env:
+          DEVID_P12_BASE64: ${{ secrets.MACOS_DEVID_P12_BASE64 }}
+          DEVID_P12_PASSWORD: ${{ secrets.MACOS_DEVID_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "${DEVID_P12_BASE64}" ]; then
+            echo "::notice::MACOS_DEVID_P12_BASE64 not set — ad-hoc signing, no notarization."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/codesign.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/devid.p12"
+          echo "${DEVID_P12_BASE64}" | base64 --decode > "${CERT_PATH}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security import "${CERT_PATH}" -P "${DEVID_P12_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN}"
+          # Let codesign use the key non-interactively.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" >/dev/null
+          # Add the temp keychain to the search list (preserving the existing ones).
+          security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | sed s/\"//g)
+          # First Developer ID Application identity's SHA-1. `exit` after the
+          # first match avoids a SIGPIPE/pipefail abort and the bare assignment
+          # never aborts the step before the explicit empty-check below.
+          IDENTITY=$(security find-identity -v -p codesigning "${KEYCHAIN}" | awk '/Developer ID Application/{print $2; exit}')
+          if [ -z "${IDENTITY}" ]; then echo "::error::No Developer ID Application identity found in imported keychain"; exit 1; fi
+          echo "Signing identity: ${IDENTITY}"
+          echo "identity=${IDENTITY}" >> "$GITHUB_OUTPUT"
+          echo "keychain=${KEYCHAIN}" >> "$GITHUB_OUTPUT"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          rm -f "${CERT_PATH}"
+
       - name: Build SecondBrain.app
         run: |
           # Generate Version.swift
@@ -74,8 +113,39 @@ jobs:
           </plist>
           PLIST
 
-          # Ad-hoc codesign
-          codesign -s - --deep --force "${BUNDLE}" 2>/dev/null || true
+          # Codesign. With a Developer ID identity available we sign with the
+          # hardened runtime + a secure timestamp (both required for
+          # notarization); otherwise fall back to the previous ad-hoc signature.
+          if [ "${{ steps.codesign_setup.outputs.signed }}" = "true" ]; then
+            codesign --force --options runtime --timestamp \
+              --keychain "${{ steps.codesign_setup.outputs.keychain }}" \
+              --sign "${{ steps.codesign_setup.outputs.identity }}" "${BUNDLE}"
+            codesign --verify --strict --verbose=2 "${BUNDLE}"
+          else
+            codesign -s - --deep --force "${BUNDLE}" 2>/dev/null || true
+          fi
+
+      # Submit the signed app to Apple's notary service and staple the ticket so
+      # Gatekeeper accepts it with no "unverified developer" dialog, even when
+      # quarantined by Homebrew's cask install. The final distributable zip is
+      # produced in the next step from this stapled bundle.
+      - name: Notarize SecondBrain.app
+        if: steps.codesign_setup.outputs.signed == 'true'
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_NOTARY_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_NOTARY_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_NOTARY_ISSUER_ID }}
+        run: |
+          BUNDLE="app/.build/arm64-apple-macosx/release/SecondBrain.app"
+          KEY_PATH="$RUNNER_TEMP/notary.p8"
+          NOTARY_ZIP="$RUNNER_TEMP/SecondBrain-notary.zip"
+          echo "${ASC_KEY_P8_BASE64}" | base64 --decode > "${KEY_PATH}"
+          ditto -c -k --keepParent "${BUNDLE}" "${NOTARY_ZIP}"
+          xcrun notarytool submit "${NOTARY_ZIP}" \
+            --key "${KEY_PATH}" --key-id "${ASC_KEY_ID}" --issuer "${ASC_ISSUER_ID}" --wait
+          xcrun stapler staple "${BUNDLE}"
+          xcrun stapler validate "${BUNDLE}"
+          rm -f "${KEY_PATH}" "${NOTARY_ZIP}"
 
       - name: Package and upload SecondBrain.zip
         env:
@@ -93,6 +163,18 @@ jobs:
 
           # Attach to the GitHub Release that GoReleaser created
           gh release upload "v${VERSION}" "${ZIP_NAME}"
+
+      # Delete the signing keychain BEFORE the Node/npm steps below. The
+      # Developer ID private key is only needed through signing + notarization
+      # (both done above); leaving it in the search list would let the
+      # subsequent `npm ci` (untrusted dependency install scripts) sign with or
+      # export it. `if: always()` so the key is dropped even if an earlier step
+      # failed; runs before "Set up Node" so the window is fully closed.
+      - name: Remove signing keychain
+        if: always() && steps.codesign_setup.outputs.signed == 'true'
+        run: |
+          security delete-keychain "${{ steps.codesign_setup.outputs.keychain }}" 2>/dev/null || true
+          security list-keychains -d user -s login.keychain-db 2>/dev/null || true
 
       # --- Obsidian plugin (BRAT-installable, no local npm build required) ---
       # Runs AFTER GoReleaser, which owns and creates the GitHub release in its
