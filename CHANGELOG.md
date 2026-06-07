@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.8] - 2026-06-07
+
+### Changed
+- **macOS app: saving the Bedrock default now nudges you to re-embed when your stored embeddings no longer match.** If "Save as default" leaves the vault embedded with a different model or dimension (`dimension_break` / `mixed` / `model_mismatch`), the confirmation gently points you at **Re-embed All** instead of a plain "Saved." The wording is honest across all three cases: a dimension break drops you to keyword-only search, while a same-dimension mismatch keeps semantic search running on stale-model vectors (less accurate, not off).
+- **macOS app: the index sheet title now stays "Re-embed All" for the whole run.** It previously reverted to "Rebuild Index" mid-run because the flag it read was cleared the moment the run started; the run mode is now carried on the progress state so the title, warning, and confirm copy stay accurate through every phase.
+
+### Fixed
+- **macOS app: a dashboard tab can no longer silently drop out of the sidebar.** A new parity test asserts the Home tab plus the Advanced group cover every `DashboardTab` case exactly once and that each tab has an icon, so a case added to the enum but forgotten in the sidebar is caught at test time.
+
 ## [0.5.7] - 2026-06-07
 
 ### Changed
