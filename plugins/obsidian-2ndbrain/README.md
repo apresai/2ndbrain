@@ -32,4 +32,4 @@ Open the plugin settings tab to configure:
 
 * **2nb CLI binary / Download / update CLI:** Status of the detected `2nb` binary, with a button to download or update a plugin-managed copy (macOS). If you prefer Homebrew, run `brew install apresai/tap/2nb`.
 * **2nb CLI Path:** Path to the `2nb` binary. Defaults to `2nb`, which probes a managed copy plus standard locations (`/opt/homebrew/bin/2nb`, `/usr/local/bin/2nb`, `~/go/bin/2nb`) and your PATH automatically.
-* **Custom Vault Path:** Optional absolute path to the vault on disk if it differs from the current active vault directory.
+* **Vault:** A read-only line showing the vault `2nb` operates on (always the open Obsidian vault) and its index state (e.g. `embedded (113 / 113 documents)`). The plugin pins every command to the open vault via `--vault`, so the Obsidian vault and the 2nb vault can never diverge.

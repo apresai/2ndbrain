@@ -86,7 +86,7 @@ On first enable, the plugin opens a setup wizard (also available via Command Pal
 In the plugin settings tab:
 * **Download / update CLI:** fetch or refresh the managed `2nb` binary.
 * **2nb CLI Path:** absolute path to your `2nb` binary if you aren't using the managed copy or PATH.
-* **Custom Vault Path:** query a vault other than the active one.
+* **Vault:** read-only — shows the vault `2nb` is bound to (always the open Obsidian vault) and its index state. The plugin pins every command to the open vault, so it can never operate on a different one.
 
 ---
 

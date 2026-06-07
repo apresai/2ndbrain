@@ -92,6 +92,8 @@ import {
 	resolveCliPath,
 	parseAskResponse,
 	parseSearchResponse,
+	pinVaultArgs,
+	formatIndexState,
 } from '../main.ts';
 
 describe('filepathBase', () => {
@@ -172,6 +174,51 @@ describe('resolveCliPath', () => {
 		// A user-configured path takes precedence over everything, including managed.
 		expect(resolveCliPath('/custom/2nb', exists, env, managed)).toBe('/custom/2nb');
 		expect(exists).not.toHaveBeenCalled();
+	});
+});
+
+describe('pinVaultArgs', () => {
+	// The core "joined at the hip" guarantee: every 2nb invocation is pinned to
+	// the open Obsidian vault via --vault, the CLI's highest-priority source.
+	it('prepends --vault <path> ahead of the subcommand', () => {
+		expect(pinVaultArgs('/Users/chad/dev/obsidian', ['search', 'q', '--json'])).toEqual([
+			'--vault', '/Users/chad/dev/obsidian', 'search', 'q', '--json',
+		]);
+	});
+
+	it('keeps --vault first even for a bare command', () => {
+		const out = pinVaultArgs('/v', ['index']);
+		expect(out[0]).toBe('--vault');
+		expect(out[1]).toBe('/v');
+		expect(out[2]).toBe('index');
+	});
+
+	it('does not mutate the caller\'s args array', () => {
+		const args = ['ai', 'status', '--json'];
+		pinVaultArgs('/v', args);
+		expect(args).toEqual(['ai', 'status', '--json']);
+	});
+});
+
+describe('formatIndexState', () => {
+	it('reports embedded when coverage is complete', () => {
+		expect(formatIndexState(113, 113)).toBe('embedded (113 / 113 documents)');
+	});
+
+	it('reports embedded when embeddings exceed docs (stale extras tolerated)', () => {
+		expect(formatIndexState(113, 114)).toBe('embedded (114 / 113 documents)');
+	});
+
+	it('reports partial coverage', () => {
+		expect(formatIndexState(113, 112)).toBe('partially embedded (112 / 113 documents)');
+	});
+
+	it('reports not-indexed when there are docs but zero embeddings', () => {
+		expect(formatIndexState(113, 0)).toContain('not indexed yet (113 documents)');
+	});
+
+	it('reports an empty vault when there are no documents', () => {
+		expect(formatIndexState(0, 0)).toContain('empty vault');
 	});
 });
 
