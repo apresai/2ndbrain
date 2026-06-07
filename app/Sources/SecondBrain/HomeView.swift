@@ -35,7 +35,10 @@ struct HomeView: View {
             .frame(maxWidth: 640, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .task {
+        // Keyed on the active vault so switching vaults re-reads status and the
+        // Obsidian registry; otherwise the cached open-vault badge could go
+        // stale after a vault switch while Home stays on screen.
+        .task(id: appState.vault?.rootURL) {
             await appState.refreshAIStatus()
             obsidianOpenVault = ObsidianRegistry.load()?.openVault
         }
