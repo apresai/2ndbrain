@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.10] - 2026-06-07
+
+### Changed
+- **The macOS app is now Apple-notarized — no more Gatekeeper warning on launch.** Previously the app shipped ad-hoc signed, so macOS showed an "Apple could not verify… / Move to Trash" dialog and you had to right-click → Open (or strip the quarantine attribute) to run it. The app is now Developer ID-signed and notarized by Apple, so `brew install --cask apresai/tap/secondbrain` installs an app that launches cleanly with no prompt. The project stays fully open source; signing happens on the maintainer's machine and no signing keys live in CI.
+
+### Fixed
+- **Release builds start from a clean app bundle.** `build-app-release` now removes any stale bundle before assembling, so a leftover file can't leak into a signed/notarized artifact.
+
 ## [0.5.9] - 2026-06-07
 
 ### Fixed
