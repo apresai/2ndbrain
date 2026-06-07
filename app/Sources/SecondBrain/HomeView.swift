@@ -39,8 +39,11 @@ struct HomeView: View {
         // Obsidian registry; otherwise the cached open-vault badge could go
         // stale after a vault switch while Home stays on screen.
         .task(id: appState.vault?.rootURL) {
-            await appState.refreshAIStatus()
+            // Read the (cheap, local) registry first so the match badge is
+            // correct immediately, rather than flashing "unknown" while the
+            // slower `2nb ai status` shell-out runs.
             obsidianOpenVault = ObsidianRegistry.load()?.openVault
+            await appState.refreshAIStatus()
         }
     }
 

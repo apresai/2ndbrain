@@ -1794,6 +1794,8 @@ final class AppState {
             do {
                 try process.run()
             } catch {
+                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
+                errorLogger?.log("CLI \(cmd) launch failed", error: error)
                 continuation.resume(throwing: error)
             }
         }
