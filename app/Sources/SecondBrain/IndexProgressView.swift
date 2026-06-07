@@ -94,7 +94,7 @@ struct IndexProgressView: View {
                 Spacer()
                 switch phase {
                 case .ready:
-                    Button("Rebuild Index") {
+                    Button(isReembed ? "Re-embed All" : "Rebuild Index") {
                         appState.startIndex()
                     }
                     .buttonStyle(.borderedProminent)
@@ -120,6 +120,13 @@ struct IndexProgressView: View {
         appState.indexProgress?.phase ?? .ready
     }
 
+    /// Whether the pending run is a full "Re-embed All" (clears and regenerates
+    /// every embedding) rather than an incremental "Rebuild Index". Drives the
+    /// confirm copy so the user knows it re-runs paid embedding calls.
+    private var isReembed: Bool {
+        appState.pendingForceReembed
+    }
+
     private var phaseIcon: String {
         switch phase {
         case .ready: return "arrow.triangle.2.circlepath"
@@ -141,17 +148,29 @@ struct IndexProgressView: View {
     @ViewBuilder
     private var readyView: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Rebuild the search index for this vault.")
+            Text(isReembed
+                 ? "Re-embed every document in this vault from scratch."
+                 : "Rebuild the search index for this vault.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
             if let fileCount = appState.files.count as Int? {
-                Text("\(fileCount) documents will be indexed.")
+                Text(isReembed
+                     ? "All \(fileCount) documents will be re-embedded."
+                     : "\(fileCount) documents will be indexed.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
 
-            if let ai = appState.aiStatus, ai.embedAvailable {
+            if isReembed, let ai = appState.aiStatus, ai.embedAvailable {
+                // Re-embed clears every stored embedding and regenerates it, so
+                // it re-runs a paid embedding call for every document — unlike
+                // an incremental Rebuild, which only embeds changed docs.
+                Label("Regenerates every embedding — re-runs paid \(ai.embeddingModel) calls for all documents.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if let ai = appState.aiStatus, ai.embedAvailable {
                 Label("Embeddings will be updated (\(ai.embeddingModel))", systemImage: "brain.head.profile")
                     .font(.caption)
                     .foregroundStyle(.tertiary)

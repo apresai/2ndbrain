@@ -1746,6 +1746,7 @@ final class AppState {
         )
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("AI Hub action: \(cmd, privacy: .public)")
+        let errorLogger = self.errorLogger
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
@@ -1785,6 +1786,7 @@ final class AppState {
                     let errMsg = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
+                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
                     continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
                 }
             }
@@ -1792,6 +1794,8 @@ final class AppState {
             do {
                 try process.run()
             } catch {
+                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
+                errorLogger?.log("CLI \(cmd) launch failed", error: error)
                 continuation.resume(throwing: error)
             }
         }
@@ -1845,6 +1849,10 @@ final class AppState {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("CLI exec: \(cmd, privacy: .public)")
+        // Capture the (Sendable) error logger so the background terminationHandler
+        // can record a genuine CLI failure to the per-vault `.2ndbrain/logs` file
+        // — the surface the user's "read the logs to debug" workflow targets.
+        let errorLogger = self.errorLogger
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
@@ -1893,6 +1901,7 @@ final class AppState {
                     if !errMsg.isEmpty {
                         log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
                     }
+                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
                     continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
                 }
             }
@@ -1901,6 +1910,7 @@ final class AppState {
                 try process.run()
             } catch {
                 log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
+                errorLogger?.log("CLI \(cmd) launch failed", error: error)
                 continuation.resume(throwing: error)
             }
         }

@@ -9,16 +9,13 @@ import SecondBrainCore
 struct HomeView: View {
     @Environment(AppState.self) private var appState
 
-    // The shipped defaults (DefaultAIConfig): AWS Bedrock + Haiku 4.5 + Nova-2.
-    private let bedrockProvider = "bedrock"
-    private let bedrockGenModel = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-    private let bedrockEmbedModel = "amazon.nova-2-multimodal-embeddings-v1:0"
-    private let bedrockDims = 1024
-
     @State private var saving = false
     @State private var testing = false
     @State private var actionMessage: String?
     @State private var actionIsError = false
+    // The vault Obsidian has open, loaded once in `.task` instead of read from
+    // disk on every body re-render.
+    @State private var obsidianOpenVault: ObsidianRegistry.Vault?
 
     var body: some View {
         ScrollView {
@@ -38,7 +35,16 @@ struct HomeView: View {
             .frame(maxWidth: 640, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .task { await appState.refreshAIStatus() }
+        // Keyed on the active vault so switching vaults re-reads status and the
+        // Obsidian registry; otherwise the cached open-vault badge could go
+        // stale after a vault switch while Home stays on screen.
+        .task(id: appState.vault?.rootURL) {
+            // Read the (cheap, local) registry first so the match badge is
+            // correct immediately, rather than flashing "unknown" while the
+            // slower `2nb ai status` shell-out runs.
+            obsidianOpenVault = ObsidianRegistry.load()?.openVault
+            await appState.refreshAIStatus()
+        }
     }
 
     // MARK: - Vault
@@ -58,7 +64,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private func obsidianMatchBadge(for url: URL) -> some View {
-        let openVault = ObsidianRegistry.load()?.openVault
+        let openVault = obsidianOpenVault
         let matches = openVault.map {
             ObsidianRegistry.normalizedPath($0.url) == ObsidianRegistry.normalizedPath(url)
         } ?? false
@@ -83,11 +89,11 @@ struct HomeView: View {
         let ready = (status?.embedAvailable ?? false) && (status?.genAvailable ?? false)
         return VStack(alignment: .leading, spacing: 8) {
             SheetSectionHeader(title: "AI — AWS Bedrock", systemImage: "bolt.horizontal")
-            LabeledContent("Generation", value: friendlyModel(status?.genModel) ?? "Claude Haiku 4.5")
-            LabeledContent("Embeddings", value: friendlyModel(status?.embeddingModel) ?? "Amazon Nova-2")
+            LabeledContent("Generation", value: HomeAI.friendlyModel(status?.genModel) ?? "Claude Haiku 4.5")
+            LabeledContent("Embeddings", value: HomeAI.friendlyModel(status?.embeddingModel) ?? "Amazon Nova-2")
             HStack(spacing: 6) {
                 Circle().fill(ready ? Color.green : Color.red).frame(width: 8, height: 8)
-                Text(statusLine(status))
+                Text(HomeAI.statusLine(status))
             }
             .font(.callout)
             HStack {
@@ -103,36 +109,16 @@ struct HomeView: View {
         }
     }
 
-    private func statusLine(_ status: AIStatusInfo?) -> String {
-        guard let status else { return "Checking…" }
-        if status.embedAvailable && status.genAvailable { return "Bedrock ready" }
-        if let reason = status.providers?.first(where: { $0.name == bedrockProvider })?.reason,
-           !reason.isEmpty {
-            return "Not ready — \(reason)"
-        }
-        return "Not ready — check AWS credentials"
-    }
-
-    /// Friendly name for the two default Bedrock models; the raw id otherwise.
-    private func friendlyModel(_ id: String?) -> String? {
-        switch id {
-        case bedrockGenModel: return "Claude Haiku 4.5"
-        case bedrockEmbedModel: return "Amazon Nova-2"
-        case .some(let value) where !value.isEmpty: return value
-        default: return nil
-        }
-    }
-
     private func save() async {
         saving = true
         actionMessage = nil
         defer { saving = false }
         do {
             try await appState.saveAIConfig(
-                provider: bedrockProvider,
-                embedModel: bedrockEmbedModel,
-                genModel: bedrockGenModel,
-                dims: bedrockDims,
+                provider: HomeAI.provider,
+                embedModel: HomeAI.embedModel,
+                genModel: HomeAI.genModel,
+                dims: HomeAI.dims,
                 bedrockProfile: "",
                 bedrockRegion: "",
                 openrouterKey: ""
@@ -151,8 +137,8 @@ struct HomeView: View {
         actionMessage = nil
         defer { testing = false }
         do {
-            _ = try await appState.testAndSave(modelID: bedrockEmbedModel, provider: bedrockProvider, type: "embedding", scope: "vault")
-            _ = try await appState.testAndSave(modelID: bedrockGenModel, provider: bedrockProvider, type: "generation", scope: "vault")
+            _ = try await appState.testAndSave(modelID: HomeAI.embedModel, provider: HomeAI.provider, type: "embedding", scope: "vault")
+            _ = try await appState.testAndSave(modelID: HomeAI.genModel, provider: HomeAI.provider, type: "generation", scope: "vault")
             await appState.refreshAIStatus()
             actionIsError = false
             actionMessage = "Test passed: both models responded."
@@ -179,5 +165,38 @@ struct HomeView: View {
             .disabled(appState.vault == nil || appState.isIndexing)
             .padding(.top, 4)
         }
+    }
+}
+
+/// Pure presentation logic for the Home AI card, plus the shipped Bedrock
+/// defaults (mirroring the CLI's `DefaultAIConfig`). Extracted from `HomeView`
+/// so the model-name and status-line mapping are unit-testable.
+enum HomeAI {
+    static let provider = "bedrock"
+    static let genModel = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    static let embedModel = "amazon.nova-2-multimodal-embeddings-v1:0"
+    static let dims = 1024
+
+    /// Friendly name for the two default Bedrock models; the raw id for any
+    /// other non-empty model; `nil` when no model is set.
+    static func friendlyModel(_ id: String?) -> String? {
+        switch id {
+        case genModel: return "Claude Haiku 4.5"
+        case embedModel: return "Amazon Nova-2"
+        case .some(let value) where !value.isEmpty: return value
+        default: return nil
+        }
+    }
+
+    /// Plain-language readiness line for the AI card, preferring the provider's
+    /// own `reason` (actionable) over a generic credentials hint.
+    static func statusLine(_ status: AIStatusInfo?) -> String {
+        guard let status else { return "Checking…" }
+        if status.embedAvailable && status.genAvailable { return "Bedrock ready" }
+        if let reason = status.providers?.first(where: { $0.name == provider })?.reason,
+           !reason.isEmpty {
+            return "Not ready — \(reason)"
+        }
+        return "Not ready — check AWS credentials"
     }
 }
