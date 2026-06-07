@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.3] - 2026-06-06
+
+### Fixed
+- macOS app no longer crashes on launch when indexing a vault that contains Obsidian **template files**. `FrontmatterParser` used `Yams.load`, whose YAML constructor traps (an uncatchable `fatalError`) on template placeholders like `date: {{date}}`; since indexing runs during vault open, a single template note crashed the whole app. The parser now walks the YAML AST (`Yams.compose`) directly, which can't trap, while preserving scalar type fidelity.
+
 ## [0.5.2] - 2026-06-06
 
 The Obsidian vault and the 2nb vault are now joined at the hip: every client operates on the vault you have open in Obsidian, never a different one.
