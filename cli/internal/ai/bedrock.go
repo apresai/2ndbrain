@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -41,8 +43,34 @@ func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) bool {
 	return true
 }
 
+// bedrockBearerTokenEnv is the environment variable the AWS SDK reads for the
+// Amazon Bedrock API key (bearer token).
+const bedrockBearerTokenEnv = "AWS_BEARER_TOKEN_BEDROCK"
+
+// ensureBedrockBearerToken makes a Keychain-stored Bedrock API key visible to
+// the AWS SDK by exporting it as AWS_BEARER_TOKEN_BEDROCK when that var is unset.
+// A GUI app that spawns 2nb has no shell environment, so without this its only
+// credential source would be ~/.aws (SigV4). When the env var is already set, or
+// no token is stored, this is a no-op. Accessors are injected so the logic is
+// testable without touching the real environment or Keychain.
+func ensureBedrockBearerToken(getenv func(string) string, setenv func(string, string) error, keychain func(string) (string, error)) {
+	if getenv(bedrockBearerTokenEnv) != "" {
+		return
+	}
+	if token, err := keychain("bedrock"); err == nil && token != "" {
+		_ = setenv(bedrockBearerTokenEnv, token)
+		// Make the source explicit: this overrides SigV4 for Bedrock (the SDK
+		// prefers a bearer token), so a stale stored key could mask working
+		// SigV4 creds. Visible in cli.log for diagnosis.
+		slog.Debug("bedrock: using API key from macOS Keychain", "env", bedrockBearerTokenEnv)
+	}
+}
+
 // loadBedrockAWSConfig builds an AWS config from BedrockConfig settings.
 func loadBedrockAWSConfig(ctx context.Context, cfg BedrockConfig) (aws.Config, error) {
+	if runtime.GOOS == "darwin" {
+		ensureBedrockBearerToken(os.Getenv, os.Setenv, keychainGet)
+	}
 	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cfg.Region),
 	}

@@ -189,6 +189,8 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 
 The default provider is **AWS Bedrock** (via your AWS credentials): generation = Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`), embeddings = Amazon Nova-2 (`amazon.nova-2-multimodal-embeddings-v1:0`, 1024 dims). Defaults live in `DefaultAIConfig()` (`cli/internal/ai/config.go`).
 
+**Bedrock auth** uses the AWS SDK credential chain (SigV4 from env or `~/.aws`), **or** a Bedrock **API key (bearer token)**. The bearer token is normally the `AWS_BEARER_TOKEN_BEDROCK` env var, but a GUI app launched by launchd has no shell env — so `2nb config set-key bedrock <token>` stores it in the macOS Keychain and `loadBedrockAWSConfig` (`cli/internal/ai/bedrock.go`, `ensureBedrockBearerToken`) exports it for the SDK when the env var is unset (macOS only, env wins). The SDK **prefers a bearer token over SigV4**, so a stored key overrides `~/.aws` SigV4 creds for Bedrock — replace it by re-running `set-key`, or delete the `dev.apresai.2ndbrain`/`bedrock` item in Keychain Access to fall back to SigV4. This is how the macOS app reaches Bedrock without your shell's credentials.
+
 **Ollama (local) and OpenRouter are opt-in**: both ship `disabled: true` in a fresh vault's `config.yaml`, so selection UIs show only Bedrock until the user enables them. `2nb ai setup` (a Bedrock-first wizard that detects AWS creds, confirms region, verifies models, and reminds you to enable Bedrock model access in the AWS console) or the macOS AI Hub clears the `disabled` flag. `Disabled` only hides a provider's models from dropdowns; an explicitly-chosen active provider still runs.
 
 ### Similarity Threshold
