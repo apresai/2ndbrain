@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.5.7] - 2026-06-07
+
 ### Changed
 - **macOS app: "Re-embed All" now warns it's a paid full regeneration.** The Rebuild confirmation sheet showed identical copy for an incremental Rebuild and a full Re-embed; it now reads "Re-embed All" with an orange note that it re-runs paid embedding calls for every document.
 - **macOS app: every CLI failure is recorded to the per-vault `.2ndbrain/logs/` file.** Previously only index rebuilds wrote there; now any failed `2nb` action (Save, Test, etc.) logs argv + exit code + stderr to `secondbrain.log`, so the "read the logs to debug" workflow is complete.
