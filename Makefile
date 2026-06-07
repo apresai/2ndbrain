@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app install clean test test-battery test-swift test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
+.PHONY: build build-cli build-app build-app-release package-app notarize-app install clean test test-battery test-swift test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -27,6 +27,9 @@ APP_BUNDLE_RELEASE := app/.build/arm64-apple-macosx/release/SecondBrain.app
 
 build-app-release: version-swift
 	cd app && swift build -c release
+	@# Start from a clean bundle so stale files (e.g. a previously-bundled
+	@# helper binary) can't leak into a signed/notarized release artifact.
+	@rm -rf $(APP_BUNDLE_RELEASE)
 	@mkdir -p $(APP_BUNDLE_RELEASE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE_RELEASE)/Contents/Resources
 	@cp -f app/.build/arm64-apple-macosx/release/SecondBrain $(APP_BUNDLE_RELEASE)/Contents/MacOS/SecondBrain
@@ -38,6 +41,13 @@ package-app: build-app-release
 	@ditto -c -k --keepParent $(APP_BUNDLE_RELEASE) SecondBrain-$(VERSION)-arm64.zip
 	@echo "Created SecondBrain-$(VERSION)-arm64.zip"
 	@shasum -a 256 SecondBrain-$(VERSION)-arm64.zip
+
+# Local Developer ID signing + Apple notarization (keys stay on this machine).
+# Reads scripts/sign.env (gitignored) and produces a notarized, Gatekeeper-clean
+# SecondBrain-<VERSION>-arm64.zip. Uploading it + updating the cask is a separate
+# release step (see docs).
+notarize-app:
+	@bash scripts/release-app-local.sh
 
 build: build-cli build-app
 

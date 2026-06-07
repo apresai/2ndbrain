@@ -1,5 +1,9 @@
 .env
 .env.*
+# Local code-signing / notarization config (identity + notary key path/IDs).
+# Real values live here on the maintainer's machine only; the committed
+# scripts/sign.env.example is the template. Keys themselves stay in ~/dev/certs.
+scripts/sign.env
 node_modules/
 .DS_Store
 
@@ -10,6 +14,9 @@ node_modules/
 cli/bin/
 *.exe
 dist/
+# Packaged macOS app artifacts (built by package-app / notarize-app at repo root).
+SecondBrain-*-arm64.zip
+*.dmg
 
 # Swift / Xcode
 app/DerivedData/
