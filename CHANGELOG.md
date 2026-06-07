@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.5.5] - 2026-06-07
+
 ### Changed
 - **macOS app: a consolidated Home screen is now the default.** Home answers the three common-case questions on one surface — is this the vault Obsidian has open (a match badge), is AI set up and working (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2, with a ready dot plus Save-as-default and Test buttons), and is the vault indexed (doc/embedding counts with Rebuild Index / Re-embed All). The five existing tabs (Vault Status, AI Settings, MCP Server, Git Integration, Validation) move under an **Advanced** sidebar section; nothing is removed.
 
