@@ -315,6 +315,7 @@ Supporting views: `MCPSetupView` (MCP config snippets for AI tools), `ModelCatal
 - **Use AppKit dialogs for modals:** prefer `NSAlert.runModal()` / `NSOpenPanel.runModal()` over SwiftUI `.sheet()` / `beginSheetModal` when a modal needs reliable button/keyboard events.
 - **Computer-use access:** The `.app` bundle must have a real binary (not symlink) and be ad-hoc codesigned (`codesign -s - --deep --force`). The Makefile handles this.
 - **Troubleshooting:** When hitting SwiftUI platform bugs, use Context7 and Brave Search before guessing.
+- **Yams traps, uncatchably:** `Yams.load` builds Swift values through a constructor that can `fatalError` (NOT throw) on malformed YAML — e.g. Obsidian template placeholders (`date: {{date}}`) or duplicate keys — so `do/catch` / `try?` won't save you (this crashed a shipped release during vault indexing). Parse untrusted frontmatter via `Yams.compose` (AST only) plus a manual, depth-bounded `Node` walk; see `FrontmatterParser`.
 
 ### Context7 Library IDs
 

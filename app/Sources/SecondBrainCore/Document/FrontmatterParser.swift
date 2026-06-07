@@ -40,7 +40,15 @@ public enum FrontmatterParser {
     /// `NSNull`, so `loadDocument`'s `?? UUID()` / `?? filename` fallbacks still
     /// fire). Sequences become arrays; mappings are built by hand (last
     /// assignment wins). Nothing on this path can trap.
-    private static func nodeToValue(_ node: Yams.Node) -> Any {
+    ///
+    /// A `depth` guard bounds the recursion: absurdly deeply nested YAML (or a
+    /// pathological anchor that expands into a very deep node) would otherwise
+    /// overflow the stack during the walk — an uncatchable trap. Real frontmatter
+    /// never nests anywhere near `maxNodeDepth`.
+    private static let maxNodeDepth = 100
+
+    private static func nodeToValue(_ node: Yams.Node, depth: Int = 0) -> Any {
+        if depth > maxNodeDepth { return node.string ?? "" }
         switch node {
         case .scalar:
             if let b = node.bool { return b }
@@ -49,12 +57,12 @@ public enum FrontmatterParser {
             if let n = node.null { return n }
             return node.string ?? ""
         case .sequence(let sequence):
-            return sequence.map { nodeToValue($0) }
+            return sequence.map { nodeToValue($0, depth: depth + 1) }
         case .mapping(let mapping):
             var dict = [String: Any](minimumCapacity: mapping.count)
             for (keyNode, valueNode) in mapping {
-                let key = keyNode.string ?? String(describing: nodeToValue(keyNode))
-                dict[key] = nodeToValue(valueNode)
+                let key = keyNode.string ?? String(describing: nodeToValue(keyNode, depth: depth + 1))
+                dict[key] = nodeToValue(valueNode, depth: depth + 1)
             }
             return dict
         @unknown default:

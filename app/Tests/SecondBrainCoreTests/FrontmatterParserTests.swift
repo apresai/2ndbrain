@@ -103,6 +103,26 @@ func parseScalarTypes() {
     #expect(fm["id"] as? String == nil)
 }
 
+@Test("nodeToValue bounds deep nesting (truncates, never overflows)")
+func parseDeepRecursionGuard() throws {
+    // 150 nested sequences — deeper than maxNodeDepth (100). The walk must bound
+    // its recursion: the parsed value's nesting is capped well below 150, proving
+    // the guard fired (without it the value would nest the full 150 levels and a
+    // truly pathological input could overflow the stack — an uncatchable trap).
+    let n = 150
+    let deep = "---\ndeep: " + String(repeating: "[", count: n) + String(repeating: "]", count: n) + "\n---\nBody"
+    let (fm, body) = FrontmatterParser.parse(deep)
+    #expect(body.contains("Body"))
+    let value = try #require(fm["deep"], "150-deep flow sequence should parse to a value")
+    #expect(arrayNestingDepth(value) <= 110)   // bounded near maxNodeDepth, not 150
+}
+
+/// Nesting depth of a parsed array-of-arrays value (0 for a non-array leaf).
+private func arrayNestingDepth(_ value: Any) -> Int {
+    guard let array = value as? [Any] else { return 0 }
+    return 1 + (array.map { arrayNestingDepth($0) }.max() ?? 0)
+}
+
 @Test("loadDocument creates MarkdownDocument from URL")
 func loadDocumentFromFile() throws {
     let tmp = FileManager.default.temporaryDirectory
