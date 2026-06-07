@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app notarize-app install clean test test-battery test-swift test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
+.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app install clean test test-battery test-swift test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -43,11 +43,15 @@ package-app: build-app-release
 	@shasum -a 256 SecondBrain-$(VERSION)-arm64.zip
 
 # Local Developer ID signing + Apple notarization (keys stay on this machine).
-# Reads scripts/sign.env (gitignored) and produces a notarized, Gatekeeper-clean
-# SecondBrain-<VERSION>-arm64.zip. Uploading it + updating the cask is a separate
-# release step (see docs).
+# Reads scripts/sign.env (gitignored). notarize-app produces a notarized,
+# Gatekeeper-clean SecondBrain-<VERSION>-arm64.zip; release-app additionally
+# uploads it to the existing release v<VERSION> and updates the Homebrew cask.
+# Run release-app AFTER `make release` (CI creates the release + ships CLI/plugin).
 notarize-app:
 	@bash scripts/release-app-local.sh
+
+release-app:
+	@bash scripts/release-app-local.sh --publish
 
 build: build-cli build-app
 
@@ -136,18 +140,21 @@ release:
 	@echo "Tag v$(VERSION) created and pushed"
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "  Tag v$(VERSION) pushed — GitHub Actions will handle the rest!"
+	@echo "  Tag v$(VERSION) pushed — this is a TWO-STEP release."
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo ""
-	@echo "GitHub Actions will:"
-	@echo "  1. Build CLI binaries (arm64 + x86_64)"
-	@echo "  2. Build SecondBrain.app (arm64)"
-	@echo "  3. Create GitHub release"
-	@echo "  4. Update Homebrew tap:"
-	@echo "     brew install apresai/tap/2nb"
-	@echo "     brew install --cask apresai/tap/secondbrain"
+	@echo "GitHub Actions is now building (CLI only):"
+	@echo "  • CLI binaries (arm64 + x86_64) → formula 'twonb'"
+	@echo "  • Obsidian plugin assets"
+	@echo "  • the GitHub release v$(VERSION)"
+	@echo "  Monitor: https://github.com/apresai/2ndbrain/actions"
 	@echo ""
-	@echo "Monitor: https://github.com/apresai/2ndbrain/actions"
+	@echo "  ⚠ THE MACOS APP IS NOT BUILT BY CI. Once the run above finishes,"
+	@echo "    finish the release locally (Developer ID sign + notarize + cask):"
+	@echo ""
+	@echo "        make release-app"
+	@echo ""
+	@echo "  Until you do, the cask still points at the PREVIOUS app version."
 
 release-local:
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -2,6 +2,13 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Release pipeline — local notarized-app flow (from PR review, 2026-06-07)
+
+The HIGH (forgetting the local `make release-app` step shipped a mismatched CLI/app silently) is mitigated: `make release` now prints a loud two-step reminder and the require-release guard is hoisted before notarization. Remaining LOW hardening for `scripts/release-app-local.sh`:
+
+- **LOW — cask push has no pull/rebase/retry.** `--publish` does a `--depth 1` clone of `apresai/homebrew-tap` → commit → `git push` with no retry. A concurrent push to the tap's `main` (e.g. CI's `2nb` alias commit) rejects it non-fast-forward. The documented ordering (run `release-app` after the CI run completes) avoids it, and the failure is loud + re-runnable; a `git pull --rebase` retry would harden it.
+- **LOW — same-version re-run sha window.** On a same-version re-run, `gh release upload --clobber` replaces the zip bytes (a fresh notarization yields a new sha) before the cask push; if the push then fails, the cask holds the old sha and `brew install --cask` errors on checksum until a clean re-run. Loud + recoverable; the script self-documents it. Different-version publishes have no such window (upload precedes cask).
+
 ## macOS app — Consolidated Home follow-ups (from PR review, 2026-06-07)
 
 Resolved in 0.5.6 / the Home-polish batch (PR #11 + `polish/home-followups`): CLI errors now surface the real `2nb` stderr; every CLI failure is recorded to `.2ndbrain/logs/`; the Re-embed confirmation warns it's a paid full regen; the per-render `ObsidianRegistry.load()` is cached in `.task`; `friendlyModel`/`statusLine` are extracted to `HomeAI` and unit-tested; index buttons clear a stale `actionMessage`.
