@@ -180,7 +180,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	count, embedded, _, _ := v.DB.EmbeddingCounts()
+	count, embedded, embeddableUnembedded, _ := v.DB.EmbeddingCounts()
 
 	aiStatus := "not configured"
 	if p := v.Config.AI.Provider; p != "" {
@@ -190,7 +190,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	label, hint := nextStepHint(count, embedded, v.Config.AI.Provider)
+	label, hint := nextStepHint(count, embedded, embedded+embeddableUnembedded, v.Config.AI.Provider)
 	fmt.Fprintf(cmd.ErrOrStderr(), "Vault: %s (%d docs, AI: %s)\n", v.Root, count, aiStatus)
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s\n\n", label, hint)
 	return cmd.Help()
@@ -198,14 +198,16 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 // nextStepHint returns a label ("Next" or "Try") and a one-line hint
 // matched to the vault's current state, so running `2nb` in a vault
-// always surfaces the single most useful next command.
-func nextStepHint(docCount, embeddedCount int, provider string) (label, hint string) {
+// always surfaces the single most useful next command. embeddableCount
+// excludes empty notes (which can't be embedded), so a vault whose only
+// gap is blank notes isn't perpetually told to run `2nb index`.
+func nextStepHint(docCount, embeddedCount, embeddableCount int, provider string) (label, hint string) {
 	switch {
 	case docCount == 0:
 		return "Next", `2nb create "My First Note"    (add your first document)`
 	case provider == "":
 		return "Next", "2nb ai setup                  (enable semantic search & ask)"
-	case embeddedCount < docCount:
+	case embeddedCount < embeddableCount:
 		return "Next", "2nb index                     (embed your documents for semantic search)"
 	default:
 		return "Try", `2nb search "query"  or  2nb ask "your question"`

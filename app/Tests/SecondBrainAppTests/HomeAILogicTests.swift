@@ -64,3 +64,17 @@ func homeAIReembedHintAfterSave() {
         #expect(hint?.contains("Re-embed All") == true, "\(status) hint should name the Re-embed All action")
     }
 }
+
+@Test("AIStatusInfo.embeddableDenominator prefers vault_embeddable_docs, falls back to document_count")
+func aiStatusEmbeddableDenominator() {
+    // Current CLI: 117 files, 2 empty notes → 115 embeddable. The embedded
+    // ratio should read 115/115, not 115/117.
+    let current = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":115,"document_count":117,"vault_embeddable_docs":115,"vault_empty_docs":2,"portability_status":"ok"}"#)
+    #expect(current.embeddableDenominator == 115)
+    #expect(current.embeddingCount == 115)
+
+    // Older 2nb binary without the field → fall back to the raw document count
+    // so the GUI still shows a sensible denominator after a CLI/app drift.
+    let legacy = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":115,"document_count":117}"#)
+    #expect(legacy.embeddableDenominator == 117)
+}

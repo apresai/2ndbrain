@@ -115,9 +115,9 @@ func TestDerivePortability(t *testing.T) {
 		},
 		{
 			// The reported bug: every doc with content is embedded; the gap is
-			// empty notes (no chunk) the embed pass skips. Must NOT be "stale"
-			// with a no-op `2nb index` hint — that nags forever. (115/117 ->
-			// 2 empty notes.)
+			// empty notes (no chunk) the embed pass skips. Must be a clean "ok"
+			// with NO action — empties are hidden from the count (reads 115/115),
+			// so there's nothing to nag about. (Old logic returned "stale".)
 			name:                 "ok_with_skipped_empty_notes",
 			cfg:                  ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:             embedder768,
@@ -127,7 +127,7 @@ func TestDerivePortability(t *testing.T) {
 			embeddedDocs:         115,
 			embeddableUnembedded: 0,
 			wantStatus:           "ok",
-			wantAction:           "empty notes skipped",
+			wantAction:           "",
 		},
 		{
 			// Both empties AND real content awaiting embeddings -> stale wins,
@@ -145,7 +145,8 @@ func TestDerivePortability(t *testing.T) {
 		},
 		{
 			// A vault of only empty notes (embeddedDocs==0, none embeddable) is
-			// as embedded as it can be — "ok", not a dead-end "unindexed".
+			// as embedded as it can be — clean "ok", not a dead-end "unindexed"
+			// and no skipped-note caveat.
 			name:                 "all_empty_notes",
 			cfg:                  ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:             embedder768,
@@ -154,7 +155,7 @@ func TestDerivePortability(t *testing.T) {
 			embeddedDocs:         0,
 			embeddableUnembedded: 0,
 			wantStatus:           "ok",
-			wantAction:           "empty notes skipped",
+			wantAction:           "",
 		},
 		{
 			// All-empty vault but no provider configured: the onboarding nudge
@@ -218,7 +219,13 @@ func TestDerivePortability(t *testing.T) {
 			if gotStatus != tt.wantStatus {
 				t.Errorf("status = %q, want %q", gotStatus, tt.wantStatus)
 			}
-			if tt.wantAction != "" && !strings.Contains(gotAction, tt.wantAction) {
+			if tt.wantAction == "" {
+				// An empty wantAction is an assertion, not "don't care": the
+				// hidden-empties cases must produce a clean OK with no caveat.
+				if gotAction != "" {
+					t.Errorf("action = %q, want empty", gotAction)
+				}
+			} else if !strings.Contains(gotAction, tt.wantAction) {
 				t.Errorf("action should contain %q, got %q", tt.wantAction, gotAction)
 			}
 		})

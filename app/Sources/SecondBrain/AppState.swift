@@ -2052,12 +2052,20 @@ struct AIStatusInfo: Codable {
     let vaultEmbeddingDim: Int?
     let vaultTotalDocs: Int?
     let vaultEmbeddedDocs: Int?
+    // Content-bearing docs (embedded + awaiting); excludes empty notes that
+    // can't be embedded. The denominator for "Embedded X / Y" so blank notes
+    // don't show as a permanent gap. Optional — older 2nb binaries omit it.
+    let vaultEmbeddableDocs: Int?
     let portabilityStatus: String?
     let portabilityAction: String?
 
     // Per-provider readiness surfaced for the AI Hub. Optional because
     // binaries before 0.3.0 don't emit this field.
     let providers: [ProviderStatusInfo]?
+
+    /// Denominator for embedding-coverage displays: the embeddable doc count
+    /// when the CLI reports it, else the raw document count (older CLI).
+    var embeddableDenominator: Int { vaultEmbeddableDocs ?? documentCount }
 
     enum CodingKeys: String, CodingKey {
         case provider
@@ -2074,6 +2082,7 @@ struct AIStatusInfo: Codable {
         case vaultEmbeddingDim = "vault_embedding_dim"
         case vaultTotalDocs = "vault_total_docs"
         case vaultEmbeddedDocs = "vault_embedded_docs"
+        case vaultEmbeddableDocs = "vault_embeddable_docs"
         case portabilityStatus = "portability_status"
         case portabilityAction = "portability_action"
         case providers

@@ -169,7 +169,9 @@ struct VaultStatusView: View {
             if let status = appState.aiStatus {
                 LabeledContent("Provider", value: status.provider.capitalized)
                 LabeledContent("Model", value: status.embeddingModel.isEmpty ? "—" : status.embeddingModel)
-                LabeledContent("Embedded", value: "\(status.embeddingCount) / \(status.documentCount) documents")
+                // Denominator is embeddable docs (excludes empty notes), so a
+                // blank Untitled.md never shows as a permanent "X / Y" gap.
+                LabeledContent("Embedded", value: "\(status.embeddingCount) / \(status.embeddableDenominator) documents")
 
                 if let portability = status.portabilityStatus, !portability.isEmpty {
                     HStack(spacing: 6) {
