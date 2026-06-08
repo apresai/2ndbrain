@@ -151,16 +151,30 @@ func (db *DB) DistinctEmbeddingModels() ([]string, error) {
 	return models, rows.Err()
 }
 
-// EmbeddingCounts returns (total_docs, embedded_docs) in a single query.
-// Used by `2nb ai status` to avoid two round trips when showing vault
-// embedding state.
-func (db *DB) EmbeddingCounts() (total, embedded int, err error) {
+// EmbeddingCounts returns (total_docs, embedded_docs, embeddable_unembedded)
+// in a single query. Used by `2nb ai status` to avoid round trips when
+// showing vault embedding state.
+//
+// embeddableUnembedded counts documents that *should* have an embedding but
+// don't: they have no embedding yet carry at least one chunk (i.e. real,
+// non-empty content). Documents with no chunks are empty/whitespace-only
+// notes that the embed pass deliberately skips (Amazon Nova-2 and similar
+// reject zero-length input), so they are excluded here — otherwise a vault
+// holding even one blank "Untitled.md" would report a perpetual, unfixable
+// "stale" state. A chunk exists for a document iff its body is non-empty
+// after comment stripping, which is exactly the same condition the embed
+// pass uses to skip (see embedDocumentsWithProvider), so the two stay in
+// lockstep.
+func (db *DB) EmbeddingCounts() (total, embedded, embeddableUnembedded int, err error) {
 	err = db.conn.QueryRow(`
 		SELECT COUNT(*),
-		       COALESCE(SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END), 0)
+		       COALESCE(SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN embedding IS NULL
+		                          AND EXISTS (SELECT 1 FROM chunks c WHERE c.doc_id = documents.id)
+		                         THEN 1 ELSE 0 END), 0)
 		FROM documents
-	`).Scan(&total, &embedded)
-	return total, embedded, err
+	`).Scan(&total, &embedded, &embeddableUnembedded)
+	return total, embedded, embeddableUnembedded, err
 }
 
 // InvalidateAllEmbeddings clears the embedding_hash column on every row

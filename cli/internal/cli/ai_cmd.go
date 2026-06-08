@@ -61,6 +61,7 @@ type AIStatus struct {
 	VaultEmbeddingDim    int      `json:"vault_embedding_dim"`    // sampled BLOB length / 4
 	VaultTotalDocs       int      `json:"vault_total_docs"`
 	VaultEmbeddedDocs    int      `json:"vault_embedded_docs"`
+	VaultEmptyDocs       int      `json:"vault_empty_docs"`   // empty/whitespace-only notes the embed pass skips (no chunk)
 	PortabilityStatus    string   `json:"portability_status"` // see derivePortability
 	PortabilityAction    string   `json:"portability_action"` // one-line fix hint
 
@@ -117,16 +118,17 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 
 	// Portability state: observe the DB directly so status always
 	// reflects reality (not drift-prone config cache).
-	totalDocs, embeddedDocs, _ := v.DB.EmbeddingCounts()
+	totalDocs, embeddedDocs, embeddableUnembedded, _ := v.DB.EmbeddingCounts()
 	status.VaultTotalDocs = totalDocs
 	status.VaultEmbeddedDocs = embeddedDocs
+	status.VaultEmptyDocs = totalDocs - embeddedDocs - embeddableUnembedded
 	status.VaultEmbeddingDim, _ = v.DB.SampleEmbeddingDim()
 	status.VaultEmbeddingModels, _ = v.DB.DistinctEmbeddingModels()
 
 	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
 	status.PortabilityStatus, status.PortabilityAction = derivePortability(
 		ctx, cfg, embedder,
-		status.VaultEmbeddingDim, status.VaultEmbeddingModels, totalDocs, embeddedDocs,
+		status.VaultEmbeddingDim, status.VaultEmbeddingModels, totalDocs, embeddedDocs, embeddableUnembedded,
 	)
 
 	status.Providers = collectProviderStatus(ctx, cfg)
@@ -216,13 +218,34 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 // returns a status label plus a one-line action hint. The labels are the
 // stable public contract — Swift and automation consumers switch on
 // these strings, so renames are a breaking change.
-func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.EmbeddingProvider, vaultDim int, vaultModels []string, totalDocs, embeddedDocs int) (status, action string) {
+func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.EmbeddingProvider, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int) (status, action string) {
+	// emptyDocs are notes with no embeddable content (no chunk) — the embed
+	// pass skips them, so they can never be embedded and must not count
+	// toward "stale" or "unindexed". See DB.EmbeddingCounts.
+	emptyDocs := totalDocs - embeddedDocs - embeddableUnembedded
+	emptyNote := func() string {
+		if emptyDocs == 1 {
+			return "Fully embedded. 1 empty note skipped (nothing to embed)."
+		}
+		return fmt.Sprintf("Fully embedded. %d empty notes skipped (nothing to embed).", emptyDocs)
+	}
+
 	if totalDocs == 0 {
 		return "empty_vault", "Create documents and run `2nb index` to build the search index."
 	}
 	if embeddedDocs == 0 {
+		// No AI provider configured yet → keep the onboarding nudge, even when
+		// the only docs so far are empty notes (saying "ok / fully embedded"
+		// would be misleading when semantic search isn't set up at all).
 		if cfg.Provider == "" {
 			return "no_provider", "Run `2nb ai setup` to enable semantic search. Keyword search works today."
+		}
+		// Provider is set but nothing is embedded. If every doc is an empty
+		// note there is nothing to embed — report healthy rather than sending
+		// the user to `2nb index`, which would skip them again. Otherwise the
+		// vault genuinely needs indexing.
+		if embeddableUnembedded == 0 {
+			return "ok", emptyNote()
 		}
 		return "unindexed", "Run `2nb index` to generate embeddings. Keyword search works today."
 	}
@@ -245,8 +268,17 @@ func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.Embeddi
 	if len(vaultModels) == 1 && vaultModels[0] != cfg.EmbeddingModel {
 		return "model_mismatch", fmt.Sprintf("Vault was embedded with %q but config is %q (same dim, still usable). Run `2nb index` to re-embed on the next content change, or `--force-reembed` to refresh now.", vaultModels[0], cfg.EmbeddingModel)
 	}
-	if embeddedDocs < totalDocs {
-		return "stale", fmt.Sprintf("%d of %d docs are embedded. Run `2nb index` to catch up.", embeddedDocs, totalDocs)
+	if embeddableUnembedded > 0 {
+		// Only count docs that *can* be embedded; empty notes are excluded so
+		// the denominator and the "catch up" advice are both actionable.
+		embeddable := embeddedDocs + embeddableUnembedded
+		return "stale", fmt.Sprintf("%d of %d docs are embedded. Run `2nb index` to catch up.", embeddedDocs, embeddable)
+	}
+	if emptyDocs > 0 {
+		// Every doc with content is embedded; the remainder are empty notes
+		// that are skipped by design. Report healthy, but explain the gap so
+		// "115 / 117" next to a green dot isn't a mystery.
+		return "ok", emptyNote()
 	}
 	return "ok", ""
 }

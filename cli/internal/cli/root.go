@@ -180,7 +180,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	count, embedded, _ := v.DB.EmbeddingCounts()
+	count, embedded, _, _ := v.DB.EmbeddingCounts()
 
 	aiStatus := "not configured"
 	if p := v.Config.AI.Provider; p != "" {
