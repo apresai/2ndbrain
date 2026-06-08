@@ -61,9 +61,10 @@ type AIStatus struct {
 	VaultEmbeddingDim    int      `json:"vault_embedding_dim"`    // sampled BLOB length / 4
 	VaultTotalDocs       int      `json:"vault_total_docs"`
 	VaultEmbeddedDocs    int      `json:"vault_embedded_docs"`
-	VaultEmptyDocs       int      `json:"vault_empty_docs"`   // empty/whitespace-only notes the embed pass skips (no chunk)
-	PortabilityStatus    string   `json:"portability_status"` // see derivePortability
-	PortabilityAction    string   `json:"portability_action"` // one-line fix hint
+	VaultEmbeddableDocs  int      `json:"vault_embeddable_docs"` // docs with content (embedded + awaiting); excludes empty notes. Status denominator.
+	VaultEmptyDocs       int      `json:"vault_empty_docs"`      // empty/whitespace-only notes the embed pass skips (no chunk)
+	PortabilityStatus    string   `json:"portability_status"`    // see derivePortability
+	PortabilityAction    string   `json:"portability_action"`    // one-line fix hint
 
 	// Providers surfaces per-provider readiness for the GUI's AI Hub
 	// and the `ai status` pretty output. Each entry reflects configured
@@ -73,12 +74,12 @@ type AIStatus struct {
 
 // ProviderStatus is the GUI-facing shape of a single provider's health.
 type ProviderStatus struct {
-	Name          string `json:"name"`                     // bedrock | openrouter | ollama
-	ConfigPresent bool   `json:"config_present"`           // creds / endpoint configured
-	Disabled      bool   `json:"disabled"`                 // user explicitly silenced via ai.<provider>.disabled
-	Reachable     bool   `json:"reachable"`                // cheap probe succeeded
-	Reason        string `json:"reason,omitempty"`         // human-readable "why not ready" when relevant
-	Detail        string `json:"detail,omitempty"`         // endpoint / region / env var name for UX
+	Name          string `json:"name"`             // bedrock | openrouter | ollama
+	ConfigPresent bool   `json:"config_present"`   // creds / endpoint configured
+	Disabled      bool   `json:"disabled"`         // user explicitly silenced via ai.<provider>.disabled
+	Reachable     bool   `json:"reachable"`        // cheap probe succeeded
+	Reason        string `json:"reason,omitempty"` // human-readable "why not ready" when relevant
+	Detail        string `json:"detail,omitempty"` // endpoint / region / env var name for UX
 }
 
 func runAIStatus(cmd *cobra.Command, args []string) error {
@@ -121,6 +122,10 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	totalDocs, embeddedDocs, embeddableUnembedded, _ := v.DB.EmbeddingCounts()
 	status.VaultTotalDocs = totalDocs
 	status.VaultEmbeddedDocs = embeddedDocs
+	// Embeddable = docs with real content (embedded + still-awaiting). Empty
+	// notes (no chunk) are excluded so status surfaces show coverage over what
+	// can actually be embedded, not a misleading gap against blank notes.
+	status.VaultEmbeddableDocs = embeddedDocs + embeddableUnembedded
 	status.VaultEmptyDocs = totalDocs - embeddedDocs - embeddableUnembedded
 	status.VaultEmbeddingDim, _ = v.DB.SampleEmbeddingDim()
 	status.VaultEmbeddingModels, _ = v.DB.DistinctEmbeddingModels()
@@ -155,7 +160,9 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Embed ready:      %v\n", status.EmbedAvailable)
 	fmt.Printf("Generation ready: %v\n", status.GenAvailable)
 	fmt.Printf("Documents:        %d\n", status.DocumentCount)
-	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.DocumentCount)
+	// Denominator is embeddable docs (content-bearing); empty notes are hidden
+	// so coverage reads cleanly against what can actually be embedded.
+	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.VaultEmbeddableDocs)
 	fmt.Printf("Search threshold: %g (%s)\n", status.SimilarityThreshold, status.SimilarityThresholdSource)
 
 	// Vault embedding state (portability) — the authoritative "is this
@@ -170,9 +177,9 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		} else if len(status.VaultEmbeddingModels) > 1 {
 			modelStr = fmt.Sprintf("mixed: %s", strings.Join(status.VaultEmbeddingModels, ", "))
 		}
-		fmt.Printf("  As-embedded:    %s (%dd), %d of %d docs\n", modelStr, status.VaultEmbeddingDim, status.VaultEmbeddedDocs, status.VaultTotalDocs)
+		fmt.Printf("  As-embedded:    %s (%dd), %d of %d docs\n", modelStr, status.VaultEmbeddingDim, status.VaultEmbeddedDocs, status.VaultEmbeddableDocs)
 	} else {
-		fmt.Printf("  As-embedded:    (no embeddings yet), %d docs\n", status.VaultTotalDocs)
+		fmt.Printf("  As-embedded:    (no embeddings yet), %d docs\n", status.VaultEmbeddableDocs)
 	}
 	fmt.Printf("  Current cfg:    %s / %s (%dd)\n", cfg.Provider, cfg.EmbeddingModel, cfg.Dimensions)
 	fmt.Printf("  Status:         %s\n", strings.ToUpper(strings.ReplaceAll(status.PortabilityStatus, "_", " ")))
@@ -219,17 +226,11 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 // stable public contract — Swift and automation consumers switch on
 // these strings, so renames are a breaking change.
 func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.EmbeddingProvider, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int) (status, action string) {
-	// emptyDocs are notes with no embeddable content (no chunk) — the embed
-	// pass skips them, so they can never be embedded and must not count
-	// toward "stale" or "unindexed". See DB.EmbeddingCounts.
-	emptyDocs := totalDocs - embeddedDocs - embeddableUnembedded
-	emptyNote := func() string {
-		if emptyDocs == 1 {
-			return "Fully embedded. 1 empty note skipped (nothing to embed)."
-		}
-		return fmt.Sprintf("Fully embedded. %d empty notes skipped (nothing to embed).", emptyDocs)
-	}
-
+	// Empty notes (no chunk) can never be embedded, so they're excluded from
+	// every decision here and from the counts callers display (the embeddable
+	// total = embeddedDocs+embeddableUnembedded). A vault whose only gap is
+	// empty notes therefore reads clean, with no "stale" and no skipped-note
+	// caveat. See DB.EmbeddingCounts.
 	if totalDocs == 0 {
 		return "empty_vault", "Create documents and run `2nb index` to build the search index."
 	}
@@ -245,7 +246,7 @@ func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.Embeddi
 		// the user to `2nb index`, which would skip them again. Otherwise the
 		// vault genuinely needs indexing.
 		if embeddableUnembedded == 0 {
-			return "ok", emptyNote()
+			return "ok", ""
 		}
 		return "unindexed", "Run `2nb index` to generate embeddings. Keyword search works today."
 	}
@@ -274,12 +275,8 @@ func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.Embeddi
 		embeddable := embeddedDocs + embeddableUnembedded
 		return "stale", fmt.Sprintf("%d of %d docs are embedded. Run `2nb index` to catch up.", embeddedDocs, embeddable)
 	}
-	if emptyDocs > 0 {
-		// Every doc with content is embedded; the remainder are empty notes
-		// that are skipped by design. Report healthy, but explain the gap so
-		// "115 / 117" next to a green dot isn't a mystery.
-		return "ok", emptyNote()
-	}
+	// All content-bearing docs are embedded. Any remaining docs are empty notes,
+	// which are hidden from the status counts, so this reads as a clean OK.
 	return "ok", ""
 }
 

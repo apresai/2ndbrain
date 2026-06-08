@@ -14,14 +14,17 @@ jobs:
     environment: apresai    # Access HOMEBREW_TAP_TOKEN from this environment
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24'
+          # go.sum lives in cli/, not the repo root; point the built-in module
+          # cache at it so setup-go stops warning "Restore cache failed".
+          cache-dependency-path: cli/go.sum
 
       - name: Read version
         run: |
@@ -29,10 +32,12 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: latest
+          # Pin to the GoReleaser v2 line (our .goreleaser.yaml is `version: 2`);
+          # `latest` warned it would lock to `~> v2` anyway.
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,7 +57,7 @@ jobs:
       # `v${VERSION}` already exists by the time we upload here — same proven
       # pattern as the SecondBrain.zip step above. No race with GoReleaser.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
 

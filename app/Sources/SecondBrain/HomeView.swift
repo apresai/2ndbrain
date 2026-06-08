@@ -190,10 +190,13 @@ struct HomeView: View {
         let status = appState.aiStatus
         let docs = status?.documentCount ?? 0
         let embedded = status?.embeddingCount ?? 0
+        // Embeddable docs (excludes empty notes) as the denominator, so a blank
+        // Untitled.md doesn't read as a permanent "X / Y" gap.
+        let embeddable = status?.embeddableDenominator ?? docs
         return VStack(alignment: .leading, spacing: 8) {
             SheetSectionHeader(title: "Index", systemImage: "square.stack.3d.up")
             LabeledContent("Documents", value: "\(docs)")
-            LabeledContent("Embedded", value: "\(embedded) / \(docs)")
+            LabeledContent("Embedded", value: "\(embedded) / \(embeddable)")
             HStack {
                 Button("Rebuild Index") { actionMessage = nil; appState.rebuildIndex() }
                 Button("Re-embed All…") { actionMessage = nil; appState.rebuildIndex(forceReembed: true) }

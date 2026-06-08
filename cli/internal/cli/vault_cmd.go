@@ -120,22 +120,23 @@ type VaultListEntry struct {
 // (PortabilityStatus, PortabilityAction, documents / embedded counts,
 // AIProvider).
 type VaultStatus struct {
-	Path              string   `json:"path"`
-	Name              string   `json:"name"`
-	Source            string   `json:"source"`
-	Documents         int      `json:"documents"`
-	EmbeddedDocuments int      `json:"embedded_documents"`
-	StaleDocuments    int      `json:"stale_documents"`
-	StaleSinceDays    int      `json:"stale_since_days"`
-	AIProvider        string   `json:"ai_provider"`
-	EmbeddingModel    string   `json:"embedding_model"`
-	GenerationModel   string   `json:"generation_model"`
-	EmbedAvailable    bool     `json:"embed_available"`
-	GenAvailable      bool     `json:"gen_available"`
-	PortabilityStatus string   `json:"portability_status"`
-	PortabilityAction string   `json:"portability_action"`
-	VaultEmbeddingDim int      `json:"vault_embedding_dim"`
-	EmbeddingModels   []string `json:"vault_embedding_models"`
+	Path                string   `json:"path"`
+	Name                string   `json:"name"`
+	Source              string   `json:"source"`
+	Documents           int      `json:"documents"`
+	EmbeddedDocuments   int      `json:"embedded_documents"`
+	EmbeddableDocuments int      `json:"embeddable_documents"` // docs with content (excludes empty notes); the embedded denominator
+	StaleDocuments      int      `json:"stale_documents"`
+	StaleSinceDays      int      `json:"stale_since_days"`
+	AIProvider          string   `json:"ai_provider"`
+	EmbeddingModel      string   `json:"embedding_model"`
+	GenerationModel     string   `json:"generation_model"`
+	EmbedAvailable      bool     `json:"embed_available"`
+	GenAvailable        bool     `json:"gen_available"`
+	PortabilityStatus   string   `json:"portability_status"`
+	PortabilityAction   string   `json:"portability_action"`
+	VaultEmbeddingDim   int      `json:"vault_embedding_dim"`
+	EmbeddingModels     []string `json:"vault_embedding_models"`
 }
 
 // runVaultDefault handles `2nb vault` (no subcommand). With no args it
@@ -226,22 +227,23 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	portStatus, portAction := derivePortability(ctx, cfg, embedder, vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded)
 
 	status := VaultStatus{
-		Path:              v.Root,
-		Name:              v.Config.Name,
-		Source:            source,
-		Documents:         docCount,
-		EmbeddedDocuments: embeddedCount,
-		StaleDocuments:    staleCount,
-		StaleSinceDays:    staleSinceDays,
-		AIProvider:        cfg.Provider,
-		EmbeddingModel:    cfg.EmbeddingModel,
-		GenerationModel:   cfg.GenerationModel,
-		EmbedAvailable:    embedAvail,
-		GenAvailable:      genAvail,
-		PortabilityStatus: portStatus,
-		PortabilityAction: portAction,
-		VaultEmbeddingDim: vaultDim,
-		EmbeddingModels:   vaultModels,
+		Path:                v.Root,
+		Name:                v.Config.Name,
+		Source:              source,
+		Documents:           docCount,
+		EmbeddedDocuments:   embeddedCount,
+		EmbeddableDocuments: embeddedCount + embeddableUnembedded,
+		StaleDocuments:      staleCount,
+		StaleSinceDays:      staleSinceDays,
+		AIProvider:          cfg.Provider,
+		EmbeddingModel:      cfg.EmbeddingModel,
+		GenerationModel:     cfg.GenerationModel,
+		EmbedAvailable:      embedAvail,
+		GenAvailable:        genAvail,
+		PortabilityStatus:   portStatus,
+		PortabilityAction:   portAction,
+		VaultEmbeddingDim:   vaultDim,
+		EmbeddingModels:     vaultModels,
 	}
 
 	format := getFormat(cmd)
@@ -249,7 +251,7 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 		return output.Write(os.Stdout, format, status)
 	}
 
-	label, hint := nextStepHint(docCount, embeddedCount, cfg.Provider)
+	label, hint := nextStepHint(docCount, embeddedCount, embeddedCount+embeddableUnembedded, cfg.Provider)
 	printVaultStatus(status, label, hint)
 	return nil
 }
@@ -266,7 +268,9 @@ func printVaultStatus(s VaultStatus, nextLabel, nextHint string) {
 
 	fmt.Println()
 	fmt.Println("Index & Embeddings")
-	fmt.Printf("  Embedded:   %d / %d\n", s.EmbeddedDocuments, s.Documents)
+	// Denominator is embeddable docs (content-bearing); empty notes are excluded
+	// so coverage reads cleanly. The raw file count is shown under Documents above.
+	fmt.Printf("  Embedded:   %d / %d\n", s.EmbeddedDocuments, s.EmbeddableDocuments)
 	if s.VaultEmbeddingDim > 0 {
 		model := "(no model recorded)"
 		if len(s.EmbeddingModels) == 1 {
@@ -443,4 +447,3 @@ func resolveVaultSource() (string, string) {
 	}
 	return ".", "current directory"
 }
-
