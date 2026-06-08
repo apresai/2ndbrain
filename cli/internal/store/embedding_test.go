@@ -212,27 +212,33 @@ func TestEmbeddingCounts(t *testing.T) {
 	defer db.Close()
 
 	// Empty vault
-	total, embedded, err := db.EmbeddingCounts()
+	total, embedded, embeddableUnembedded, err := db.EmbeddingCounts()
 	if err != nil {
 		t.Fatalf("empty: %v", err)
 	}
-	if total != 0 || embedded != 0 {
-		t.Errorf("empty: got (%d, %d), want (0, 0)", total, embedded)
+	if total != 0 || embedded != 0 || embeddableUnembedded != 0 {
+		t.Errorf("empty: got (%d, %d, %d), want (0, 0, 0)", total, embedded, embeddableUnembedded)
 	}
 
-	// 3 docs, 2 embedded
+	// 4 docs: a,b embedded; c has content (a chunk) but no embedding; d is an
+	// empty note (no chunk, no embedding). Only c is "embeddable but
+	// unembedded" — d must NOT count, since the embed pass can never embed it.
 	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('a', 'a.md', 'A')`)
 	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('b', 'b.md', 'B')`)
 	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('c', 'c.md', 'C')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('d', 'd.md', 'D')`)
 	db.SetEmbedding("a", []float32{1, 2}, "m", "h")
 	db.SetEmbedding("b", []float32{3, 4}, "m", "h")
+	// c carries real content (one chunk); d is empty (no chunk).
+	db.Conn().Exec(`INSERT INTO chunks (id, doc_id, heading_path, content, content_hash)
+	                VALUES ('c1', 'c', '(preamble)', 'real content', 'ch')`)
 
-	total, embedded, err = db.EmbeddingCounts()
+	total, embedded, embeddableUnembedded, err = db.EmbeddingCounts()
 	if err != nil {
 		t.Fatalf("seeded: %v", err)
 	}
-	if total != 3 || embedded != 2 {
-		t.Errorf("seeded: got (%d, %d), want (3, 2)", total, embedded)
+	if total != 4 || embedded != 2 || embeddableUnembedded != 1 {
+		t.Errorf("seeded: got (%d, %d, %d), want (4, 2, 1)", total, embedded, embeddableUnembedded)
 	}
 }
 

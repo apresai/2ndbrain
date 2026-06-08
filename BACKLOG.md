@@ -2,6 +2,13 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Embeddings status — empty-note handling (from PR review, 2026-06-07)
+
+The fix (`derivePortability` no longer reports a vault perpetually "stale" when the only unembedded docs are empty notes; `EmbeddingCounts` now returns `embeddableUnembedded`) shipped with the LOW from review (all-empty + no-provider should nudge `no_provider`, not "ok") already fixed in-commit. Remaining LOW:
+
+- **LOW — `vault_empty_docs` is emitted by the CLI but not surfaced in the macOS app.** `2nb ai status --json` now includes `vault_empty_docs`, but Swift `AIStatusInfo` (`app/Sources/SecondBrain/AppState.swift`) has no matching `CodingKey`, so the GUI can't show *why* "115 / 117" sits next to a green Healthy dot. The `portability_action` string already explains it in prose, so this is purely a nicer-affordance follow-up (e.g. render "115 / 117 (2 empty, skipped)"). Wire a `vaultEmptyDocs` key + use it in `VaultStatusView`/`HomeView`.
+- **LOW — `EmbeddingCounts` query error is discarded at all three call sites** (`ai_cmd.go`, `vault_cmd.go`, `root.go` use `..., _`). Pre-existing (the error was already discarded before this change), so not a regression; but a wedged DB would silently report 0 docs / misclassify portability as `empty_vault`. A `slog.Warn("embedding counts query failed", err)` would aid diagnosis. Read-only status path, so it degrades gracefully — low priority.
+
 ## Release pipeline — local notarized-app flow (from PR review, 2026-06-07)
 
 The HIGH (forgetting the local `make release-app` step shipped a mismatched CLI/app silently) is mitigated: `make release` now prints a loud two-step reminder and the require-release guard is hoisted before notarization. Remaining LOW hardening for `scripts/release-app-local.sh`:

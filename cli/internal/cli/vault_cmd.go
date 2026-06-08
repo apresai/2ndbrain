@@ -193,7 +193,7 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	initAIProviders(v)
 
 	const staleSinceDays = 90
-	docCount, embeddedCount, _ := v.DB.EmbeddingCounts()
+	docCount, embeddedCount, embeddableUnembedded, _ := v.DB.EmbeddingCounts()
 	var staleCount int
 	staleCutoff := time.Now().AddDate(0, 0, -staleSinceDays).UTC().Format(time.RFC3339)
 	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents WHERE modified_at < ?", staleCutoff).Scan(&staleCount)
@@ -223,7 +223,7 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	}
 	wg.Wait()
 
-	portStatus, portAction := derivePortability(ctx, cfg, embedder, vaultDim, vaultModels, docCount, embeddedCount)
+	portStatus, portAction := derivePortability(ctx, cfg, embedder, vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded)
 
 	status := VaultStatus{
 		Path:              v.Root,
