@@ -21,7 +21,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          # Read the Go version from cli/go.mod so the workflow can't drift from
+          # what the module requires. setup-go v6 sets GOTOOLCHAIN=local, so the
+          # installed toolchain must already satisfy go.mod (no auto-download) —
+          # a hardcoded older go-version would fail the build.
+          go-version-file: cli/go.mod
           # go.sum lives in cli/, not the repo root; point the built-in module
           # cache at it so setup-go stops warning "Restore cache failed".
           cache-dependency-path: cli/go.sum
