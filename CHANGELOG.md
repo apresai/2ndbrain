@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.11] - 2026-06-07
+
+### Fixed
+- **Embeddings status no longer reads "Stale" forever when a vault has empty notes.** A blank (0-byte) note — e.g. Obsidian's default `Untitled.md` — can't be embedded (Amazon Nova-2 rejects empty input), so it was permanently counted as "missing an embedding," leaving the dashboard stuck on "Stale" with the dead-end advice to run `2nb index` (which just skips it again). The status now treats empty notes as deliberately skipped: a vault whose only unembedded documents are empty notes reports a healthy "OK" with a one-line "N empty notes skipped" explanation instead of a false "Stale," and the "catch up" advice only appears when documents with real content are genuinely missing embeddings. `2nb ai status --json` gains a `vault_empty_docs` field.
+
 ## [0.5.10] - 2026-06-07
 
 ### Changed
