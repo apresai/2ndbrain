@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.12] - 2026-06-07
+
+### Fixed
+- **Empty notes no longer show as a gap in the embedding status.** A blank (0-byte) note can't be embedded, so the dashboard and `2nb ai status` / `vault status` used to read "115 / 117" with a "2 empty notes skipped" caveat. The embedding ratio now counts only documents that have content, so a vault with blank notes reads "115 / 115" with a clean "OK," and `2nb` no longer keeps suggesting "run index" for notes it will always skip. Empty notes stay in the index, so links to empty stub notes still resolve.
+
+### Changed
+- **Release CI runs on Node 24.** Bumped the GitHub Actions in the release workflow (`actions/checkout`, `setup-go`, `setup-node`, `goreleaser-action`) to their current major versions ahead of GitHub's June 2026 removal of Node 20. No effect on the published CLI or app; build-side maintenance only.
+
 ## [0.5.11] - 2026-06-07
 
 ### Fixed
