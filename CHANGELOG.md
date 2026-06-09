@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.5.13] - 2026-06-08
+
+### Changed
+- **The dashboard now keeps the terminal `2nb` pointed at the same vault.** When the app binds a vault (on launch, or via Open Vault), it now also sets that vault as the CLI's active vault, so a bare `2nb ask`/`search` in the terminal (with no `--vault`) resolves to the same vault the dashboard shows. Previously the app pinned the vault only for its own calls, so the terminal CLI could drift to a different vault.
+
+### Fixed
+- **The test suite no longer overwrites your active-vault setting.** Running `2nb`'s own test suite (a developer action) could clobber `~/.2ndbrain-active-vault`, which made a bare terminal `2nb ask` resolve to the wrong place. The tests are now fully sandboxed. No effect on normal use; included for completeness.
+
 ## [0.5.12] - 2026-06-07
 
 ### Fixed
