@@ -69,6 +69,82 @@ func TestGetConfigValue_SimilarityThreshold(t *testing.T) {
 	}
 }
 
+func TestSetConfigValue_Provider(t *testing.T) {
+	// A valid provider sets the value and clears that provider's disabled flag,
+	// so the CLI and GUI agree the active provider is "on".
+	cfg := ai.DefaultAIConfig() // ollama ships disabled
+	if !cfg.Ollama.Disabled {
+		t.Fatal("precondition: default ollama should ship disabled")
+	}
+	if err := setConfigValue(&cfg, "ai.provider", "ollama"); err != nil {
+		t.Fatalf("setConfigValue(ai.provider, ollama): %v", err)
+	}
+	if cfg.Provider != "ollama" {
+		t.Errorf("cfg.Provider = %q, want ollama", cfg.Provider)
+	}
+	if cfg.Ollama.Disabled {
+		t.Error("activating ollama did not clear ai.ollama.disabled")
+	}
+
+	// An unknown provider (typo) is rejected with the valid list, not saved.
+	err := setConfigValue(&cfg, "ai.provider", "bedrok")
+	if err == nil {
+		t.Fatal("setConfigValue(ai.provider, bedrok) = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "valid providers") {
+		t.Errorf("error = %q, want to mention valid providers", err.Error())
+	}
+}
+
+func TestConfigSetEmbeddingModel_SyncsDimensions(t *testing.T) {
+	_, root := newContractVault(t)
+
+	// Put the vault in a deliberately wrong dimension — the state a model
+	// switch that failed to sync dims would leave behind.
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.dimensions", "512"); err != nil {
+		t.Fatalf("config set ai.dimensions 512: %v", err)
+	}
+
+	// Re-selecting the catalog's default Nova-2 (1024-dim) embedding model must
+	// resync ai.dimensions to 1024. Regression guard: deleting the dims-sync
+	// block in runConfigSet leaves the dimension stuck at 512 and this fails.
+	nova := ai.DefaultAIConfig().EmbeddingModel
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", nova); err != nil {
+		t.Fatalf("config set ai.embedding_model: %v", err)
+	}
+
+	out, err := runCLIArgs(t, root, "config", "get", "ai.dimensions")
+	if err != nil {
+		t.Fatalf("config get ai.dimensions: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "1024" {
+		t.Errorf("ai.dimensions after embedding-model switch = %q, want 1024 (dims-sync did not run)", got)
+	}
+}
+
+func TestConfigSetProvider_WarnsButSavesAndRejectsUnknown(t *testing.T) {
+	_, root := newContractVault(t)
+
+	// Switching ai.provider to openrouter orphans the (bedrock) embedding model,
+	// so Validate() warns — but the write must still SUCCEED (warn, don't
+	// refuse) so a step-by-step reconfigure isn't blocked midway.
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "openrouter"); err != nil {
+		t.Fatalf("config set ai.provider openrouter must warn, not error: %v", err)
+	}
+	out, err := runCLIArgs(t, root, "config", "get", "ai.provider")
+	if err != nil {
+		t.Fatalf("config get ai.provider: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "openrouter" {
+		t.Errorf("ai.provider = %q, want openrouter (a warning must not block the save)", got)
+	}
+
+	// An unknown provider is rejected end-to-end.
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrok"); err == nil {
+		t.Error("config set ai.provider bedrok should error (unknown provider)")
+	}
+}
+
 func TestSettableConfigKeys_includesThreshold(t *testing.T) {
 	var found bool
 	for _, k := range settableConfigKeys {

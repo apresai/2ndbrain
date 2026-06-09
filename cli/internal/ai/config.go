@@ -1,5 +1,7 @@
 package ai
 
+import "fmt"
+
 // AIConfig holds AI provider configuration from vault config.yaml.
 type AIConfig struct {
 	Provider        string `yaml:"provider" json:"provider"` // ollama, bedrock, openrouter
@@ -53,6 +55,19 @@ func (cfg AIConfig) ProviderDisabled(name string) bool {
 		return cfg.Ollama.Disabled
 	}
 	return false
+}
+
+// SetProviderDisabled sets the disabled flag for the named provider. Unknown
+// provider names are a no-op. Pointer receiver: it mutates cfg.
+func (cfg *AIConfig) SetProviderDisabled(name string, disabled bool) {
+	switch name {
+	case "bedrock":
+		cfg.Bedrock.Disabled = disabled
+	case "openrouter":
+		cfg.OpenRouter.Disabled = disabled
+	case "ollama":
+		cfg.Ollama.Disabled = disabled
+	}
 }
 
 // DefaultSimilarityThreshold is the conservative floor for semantic search.
@@ -159,4 +174,78 @@ func userCatalogSimilarityThreshold(vaultRoot, provider, modelID string) float64
 		}
 	}
 	return 0
+}
+
+// EmbeddingDimensionsFor returns the declared output dimension for the
+// embedding model (provider, modelID) from the merged catalog — the user
+// catalog (global + per-vault) overlaying the builtin catalog. Returns 0 when
+// the model isn't in the catalog or declares no dimension, in which case
+// callers should leave ai.dimensions untouched rather than guess. Pass
+// vaultRoot="" to consult only the builtin catalog.
+func EmbeddingDimensionsFor(vaultRoot, provider, modelID string) int {
+	if provider == "" || modelID == "" {
+		return 0
+	}
+	if vaultRoot != "" {
+		for _, m := range LoadUserCatalog(vaultRoot) {
+			if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && m.Dimensions > 0 {
+				return m.Dimensions
+			}
+		}
+	}
+	for _, m := range BuiltinCatalog() {
+		if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && m.Dimensions > 0 {
+			return m.Dimensions
+		}
+	}
+	return 0
+}
+
+// catalogProviderFor returns the provider a model of the given type is
+// registered under in the merged catalog, when the model ID is known. The
+// found result is false when the ID appears in no catalog (e.g. a user's
+// freshly discovered model) — callers must not treat "unknown" as "wrong".
+func catalogProviderFor(vaultRoot, modelType, modelID string) (string, bool) {
+	if modelID == "" {
+		return "", false
+	}
+	if vaultRoot != "" {
+		for _, m := range LoadUserCatalog(vaultRoot) {
+			if m.Type == modelType && m.ID == modelID {
+				return m.Provider, true
+			}
+		}
+	}
+	for _, m := range BuiltinCatalog() {
+		if m.Type == modelType && m.ID == modelID {
+			return m.Provider, true
+		}
+	}
+	return "", false
+}
+
+// Validate reports internal-consistency problems with the active AI selection
+// that would silently break semantic search or generation. It is advisory:
+// callers (config set, and a future config doctor / ai status) surface the
+// issues, but the config is still saved — a model the catalog doesn't know
+// (a user's own discovered model) is legitimate and must not be blocked.
+//
+// Today it catches the orphaned-slot bug: 2nb resolves both the embedder and
+// the generator from the single ai.provider, so an embedding or generation
+// model the catalog registers under a DIFFERENT provider can never be served,
+// and search/generation silently dies. Returns nil when consistent. Pass
+// vaultRoot="" to validate against the builtin catalog only.
+func (c AIConfig) Validate(vaultRoot string) []string {
+	var issues []string
+	check := func(slot, modelID string) {
+		p, ok := catalogProviderFor(vaultRoot, slot, modelID)
+		if ok && p != c.Provider {
+			issues = append(issues, fmt.Sprintf(
+				"%s model %q belongs to provider %q but ai.provider is %q, which cannot serve it; switch the %s model to a %q model, or set ai.provider to %q.",
+				slot, modelID, p, c.Provider, slot, c.Provider, p))
+		}
+	}
+	check("embedding", c.EmbeddingModel)
+	check("generation", c.GenerationModel)
+	return issues
 }

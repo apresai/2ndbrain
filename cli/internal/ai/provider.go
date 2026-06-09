@@ -7,6 +7,16 @@ import "context"
 // adding a new provider, append it here so every site stays in sync.
 var KnownProviders = []string{"bedrock", "openrouter", "ollama"}
 
+// IsKnownProvider reports whether name is one of the providers 2nb supports.
+func IsKnownProvider(name string) bool {
+	for _, p := range KnownProviders {
+		if p == name {
+			return true
+		}
+	}
+	return false
+}
+
 // EmbeddingProvider generates vector embeddings from text.
 type EmbeddingProvider interface {
 	Name() string
