@@ -7,7 +7,19 @@ import SecondBrainCore
 // instead of failing — matching the no-mock policy from CLAUDE.md and the
 // existing pattern in bedrock/openrouter Go tests.
 
+// Set 2NB_TEST exactly once before any test shells out to `2nb`. The
+// `vault create` subprocess in VaultManager.initializeVault inherits this and
+// skips writing the real ~/.2ndbrain-active-vault / ~/.2ndbrain-vaults —
+// otherwise running this target's tests clobbers the developer's active vault.
+// A run-once global is thread-safe; a per-call setenv would race under
+// swift-testing's parallel execution. (`make test-swift` also exports 2NB_TEST
+// for the whole process as the primary, cross-target guard.)
+private let isolate2nbHomeWrites: Void = {
+    setenv("2NB_TEST", "1", 1)
+}()
+
 private func requireCLI() throws {
+    _ = isolate2nbHomeWrites // force the one-time setenv before any subprocess
     let path = CLIPath.resolve()
     guard FileManager.default.isExecutableFile(atPath: path) else {
         throw TestSkip.cliMissing(path)
