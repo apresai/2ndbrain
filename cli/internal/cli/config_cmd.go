@@ -124,10 +124,40 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Changing the embedding model must also resync ai.dimensions. The
+	// dimension is threaded into every embedder constructor (and, for Bedrock,
+	// sent as the requested output width), so a stale dimension produces a
+	// DIMENSION BREAK that silently disables semantic search. `ai setup`
+	// already keeps the pair in sync; this is the path the GUI "Set Active"
+	// and a bare `config set ai.embedding_model` take, which previously left
+	// the dimension stale.
+	if key == "ai.embedding_model" {
+		if dims := ai.EmbeddingDimensionsFor(v.Root, v.Config.AI.Provider, value); dims > 0 && dims != v.Config.AI.Dimensions {
+			if v.DB != nil {
+				if embCount, _ := v.DB.EmbeddingCount(); embCount > 0 {
+					fmt.Fprintf(os.Stderr,
+						"Note: embedding dimension changes from %d to %d; run `2nb index --force-reembed` to re-embed %d existing document(s).\n",
+						v.Config.AI.Dimensions, dims, embCount)
+				}
+			}
+			v.Config.AI.Dimensions = dims
+		}
+	}
+
 	if err := v.Config.Save(v.DotDir); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 	slog.Info("config set", "key", key, "value", value)
+
+	// Surface (loudly, but non-blocking) any internal inconsistency the write
+	// introduced — e.g. an active model that belongs to a different provider
+	// than ai.provider, which would silently break search/generation. We warn
+	// rather than refuse so a legitimate step-by-step reconfigure (set the
+	// provider, then each model) isn't blocked midway.
+	for _, issue := range v.Config.AI.Validate(v.Root) {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", issue)
+		slog.Warn("ai config inconsistency", "key", key, "issue", issue)
+	}
 
 	if !flagPorcelain {
 		fmt.Fprintf(os.Stderr, "Set %s = %s\n", key, value)
@@ -215,7 +245,15 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 	switch key {
 	case "ai.provider":
+		if !ai.IsKnownProvider(value) {
+			return fmt.Errorf("unknown provider %q; valid providers: %s", value, strings.Join(ai.KnownProviders, ", "))
+		}
 		cfg.Provider = value
+		// Activating a provider clears its disabled flag. An active-but-disabled
+		// provider is contradictory: the CLI still runs it, but the GUI hides
+		// every one of its models, so the two surfaces disagree about the same
+		// vault. Mirrors `ai setup`, which enables the chosen provider.
+		cfg.SetProviderDisabled(value, false)
 	case "ai.embedding_model":
 		cfg.EmbeddingModel = value
 	case "ai.generation_model":
