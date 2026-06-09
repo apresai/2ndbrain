@@ -1,6 +1,6 @@
 ---
 name: 2nb
-description: 2ndbrain knowledge base — CLI commands, MCP tools, document format, and workflows. Use when working with 2ndbrain vaults, markdown documents with YAML frontmatter, wikilinks, or the 2nb CLI.
+description: 2ndbrain (2nb) knowledge base for Obsidian-native vaults. Use to semantically search, recall, fetch, or save notes; to run the 2nb CLI or its kb_* MCP tools; or when working with markdown that has YAML frontmatter and [[wikilinks]]. Covers hybrid BM25 plus vector search, RAG ask, document create/read/update, and the search-before-create workflow that avoids duplicates.
 ---
 
 # 2ndbrain Knowledge Base
@@ -25,6 +25,30 @@ If `vault_root` (from `config show`) isn't the directory you expected, either `c
 1. Initialize it: `2nb vault create .` (adds a `.2ndbrain/` directory so 2nb can index it). The legacy `2nb init` still works but is deprecated.
 2. Treat it as a foreign filesystem: use direct file writes with correct frontmatter (see "Document Format" below) and skip `2nb create` entirely. This is how you'd add notes to an Obsidian vault that you *don't* want to convert to 2nb.
 
+## Semantic-search playbook (the core loop)
+
+> In Claude Code: if the 2ndbrain MCP server is configured you will see `kb_*` tools. Prefer them. They cache the resolved similarity threshold and the loaded embeddings per session, so repeated calls skip a DB round-trip. With no MCP server, shell out to `2nb` instead. Every step below gives both.
+
+Three intents cover almost every request. Pick the path; do not improvise a one-off shell pipeline.
+
+**1. Find / recall / "what do we know about X" → search, then fetch.**
+- Search: `kb_search` (query) or `2nb search "X" --json`.
+- Rank by `vector_score` (raw cosine), NOT `score`. `score` is RRF rank-fusion: useful for ordering, meaningless as an absolute relevance signal (a strong vector-only hit can show `score` near 0.016). Cosine bands: 0.6+ strong, 0.35 to 0.6 related, below the active threshold it is dropped entirely. A result with no `vector_score` was a BM25-only match (still valid).
+- Fetch the winners: `kb_read` / `2nb read <path>`. For a long document call `kb_structure` first, then `kb_read` with `chunk:"<heading>"` so you pull one section instead of the whole body.
+
+**2. Save / capture / "write up X" → search FIRST, then create.**
+- Search the topic before creating, every time: `kb_search` / `2nb search`. Vaults accumulate duplicates fast. A near-match (cosine 0.6+) usually means you want to edit or extend that doc, not add a new one.
+- Genuinely new: `kb_create` / `2nb create --type <type> --title "..."` mints the UUID and type-appropriate frontmatter. Then write the body and add `[[wikilinks]]` to the docs search surfaced.
+- `kb_suggest_links <path>` ranks docs you SHOULD link but have not yet (semantic similarity), which is different from `kb_related` (docs you already link via the wikilink graph).
+
+**3. Answer a question from the notes → ask, then verify.**
+- `kb_ask` / `2nb ask "..."` searches and synthesizes an answer with a source list. `ask` is STRICTER than `search`: it weighs only the top 5 hits against the same threshold, so a borderline match at rank 8 appears in `search` but not `ask`. If `ask` returns "no relevant documents," drop to `kb_search` with broader terms.
+- RAG can hallucinate a specific detail out of a real chunk. `kb_read` each cited source before repeating an exact claim, number, or name.
+
+**Confirm the vault before writing.** The top failure mode is operating on the wrong vault. `kb_info` or `2nb vault show --json` answers "which vault?". The active vault lives in `~/.2ndbrain-active-vault`, independent of your shell's cwd, so `2nb create` run from some other folder still writes to the active vault unless you pass `--vault <path>` (or set `2NB_VAULT`).
+
+**Watch for degraded search.** If `mode` comes back `keyword` when you expected semantic ranking, the vector channel is off (provider down, dimension mismatch, or an unindexed vault). Check `mode` on every `--json` result and read `warnings` when it is present. Never report "no matches" without first confirming `mode` was `hybrid` (see "Search scoring" and the recovery playbook below).
+
 ## Parent-command defaults
 
 Every command group has a useful default action when called without a subcommand. `--help` still works everywhere because Cobra intercepts it before the default runs.
@@ -39,9 +63,9 @@ Every command group has a useful default action when called without a subcommand
 | `2nb skills` | `2nb skills list` | Which agents have this skill installed? |
 | `2nb config` | `2nb config show` | Full config including vault paths |
 
-## CLI Commands (46)
+## CLI Commands
 
-All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--vault <path>`, and `--verbose`. Prefer `--json` in scripts and agent pipelines.
+All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--vault <path>`, and `--verbose`. Prefer `--json` in scripts and agent pipelines. Run `2nb <command> --help` for the authoritative flag list, and `2nb --help` for the full command set grouped by category.
 
 ### Read & query
 
@@ -216,6 +240,8 @@ If legitimate matches are being cut, lower the threshold: `2nb config set ai.sim
 
 When semantic search falls back to BM25, the CLI prints a warning to stderr and the `--json` envelope includes it in `warnings[]`. Match on the stable prefix `"semantic search disabled:"` — the tail varies with provider/dim details.
 
+`2nb ai status --json` is the fastest triage. It exposes `portability_status` (e.g. `ok`, `provider_unavailable`, `dimension_break`, `model_mismatch`, `mixed`, `unindexed`), the active `similarity_threshold` with its `similarity_threshold_source`, the embedding/embeddable/embedded doc counts, and a `providers[]` array carrying per-provider `reachable` / `disabled` / `reason`. Read it before guessing why a search degraded.
+
 | Warning or state | What's wrong | Fix |
 |---|---|---|
 | `"semantic search disabled: vault was embedded with Nd vectors but current provider X produces Md"` | Dimension mismatch — you switched providers and existing embeddings are the wrong size | `2nb index --force-reembed` OR switch the provider back to the one that built this vault |
@@ -229,20 +255,22 @@ When semantic search falls back to BM25, the CLI prints a warning to stderr and 
 
 ## Worked JSON examples
 
-`2nb search --json` returns an envelope — decode `{mode, warnings, results}`, not a raw array:
+`2nb search --json` returns an envelope. Decode `{mode, warnings?, results}`, not a raw array. `warnings` is omitted when empty (`omitempty`), and a result's `vector_score` is omitted for a BM25-only hit, so branch on field presence, not on a zero value:
 
 ```bash
 $ 2nb search "authentication" --json --limit 2
 {
   "mode": "hybrid",
-  "warnings": [],
   "results": [
     {
+      "doc_id": "0e2c8f1a-…",
       "path": "use-jwt-for-auth.md",
       "title": "Use JWT for Auth",
+      "chunk_id": "a52ae4a7d7eadd17",
+      "heading_path": "# Use JWT for Auth > ## Decision",
+      "content": "...",
       "score": 0.0163,
       "vector_score": 0.72,
-      "content": "...",
       "type": "adr",
       "status": "accepted"
     }
@@ -273,7 +301,7 @@ $ 2nb ask "how does auth work?" --json
 }
 ```
 
-**Always check `warnings[]` and `mode`** before assuming hybrid search ran. An agent that proceeds on empty results without checking `warnings` will report "no matches" when the real problem is a broken provider.
+**Always check `mode`, and `warnings` when present,** before assuming hybrid search ran. An agent that proceeds on empty results without checking `mode` will report "no matches" when the real problem is a broken provider (the results came back keyword-only).
 
 ## Document Format
 
