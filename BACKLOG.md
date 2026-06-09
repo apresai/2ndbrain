@@ -2,6 +2,11 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Vault resolution — active-vault precedes cwd (from PR review, 2026-06-08)
+
+- **MEDIUM — a bare `2nb` run *inside* vault B's directory resolves to the active vault A, not B.** The resolution order is `--vault` > `2NB_VAULT` > `~/.2ndbrain-active-vault` > cwd (`root.go:218-242`), so the active-vault pointer wins over the current directory. With the new GUI→CLI sync (`AppState.openVault` writes the pointer on every bind), the active pointer is set more often, making this cross-vault surprise likelier for multi-vault users. It's pre-existing, documented precedence and only prints the resolved source on error. Options if it bites: (a) move cwd ahead of the active-vault file when the cwd is itself a vault, or (b) print the resolved vault + source on every run, not just on error. Single-vault users (the common case) are unaffected.
+- **LOW — GUI tests (`make test-gui`) run the production app, which now writes `~/.2ndbrain-active-vault` on bind (fix #2).** A GUI test that opens a throwaway vault would set the developer's real active pointer to it (the same class of leak the unit-test isolation fixes, but via the real app, not a test subprocess). GUI tests are manual/rare and out of this PR's scope; if automated, point them at a vault that's meant to be active, or run the app under an isolated HOME.
+
 ## Embeddings status — empty-note handling (from PR review, 2026-06-07)
 
 The fix (`derivePortability` no longer reports a vault perpetually "stale" when the only unembedded docs are empty notes; `EmbeddingCounts` now returns `embeddableUnembedded`) shipped with the LOW from review (all-empty + no-provider should nudge `no_provider`, not "ok") already fixed in-commit. Remaining LOW:
