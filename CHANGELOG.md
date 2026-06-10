@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Added
+- **`2nb ask` supports true multi-turn conversations.** Pass prior turns with `--history <path|->` (a JSON array of `{role, content}` objects; `-` reads stdin) and follow-up questions like "who owns it?" are first rewritten into standalone retrieval queries using the conversation, then answered with the conversation as context, grounded strictly in the retrieved documents and never in earlier answers. The `--json` envelope gains an additive `rewritten_query` field showing what was actually searched; if a rewrite retrieves nothing, the question is retried as asked. Without `--history`, behavior is unchanged.
 
 ## [0.5.14] - 2026-06-09
 

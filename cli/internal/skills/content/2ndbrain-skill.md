@@ -75,7 +75,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb read <path>` | Read full document or a specific heading chunk (`--chunk "Heading"`) |
 | `2nb meta <path>` | View frontmatter; update with `--set key=value` |
 | `2nb search <query>` | Hybrid BM25 + vector search. Shows `(rrf=X.XXX, cos=Y.YYY)` per result. `--threshold` overrides `ai.similarity_threshold` per-query. `--bm25-only` skips vector search. |
-| `2nb ask "<question>"` | RAG Q&A — searches the vault, synthesizes an answer with source citations |
+| `2nb ask "<question>"` | RAG Q&A — searches the vault, synthesizes an answer with source citations. Multi-turn: `--history <path\|->` takes a JSON array of `{role, content}` turns (`-` = stdin); follow-ups are rewritten into standalone retrieval queries (`rewritten_query` in `--json`) |
 | `2nb related <path>` | Find docs connected via `[[wikilink]]` graph traversal (`--depth N`) |
 | `2nb graph` | Output the full link graph as JSON adjacency list |
 | `2nb suggest-links <path>` | Rank semantically related documents that would make good wikilink targets (excludes docs already linked) |
@@ -289,15 +289,16 @@ $ 2nb search "authentication" --json
 }
 ```
 
-`2nb ask --json` uses the same envelope shape:
+`2nb ask --json` uses the same envelope shape (`warnings` likewise omitted when empty). With `--history`, the standalone query the follow-up was rewritten into appears as `rewritten_query` (omitted on single-shot asks):
 
 ```bash
-$ 2nb ask "how does auth work?" --json
+$ printf '[{"role":"user","content":"tell me about auth"},{"role":"assistant","content":"Auth uses JWT..."}]' \
+  | 2nb ask --history - "when do they expire?" --json
 {
   "mode": "hybrid",
-  "warnings": [],
-  "answer": "Authentication uses JWT...",
-  "sources": ["use-jwt-for-auth.md", "debug-auth-failures.md"]
+  "answer": "JWT tokens expire after...",
+  "sources": ["use-jwt-for-auth.md", "debug-auth-failures.md"],
+  "rewritten_query": "When do the JWT authentication tokens expire?"
 }
 ```
 
