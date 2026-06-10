@@ -166,6 +166,37 @@ export function parseSearchResponse(json: string): SearchResponse {
 	};
 }
 
+// ChatTurn mirrors the CLI's ai.ChatTurn: one prior message passed back to
+// `2nb ask --history` so follow-up questions carry conversational context.
+export interface ChatTurn {
+	role: 'user' | 'assistant';
+	content: string;
+}
+
+// Client-side history caps mirroring the Go engine's (ai.TrimHistory):
+// the CLI re-trims authoritatively, this just keeps stdin payloads small.
+const MAX_HISTORY_TURNS = 12;
+const MAX_HISTORY_TURN_CHARS = 1500;
+const MAX_HISTORY_CHARS = 8000;
+
+// trimChatHistory enforces the history caps: most recent turns, each
+// truncated (code-point safe), oldest dropped to fit the total budget.
+// Pure and exported for unit testing.
+export function trimChatHistory(turns: ChatTurn[]): ChatTurn[] {
+	let trimmed = turns.slice(-MAX_HISTORY_TURNS).map((t) => {
+		const points = Array.from(t.content);
+		return points.length > MAX_HISTORY_TURN_CHARS
+			? { ...t, content: points.slice(0, MAX_HISTORY_TURN_CHARS).join('') + '...' }
+			: t;
+	});
+	let total = trimmed.reduce((n, t) => n + t.content.length, 0);
+	while (trimmed.length > 1 && total > MAX_HISTORY_CHARS) {
+		total -= trimmed[0].content.length;
+		trimmed = trimmed.slice(1);
+	}
+	return trimmed;
+}
+
 // renderAskResponse renders a parsed ask envelope into container: the CLI's
 // degradation warnings (if any), the markdown answer, and deduped source
 // chips. Shared by the Ask AI modal and the chat panel so the two surfaces
@@ -451,8 +482,11 @@ export default class BrainPlugin extends Plugin {
 		}
 	}
 
-	// Helper to execute 2nb commands safely
-	runCommand(args: string[]): Promise<string> {
+	// Helper to execute 2nb commands safely. When stdin is provided it is
+	// written to the child and the pipe is closed: closing is mandatory,
+	// because flags like `ask --history -` read stdin to EOF and would
+	// otherwise hang into the timeout.
+	runCommand(args: string[], stdin?: string): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const cliPath = resolveCliPath(this.settings.cliPath, existsSync, process.env, this.managedBinaryPath() ?? undefined);
 
@@ -486,7 +520,7 @@ export default class BrainPlugin extends Plugin {
 			const isIndex = args[0] === 'index';
 			const options = { cwd: vaultPath, maxBuffer: 16 * 1024 * 1024, timeout: isIndex ? 0 : 120000 };
 
-			execFile(cliPath, pinVaultArgs(vaultPath, args), options, (error, stdout, stderr) => {
+			const child = execFile(cliPath, pinVaultArgs(vaultPath, args), options, (error, stdout, stderr) => {
 				if (error) {
 					if ((error as any).code === 'ENOENT') {
 						reject(new Error(`Could not find 2nb CLI at "${cliPath}". Please ensure it is installed or configure the path in settings.`));
@@ -503,6 +537,19 @@ export default class BrainPlugin extends Plugin {
 				}
 				resolve(stdout);
 			});
+
+			if (stdin !== undefined && child.stdin) {
+				// Swallow stream errors: a child that exits without reading
+				// stdin (e.g. an older 2nb rejecting --history) makes the pipe
+				// emit EPIPE asynchronously, OUTSIDE execFile's callback. With
+				// no listener that's an uncaught exception in Obsidian's
+				// renderer; the command failure itself still rejects normally.
+				child.stdin.on('error', () => {});
+				// No deadlock risk: execFile drains stdout/stderr continuously,
+				// and history payloads (a few KB) fit the pipe buffer anyway.
+				child.stdin.write(stdin);
+				child.stdin.end();
+			}
 		});
 	}
 
@@ -651,15 +698,24 @@ class AskAIModal extends Modal {
 // ── Chat Panel (sidebar view) ────────────────────────────────────────────────
 
 // ChatView is a right-sidebar panel for conversational Q&A against the vault.
-// Each message runs `2nb ask --json` independently (RAG is single-shot), so
-// the transcript is visual history, not conversational context. Toggled by
-// the ribbon icon (open/close) and the "Open chat" command.
+// The conversation is real: each message passes the prior turns to
+// `2nb ask --history -` (stdin), which condenses follow-ups into standalone
+// retrieval queries and grounds answers in the retrieved documents. The
+// conversation lives in the view and resets when the panel is closed.
+// Toggled by the ribbon icon (open/close) and the "Open chat" command.
 class ChatView extends ItemView {
 	private plugin: BrainPlugin;
 	private messagesEl!: HTMLElement;
 	private inputEl!: HTMLInputElement;
 	private sendBtn!: HTMLButtonElement;
 	private emptyStateEl: HTMLElement | null = null;
+	// The real conversation: passed to `2nb ask --history -` with every send so
+	// follow-ups carry context. Turns are recorded only after a successful
+	// answer, so a failed ask never poisons the conversation.
+	private history: ChatTurn[] = [];
+	// Set once when the installed CLI rejects --history (pre-multi-turn 2nb)
+	// so later sends skip straight to single-shot instead of failing again.
+	private historyUnsupported = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: BrainPlugin) {
 		super(leaf);
@@ -686,7 +742,7 @@ class ChatView extends ItemView {
 		this.messagesEl = container.createDiv({ cls: 'brain-chat-messages' });
 		this.emptyStateEl = this.messagesEl.createDiv({
 			cls: 'brain-chat-empty',
-			text: 'Ask anything about your vault. Each question searches your notes fresh, and answers cite the source notes they came from.',
+			text: 'Ask anything about your vault. Follow-up questions carry the conversation, and answers cite the source notes they came from.',
 		});
 
 		const inputRow = container.createDiv({ cls: 'brain-input-container brain-chat-input-row' });
@@ -719,15 +775,45 @@ class ChatView extends ItemView {
 		const aiMsg = this.messagesEl.createDiv({ cls: 'brain-msg brain-msg-ai' });
 		const loader = aiMsg.createDiv({ cls: 'brain-loader-container' });
 		loader.createDiv({ cls: 'brain-spinner' });
-		loader.createDiv({ cls: 'brain-loader-text', text: 'Searching your vault...' });
+		loader.createDiv({
+			cls: 'brain-loader-text',
+			text: this.history.length > 0 ? 'Thinking...' : 'Searching your vault...',
+		});
 		this.scrollToBottom();
 
 		try {
-			const stdout = await this.plugin.runCommand(['ask', '--json', query]);
+			// With history, pass the conversation via `--history -` on stdin:
+			// the CLI condenses the follow-up into a standalone retrieval query
+			// and grounds the answer in the retrieved documents.
+			let stdout: string;
+			if (this.history.length > 0 && !this.historyUnsupported) {
+				const stdin = JSON.stringify(trimChatHistory(this.history));
+				try {
+					stdout = await this.plugin.runCommand(['ask', '--json', '--history', '-', query], stdin);
+				} catch (err) {
+					// A 2nb older than `ask --history` rejects the flag. Degrade
+					// to a single-shot ask so the panel keeps working, and say so.
+					if (!(err as Error).message.includes('unknown flag')) throw err;
+					this.historyUnsupported = true;
+					aiMsg.createDiv({
+						text: 'Installed 2nb is too old for multi-turn chat (needs ask --history). Answering without conversation context. Upgrade: brew upgrade apresai/tap/twonb',
+						cls: 'brain-warning',
+					});
+					stdout = await this.plugin.runCommand(['ask', '--json', query]);
+				}
+			} else {
+				stdout = await this.plugin.runCommand(['ask', '--json', query]);
+			}
 			const response = parseAskResponse(stdout);
 			loader.remove();
 			// The panel stays open when a source note is opened (no onSourceOpen).
 			await renderAskResponse(this.plugin, aiMsg, response);
+
+			// Record the exchange only after the answer rendered; answer text
+			// only, never sources or warnings. A render failure drops the turn
+			// so the history never references content the user did not see.
+			this.history.push({ role: 'user', content: query }, { role: 'assistant', content: response.answer });
+			this.history = trimChatHistory(this.history);
 		} catch (err) {
 			loader.remove();
 			aiMsg.createDiv({ text: `Error: ${(err as Error).message}`, cls: 'brain-error' });
