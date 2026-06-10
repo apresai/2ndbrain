@@ -122,7 +122,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 |---------|---------|
 | `2nb config show` | Full config with `vault_root`, `vault_dir`, `vault_name` |
 | `2nb config get <key>` | Read one key (e.g. `ai.provider`, `ai.similarity_threshold`) |
-| `2nb config set <key> <value>` | Write one key |
+| `2nb config set <key> <value>` | Write one key. Setting `ai.embedding_model` also resyncs `ai.dimensions` from the catalog; setting `ai.provider` validates the name, re-enables that provider, and warns if an active model can't be served |
 | `2nb config set-key <provider>` | Store a provider API key in macOS Keychain |
 | `2nb ai status` / `ai setup` / `ai local` / `ai embed <text>` | Provider status, wizard, readiness check, debug embedding |
 | `2nb models list` / `models test <id>` / `models bench` | Verified catalog, smoke test, benchmark favorites |

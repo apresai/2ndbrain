@@ -50,6 +50,5 @@ Summarized from the 2026-06-09 alignment audit (a 5-agent survey of CLI/GUI/plug
 
 ### Phase 1 review follow-ups (filed from /chad-review)
 
-- **LOW — CLAUDE.md provider-disable note.** The AI Providers section attributes clearing the `disabled` flag to `ai setup` / the AI Hub; `config set ai.provider` now also clears it. One-line doc update.
-- **LOW — embedded skill `config set` row.** `cli/internal/skills/content/2ndbrain-skill.md` describes `config set` as "Write one key"; it now also resyncs `ai.dimensions` and runs `Validate()`. Fold into the skill PR or a later refresh.
+- **RESOLVED (v0.5.14 release prep) — CLAUDE.md provider-disable note and the embedded skill's `config set` row** now both describe the Phase 1 behavior (`config set ai.provider` clears `disabled`; `config set ai.embedding_model` resyncs dimensions).
 - **LOW — catalog ID collision.** `catalogProviderFor` / `Validate` return the first catalog match for a model ID; if the same ID were registered under two providers, attribution could be wrong. No real collision today (builtin IDs are provider-namespaced); guard only if cross-provider IDs ever appear.
