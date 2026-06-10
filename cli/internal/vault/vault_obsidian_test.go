@@ -38,6 +38,45 @@ func TestOpen_AutoCreatesSidecarForObsidianVault(t *testing.T) {
 	}
 }
 
+func TestIsVaultRoot(t *testing.T) {
+	t.Run("obsidian-only dir is a root", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".obsidian"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if !IsVaultRoot(dir) {
+			t.Errorf("IsVaultRoot(%q) = false, want true for .obsidian-only dir", dir)
+		}
+	})
+	t.Run("sidecar-only dir is a root", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, DotDirName), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if !IsVaultRoot(dir) {
+			t.Errorf("IsVaultRoot(%q) = false, want true for .2ndbrain-only dir", dir)
+		}
+	})
+	t.Run("vault subdirectory is not a root (no walk-up)", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, ".obsidian"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sub := filepath.Join(root, "notes")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if IsVaultRoot(sub) {
+			t.Errorf("IsVaultRoot(%q) = true, want false — walking up is FindVaultRoot's job", sub)
+		}
+	})
+	t.Run("missing dir is not a root", func(t *testing.T) {
+		if IsVaultRoot(filepath.Join(t.TempDir(), "nope")) {
+			t.Error("IsVaultRoot(missing dir) = true, want false")
+		}
+	})
+}
+
 func TestFindVaultRoot_DetectsObsidianDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".obsidian"), 0o755); err != nil {

@@ -17,9 +17,16 @@ import (
 
 // isolatedHome returns a temp HOME for the test. Used so setActiveVault,
 // addRecentVault, and skills install --user do NOT touch the real user home.
+// The path is symlink-resolved because the CLI stores and reports vault
+// paths canonically (macOS t.TempDir returns /var/... which is a symlink to
+// /private/var/...), so test expectations must use the canonical spelling.
 func isolatedHome(t *testing.T) string {
 	t.Helper()
-	return t.TempDir()
+	dir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	return dir
 }
 
 // filterEnv drops entries whose key matches any of keys.
