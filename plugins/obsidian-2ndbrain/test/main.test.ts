@@ -109,7 +109,54 @@ import {
 	parseSearchResponse,
 	pinVaultArgs,
 	formatIndexState,
+	trimChatHistory,
+	type ChatTurn,
 } from '../main.ts';
+
+describe('trimChatHistory', () => {
+	const turn = (role: ChatTurn['role'], content: string): ChatTurn => ({ role, content });
+
+	it('keeps a short conversation unchanged', () => {
+		const h = [turn('user', 'q1'), turn('assistant', 'a1')];
+		expect(trimChatHistory(h)).toEqual(h);
+	});
+
+	it('caps the turn count keeping the most recent', () => {
+		const h: ChatTurn[] = [];
+		for (let i = 0; i < 20; i++) h.push(turn('user', `q${i}`));
+		const got = trimChatHistory(h);
+		expect(got).toHaveLength(12);
+		expect(got[got.length - 1].content).toBe('q19');
+	});
+
+	it('truncates long turns code-point safely', () => {
+		const long = 'ü'.repeat(1600); // multibyte chars
+		const got = trimChatHistory([turn('user', long)]);
+		expect(Array.from(got[0].content)).toHaveLength(1503); // 1500 + '...'
+	});
+
+	it('drops oldest turns to fit the total budget', () => {
+		const h: ChatTurn[] = [];
+		for (let i = 0; i < 10; i++) h.push(turn('user', `${i}:` + 'x'.repeat(1400)));
+		const got = trimChatHistory(h);
+		expect(got.length).toBeLessThan(10);
+		expect(got[got.length - 1].content.startsWith('9:')).toBe(true);
+	});
+
+	it('empty stays empty', () => {
+		expect(trimChatHistory([])).toEqual([]);
+	});
+});
+
+describe('parseAskResponse with rewritten_query', () => {
+	it('tolerates the additive multi-turn field', () => {
+		const response = parseAskResponse(
+			'{"mode":"hybrid","answer":"a","sources":["s.md"],"rewritten_query":"standalone q"}'
+		);
+		expect(response.answer).toBe('a');
+		expect(response.sources).toEqual(['s.md']);
+	});
+});
 
 describe('filepathBase', () => {
 	it('returns the final path segment', () => {
