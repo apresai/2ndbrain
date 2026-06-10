@@ -187,6 +187,99 @@
 	display: none !important;
 }
 
+/* ── Warnings (degraded-search banner) ───────────────────────────────────── */
+.brain-warning {
+	color: var(--text-warning, var(--text-muted));
+	background-color: var(--background-secondary);
+	padding: 10px 14px;
+	margin-bottom: 12px;
+	border-radius: 6px;
+	border-left: 4px solid var(--color-yellow, var(--interactive-accent));
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+/* ── Chat panel (sidebar view) ────────────────────────────────────────────── */
+.brain-chat-panel {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 8px;
+}
+
+.brain-chat-messages {
+	flex-grow: 1;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 4px 2px 12px 2px;
+}
+
+.brain-chat-empty {
+	color: var(--text-muted);
+	font-size: 13px;
+	line-height: 1.6;
+	padding: 16px 8px;
+	text-align: center;
+}
+
+.brain-msg {
+	border-radius: 10px;
+	padding: 10px 14px;
+	font-size: 14px;
+	line-height: 1.55;
+	max-width: 92%;
+}
+
+.brain-msg-user {
+	align-self: flex-end;
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	white-space: pre-wrap;
+}
+
+.brain-msg-ai {
+	align-self: flex-start;
+	background-color: var(--background-secondary);
+	color: var(--text-normal);
+	width: 92%;
+}
+
+/* The shared answer/sources renderer inside a chat bubble: tighten the
+   modal-sized spacing so bubbles stay compact. */
+.brain-msg-ai .brain-loader-container {
+	padding: 8px 0;
+	gap: 10px;
+}
+.brain-msg-ai .brain-spinner {
+	width: 22px;
+	height: 22px;
+}
+.brain-msg-ai .brain-answer {
+	margin-bottom: 0;
+	font-size: 14px;
+}
+.brain-msg-ai .brain-sources-container {
+	margin-top: 12px;
+	padding-top: 10px;
+}
+.brain-msg-ai .brain-warning {
+	margin-bottom: 8px;
+}
+
+.brain-chat-input-row {
+	margin-bottom: 0;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.brain-ask-button:disabled {
+	opacity: 0.5;
+	cursor: default;
+	transform: none;
+}
+
 /* ── Setup wizard ─────────────────────────────────────────────────────────── */
 .brain-wizard-step {
 	margin: 12px 0;

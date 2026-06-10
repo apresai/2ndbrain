@@ -73,6 +73,18 @@ vi.mock('obsidian', () => {
 	const Notice = vi.fn();
 	const MarkdownRenderer = { renderMarkdown: vi.fn() };
 	class App {}
+	// ItemView is extended by ChatView at module top level (like Modal), so
+	// it must be a real constructable class. WorkspaceLeaf is only a type
+	// annotation but exporting a class keeps the mock future-proof.
+	class ItemView {
+		leaf: any;
+		containerEl: any = { children: [{}, {}] };
+		constructor(leaf?: any) {
+			this.leaf = leaf;
+		}
+	}
+	class WorkspaceLeaf {}
+	const addIcon = vi.fn();
 
 	return {
 		Plugin,
@@ -84,6 +96,9 @@ vi.mock('obsidian', () => {
 		Notice,
 		MarkdownRenderer,
 		App,
+		ItemView,
+		WorkspaceLeaf,
+		addIcon,
 	};
 });
 
