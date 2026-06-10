@@ -7,13 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- **Switching the embedding model no longer silently breaks semantic search.** Changing `ai.embedding_model` (via `2nb config set` or the macOS app's "Set Active") left `ai.dimensions` stale, which made the embedder produce or request the wrong vector width and dropped search to keyword-only with a DIMENSION BREAK. The CLI now resyncs the dimension from the model catalog in the same write and prints a re-embed note when existing embeddings need a refresh. `config set ai.provider` also rejects unknown provider names (a typo used to silently degrade the vault to keyword search) and clears that provider's `disabled` flag so the CLI and the app agree the active provider is on; `config set` warns when an active model belongs to a different provider than `ai.provider` (a combination that can never serve requests).
-- **`--vault` is now a true one-shot override.** Write commands (`create`, `index`, `meta`, `config set`, …) run with an explicit `--vault` or `2NB_VAULT` no longer repoint the shared active vault — previously a one-off `2nb create --vault /other` (or the Obsidian plugin's pinned "Rebuild AI Index") silently changed which vault a bare terminal `2nb` and the dashboard resolve to. Commands resolved from the current directory or the active pointer still update it.
-- **`2nb vault status`/`show` now agree with every other command about which vault is active.** They previously trusted a stale `~/.2ndbrain-active-vault` (deleted or moved vault) and could report a different vault than `2nb search`/`ask` were actually using; all commands now share one resolver with one validity rule (a vault with `.obsidian/` but a deleted `.2ndbrain/` sidecar also keeps its pointer valid now). The active-vault pointer is written atomically (no torn reads when the app and CLI race) and paths are stored symlink-resolved, so the same vault reached via a symlink or `/private` prefix no longer shows up unmarked or duplicated in `2nb vault list` — which now always marks the active vault.
+(empty - ready for next release)
+
+## [0.5.14] - 2026-06-09
+
+### Added
+- Semantic-search playbook and accuracy fixes in the generated 2nb SKILL.md for coding agents (#21)
 
 ### Changed
-- **The agent skill (`2nb skills install`) now leads with a semantic-search playbook.** The SKILL.md taught to Claude Code, Cursor, and other agents gains a top-of-file core loop (find→fetch, save→search-first-then-create, ask→verify) with both the MCP `kb_*` call and the CLI command for each step, plus accuracy fixes against the real JSON envelope (`warnings`/`vector_score` are omitted when empty, result fields, `ai status --json` triage fields).
+- `--vault` is now a true one-shot override: it no longer persists as the active vault for later commands (#23)
+- Provider-disable and `config set` docs aligned with actual config-write behavior
+
+### Fixed
+- Unified vault resolution so all commands resolve the active vault through the same path (#23)
+- AI config writes are now atomic and validated, preventing partial or corrupt `config.yaml` updates (#22)
+
 
 ## [0.5.13] - 2026-06-08
 
