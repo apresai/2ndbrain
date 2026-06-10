@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- **Obsidian plugin: the chat panel is now a true multi-turn conversation.** Follow-up questions ("who owns it?") carry the conversation: the panel passes prior turns to `2nb ask --history`, which rewrites the follow-up into a standalone search and answers grounded in your notes. The conversation resets when the panel closes. With a 2nb older than `ask --history`, the panel falls back to single-shot answers and shows an upgrade hint. Plugin version 0.7.0.
-- **Obsidian plugin: a ribbon icon that opens a chat with your vault.** The left ribbon gains the SecondBrain head-with-brain icon; clicking it opens (and clicking again closes) a right-sidebar chat panel where each message asks your vault a question (RAG Q&A) and answers with clickable source-note chips. Also available as "2ndbrain AI: Open chat" in the command palette. Plugin version 0.6.0.
-- **`2nb chat`: an interactive terminal conversation with your vault.** A REPL over the same multi-turn pipeline as `2nb ask --history`: ask, then follow up with pronouns ("who owns it?") and the conversation carries; answers cite their source notes. The conversation lives in the terminal session only. Type `exit` or Ctrl-D to quit.
-- **`2nb ask` supports true multi-turn conversations.** Pass prior turns with `--history <path|->` (a JSON array of `{role, content}` objects; `-` reads stdin) and follow-up questions like "who owns it?" are first rewritten into standalone retrieval queries using the conversation, then answered with the conversation as context, grounded strictly in the retrieved documents and never in earlier answers. The `--json` envelope gains an additive `rewritten_query` field showing what was actually searched; if a rewrite retrieves nothing, the question is retried as asked. Without `--history`, behavior is unchanged.
+(empty - ready for next release)
 
-### Fixed
-- **Obsidian plugin: degraded-search warnings are no longer silently dropped.** When semantic search falls back to keyword-only (provider down, dimension mismatch), the CLI's warning now renders as a banner in both the chat panel and the Ask AI modal instead of disappearing — previously a degraded vault produced keyword answers that looked like normal semantic results.
+## [0.5.15] - 2026-06-10
+
+### Added
+- `2nb ask --history <path|->` enables true multi-turn conversations: prior turns (JSON `[{role, content}]`, `-` for stdin) condense follow-up questions into standalone retrieval queries (reported as `rewritten_query` in `--json`) and ground the answer (#25)
+- `2nb chat` interactive multi-turn REPL over the same RAG pipeline as `ask --history`; conversation lives in-process only (#26)
+- Obsidian plugin: ribbon icon (custom head-with-brain mark) toggles a right-sidebar vault-chat panel (#24)
+- Obsidian plugin: chat panel holds a true multi-turn conversation, passing prior turns to `2nb ask --history -` via stdin with client-side history trimming; renders answers, degradation warnings, and source chips; degrades to single-shot with an upgrade hint on pre-`--history` CLIs (#27)
+
 
 ## [0.5.14] - 2026-06-09
 
