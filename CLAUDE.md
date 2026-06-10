@@ -123,7 +123,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (52)
+### CLI Commands (53)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -161,6 +161,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `git diff <path>` | Unified diff of a file vs HEAD |
 | `git status` | Uncommitted/untracked files in the vault |
 | `ask <question>` | RAG Q&A — search vault, generate answer with sources. `--history <path\|->` (JSON `[{role, content}]`, `-` = stdin) makes it multi-turn: the history condenses follow-ups into standalone retrieval queries (reported as `rewritten_query` in `--json`) and grounds the answer |
+| `chat` | Interactive multi-turn REPL over the same pipeline as `ask --history`; conversation lives in-process only, no `--json` |
 | `ai status` | Provider, models, readiness, embedding count, vault portability state with one-line fix hints |
 | `ai embed <text>` | Generate embedding vector (debug) |
 | `ai setup` | Multi-provider setup wizard (`--provider --embedding-model --generation-model`) |
