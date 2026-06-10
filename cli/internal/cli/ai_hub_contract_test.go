@@ -82,6 +82,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	indexDocFlag, indexForceReembed = "", false
 	searchType, searchStatus, searchTag = "", "", ""
 	searchLimit, searchBM25Only, searchThreshold = 20, false, 0
+	askHistory = ""
 	listType, listStatus, listTag, listSort = "", "", "", "modified"
 	listLimit = 100
 	relatedDepth = 2

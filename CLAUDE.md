@@ -160,7 +160,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `git show <hash>` | Full commit detail: metadata, stats, per-file diffs |
 | `git diff <path>` | Unified diff of a file vs HEAD |
 | `git status` | Uncommitted/untracked files in the vault |
-| `ask <question>` | RAG Q&A — search vault, generate answer with sources |
+| `ask <question>` | RAG Q&A — search vault, generate answer with sources. `--history <path\|->` (JSON `[{role, content}]`, `-` = stdin) makes it multi-turn: the history condenses follow-ups into standalone retrieval queries (reported as `rewritten_query` in `--json`) and grounds the answer |
 | `ai status` | Provider, models, readiness, embedding count, vault portability state with one-line fix hints |
 | `ai embed <text>` | Generate embedding vector (debug) |
 | `ai setup` | Multi-provider setup wizard (`--provider --embedding-model --generation-model`) |

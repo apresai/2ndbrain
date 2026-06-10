@@ -35,7 +35,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 
 1. **MCP is (mostly) a strict subset of CLI for read operations**, with three extras: `kb_update_meta`, the embedding cache, and the threshold cache. For read-heavy agent sessions, MCP wins on latency.
 2. **CLI is the superset** — vault management, skills, config, models, and import/export are CLI-only by design. MCP is intentionally scoped to vault-content operations.
-3. **The JSON envelope is the contract** — since 0.1.12, `2nb search --json` and `2nb ask --json` return `{mode, warnings, results}` and `{mode, warnings, answer, sources}` respectively. These are defined in:
+3. **The JSON envelope is the contract** — since 0.1.12, `2nb search --json` and `2nb ask --json` return `{mode, warnings, results}` and `{mode, warnings, answer, sources}` respectively (multi-turn asks via `--history` add a `rewritten_query` field). These are defined in:
 
    ```go
    // cli/internal/cli/search.go:31-35

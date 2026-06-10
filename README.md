@@ -312,7 +312,7 @@ tar czf vault.tar.gz \
 
 Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets the vault's as-embedded state and avoids re-embedding from scratch. For git-shared team vaults, `2nb vault create` writes a `.gitignore` that excludes personal/local state (config, DBs, logs, recovery) and commits only `schemas.yaml`. Missing or corrupt `config.yaml` / `index.db` self-heal on next open with a one-line stderr warning — the vault never bricks.
 
-> **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`). If you were parsing a raw array/object, extract `.results` / `.answer`.
+> **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`; multi-turn asks via `--history` add `rewritten_query`). If you were parsing a raw array/object, extract `.results` / `.answer`.
 
 ## MCP Server
 
