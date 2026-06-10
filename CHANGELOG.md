@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Added
+- **Obsidian plugin: a ribbon icon that opens a chat with your vault.** The left ribbon gains the SecondBrain head-with-brain icon; clicking it opens (and clicking again closes) a right-sidebar chat panel where each message asks your vault a question (RAG Q&A) and answers with clickable source-note chips. Also available as "2ndbrain AI: Open chat" in the command palette. Plugin version 0.6.0.
+
+### Fixed
+- **Obsidian plugin: degraded-search warnings are no longer silently dropped.** When semantic search falls back to keyword-only (provider down, dimension mismatch), the CLI's warning now renders as a banner in both the chat panel and the Ask AI modal instead of disappearing — previously a degraded vault produced keyword answers that looked like normal semantic results.
 
 ## [0.5.14] - 2026-06-09
 

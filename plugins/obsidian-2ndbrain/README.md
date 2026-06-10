@@ -8,6 +8,7 @@ AI defaults to **AWS Bedrock** (Claude Haiku for generation, Amazon Nova for emb
 
 ## Features
 
+* **Chat panel (ribbon icon):** A head-with-brain icon in the left ribbon (matching the SecondBrain app icon) toggles a right-sidebar chat where you converse with your vault. Each message runs RAG Q&A and renders the answer with clickable source-note chips; clicking the ribbon again closes the panel. Also available as **2ndbrain AI: Open chat** in the command palette. Each question searches the vault fresh (single-shot RAG); the transcript is visual history, not conversational context.
 * **2ndbrain AI: Setup wizard:** Guided first-run flow: Download CLI → Connect AI (AWS Bedrock) → Index the vault. Opens automatically on first launch and is re-runnable any time from the command palette.
 * **2ndbrain AI: Semantic Search:** Execute hybrid search queries (BM25 keyword + semantic similarity) across all vault markdown notes.
 * **2ndbrain AI: Ask AI (RAG Q&A):** Ask questions about your vault and receive answers generated from retrieved context with source citations.

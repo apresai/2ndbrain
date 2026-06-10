@@ -1,6 +1,7 @@
 import {
 	App,
 	FileSystemAdapter,
+	ItemView,
 	MarkdownRenderer,
 	Modal,
 	Notice,
@@ -8,6 +9,8 @@ import {
 	PluginSettingTab,
 	Setting,
 	SuggestModal,
+	WorkspaceLeaf,
+	addIcon,
 	requestUrl
 } from 'obsidian';
 import { execFile } from 'child_process';
@@ -24,6 +27,15 @@ const DEFAULT_SETTINGS: BrainSettings = {
 	cliPath: '2nb',
 	firstRunComplete: false,
 };
+
+// View type for the vault-chat sidebar panel.
+const VIEW_TYPE_CHAT = '2ndbrain-chat';
+
+// Custom ribbon/tab icon: a head in right-facing profile with a brain inside,
+// a monochrome stroke rendition of the SecondBrain app icon
+// (app/Resources/AppIcon-1024.png). Inner SVG content for Obsidian's
+// addIcon() 0-100 viewBox; currentColor so it follows the theme.
+const BRAIN_HEAD_ICON = `<g stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="7" d="M34 92 V70 C22 63 15 50 16 38 C18 21 32 9 49 9 C66 9 79 21 80 37 L88 52 C89 54.5 87.5 57 85 57 H80 V63 C80 69 75 73 69 73 H64 V92"/><path stroke-width="6" d="M35 47 C29 45 26 39 29 34 C27 27 32 21 39 21 C43 16 51 16 55 20 C61 19 66 24 65 30 C68 35 66 42 61 44 C59 48 52 50 48 47 C44 51 38 50 35 47"/><path stroke-width="5" d="M44 21 C45 26 41 29 42 33"/><path stroke-width="5" d="M55 25 C52 28 54 32 50 35"/><path stroke-width="5" d="M32 36 C36 36 39 40 37 44"/></g>`;
 
 // AIStatus is the subset of `2nb ai status --json` the plugin reads.
 interface AIStatus {
@@ -154,6 +166,54 @@ export function parseSearchResponse(json: string): SearchResponse {
 	};
 }
 
+// renderAskResponse renders a parsed ask envelope into container: the CLI's
+// degradation warnings (if any), the markdown answer, and deduped source
+// chips. Shared by the Ask AI modal and the chat panel so the two surfaces
+// can't drift. onSourceOpen runs after a source chip opens its note (the
+// modal closes itself; the chat panel stays open).
+async function renderAskResponse(
+	plugin: BrainPlugin,
+	container: HTMLElement,
+	response: AskResponse,
+	onSourceOpen?: () => void
+): Promise<void> {
+	// Surface the CLI's loud-degradation channel. Without this, a vault in
+	// DIMENSION BREAK / provider-down state silently returns keyword-only
+	// answers that look like normal semantic results.
+	for (const warning of response.warnings) {
+		container.createDiv({ text: warning, cls: 'brain-warning' });
+	}
+
+	const answerEl = container.createDiv({ cls: 'brain-answer' });
+	await plugin.renderMarkdown(response.answer, answerEl);
+
+	// `sources` is a string[] of vault-relative paths (see parseAskResponse /
+	// cli/internal/cli/ask.go), so dedupe on the path string itself and derive
+	// the label from it.
+	if (response.sources && response.sources.length > 0) {
+		const sourcesContainer = container.createDiv({ cls: 'brain-sources-container' });
+		sourcesContainer.createEl('div', { text: 'Sources', cls: 'brain-sources-title' });
+		const sourcesList = sourcesContainer.createEl('ul', { cls: 'brain-sources-list' });
+
+		const seenPaths = new Set<string>();
+		response.sources.forEach((source) => {
+			if (seenPaths.has(source)) return;
+			seenPaths.add(source);
+
+			const li = sourcesList.createEl('li');
+			const link = li.createEl('a', { cls: 'brain-source-chip', href: '#' });
+			link.createSpan({ text: '📄', cls: 'brain-source-icon' });
+			link.createSpan({ text: filepathBase(source) });
+
+			link.addEventListener('click', (e) => {
+				e.preventDefault();
+				plugin.app.workspace.openLinkText(source, '', false);
+				onSourceOpen?.();
+			});
+		});
+	}
+}
+
 export default class BrainPlugin extends Plugin {
 	settings!: BrainSettings;
 	statusBarEl!: HTMLElement;
@@ -165,7 +225,23 @@ export default class BrainPlugin extends Plugin {
 		this.statusBarEl = this.addStatusBarItem();
 		this.statusBarEl.setText('2ndbrain: Ready');
 
+		// Chat panel: custom icon (the app's head-with-brain mark), the view
+		// itself, and a ribbon button that toggles it open/closed.
+		addIcon('2ndbrain-head', BRAIN_HEAD_ICON);
+		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
+		this.addRibbonIcon('2ndbrain-head', '2ndbrain: chat with your vault', () => {
+			void this.toggleChatView();
+		});
+
 		// Add commands
+		this.addCommand({
+			id: 'chat',
+			name: 'Open chat',
+			callback: () => {
+				void this.toggleChatView();
+			}
+		});
+
 		this.addCommand({
 			id: 'semantic-search',
 			name: 'Semantic Search',
@@ -236,6 +312,24 @@ export default class BrainPlugin extends Plugin {
 				new SetupWizardModal(this.app, this).open();
 			});
 		}
+	}
+
+	// toggleChatView opens the chat panel in the right sidebar, or closes it
+	// if it's already open: the ribbon icon is both the launcher and the
+	// kill switch. (The view's own tab close button also works.)
+	async toggleChatView() {
+		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT);
+		if (existing.length > 0) {
+			existing.forEach((leaf) => leaf.detach());
+			return;
+		}
+		const leaf = this.app.workspace.getRightLeaf(false);
+		if (!leaf) {
+			new Notice('2ndbrain: could not open the chat panel.');
+			return;
+		}
+		await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
+		await this.app.workspace.revealLeaf(leaf);
 	}
 
 	async loadSettings() {
@@ -530,39 +624,9 @@ class AskAIModal extends Modal {
 				loader.addClass("brain-hidden");
 				resultContainer.removeClass("brain-hidden");
 
-				// Render Markdown answer
-				const answerEl = resultContainer.createDiv({ cls: "brain-answer" });
-				await this.plugin.renderMarkdown(response.answer, answerEl);
-
-				// Render Sources Chips. `sources` is a string[] of vault-relative
-				// paths (see parseAskResponse / cli/internal/cli/ask.go), so dedupe
-				// on the path string itself and derive the label from it.
-				if (response.sources && response.sources.length > 0) {
-					const sourcesContainer = resultContainer.createDiv({ cls: "brain-sources-container" });
-					sourcesContainer.createEl("div", { text: "Sources", cls: "brain-sources-title" });
-					const sourcesList = sourcesContainer.createEl("ul", { cls: "brain-sources-list" });
-
-					const seenPaths = new Set<string>();
-					response.sources.forEach((source) => {
-						if (seenPaths.has(source)) return;
-						seenPaths.add(source);
-
-						const li = sourcesList.createEl("li");
-						const link = li.createEl("a", {
-							cls: "brain-source-chip",
-							href: "#"
-						});
-
-						link.createSpan({ text: "📄", cls: "brain-source-icon" });
-						link.createSpan({ text: filepathBase(source) });
-
-						link.addEventListener("click", (e) => {
-							e.preventDefault();
-							this.app.workspace.openLinkText(source, "", false);
-							this.close();
-						});
-					});
-				}
+				// Warnings + answer + source chips, shared with the chat panel.
+				// Opening a source closes the modal.
+				await renderAskResponse(this.plugin, resultContainer, response, () => this.close());
 			} catch (err) {
 				loader.addClass("brain-hidden");
 				resultContainer.removeClass("brain-hidden");
@@ -581,6 +645,106 @@ class AskAIModal extends Modal {
 	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
+	}
+}
+
+// ── Chat Panel (sidebar view) ────────────────────────────────────────────────
+
+// ChatView is a right-sidebar panel for conversational Q&A against the vault.
+// Each message runs `2nb ask --json` independently (RAG is single-shot), so
+// the transcript is visual history, not conversational context. Toggled by
+// the ribbon icon (open/close) and the "Open chat" command.
+class ChatView extends ItemView {
+	private plugin: BrainPlugin;
+	private messagesEl!: HTMLElement;
+	private inputEl!: HTMLInputElement;
+	private sendBtn!: HTMLButtonElement;
+	private emptyStateEl: HTMLElement | null = null;
+
+	constructor(leaf: WorkspaceLeaf, plugin: BrainPlugin) {
+		super(leaf);
+		this.plugin = plugin;
+	}
+
+	getViewType(): string {
+		return VIEW_TYPE_CHAT;
+	}
+
+	getDisplayText(): string {
+		return '2ndbrain Chat';
+	}
+
+	getIcon(): string {
+		return '2ndbrain-head';
+	}
+
+	async onOpen() {
+		const container = this.containerEl.children[1];
+		container.empty();
+		container.addClass('brain-chat-panel');
+
+		this.messagesEl = container.createDiv({ cls: 'brain-chat-messages' });
+		this.emptyStateEl = this.messagesEl.createDiv({
+			cls: 'brain-chat-empty',
+			text: 'Ask anything about your vault. Each question searches your notes fresh, and answers cite the source notes they came from.',
+		});
+
+		const inputRow = container.createDiv({ cls: 'brain-input-container brain-chat-input-row' });
+		this.inputEl = inputRow.createEl('input', {
+			type: 'text',
+			placeholder: 'Ask your vault...',
+			cls: 'brain-ask-input',
+		});
+		this.sendBtn = inputRow.createEl('button', { text: 'Ask', cls: 'brain-ask-button' });
+
+		this.sendBtn.addEventListener('click', () => void this.send());
+		this.inputEl.addEventListener('keydown', (e) => {
+			// isComposing: Enter that confirms an IME composition must not send.
+			if (e.key === 'Enter' && !e.isComposing) void this.send();
+		});
+		this.inputEl.focus();
+	}
+
+	private async send() {
+		const query = this.inputEl.value.trim();
+		if (!query || this.sendBtn.disabled) return;
+
+		this.emptyStateEl?.remove();
+		this.emptyStateEl = null;
+		this.inputEl.value = '';
+		this.sendBtn.disabled = true;
+
+		this.messagesEl.createDiv({ cls: 'brain-msg brain-msg-user', text: query });
+
+		const aiMsg = this.messagesEl.createDiv({ cls: 'brain-msg brain-msg-ai' });
+		const loader = aiMsg.createDiv({ cls: 'brain-loader-container' });
+		loader.createDiv({ cls: 'brain-spinner' });
+		loader.createDiv({ cls: 'brain-loader-text', text: 'Searching your vault...' });
+		this.scrollToBottom();
+
+		try {
+			const stdout = await this.plugin.runCommand(['ask', '--json', query]);
+			const response = parseAskResponse(stdout);
+			loader.remove();
+			// The panel stays open when a source note is opened (no onSourceOpen).
+			await renderAskResponse(this.plugin, aiMsg, response);
+		} catch (err) {
+			loader.remove();
+			aiMsg.createDiv({ text: `Error: ${(err as Error).message}`, cls: 'brain-error' });
+		} finally {
+			this.sendBtn.disabled = false;
+			this.scrollToBottom();
+			this.inputEl.focus();
+		}
+	}
+
+	private scrollToBottom() {
+		this.messagesEl.scrollTo({ top: this.messagesEl.scrollHeight });
+	}
+
+	async onClose() {
+		// Nothing to release: runCommand owns its subprocess lifecycle and the
+		// DOM is dropped with the leaf.
 	}
 }
 
