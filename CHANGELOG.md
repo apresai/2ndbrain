@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`2nb chat`: an interactive terminal conversation with your vault.** A REPL over the same multi-turn pipeline as `2nb ask --history`: ask, then follow up with pronouns ("who owns it?") and the conversation carries; answers cite their source notes. The conversation lives in the terminal session only. Type `exit` or Ctrl-D to quit.
 - **`2nb ask` supports true multi-turn conversations.** Pass prior turns with `--history <path|->` (a JSON array of `{role, content}` objects; `-` reads stdin) and follow-up questions like "who owns it?" are first rewritten into standalone retrieval queries using the conversation, then answered with the conversation as context, grounded strictly in the retrieved documents and never in earlier answers. The `--json` envelope gains an additive `rewritten_query` field showing what was actually searched; if a rewrite retrieves nothing, the question is retried as asked. Without `--history`, behavior is unchanged.
 
 ## [0.5.14] - 2026-06-09
