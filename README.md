@@ -206,7 +206,8 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | Command | Description |
 |---------|-------------|
 | `search <query> [--type] [--status] [--tag] [--threshold]` | Hybrid BM25 + semantic search (shows `rrf` + raw `cos` scores) |
-| `ask <question>` | RAG Q&A with source citations |
+| `ask <question> [--history <path\|->]` | RAG Q&A with source citations; `--history` makes it multi-turn |
+| `chat` | Interactive multi-turn Q&A session (REPL over the same pipeline) |
 | `suggest-links <path> [--limit 10]` | Rank semantically related documents for wikilink insertion |
 | `polish <path> [--system <prompt>]` | AI copy-edit a document (JSON with original + polished body) |
 | `index [--doc <path>] [--force-reembed]` | Build search index + embeddings (full vault or a single document); `--force-reembed` invalidates every stored embedding for after an intentional provider switch |
@@ -312,7 +313,7 @@ tar czf vault.tar.gz \
 
 Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets the vault's as-embedded state and avoids re-embedding from scratch. For git-shared team vaults, `2nb vault create` writes a `.gitignore` that excludes personal/local state (config, DBs, logs, recovery) and commits only `schemas.yaml`. Missing or corrupt `config.yaml` / `index.db` self-heal on next open with a one-line stderr warning — the vault never bricks.
 
-> **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`). If you were parsing a raw array/object, extract `.results` / `.answer`.
+> **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`; multi-turn asks via `--history` add `rewritten_query`). If you were parsing a raw array/object, extract `.results` / `.answer`.
 
 ## MCP Server
 
