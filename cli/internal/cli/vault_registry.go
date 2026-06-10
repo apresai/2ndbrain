@@ -22,8 +22,9 @@ func recentVaultsPath() string {
 }
 
 // addRecentVault records a vault path in the recents file, newest first,
-// deduped, capped at recentVaultsCap. Best-effort — a write failure does
-// not block the caller.
+// deduped, capped at recentVaultsCap. Paths are canonicalized so the same
+// vault reached via a symlink or /private prefix dedupes to one entry.
+// Best-effort — a write failure does not block the caller.
 func addRecentVault(absPath string) {
 	if os.Getenv("2NB_TEST") != "" {
 		return
@@ -32,6 +33,7 @@ func addRecentVault(absPath string) {
 	if path == "" || absPath == "" {
 		return
 	}
+	absPath = canonicalVaultPath(absPath)
 
 	entries := readRecentVaultsFile(path)
 	out := make([]string, 0, len(entries)+1)

@@ -150,7 +150,7 @@ func runVaultDefault(cmd *cobra.Command, args []string) error {
 }
 
 func runVaultShow(cmd *cobra.Command, _ []string) error {
-	dir, source := resolveVaultSource()
+	dir, source := resolveVaultDir()
 
 	v, err := vault.Open(dir)
 	if err != nil {
@@ -163,7 +163,7 @@ func runVaultShow(cmd *cobra.Command, _ []string) error {
 
 	info := VaultInfo{
 		Path:      v.Root,
-		Source:    source,
+		Source:    string(source),
 		Name:      v.Config.Name,
 		Documents: docCount,
 	}
@@ -181,7 +181,7 @@ func runVaultShow(cmd *cobra.Command, _ []string) error {
 }
 
 func runVaultStatus(cmd *cobra.Command, _ []string) error {
-	dir, source := resolveVaultSource()
+	dir, source := resolveVaultDir()
 
 	v, err := vault.Open(dir)
 	if err != nil {
@@ -229,7 +229,7 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	status := VaultStatus{
 		Path:                v.Root,
 		Name:                v.Config.Name,
-		Source:              source,
+		Source:              string(source),
 		Documents:           docCount,
 		EmbeddedDocuments:   embeddedCount,
 		EmbeddableDocuments: embeddedCount + embeddableUnembedded,
@@ -336,6 +336,7 @@ func runVaultSet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve path: %w", err)
 	}
+	absPath = canonicalVaultPath(absPath)
 
 	v, err := vault.Open(absPath)
 	if err != nil {
@@ -356,11 +357,25 @@ func runVaultSet(cmd *cobra.Command, args []string) error {
 
 func runVaultList(cmd *cobra.Command, _ []string) error {
 	paths := listRecentVaults()
-	active := getActiveVault()
+	active := canonicalVaultPath(getActiveVault())
+
+	// The active vault can be missing from recents (e.g. the recents file
+	// was trimmed or written by an older version). Synthesize a row for it
+	// so the `*` marker always appears, as this command's help promises.
+	inRecents := false
+	for _, p := range paths {
+		if canonicalVaultPath(p) == active {
+			inRecents = true
+			break
+		}
+	}
+	if !inRecents && active != "" && vault.IsVaultRoot(active) {
+		paths = append([]string{active}, paths...)
+	}
 
 	entries := make([]VaultListEntry, 0, len(paths))
 	for _, p := range paths {
-		e := VaultListEntry{Path: p, Active: p == active}
+		e := VaultListEntry{Path: p, Active: canonicalVaultPath(p) == active}
 		if v, err := vault.Open(p); err == nil {
 			e.Name = v.Config.Name
 			v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents").Scan(&e.Documents)
@@ -435,15 +450,3 @@ func createVaultAt(cmd *cobra.Command, path string) error {
 	return nil
 }
 
-func resolveVaultSource() (string, string) {
-	if flagVault != "" {
-		return expandPath(flagVault), "--vault flag"
-	}
-	if env := os.Getenv("2NB_VAULT"); env != "" {
-		return expandPath(env), "2NB_VAULT environment variable"
-	}
-	if active := getActiveVault(); active != "" {
-		return active, "~/.2ndbrain-active-vault"
-	}
-	return ".", "current directory"
-}

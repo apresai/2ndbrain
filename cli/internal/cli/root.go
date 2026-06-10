@@ -214,51 +214,84 @@ func nextStepHint(docCount, embeddedCount, embeddableCount int, provider string)
 	}
 }
 
-// openVault resolves the vault path using this priority:
-// 1. --vault flag
-// 2. 2NB_VAULT env var
-// 3. ~/.2ndbrain-active-vault (shared with GUI)
-// 4. Current directory
-func openVault() (*vault.Vault, error) {
-	dir := expandPath(flagVault)
-	source := "--vault flag"
-	if dir == "" {
-		dir = expandPath(os.Getenv("2NB_VAULT"))
-		source = "2NB_VAULT env var"
-	}
-	if dir == "" {
-		dir = getActiveVault()
-		source = "active vault (~/.2ndbrain-active-vault)"
-		// Validate the active vault path still exists on disk.
-		if dir != "" {
-			if _, err := os.Stat(filepath.Join(dir, vault.DotDirName)); err != nil {
-				dir = ""
-			}
-		}
-	}
-	if dir == "" {
-		dir = "."
-		source = "current directory"
-	}
+// vaultSource labels which rung of the resolution ladder picked the vault.
+// The string values are part of the `vault show --json` contract (its
+// "source" field) — keep them stable.
+type vaultSource string
 
+const (
+	sourceFlag   vaultSource = "--vault flag"
+	sourceEnv    vaultSource = "2NB_VAULT environment variable"
+	sourceActive vaultSource = "~/.2ndbrain-active-vault"
+	sourceCwd    vaultSource = "current directory"
+)
+
+// resolveVaultDir is the single implementation of the vault-resolution
+// ladder, shared by every command (including `vault status`/`show`):
+//
+//  1. --vault flag
+//  2. 2NB_VAULT env var
+//  3. ~/.2ndbrain-active-vault (shared with the GUI and a bare terminal)
+//  4. Current directory
+//
+// The active pointer is validated with vault.IsVaultRoot — the stored path
+// must itself be a vault root (.obsidian or .2ndbrain child). A stale
+// pointer (vault deleted or moved) falls through to the current directory,
+// so every command agrees on which vault a given machine state resolves to.
+// Deliberately no walk-up here: walking up from a dead path could land on a
+// parent vault and silently change the target.
+func resolveVaultDir() (string, vaultSource) {
+	if dir := expandPath(flagVault); dir != "" {
+		return dir, sourceFlag
+	}
+	if dir := expandPath(os.Getenv("2NB_VAULT")); dir != "" {
+		return dir, sourceEnv
+	}
+	if dir := getActiveVault(); dir != "" && vault.IsVaultRoot(dir) {
+		return dir, sourceActive
+	}
+	return ".", sourceCwd
+}
+
+// openResolvedVault opens the vault at dir, wrapping failure in the
+// standard "no vault found" guidance with the resolution source named.
+func openResolvedVault(dir string, source vaultSource) (*vault.Vault, error) {
 	absDir, _ := filepath.Abs(dir)
 	v, err := vault.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("no vault found at %s (resolved from %s)\n\nTo fix:\n  • Run from inside your vault directory\n  • Use --vault /path/to/vault\n  • Set 2NB_VAULT=/path/to/vault\n  • Create a new vault with `2nb init /path/to/vault`", absDir, source)
 	}
-
 	return v, nil
 }
 
-// openVaultAndSetActive opens the vault and updates the active vault file.
+// openVault resolves the vault via resolveVaultDir and opens it.
+func openVault() (*vault.Vault, error) {
+	dir, source := resolveVaultDir()
+	return openResolvedVault(dir, source)
+}
+
+// openVaultAndSetActive opens the vault and, when the vault was resolved
+// from the active pointer or the current directory, records it as the
+// active vault and in the recents list. An explicit --vault flag or
+// 2NB_VAULT env var is a one-shot override: it must NOT repoint the shared
+// ~/.2ndbrain-active-vault that the GUI, the Obsidian plugin's pinned
+// calls, and a bare terminal all coordinate on.
 // Use for write commands (init, create, index, delete). Read commands use openVault().
 func openVaultAndSetActive() (*vault.Vault, error) {
-	v, err := openVault()
+	dir, source := resolveVaultDir()
+	v, err := openResolvedVault(dir, source)
 	if err != nil {
 		return nil, err
 	}
-	if abs, err := filepath.Abs(v.Root); err == nil {
-		_ = setActiveVault(abs)
+	if source == sourceActive || source == sourceCwd {
+		canonical := canonicalVaultPath(v.Root)
+		if err := setActiveVault(canonical); err != nil {
+			// Best-effort: the command itself proceeds, but a failed pointer
+			// write means the next bare `2nb` resolves a stale vault — leave
+			// a trace for that investigation.
+			slog.Warn("active-vault pointer write failed", "path", canonical, "error", err)
+		}
+		addRecentVault(canonical)
 	}
 	return v, nil
 }

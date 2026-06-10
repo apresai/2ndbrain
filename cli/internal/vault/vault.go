@@ -228,17 +228,30 @@ func (v *Vault) ContainsPath(absPath string) bool {
 	return !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
 }
 
-// FindVaultRoot walks up from dir until it finds a directory containing
-// a .2ndbrain/ child, and returns that directory (the vault root).
+// IsVaultRoot reports whether dir itself is a vault root: a directory
+// containing either an .obsidian/ child (an Obsidian vault — Open will
+// recreate the .2ndbrain sidecar) or a .2ndbrain/ child. Unlike
+// FindVaultRoot it never walks up, so it's the right check for validating
+// a stored vault path (e.g. ~/.2ndbrain-active-vault), where resolving a
+// dead path to a parent vault would silently change which vault is used.
+func IsVaultRoot(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, ".obsidian")); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(dir, DotDirName)); err == nil {
+		return true
+	}
+	return false
+}
+
+// FindVaultRoot walks up from dir until it finds a vault root (a directory
+// with an .obsidian/ or .2ndbrain/ child, per IsVaultRoot) and returns it.
 // Returns "" if no vault is found before reaching the filesystem root.
 // Intended for read-only callers (e.g. shell completion) that need the
 // vault root without paying for a full Open.
 func FindVaultRoot(dir string) string {
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".obsidian")); err == nil {
-			return dir
-		}
-		if _, err := os.Stat(filepath.Join(dir, DotDirName)); err == nil {
+		if IsVaultRoot(dir) {
 			return dir
 		}
 		parent := filepath.Dir(dir)
