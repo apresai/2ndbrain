@@ -21,9 +21,9 @@ Obsidian-native AI companion. **Obsidian stays your editor**; the Go CLI (`2nb`)
 
 ## Versioning
 
-Format: `major.minor.build`. Single source of truth: `VERSION` file at repo root. The Go CLI reads it via `cli/Makefile` LDFLAGS into `internal/cli.Version`; the Swift app generates `app/Sources/SecondBrain/Version.swift` (never edit by hand).
+Format: `major.minor.build`. Single source of truth: `VERSION` file at repo root. The Go CLI reads it via `cli/Makefile` LDFLAGS into `internal/cli.Version`; the Swift app generates `app/Sources/SecondBrain/Version.swift` (never edit by hand); the Obsidian plugin's `manifest.json`/`package.json`/`package-lock.json` are synced from it by `make version-plugin` (aligned from 0.8.0 onward; release CI fails if the manifest drifts from `VERSION`, and the sync refuses to lower the plugin version since Obsidian/BRAT only see increases as updates).
 
-Bump targets (root `Makefile`): `make bump-build` (`0.1.0` → `0.1.1`), `make bump-minor` (`0.1.1` → `0.2.0`), `make bump-major` (`0.2.0` → `1.0.0`). Each regenerates `Version.swift`.
+Bump targets (root `Makefile`): `make bump-build` (`0.1.0` → `0.1.1`), `make bump-minor` (`0.1.1` → `0.2.0`), `make bump-major` (`0.2.0` → `1.0.0`). Each regenerates `Version.swift` and the plugin version files. `make set-version V=x.y.z` sets an explicit version across all products (used for the one-time 0.8.0 alignment jump).
 
 ## Release
 

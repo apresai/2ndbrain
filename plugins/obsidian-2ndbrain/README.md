@@ -19,7 +19,7 @@ AI defaults to **AWS Bedrock** (Claude Haiku for generation, Amazon Nova for emb
 
 ## Installation
 
-No npm build is required; users install prebuilt assets.
+No npm build is required; users install prebuilt assets. From 0.8.0 the plugin version tracks the product version (one release ships the CLI, the macOS app, and this plugin together).
 
 **Via BRAT (recommended):** Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin, then add the beta plugin `apresai/2ndbrain`.
 
