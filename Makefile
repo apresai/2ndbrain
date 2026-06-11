@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app install clean test test-battery test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog
+.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean test test-battery test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -67,6 +67,13 @@ notarize-app:
 
 release-app:
 	@bash scripts/release-app-local.sh --publish
+
+# The one-command unified release: bump -> tag -> wait for CI (CLI formula +
+# plugin assets) -> sign/notarize/publish the app + cask -> verify everything
+# shipped at one version. BUMP=build|minor|major|none; SKIP_TESTS=1 for re-runs.
+# Canonical clone only (needs gitignored scripts/sign.env).
+release-all:
+	@bash scripts/release-all.sh
 
 build: build-cli build-app
 
@@ -176,6 +183,7 @@ release:
 	@echo "        make release-app"
 	@echo ""
 	@echo "  Until you do, the cask still points at the PREVIOUS app version."
+	@echo "  (Next time: 'make release-all' runs both steps and verifies.)"
 
 release-local:
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

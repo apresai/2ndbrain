@@ -36,9 +36,11 @@ brew install --cask apresai/tap/secondbrain     # macOS dashboard app (depends o
 
 ### Pipeline
 
+**`make release-all`** is the front door: one command (canonical clone only; needs gitignored `scripts/sign.env`) that runs the test gate, bumps (`BUMP=build|minor|major|none`), tags, **waits for CI**, then signs/notarizes/publishes the app + cask, and verifies every product shipped at one version (`scripts/release-all.sh`). The underlying two steps remain available individually:
+
 A release is **two steps**: CI ships the CLI + plugin; the macOS app is signed, notarized, and published from the maintainer's machine (signing keys never leave it / never enter CI).
 
-1. `make bump-build` (or `bump-minor`/`bump-major`) — increment `VERSION`, regenerate `Version.swift`.
+1. `make bump-build` (or `bump-minor`/`bump-major`) — increment `VERSION`, regenerate `Version.swift`, sync the plugin version files.
 2. `make release` — updates `CHANGELOG.md`, commits, tags `v<VERSION>`, pushes tag.
 3. GitHub Actions (`.github/workflows/release.yml`) on tag push: macos-latest arm64, CGO_ENABLED=1; GoReleaser builds CLI for arm64+x86_64 and pushes formula `twonb.rb` to `apresai/homebrew-tap`; builds + uploads the Obsidian plugin assets; maintains the `2nb` formula alias. **CI does NOT build the macOS app or the cask.**
 4. `make release-app` — **local, after the CI release exists.** Runs `scripts/release-app-local.sh --publish`: builds `SecondBrain.app`, Developer ID-signs it (hardened runtime), Apple-notarizes via `notarytool` + staples, packages `SecondBrain-<VERSION>-arm64.zip`, uploads it to release `v<VERSION>`, and updates the cask `secondbrain.rb` (version + sha256) in the tap. Signing config is read from `scripts/sign.env` (gitignored; template at `scripts/sign.env.example`); the private key stays in the keychain / cert store.
