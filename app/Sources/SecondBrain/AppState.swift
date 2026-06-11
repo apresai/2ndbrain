@@ -1303,6 +1303,64 @@ final class AppState {
         }
     }
 
+    /// Runs `brew upgrade apresai/tap/twonb` to close the CLI/app version
+    /// drift Home warns about, then re-reads the CLI version and AI status.
+    /// Kept off `runCLI` because the executable is brew, not 2nb, and no
+    /// vault is involved. Throws with brew's stderr on a non-zero exit.
+    func upgradeCLI(brewPath: String) async throws {
+        let logger = self.errorLogger
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: brewPath)
+            process.arguments = ["upgrade", "apresai/tap/twonb"]
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+            // Drain both pipes as data arrives; brew's download/pour chatter
+            // can exceed the pipe buffer and deadlock an undrained child.
+            let drain = PipeDrain()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStdout(chunk) }
+            }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(chunk) }
+            }
+            process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
+                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                if proc.terminationStatus == 0 {
+                    continuation.resume()
+                } else {
+                    let errMsg = String(data: drain.stderrData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    logger?.log("brew upgrade twonb failed (exit \(proc.terminationStatus)): \(errMsg)")
+                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
+                }
+            }
+            do {
+                try process.run()
+            } catch {
+                logger?.log("brew upgrade twonb launch failed", error: error)
+                continuation.resume(throwing: error)
+            }
+        }
+        await refreshCLIVersion()
+        await refreshAIStatus()
+    }
+
+    /// Installs or updates the Obsidian plugin in the bound vault via
+    /// `2nb plugin install` (runCLI pins `--vault`, so the bundle lands in
+    /// the vault this dashboard shows).
+    func installObsidianPlugin() async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await runCLI(["plugin", "install"], cwd: vault.rootURL)
+    }
+
     func askAI(question: String) async throws -> AIAskResult {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)

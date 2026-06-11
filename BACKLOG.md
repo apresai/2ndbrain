@@ -2,6 +2,16 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## GUI installer (Home Update CLI + plugin row) — review follow-ups (from PR review, 2026-06-10)
+
+Fixed in-PR: the no-op `brew upgrade` exit-0 case no longer claims "CLI updated" (`HomeCLIUpdate.resultMessage`, unit-tested); non-semver manifest versions render raw; rowState/parse edge cases and the `installObsidianPlugin` noVault guard gained tests. Remaining LOWs:
+
+- **LOW — the plugin row only refreshes on vault change.** Installing the plugin from a terminal or BRAT while Home is open leaves the row stale until a vault rebind. A cheap re-read on window focus (or after any CLI action) would close it.
+- **LOW — plugin install on a pre-0.8.0 CLI surfaces raw stderr** (`unknown command "plugin"`) without pointing at the Update CLI button. Mitigated: the drift banner is necessarily visible right above in that case.
+- **LOW — long `brew upgrade` shows a static "Updating…" label**, no spinner/cancel/timeout. UI stays responsive and double-click is blocked; progress affordance only.
+- **LOW — `upgradeCLI` failures log only to the per-vault file logger** (nil when no vault is open) and skip `os_log`, unlike `runCLI`. The error still surfaces in the UI banner.
+- **LOW — `BrewLocator.resolve()` stats the disk on each banner render.** Two `fileExists` calls on a rarely-rendered banner; fine, noted for completeness.
+
 ## `2nb plugin install/status` — review follow-ups (from PR review, 2026-06-10)
 
 Fixed in-PR: the missed write-boundary doc (`docs/obsidian/vault-coexistence.md`), installed-status test coverage, silent 16MB truncation (now errors), mixed-version partial updates (download-all-then-write), direction-aware drift hints with a dev-build guard, and rate-limit hints on 403/429. Remaining LOWs:

@@ -11,11 +11,16 @@ struct HomeView: View {
 
     @State private var saving = false
     @State private var testing = false
+    @State private var updatingCLI = false
+    @State private var installingPlugin = false
     @State private var actionMessage: String?
     @State private var actionIsError = false
     // The vault Obsidian has open, loaded once in `.task` instead of read from
     // disk on every body re-render.
     @State private var obsidianOpenVault: ObsidianRegistry.Vault?
+    // Installed Obsidian plugin version (nil = not installed), read from the
+    // vault's plugin manifest in `.task` and re-read after an install.
+    @State private var pluginVersion: String?
 
     var body: some View {
         ScrollView {
@@ -46,6 +51,7 @@ struct HomeView: View {
             // correct immediately, rather than flashing "unknown" while the
             // slower `2nb ai status` shell-out runs.
             obsidianOpenVault = ObsidianRegistry.load()?.openVault
+            pluginVersion = appState.vault.flatMap { ObsidianPlugin.installedVersion(vaultRoot: $0.rootURL) }
             await appState.refreshCLIVersion()
             await appState.refreshAIStatus()
         }
@@ -70,14 +76,41 @@ struct HomeView: View {
                 Text(message)
                     .font(.callout)
             }
-            Text("brew upgrade apresai/tap/twonb")
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                // Real button when brew is present; the copyable command stays
+                // either way (some users prefer the terminal, and it's the
+                // fallback when Homebrew isn't installed).
+                if let brew = BrewLocator.resolve() {
+                    Button(updatingCLI ? "Updating…" : "Update CLI") {
+                        Task { await updateCLI(brew: brew) }
+                    }
+                    .disabled(updatingCLI)
+                    .controlSize(.small)
+                }
+                Text("brew upgrade apresai/tap/twonb")
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func updateCLI(brew: String) async {
+        updatingCLI = true
+        actionMessage = nil
+        defer { updatingCLI = false }
+        let before = appState.cliVersion
+        do {
+            try await appState.upgradeCLI(brewPath: brew)
+            actionIsError = false
+            actionMessage = HomeCLIUpdate.resultMessage(before: before, after: appState.cliVersion)
+        } catch {
+            actionIsError = true
+            actionMessage = "CLI update failed: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Vault
@@ -89,9 +122,42 @@ struct HomeView: View {
                 LabeledContent("Name", value: vault.rootURL.lastPathComponent)
                 LabeledContent("Path", value: vault.rootURL.path)
                 obsidianMatchBadge(for: vault.rootURL)
+                pluginRow(for: vault.rootURL)
             } else {
                 Text("No vault open").foregroundStyle(.secondary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func pluginRow(for vaultRoot: URL) -> some View {
+        let state = HomePlugin.rowState(installed: pluginVersion, appVersion: appVersion)
+        HStack(spacing: 8) {
+            Text("Obsidian plugin: \(state.label)")
+            if let buttonTitle = state.button {
+                Button(installingPlugin ? "Installing…" : buttonTitle) {
+                    Task { await installPlugin(into: vaultRoot) }
+                }
+                .disabled(installingPlugin)
+                .controlSize(.small)
+            }
+        }
+        .font(.callout)
+    }
+
+    private func installPlugin(into vaultRoot: URL) async {
+        installingPlugin = true
+        actionMessage = nil
+        defer { installingPlugin = false }
+        let wasInstalled = pluginVersion != nil
+        do {
+            try await appState.installObsidianPlugin()
+            pluginVersion = ObsidianPlugin.installedVersion(vaultRoot: vaultRoot)
+            actionIsError = false
+            actionMessage = HomePlugin.successMessage(updated: wasInstalled)
+        } catch {
+            actionIsError = true
+            actionMessage = "Plugin install failed: \(error.localizedDescription)"
         }
     }
 
@@ -258,5 +324,47 @@ enum HomeAI {
         default:
             return nil
         }
+    }
+}
+
+/// Pure presentation logic for the Obsidian plugin row on the Vault card,
+/// extracted (like `HomeAI`) so the label/button mapping is unit-testable.
+enum HomePlugin {
+    /// Row label and optional action-button title for an installed plugin
+    /// version (nil = not installed) vs this app's version. A plugin that is
+    /// current or newer (a dev/BRAT build) gets no button: `2nb plugin
+    /// install` pulls the latest release, which can't help either case.
+    static func rowState(installed: String?, appVersion: String) -> (label: String, button: String?) {
+        guard let installed else { return ("not installed", "Install") }
+        if CLIVersion.isOlder(cli: installed, thanApp: appVersion) {
+            return ("v\(installed) (update available)", "Update")
+        }
+        // Non-semver manifest versions (a dev/BRAT build) show raw, no "v".
+        return (CLIVersion.parse(installed) != nil ? "v\(installed)" : installed, nil)
+    }
+
+    /// Post-install confirmation. A fresh install needs the two manual
+    /// Obsidian steps (no API automates them); an update only needs a reload.
+    static func successMessage(updated: Bool) -> String {
+        if updated {
+            return "Plugin updated. Reload Obsidian (Cmd+R) to pick it up."
+        }
+        return "Plugin installed. Reload Obsidian (Cmd+R), then enable \"2ndbrain AI\" under Settings > Community plugins."
+    }
+}
+
+/// Pure message logic for the drift banner's Update CLI button, extracted so
+/// the no-op case is unit-testable.
+enum HomeCLIUpdate {
+    /// Message after a zero-exit `brew upgrade`. Brew exits 0 even when it
+    /// had nothing to do (the realistic case: the cask bumped the app before
+    /// the tap shipped the matching formula), and that no-op must not read
+    /// as "updated": the drift banner is still on screen contradicting it.
+    static func resultMessage(before: String?, after: String?) -> String {
+        if let after, after != before {
+            return "CLI updated to \(after)."
+        }
+        let current = after ?? before ?? "unknown"
+        return "CLI unchanged at \(current). Homebrew found no newer formula; the tap may not have shipped this release yet. Try again in a few minutes."
     }
 }
