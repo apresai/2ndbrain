@@ -1,6 +1,6 @@
 # 2ndbrain
 
-Obsidian-native AI companion. **Obsidian stays your editor**; the Go CLI (`2nb`) + MCP server are the engine that indexes, searches, and answers (RAG) over a real Obsidian vault. A thin Obsidian plugin and a macOS configuration dashboard wrap the CLI. `2nb` writes only a gitignored `.2ndbrain/` sidecar and never rewrites your markdown.
+Obsidian-native AI companion. **Obsidian stays your editor**; the Go CLI (`2nb`) + MCP server are the engine that indexes, searches, and answers (RAG) over a real Obsidian vault. A thin Obsidian plugin and a macOS configuration dashboard wrap the CLI. `2nb` writes only a gitignored `.2ndbrain/` sidecar and never rewrites your markdown. (One explicit, user-invoked exception: `2nb plugin install` writes the plugin bundle under `.obsidian/plugins/obsidian-2ndbrain/`; never notes, never Obsidian settings.)
 
 ## Repository Layout
 
@@ -125,7 +125,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (53)
+### CLI Commands (55)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -156,6 +156,8 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `mcp-server` | Start MCP server on stdio transport |
 | `mcp-setup` | Show MCP setup instructions for all AI tools |
 | `mcp status` | List live MCP server processes and recent tool invocations (`--json`) |
+| `plugin status` | Installed Obsidian plugin version vs this CLI (`--json`) |
+| `plugin install` | Install or update the Obsidian plugin: downloads `manifest.json`/`main.js`/`styles.css` from the latest GitHub release into `<vault>/.obsidian/plugins/obsidian-2ndbrain/` (manifest written last so a partial install never looks complete). Alias: `plugin update`. Enabling in Obsidian stays manual (no API for it) |
 | `suggest-links` | Suggest semantically related documents to link from a given document (`--limit`) |
 | `polish` | AI copy-edit (`--system`, `--max-tokens`) — returns original + polished for diff preview |
 | `git activity` | Recent commits touching vault files (`--since 7d`, `--json`) |
@@ -189,7 +191,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 
 **Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`.
 
-**Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works (Cobra intercepts before `RunE`).
+**Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works (Cobra intercepts before `RunE`).
 
 ### AI Providers
 

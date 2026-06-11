@@ -21,7 +21,9 @@ AI defaults to **AWS Bedrock** (Claude Haiku for generation, Amazon Nova for emb
 
 No npm build is required; users install prebuilt assets. From 0.8.0 the plugin version tracks the product version (one release ships the CLI, the macOS app, and this plugin together).
 
-**Via BRAT (recommended):** Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin, then add the beta plugin `apresai/2ndbrain`.
+**Via the CLI (simplest):** If you already have `2nb` (`brew install apresai/tap/2nb`), run `2nb plugin install` from inside your vault (or use the Install button in the SecondBrain macOS app). It downloads the latest release assets into `.obsidian/plugins/obsidian-2ndbrain/`. Then reload Obsidian and enable "2ndbrain AI" under Settings → Community plugins. Updates: rerun `2nb plugin install` and reload.
+
+**Via BRAT (auto-updating):** Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin, then add the beta plugin `apresai/2ndbrain`. BRAT checks for new releases on its own, so pick this if you'd rather not rerun an update command.
 
 **Manual:** Download `manifest.json`, `main.js`, and `styles.css` from a [GitHub release](https://github.com/apresai/2ndbrain/releases) and copy them into your vault under `.obsidian/plugins/obsidian-2ndbrain/`. Then enable "2ndbrain AI" under Settings → Community plugins.
 

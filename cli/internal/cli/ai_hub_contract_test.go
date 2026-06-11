@@ -61,6 +61,11 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	flagPorcelain = false
 	flagVault = ""
 	flagVerbose = false
+	// The json/csv/yaml shorthands are unbound persistent bools; cobra
+	// keeps their values across Execute() calls, so clear them too.
+	_ = rootCmd.PersistentFlags().Set("json", "false")
+	_ = rootCmd.PersistentFlags().Set("csv", "false")
+	_ = rootCmd.PersistentFlags().Set("yaml", "false")
 	enableProvider, enableScope, enableVendor = "", "vault", ""
 	disableProvider, disableScope, disableVendor = "", "vault", ""
 	enableStateProvider, enableStateScope, enableStateValue = "", "vault", ""

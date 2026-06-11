@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Added
+- `2nb plugin install` (alias `update`) installs or updates the Obsidian plugin into the open vault by downloading the latest release's `manifest.json`/`main.js`/`styles.css` into `.obsidian/plugins/obsidian-2ndbrain/`; `2nb plugin status` reports the installed plugin version vs the CLI (`--json`). The manifest is written last so a partial install never looks complete; enabling the plugin in Obsidian remains the one manual step
 
 ## [0.5.15] - 2026-06-10
 
