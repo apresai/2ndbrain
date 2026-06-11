@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.8.0] - 2026-06-10
+
 ### Added
-- `2nb plugin install` (alias `update`) installs or updates the Obsidian plugin into the open vault by downloading the latest release's `manifest.json`/`main.js`/`styles.css` into `.obsidian/plugins/obsidian-2ndbrain/`; `2nb plugin status` reports the installed plugin version vs the CLI (`--json`). The manifest is written last so a partial install never looks complete; enabling the plugin in Obsidian remains the one manual step
-- macOS app: Home is now an installer too. The CLI-drift banner gains an Update CLI button that runs `brew upgrade apresai/tap/twonb` directly (when Homebrew is present; the copyable command remains the fallback), and the Vault card gains an Obsidian-plugin row showing the installed plugin version with an Install/Update button that shells `2nb plugin install` pinned to the bound vault
+- `2nb plugin install` and `2nb plugin status`: one-command Obsidian plugin installer that downloads the plugin bundle from the latest GitHub release into the vault's `.obsidian/plugins/` directory, with version comparison against the CLI (#30)
+- Home screen Obsidian plugin row showing the installed plugin version with an Install/Update button that runs `2nb plugin install` (#31)
+- Home screen Update CLI button that runs `brew upgrade apresai/tap/twonb` when the installed CLI is older than the app and Homebrew is present (#31)
+- `make release-all`: single-command unified release that runs the test gate, bumps the version, tags, waits for CI, then signs, notarizes, and publishes the app and cask (`scripts/release-all.sh`) (#29)
+
+### Changed
+- Obsidian plugin version is now synced from the root `VERSION` file via `make version-plugin` (`scripts/sync-plugin-version.js`); release CI fails if the plugin manifest drifts, and the sync refuses to lower the plugin version (#28)
+
 
 ## [0.5.15] - 2026-06-10
 
