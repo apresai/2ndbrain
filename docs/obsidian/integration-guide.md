@@ -94,7 +94,7 @@ The plugin executes commands using `execFile` from Node's `child_process` librar
 
 ### Managed CLI Install and Setup Wizard
 
-The plugin does not require a pre-installed CLI. On macOS it can download and manage the `2nb` binary itself: it resolves the latest published GitHub release tag at runtime, downloads the matching `Darwin_<arch>` archive into the plugin's `bin/` folder, ad-hoc signs the binary, and strips the `com.apple.quarantine` xattr (the CLI release is not notarized). A first-run setup wizard (also reachable via the "2ndbrain AI: Setup wizard" command) walks the user through Download CLI → Connect AI (AWS Bedrock by default) → Index. Install the plugin via BRAT (`apresai/2ndbrain`) or by copying `manifest.json`, `main.js`, and `styles.css` from a GitHub release — no npm build is required.
+The plugin does not require a pre-installed CLI. On macOS it can download and manage the `2nb` binary itself: it resolves the latest published GitHub release tag at runtime, downloads the matching `Darwin_<arch>` archive into the plugin's `bin/` folder, ad-hoc signs the binary, and strips the `com.apple.quarantine` xattr (the CLI release is not notarized). A first-run setup wizard (also reachable via the "2ndbrain AI: Setup wizard" command) walks the user through Download CLI → Connect AI (AWS Bedrock by default) → Index. Install the plugin via BRAT (`apresai/2ndbrain`), via `2nb plugin install`, or by copying `manifest.json`, `main.js`, `styles.css`, and `versions.json` from a GitHub release — no npm build is required.
 
 ---
 

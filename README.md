@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/apresai/2ndbrain)](https://github.com/apresai/2ndbrain/releases)
 [![Homebrew](https://img.shields.io/badge/homebrew-apresai%2Ftap%2F2nb-orange)](https://github.com/apresai/homebrew-tap)
 
-AI-native markdown knowledge base with semantic search. A Go CLI, MCP server, and native macOS editor that share a SQLite index — making your knowledge base searchable by both you and your AI coding assistant.
+AI companion for your Obsidian vault with semantic search. A Go CLI, MCP server, and native macOS dashboard share a SQLite index, making your knowledge base searchable by both you and your AI coding assistant. Obsidian stays your editor; 2ndbrain is the engine that indexes, searches, and answers underneath it.
 
 ## Install
 
@@ -12,7 +12,7 @@ AI-native markdown knowledge base with semantic search. A Go CLI, MCP server, an
 brew install --cask apresai/tap/secondbrain
 ```
 
-This installs both the `2nb` CLI and the SecondBrain macOS editor. If you only need the CLI:
+This installs both the `2nb` CLI and the SecondBrain macOS dashboard app. If you only need the CLI:
 
 ```bash
 brew install apresai/tap/2nb
@@ -20,18 +20,18 @@ brew install apresai/tap/2nb
 
 Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/releases).
 
-> **Note:** The editor is ad-hoc signed (not notarized). On first launch, right-click the app and choose "Open" to bypass the macOS Gatekeeper warning.
+The app is Developer ID-signed and Apple-notarized, so it launches with no Gatekeeper prompt.
+
+**New here? Follow the [Quick Start guide](docs/quick-start.md)** for the full walkthrough: app, Obsidian plugin, AI setup, and first search.
 
 ## Quick Start
 
-```bash
-# Create a vault (and set it active)
-2nb vault create ~/vault
+The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives in **[docs/quick-start.md](docs/quick-start.md)**. The CLI fast path:
 
-# Create documents
-2nb create "Use JWT for Authentication" --type adr
-2nb create "Debug Auth Failures" --type runbook
-2nb create "My Notes on Go"
+```bash
+# Point 2nb at your existing Obsidian vault (or scaffold a fresh one)
+2nb vault set ~/path/to/your-obsidian-vault
+2nb vault create ~/vault                      # only for a brand-new vault
 
 # Configure AI for semantic search & ask
 2nb ai setup
@@ -63,20 +63,19 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 - **RAG Q&A** — Ask questions, get answers with source citations
 - **MCP server** — 16 tools for Claude Code, Cursor, and any MCP client, with live status sidecar files and an observability panel
 - **Suggest Links** — AI finds semantically related documents in your vault and proposes wikilinks to insert
-- **Polish** — AI copy-editor fixes spelling, grammar, and awkward phrasing with a diff preview (Accept / Open in new tab / Reject)
+- **Polish** — AI copy-editor returns the original and polished text together, so any client (Obsidian plugin, MCP, CLI) can show a diff before applying
 - **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Rebuild Index and Re-embed All
 - **Built-in installer**: the dashboard updates the CLI (`brew upgrade` behind an Update CLI button) and installs or updates the Obsidian plugin into the bound vault (`2nb plugin install` behind an Install/Update button)
 - **AI connection testing** — one-click probe of your configured embedding and generation models with live latency
-- **Incremental re-embed on save** — embeddings rebuild only for the document whose content hash changed
-- **Git integration (read-only)** — sidebar dots for uncommitted/untracked files, Recent Activity panel, Show Changes vs HEAD, MCP tools for AI clients
-- **Merge conflict resolution** — FSEvents-backed 3-way diff dialog when a tab's file changes externally while dirty
+- **Incremental re-embed** — `2nb index` rebuilds embeddings only for documents whose content hash changed
+- **Git integration (read-only)** — Recent Activity panel with per-commit file diffs in the dashboard, plus MCP git tools for AI clients
 - **Skill files** — One command to teach 8 AI coding agents about your vault
 - **Three AI providers** — AWS Bedrock, OpenRouter, Ollama (fully local)
 - **Schema validation** — Typed frontmatter, enum constraints, status state machines
 - **Wikilinks** — `[[target#heading|alias]]` with link resolution and graph traversal
 - **Document templates** — ADR, runbook, prd, prfaq, postmortem, note with enforced schemas
-- **Native macOS editor** — SwiftUI + AppKit with Source/Split/Preview modes, tabs, search, graph view, autosave, crash recovery
-- **Local-first** — All data on disk as plain markdown. Obsidian-compatible.
+- **Native macOS dashboard** — SwiftUI + AppKit companion app for vault health, AI configuration, plugin install, MCP monitoring, and git activity; Obsidian remains the editor
+- **Local-first** — All data on disk as plain markdown in your Obsidian vault. `2nb` writes only a gitignored `.2ndbrain/` sidecar and never rewrites your notes.
 
 ## AI Providers
 
@@ -168,7 +167,7 @@ Browse verified models across all providers, test any model, and benchmark your 
 2nb models wizard --json          # JSON-event stream (GUI / automation)
 
 # Estimate before you run
-2nb models cost-preview us.anthropic.claude-opus-4-20250514-v1:0 --probe bench_rag
+2nb models cost-preview us.anthropic.claude-opus-4-6-v1 --probe bench_rag
 
 # Hide a model from selection dropdowns without removing it from the catalog
 2nb models disable cohere.embed-multilingual-v3 --provider bedrock --scope vault
@@ -177,7 +176,7 @@ Browse verified models across all providers, test any model, and benchmark your 
 
 Models are tiered as **verified** (tested with 2nb) or **unverified** (available from vendor, use `models test` to check). The benchmark suite stores results in `.2ndbrain/bench.db` for tracking performance over time.
 
-Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bedrock_invoke_cohere_embed`, `openrouter_chat`) so adding a new model variant doesn't require a code change — a catalog entry with the right strategy is enough. The macOS editor's **AI → AI…** opens the AI Hub — a single sheet with provider cards (enable / disable Bedrock, OpenRouter, Ollama), active model status, and the full catalog with inline Test / Set active / Enable / Disable / Discover actions. Catalog changes written by the CLI propagate to the running GUI via FSEvents without reopening the vault.
+Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bedrock_invoke_cohere_embed`, `openrouter_chat`) so adding a new model variant doesn't require a code change — a catalog entry with the right strategy is enough. The macOS dashboard's **AI → AI…** opens the AI Hub — a single sheet with provider cards (enable / disable Bedrock, OpenRouter, Ollama), active model status, and the full catalog with inline Test / Set active / Enable / Disable / Discover actions. Catalog changes written by the CLI propagate to the running GUI via FSEvents without reopening the vault.
 
 ## CLI Commands
 
@@ -189,8 +188,12 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `init --path <dir>` | Initialize a new vault |
-| `vault` | Show or set the active vault |
+| `vault` | Health report for the active vault (same as `vault status`) |
+| `vault create <path>` | Initialize a new vault and make it active |
+| `vault set <path>` | Set an existing vault as active |
+| `vault list` | List recently used vaults |
+| `vault show` | Terse summary: path, source, name, doc count |
+| `init [path]` | Deprecated alias for `vault create` |
 
 ### Documents
 
@@ -227,6 +230,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `models bench` | Benchmark favorites with persistent history |
 | `models bench fav <model-id>` | Add model to benchmark favorites |
 | `models bench compare` | Side-by-side latency leaderboard |
+| `models bench history` | View past benchmark runs |
 
 ### Git (read-only)
 
@@ -341,7 +345,7 @@ The MCP server exposes 16 tools for AI coding assistants:
 | `kb_git_diff` | Unified diff of a file against HEAD |
 | `kb_git_status` | Uncommitted/untracked files in the vault |
 
-Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` with PID, start time, parent PID, and the last 50 tool invocations. Run `2nb mcp status` to list live servers, or use the Cmd+Shift+M status panel in the editor.
+Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` with PID, start time, parent PID, and the last 50 tool invocations. Run `2nb mcp status` to list live servers, or use the Cmd+Shift+M status panel in the dashboard.
 
 ### Claude Code
 
@@ -413,47 +417,31 @@ Install a skill file to teach AI coding agents about your vault's CLI, MCP tools
 
 Supported agents: Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, JetBrains Junie.
 
-## macOS Editor
+## macOS Dashboard
 
-A native SwiftUI + AppKit editor with:
+A native SwiftUI + AppKit configuration and companion app. It is **not an editor**: Obsidian stays your editor. The dashboard binds to the vault Obsidian currently has open (read from Obsidian's own registry) and gives you one place to manage everything around it.
 
-- Markdown editing with Source / Split / Preview mode toggle (Preview is read-only — use Source or Split for editing)
-- Autosave toggle with 15s / 30s / 60s intervals in Preferences, low-disk warning, filename collision suffixing, pre-write crash snapshots
-- Merge conflict dialog — when a file changes externally while a tab is dirty, a 2-pane diff window shows On Disk vs Ancestor and Yours vs Ancestor
-- Configurable editor font family and size (Preferences via Cmd+,, zoom with Cmd+=/Cmd+-/Cmd+0)
-- Window toolbar (visible once a vault is open): New Note, Search, Quick Open
-- Editor toolbar (visible when a document is open): Save, Polish, Suggest Links, Share, Source/Split/Preview mode picker
-- Quick Open (Cmd+P), Command Palette (Cmd+Shift+P)
-- Search panel with semantic search toggle (Cmd+Shift+F)
-- Ask AI panel for RAG Q&A (Cmd+Shift+A)
-- **Suggest Links** (Cmd+Shift+L) — click-to-insert AI-suggested wikilinks to semantically related documents
-- **Polish** (Cmd+Option+P) — AI copy-edit the current document with an accept/reject diff preview
-- **Vault Status** — unified health panel (Vault menu) showing index state, embedding portability, stale docs, and provider reachability with Rebuild Index + Re-embed All buttons
-- **AI Hub** (AI menu > AI…, Cmd+Shift+,) — single merged surface for providers (enable/disable Bedrock / OpenRouter / Ollama), active embedding + generation models, and the full catalog grouped by vendor within each type (Embeddings first, Generation second; Anthropic / Amazon / Google / Meta / etc. as collapsible groups). Per-group bulk `Enable all` / `Disable all`, per-row Test · Set active · Enable · Disable, live search, and Discover. Replaces the previous three wizards (AI Setup, Test AI Connection, Model Wizard). Catalog changes made from a terminal propagate live via FSEvents
-- **MCP Server Status** (Cmd+Shift+M) — see which AI clients are connected and which tools they've invoked, plus a live status-bar indicator
-- **Recent Activity** (Cmd+Shift+G) — for vaults that are git repos, browse recent commits with 1/3/7/30-day window; click any commit for full detail with per-file diffs
-- **Git diff viewer** — right-click any file in the sidebar → Show Changes vs HEAD
-- **Git sidebar indicators** — orange dot for modified, blue dot for untracked
-- Interactive AI status popover with staleness indicator and index rebuild
-- Clickable vault name in status bar — opens Vault Status panel
-- Status bar shows document type, status, word count, chunk count, token estimate, AI dot, MCP dot
-- Index rebuild dialog with confirmation, progress bars, and stats summary
-- Tag drill-down navigation — click a tag to see filtered files, back button to return
-- Export as PDF, HTML, or Markdown (Notes > Export submenu, Cmd+Shift+X for PDF)
-- Menu taxonomy: **Notes** (file operations), **Vault** (vault operations + health), **View** (panels, search, zoom), **AI** (Ask AI, Suggest Links, Polish, Setup, Test, Skills, MCP)
-- Interactive link graph visualization
-- Wikilink autocomplete, backlinks panel, outline view
-- Tabs with dirty indicators, focus mode with hover-to-reveal toolbar
-- Sidebar context menu: Open, Duplicate, Find Similar, Show Changes vs HEAD, Delete
-- Drag `.md` files from Finder into the editor to open in new tabs
-- 6 document templates: Note, ADR, Runbook, Postmortem, PRD, PR/FAQ
-- Obsidian import/export
-- Spotlight indexing, crash recovery (parse-on-open corruption detection), file watching
+**Home** (the default screen) covers the common cases:
 
-Build and install:
+- **Vault card**: active vault name and path, a badge confirming it matches the vault Obsidian has open, and an Obsidian plugin row showing the installed plugin version with an Install/Update button (runs `2nb plugin install`)
+- **AI card**: provider and models (AWS Bedrock with Claude Haiku 4.5 + Amazon Nova-2 by default) with a readiness dot, Save-as-default, and Test buttons
+- **Index card**: document and embedding counts with Rebuild Index and Re-embed All
+- An orange banner warns when the installed `2nb` CLI is older than the app (a cask upgrade does not bump the CLI formula); when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` for you
+
+**Advanced** tabs for the power-user depth:
+
+- **Vault Status**: unified health (vault info, index coverage, embedding portability, AI reachability, stale docs)
+- **AI Settings**: the AI Hub (Cmd+Shift+,) with provider cards, active model slots, and the full model catalog with per-model test, benchmark, and enable/disable
+- **MCP Server** (Cmd+Shift+M): live MCP server processes and recent tool invocations
+- **Git Integration** (Cmd+Shift+G): recent commits with a 1/3/7/30-day window; click a commit for per-file diffs
+- **Validation**: `2nb lint` findings rendered with file and line detail
+
+Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Rebuild Index, Validate Vault, Import/Export Obsidian) and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
+
+Build and install from source:
 
 ```bash
-make install    # Installs to ~/Applications
+make install    # CLI to /usr/local/bin, app to ~/Applications
 ```
 
 ## Document Types
@@ -512,56 +500,66 @@ make test-gui       # GUI tests (AppleScript automation)
 make test-all       # Go + battery + Swift + GUI
 ```
 
-Requires Go 1.24+, CGO_ENABLED=1, macOS 14+ (for Swift app).
+Requires Go 1.25+, CGO_ENABLED=1, macOS 14+ (for Swift app).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Releasing
 
-Both the CLI and macOS editor are published to Homebrew via GitHub Actions.
+A release ships three products at one version: the `2nb` CLI, the Obsidian plugin, and the SecondBrain macOS app. CI builds the first two; the app is signed and notarized locally, so signing keys never enter CI.
+
+```bash
+make release-all         # the front door: test gate, bump, tag, wait for CI, then sign/notarize/publish the app
+```
+
+Or step by step:
 
 ```bash
 # 1. Bump the version
-make bump-build          # 0.1.8 → 0.1.9 (or bump-minor / bump-major)
+make bump-build          # 0.8.0 → 0.8.1 (or bump-minor / bump-major)
 
-# 2. Release — tags, pushes, and triggers CI
+# 2. Release: updates CHANGELOG.md, commits, tags, pushes; CI takes it from there
 make release
+
+# 3. After CI finishes: build, sign, notarize, and publish the app + cask (local only)
+make release-app
 ```
 
-`make release` updates `CHANGELOG.md`, commits, creates a git tag, and pushes it. GitHub Actions then:
+GitHub Actions on the tag push:
 
 1. Builds CLI binaries (arm64 + x86_64) via [GoReleaser](https://goreleaser.com)
-2. Builds SecondBrain.app (arm64, `swift build -c release`)
-3. Creates a [GitHub Release](https://github.com/apresai/2ndbrain/releases) with all archives
-4. Pushes the Homebrew formula and cask to [`apresai/homebrew-tap`](https://github.com/apresai/homebrew-tap)
+2. Builds and uploads the Obsidian plugin assets (`manifest.json`, `main.js`, `styles.css`, `versions.json`)
+3. Creates a [GitHub Release](https://github.com/apresai/2ndbrain/releases) with the CLI archives and plugin assets
+4. Pushes the Homebrew formula (`twonb`, plus the `2nb` alias) to [`apresai/homebrew-tap`](https://github.com/apresai/homebrew-tap)
+
+`make release-app` then runs on the maintainer's machine: it builds SecondBrain.app, signs it with a Developer ID certificate (hardened runtime), notarizes via Apple `notarytool`, staples the ticket, uploads the zip to the release, and updates the cask in the tap with the new version and sha256. Signing config is read from `scripts/sign.env` (gitignored; template at `scripts/sign.env.example`).
 
 Users install with:
 
 ```bash
 brew install apresai/tap/2nb                    # CLI
-brew install --cask apresai/tap/secondbrain     # macOS editor (includes CLI)
+brew install --cask apresai/tap/secondbrain     # macOS dashboard app (depends on the CLI formula)
 ```
 
-To build a release locally (without GitHub Actions):
+To build locally without GitHub Actions:
 
 ```bash
 make release-local       # runs goreleaser locally (CLI only)
-make package-app         # builds + zips SecondBrain.app locally
+make package-app         # builds + zips SecondBrain.app locally (ad-hoc signed, local use only)
 ```
-
-> **Note:** The editor is ad-hoc signed, not notarized with Apple Developer ID. Users must right-click > Open on first launch to bypass Gatekeeper.
 
 ## Architecture
 
 ```
-cli/    Go CLI + MCP server (cobra, go-sqlite3, mcp-go, aws-sdk-go-v2)
-app/    Swift macOS editor (SwiftUI, GRDB.swift, swift-markdown)
-         |                    |
-         +-------- shared ----+
-              .2ndbrain/index.db (SQLite WAL)
+cli/        Go CLI + MCP server (cobra, go-sqlite3, mcp-go, aws-sdk-go-v2)
+app/        Swift macOS dashboard (SwiftUI, GRDB.swift, swift-markdown)
+plugins/    Obsidian plugin (thin wrapper that shells out to 2nb)
+             |                    |
+             +-------- shared ----+
+                  .2ndbrain/index.db (SQLite WAL)
 ```
 
-The CLI and editor share the same SQLite database via WAL mode for concurrent access. All AI operations go through the provider interfaces in `cli/internal/ai/`.
+The CLI and dashboard share the same SQLite database via WAL mode for concurrent access. All AI operations go through the provider interfaces in `cli/internal/ai/`.
 
 ## License
 

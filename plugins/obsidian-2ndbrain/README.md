@@ -25,7 +25,7 @@ No npm build is required; users install prebuilt assets. From 0.8.0 the plugin v
 
 **Via BRAT (auto-updating):** Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin, then add the beta plugin `apresai/2ndbrain`. BRAT checks for new releases on its own, so pick this if you'd rather not rerun an update command.
 
-**Manual:** Download `manifest.json`, `main.js`, and `styles.css` from a [GitHub release](https://github.com/apresai/2ndbrain/releases) and copy them into your vault under `.obsidian/plugins/obsidian-2ndbrain/`. Then enable "2ndbrain AI" under Settings → Community plugins.
+**Manual:** Download `manifest.json`, `main.js`, `styles.css`, and `versions.json` from a [GitHub release](https://github.com/apresai/2ndbrain/releases) and copy them into your vault under `.obsidian/plugins/obsidian-2ndbrain/`. Then enable "2ndbrain AI" under Settings → Community plugins.
 
 On first launch the **Setup wizard** opens to walk you through installing the CLI, connecting AI, and indexing. You do not need to run `2nb init` on an existing Obsidian vault. The wizard's "Index now" (or `2nb index`) is all that's needed.
 

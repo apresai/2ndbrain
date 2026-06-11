@@ -74,12 +74,12 @@ SQLite database shared by the Go CLI and Swift app via WAL mode.
 
 | Table | Purpose |
 |-------|---------|
-| `documents` | Document metadata (id, path, title, type, status, timestamps, content_hash, frontmatter JSON, embedding, embedding_model, embedding_hash) |
+| `documents` | Document metadata (id, path, title, doc_type, status, timestamps, content_hash, frontmatter JSON, embedding, embedding_model, embedding_hash) |
 | `chunks` | Heading-based sections (heading path, level, content, content hash, line range) |
 | `chunks_fts` | FTS5 virtual table for BM25 keyword search |
 | `links` | Wikilink edges (source -> target, with resolution status) |
 | `tags` | Document tags for filtering |
-| `schema_version` | Single-row schema version; v2 adds document embedding columns |
+| `schema_version` | Single-row schema version; v2 adds document embedding columns; v3 adds the `aliases` table and `block_id` columns on `chunks` and `links` |
 
 ## Ignored Paths
 

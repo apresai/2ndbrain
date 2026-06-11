@@ -19,7 +19,7 @@
 | `kb_index` | none | Rebuild the vault index and refresh embeddings |
 | `kb_suggest_links` | `path` (required), `limit` | Suggest semantic wikilinks for a document |
 | `kb_polish` | `path` (required) | Generate a polished revision without writing it back |
-| `kb_git_activity` | `since` | Summarize recent git commits for the vault |
+| `kb_git_activity` | `since_days` | Summarize recent git commits for the vault |
 | `kb_git_diff` | `path` (required) | Return a unified diff for one file versus HEAD |
 | `kb_git_status` | none | Return porcelain-style git status for tracked and untracked files |
 

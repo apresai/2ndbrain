@@ -4,8 +4,8 @@ Thanks for your interest in contributing to 2ndbrain.
 
 ## Prerequisites
 
-- **Go 1.24+** with `CGO_ENABLED=1` (SQLite requires it)
-- **macOS 14+** (Sonoma) for the Swift editor
+- **Go 1.25+** with `CGO_ENABLED=1` (SQLite requires it)
+- **macOS 14+** (Sonoma) for the Swift dashboard app
 - **Xcode Command Line Tools** (`xcode-select --install`)
 
 Optional for AI features:
@@ -33,6 +33,12 @@ The CLI requires `-tags fts5` for SQLite full-text search. The Makefiles handle 
 ```bash
 # Go tests (all packages)
 make test
+
+# Golden-path E2E battery (vault, CRUD, index, MCP, skills)
+make test-battery
+
+# Swift app unit tests
+make test-swift
 
 # GUI tests (requires make install first)
 make test-gui
@@ -76,7 +82,8 @@ cli/               Go CLI + MCP server
   internal/search/ BM25 + vector search engine
   internal/mcp/    MCP server tools
   internal/skills/ Skill file generation for AI coding agents
-app/               Swift macOS editor
+app/               Swift macOS dashboard
+plugins/           Obsidian plugin (obsidian-2ndbrain)
 docs/              Additional documentation
 tests/             GUI test scripts
 ```
