@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 - `2nb plugin install` (alias `update`) installs or updates the Obsidian plugin into the open vault by downloading the latest release's `manifest.json`/`main.js`/`styles.css` into `.obsidian/plugins/obsidian-2ndbrain/`; `2nb plugin status` reports the installed plugin version vs the CLI (`--json`). The manifest is written last so a partial install never looks complete; enabling the plugin in Obsidian remains the one manual step
+- macOS app: Home is now an installer too. The CLI-drift banner gains an Update CLI button that runs `brew upgrade apresai/tap/twonb` directly (when Homebrew is present; the copyable command remains the fallback), and the Vault card gains an Obsidian-plugin row showing the installed plugin version with an Install/Update button that shells `2nb plugin install` pinned to the bound vault
 
 ## [0.5.15] - 2026-06-10
 

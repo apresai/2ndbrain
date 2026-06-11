@@ -65,6 +65,7 @@ Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/
 - **Suggest Links** — AI finds semantically related documents in your vault and proposes wikilinks to insert
 - **Polish** — AI copy-editor fixes spelling, grammar, and awkward phrasing with a diff preview (Accept / Open in new tab / Reject)
 - **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Rebuild Index and Re-embed All
+- **Built-in installer**: the dashboard updates the CLI (`brew upgrade` behind an Update CLI button) and installs or updates the Obsidian plugin into the bound vault (`2nb plugin install` behind an Install/Update button)
 - **AI connection testing** — one-click probe of your configured embedding and generation models with live latency
 - **Incremental re-embed on save** — embeddings rebuild only for the document whose content hash changed
 - **Git integration (read-only)** — sidebar dots for uncommitted/untracked files, Recent Activity panel, Show Changes vs HEAD, MCP tools for AI clients

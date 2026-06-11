@@ -50,7 +50,7 @@ Key files: `.goreleaser.yaml`, `.github/workflows/release.yml`, `scripts/release
 
 The `apresai` GitHub environment provides `HOMEBREW_TAP_TOKEN` (PAT for `apresai/homebrew-tap`). No code-signing secrets live in CI — signing is local only.
 
-The macOS app is distributed as an arm64 **Developer ID-signed, Apple-notarized** `.app` bundle, so it launches with no Gatekeeper prompt even when Homebrew's cask install quarantines it. The cask `depends_on formula: "apresai/tap/twonb"` because the app shells out to `2nb` for AI/indexing/lint; a cask upgrade does **not** bump the formula, so the app warns on Home when the CLI has drifted behind.
+The macOS app is distributed as an arm64 **Developer ID-signed, Apple-notarized** `.app` bundle, so it launches with no Gatekeeper prompt even when Homebrew's cask install quarantines it. The cask `depends_on formula: "apresai/tap/twonb"` because the app shells out to `2nb` for AI/indexing/lint; a cask upgrade does **not** bump the formula, so the app warns on Home when the CLI has drifted behind (and, when Homebrew is present, offers an Update CLI button that runs the `brew upgrade` itself).
 
 ## Build
 
@@ -306,7 +306,7 @@ The macOS app is a **configuration and companion dashboard, not an editor**: Obs
 
 | Tab | View | Purpose |
 |-----|------|---------|
-| **Home** (default) | HomeView.swift | Consolidated common-case surface: Vault card (name/path + an Obsidian-match badge confirming this is the vault Obsidian has open), AI card (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2 with a ready/not-ready dot and Save-as-default / Test buttons), and Index card (doc + embedding counts with Rebuild Index / Re-embed All). An orange banner warns when the installed `2nb` CLI is older than the app (`CLIVersion`/`refreshCLIVersion`), since `brew upgrade --cask` bumps the app but not the `twonb` formula. The catalog/benchmark/MCP/git/lint depth lives under Advanced. |
+| **Home** (default) | HomeView.swift | Consolidated common-case surface: Vault card (name/path + an Obsidian-match badge confirming this is the vault Obsidian has open, plus an Obsidian-plugin row showing the installed plugin version with an Install/Update button that shells `2nb plugin install`; `ObsidianPlugin`/`HomePlugin`), AI card (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2 with a ready/not-ready dot and Save-as-default / Test buttons), and Index card (doc + embedding counts with Rebuild Index / Re-embed All). An orange banner warns when the installed `2nb` CLI is older than the app (`CLIVersion`/`refreshCLIVersion`), since `brew upgrade --cask` bumps the app but not the `twonb` formula; when Homebrew is present (`BrewLocator`) the banner offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` (`AppState.upgradeCLI`). The catalog/benchmark/MCP/git/lint depth lives under Advanced. |
 
 Advanced section:
 

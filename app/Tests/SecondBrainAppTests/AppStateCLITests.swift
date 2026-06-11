@@ -127,6 +127,14 @@ func appStateNoVaultErrors() async {
         benchmarkNoVault = true
     } catch {}
     #expect(benchmarkNoVault)
+
+    var pluginInstallNoVault = false
+    do {
+        try await state.installObsidianPlugin()
+    } catch CLIError.noVault {
+        pluginInstallNoVault = true
+    } catch {}
+    #expect(pluginInstallNoVault)
 }
 
 @Test("CLIError.nonZeroExit surfaces the CLI stderr, falling back to the exit code")
