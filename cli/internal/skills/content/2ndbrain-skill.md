@@ -5,7 +5,7 @@ description: 2ndbrain (2nb) knowledge base for Obsidian-native vaults. Use to se
 
 # 2ndbrain Knowledge Base
 
-This project uses **2ndbrain** (`2nb`), an AI-native markdown knowledge base with a Go CLI, a native macOS editor, and an MCP server. All documents live as plain `.md` files with YAML frontmatter in a **vault** directory. The CLI and the macOS app share a SQLite index at `<vault>/.2ndbrain/index.db` via WAL mode.
+This project uses **2ndbrain** (`2nb`), an AI companion for Obsidian-native markdown vaults with a Go CLI, a native macOS dashboard, and an MCP server. All documents live as plain `.md` files with YAML frontmatter in a **vault** directory. The CLI and the macOS app share a SQLite index at `<vault>/.2ndbrain/index.db` via WAL mode.
 
 ## First — orient yourself in the vault (the 5-command drill)
 
@@ -378,7 +378,7 @@ vault-root/
 ├── .2ndbrain/
 │   ├── config.yaml          # Vault config (name, embedding, ai.*)
 │   ├── schemas.yaml         # Document type schemas
-│   ├── index.db             # SQLite search index (shared with macOS editor)
+│   ├── index.db             # SQLite search index (shared with the macOS dashboard)
 │   ├── bench.db             # Model benchmark history (optional)
 │   ├── mcp/<pid>.json       # One sidecar status file per running mcp-server
 │   ├── recovery/            # Pre-write crash snapshots

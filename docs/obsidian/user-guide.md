@@ -49,7 +49,7 @@ The macOS app acts as a companion control center. It does not edit your markdown
 
 Open the app using the Finder or terminal:
 ```bash
-open ~/Applications/SecondBrain.app
+open /Applications/SecondBrain.app
 ```
 
 ### Configuration and Status

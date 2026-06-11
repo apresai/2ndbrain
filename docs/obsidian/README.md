@@ -13,7 +13,7 @@ This directory contains the design and specification files for the pivot of 2nb 
 > The documentation in this directory supersedes the legacy import/export and UUID-first models described in the root [press-release.md](../../press-release.md) and [docs/vault-structure.md](../vault-structure.md).
 
 > [!TIP]
-> Just want to set it up? Start with **[getting-started.md](getting-started.md)** — install the CLI, index your vault, turn on AI, and add the Obsidian plugin in ~10 minutes.
+> Just want to set it up? Start with **[getting-started.md](getting-started.md)** — install the CLI, index your vault, turn on AI, and add the Obsidian plugin in ~10 minutes. For the app-first walkthrough (dashboard + plugin + AI + MCP), see the top-level **[Quick Start guide](../quick-start.md)**.
 
 ## Reading Order
 

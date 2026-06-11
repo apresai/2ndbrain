@@ -10,6 +10,8 @@ There are three pieces, and you only need the first two to get going:
 
 Total setup time: about 10 minutes.
 
+> Want the app-first walkthrough (dashboard, plugin, AI, and MCP in one pass)? See the [Quick Start guide](../quick-start.md). This page is the CLI-first route through the same setup.
+
 > **Prefer fewer terminal steps?** Skip to [Step 4](#step-4-install-the-obsidian-plugin): install the plugin and its first-run wizard downloads the `2nb` CLI and indexes your vault for you. Connecting AI still needs AWS credentials (or `2nb ai setup`); the wizard checks readiness and points you to it. Steps 1–3 below are the full terminal route.
 
 ---

@@ -1,118 +1,93 @@
 # 2ndbrain
 
-AI-native markdown knowledge base with a Go CLI, MCP server, and native macOS editor.
+Obsidian-native AI companion. **Obsidian stays the editor**; the Go CLI (`2nb`) + MCP server are the engine that indexes, searches, and answers (RAG) over a real Obsidian vault. A thin Obsidian plugin and a macOS configuration dashboard wrap the CLI. `2nb` writes only a gitignored `.2ndbrain/` sidecar and never rewrites your markdown (one explicit, user-invoked exception: `2nb plugin install` writes the plugin bundle under `.obsidian/plugins/obsidian-2ndbrain/`).
+
+> [!NOTE]
+> [CLAUDE.md](CLAUDE.md) at the repo root is the full, maintained project reference (architecture, release pipeline, command catalog, app internals). This file is the condensed version for coding agents; when the two disagree, trust CLAUDE.md and fix this file.
 
 ## Repository Layout
 
-- `cli/` — Go CLI binary (`2nb`) + MCP server
-- `app/` — Swift macOS editor (SwiftUI + AppKit)
+- `cli/` — Go CLI binary (`2nb`) + MCP server (the engine)
+- `app/` — Swift macOS configuration & companion dashboard, **not an editor** (SwiftUI + AppKit)
+- `plugins/obsidian-2ndbrain/` — thin Obsidian plugin that shells out to `2nb`
+- `docs/` — user-facing docs, including [docs/quick-start.md](docs/quick-start.md) and the Obsidian-pivot docs under `docs/obsidian/`
 - `reqs.md` — EARS-format requirements specification
-- `press-release.md` — Product vision document
 - `test-plan.md` — Requirements validation test plan
 
 ## Versioning
 
-Format: `major.minor.build` (e.g., `0.1.0`). Single source of truth: `VERSION` file at repo root.
+Format: `major.minor.build`. Single source of truth: `VERSION` file at repo root.
 
 | Component | How it reads the version |
 |-----------|------------------------|
 | Go CLI | `cli/Makefile` reads `../VERSION` via LDFLAGS into `internal/cli.Version` |
-| Swift app | `app/Sources/SecondBrain/Version.swift` (generated, exposes `appVersion`) |
+| Swift app | `app/Sources/SecondBrain/Version.swift` (generated; never edit by hand) |
+| Obsidian plugin | `manifest.json`/`package.json` synced by `make version-plugin` |
 
-Bump targets (root `Makefile`):
-
-| Target | Effect | Example |
-|--------|--------|---------|
-| `make bump-build` | Increment build | `0.1.0` → `0.1.1` |
-| `make bump-minor` | Increment minor, reset build | `0.1.1` → `0.2.0` |
-| `make bump-major` | Increment major, reset minor+build | `0.2.0` → `1.0.0` |
-
-Each bump target also regenerates `Version.swift`. Never edit `Version.swift` by hand.
+Bump targets (root `Makefile`): `make bump-build` (`0.8.0` → `0.8.1`), `make bump-minor`, `make bump-major`, `make set-version V=x.y.z`. Each regenerates `Version.swift` and syncs the plugin version files.
 
 ## Build
 
 ```bash
-make build              # Builds both CLI and app (generates Version.swift first)
-make build-cli          # Builds cli/bin/2nb only
-make build-app          # Generates Version.swift + builds macOS editor
-cd cli && make build    # Builds cli/bin/2nb
-cd cli && make test     # Runs all Go tests
-cd cli && make install  # Installs to /usr/local/bin/2nb
+make build              # Both CLI and app (regenerates Version.swift)
+make build-cli          # cli/bin/2nb only
+make build-app          # macOS app
+cd cli && make test     # All Go tests
+cd cli && make install  # Install to /usr/local/bin/2nb
 ```
 
-### Running the macOS Editor
+**Required:** CGO_ENABLED=1 and `-tags fts5` for all Go compilation (SQLite FTS5 + CGO).
 
-Launch via `open` on the `.app` bundle — do **not** run the raw binary directly (it won't register with the window server and no window will appear):
+Launch the macOS app via `open` on the `.app` bundle — never run the raw binary directly (it won't register with the window server):
 
 ```bash
 open app/.build/arm64-apple-macosx/debug/SecondBrain.app
 ```
 
-**Required:** CGO_ENABLED=1 and `-tags fts5` for all Go compilation (SQLite FTS5 + CGO).
-
 ## Testing
 
 ```bash
-make test               # Go unit tests (cli/)
+make test               # Go unit tests
+make test-battery       # Golden-path E2E battery (cli/battery_test.go)
+make test-swift         # Swift unit tests (JSON decoding, parsing, wizard logic)
 make test-gui           # GUI tests via AppleScript + screencapture
-make test-all           # Everything: Go + GUI
-make install            # Build + install CLI to /usr/local/bin + app to /Applications
+make test-all           # Everything
+make install            # Build + install CLI to /usr/local/bin + app to ~/Applications
 ```
 
 ### No Mock Tests Policy
 
-**All tests MUST use real API endpoints — local or paid. Mock tests (httptest.NewServer, fake responses, stub implementations) are NOT allowed.** Tests that need a provider should call the real API and skip if credentials or services are unavailable. This applies to AI provider tests (Bedrock, OpenRouter, Ollama), MCP tests, and any future integration tests. The test suite must verify actual behavior against real services, not simulated responses.
+**All tests MUST use real API endpoints — local or paid. Mock tests (httptest.NewServer, fake responses, stub implementations) are NOT allowed.** Tests that need a provider call the real API and skip if credentials or services are unavailable. This applies to AI provider tests (Bedrock, OpenRouter, Ollama), MCP tests, and any future integration tests.
 
-- **Bedrock tests**: Use real AWS credentials; skip if not configured
-- **OpenRouter tests**: Use real OPENROUTER_API_KEY; skip if not set
-- **Ollama tests**: Use real Ollama server at localhost:11434; skip if not running or model not pulled
-- Pure logic tests (e.g., string classification, price parsing) that don't call any API are fine
+- **Bedrock tests**: real AWS credentials; skip if not configured
+- **OpenRouter tests**: real `OPENROUTER_API_KEY`; skip if not set
+- **Ollama tests**: real server at localhost:11434; skip if not running or model not pulled
+- Pure logic tests (string classification, price parsing) that don't call any API are fine
 
 ### GUI Test Automation
 
-GUI tests use **AppleScript** for app interaction and **screencapture** for verification. Run `make install` first to install to `/Applications` — computer-use MCP requires apps in `/Applications` to grant access.
+GUI tests use **AppleScript** for app interaction and **screencapture** for verification. Run `make install` first (the app lands in `~/Applications`).
 
-- **Computer-use**: Use for interactive testing and visual verification after `make install`
-- **AppleScript**: Automated test scripts use this for headless GUI control
-- **File verification**: Tests check disk state (file exists, frontmatter correct) after GUI actions
-
-Test scripts live in `tests/`:
-
-| Script | What it tests |
-|--------|--------------|
-| `gui-helpers.sh` | Shared functions (screenshot, pass/fail, launch/kill) |
-| `gui-test-crud.sh` | Create notes (Note, ADR), delete, vault reopen |
-| `gui-test-navigation.sh` | Quick Open, Command Palette, Search Panel |
-| `gui-test-editor.sh` | Undo/redo, bold/italic, save, preview |
-| `gui-test-ui.sh` | Sidebar, focus mode, tabs, graph view |
-| `gui-test-vault.sh` | FSEvents, Obsidian import/export |
-| `gui-test-ai.sh` | Ask AI panel, status bar indicator, semantic search |
-
-### Key patterns for GUI tests
-
-- **NSAlert dialogs** (New Document): Type in text field, navigate popup via accessibility, press Return
-- **SwiftUI overlays** (Quick Open, Search, Command Palette): Rely on menu shortcuts (not `.onKeyPress`) since NSTextView steals focus. `makeFirstResponder(nil)` + `@FocusState` ensures overlay TextFields get focus.
-- **Sidebar clicks**: Use AppleScript `click at {x, y}` coordinates
-- **Screenshots**: Saved to `/tmp/sb-gui-tests/` for debugging failures
+Test scripts live in `tests/`: `gui-helpers.sh` (shared), `gui-test-crud.sh`, `gui-test-navigation.sh`, `gui-test-editor.sh`, `gui-test-ui.sh`, `gui-test-vault.sh`, `gui-test-vault-switch.sh`, `gui-test-ai.sh`, `gui-test-polish.sh` (credential-gated). Screenshots land in `/tmp/sb-gui-tests/` for debugging.
 
 ## Go CLI (`cli/`)
 
-**Module:** `github.com/apresai/2ndbrain`
-**Framework:** cobra for CLI, mark3labs/mcp-go for MCP server
-**Database:** mattn/go-sqlite3 with FTS5 for BM25 search
+**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** mattn/go-sqlite3 with FTS5
 
 ### Package Layout
 
 | Package | Purpose |
 |---------|---------|
-| `internal/ai` | AI provider interfaces, registry, Bedrock/OpenRouter/Ollama implementations |
+| `internal/ai` | Provider interfaces, registry, Bedrock/OpenRouter/Ollama implementations |
 | `internal/cli` | Cobra command definitions (one file per command) |
-| `internal/vault` | Vault init/open, config, schemas, templates, indexer |
+| `internal/vault` | Init/open, config, schemas, templates, indexer |
 | `internal/document` | Markdown parsing, frontmatter, chunking, wikilinks |
-| `internal/store` | SQLite database CRUD, migrations, link resolution |
+| `internal/store` | SQLite CRUD, migrations, link resolution |
 | `internal/search` | BM25 search engine with structured filters |
 | `internal/graph` | Link graph BFS traversal |
-| `internal/mcp` | MCP server with 9 tools |
+| `internal/mcp` | MCP server with 16 tools + sidecar status files |
+| `internal/git` | Read-only git wrappers (IsRepo, Activity, DiffFile, StatusFiles) |
+| `internal/skills` | Skill file generation and agent registry |
 | `internal/output` | JSON/CSV/YAML formatters |
 | `internal/testutil` | Test helpers (NewTestVault, CreateAndIndex) |
 
@@ -124,51 +99,46 @@ Test scripts live in `tests/`:
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (23)
+### CLI Commands (31 top-level)
 
-| Command | Flags | Purpose |
-|---------|-------|---------|
-| `init` | `--path` | Initialize a new vault |
-| `create` | `--type`, `--title` | Create document from template (adr/runbook/note/postmortem) |
-| `read` | `--chunk` | Read full document or specific section |
-| `meta` | `--set key=value` | View or update frontmatter with schema validation |
-| `index` | | Rebuild vault search index |
-| `search` | `--type`, `--status`, `--tag`, `--limit` | Hybrid BM25 search with filters |
-| `list` | `--type`, `--status`, `--tag`, `--limit`, `--sort` | List documents with filters |
-| `lint` | `[glob]` | Validate schemas, check broken wikilinks |
-| `stale` | `--since` | List documents not modified within N days |
-| `related` | `--depth` | Find related docs via link graph traversal |
-| `graph` | | Output link graph as JSON adjacency list |
-| `export-context` | `--types`, `--status`, `--limit` | Generate AGENTS.md-compatible context bundle |
-| `delete` | `--force` | Delete document from disk and index |
-| `import-obsidian` | `--target` | Import Obsidian vault (adds UUIDs, normalizes tags, builds index) |
-| `export-obsidian` | `--strip-ids` | Export vault to Obsidian format |
-| `mcp-server` | | Start MCP server on stdio transport |
-| `ask` | `<question>` | RAG Q&A — search vault, generate answer with sources |
-| `ai status` | | Show AI provider, models, readiness, embedding count |
-| `ai embed` | `<text>` | Generate embedding vector (debug/testing) |
-| `ai setup` | | Guided local AI setup with Ollama (install, pull models, configure) |
-| `models list` | `--type`, `--free` | List available AI models with pricing |
-| `config show` | | Dump full vault configuration |
-| `config get` | `<key>` | Read a config value |
-| `config set` | `<key> <value>` | Write a config value |
-| `config set-key` | `<provider>` | Store API key in macOS Keychain |
+Run `2nb --help` for the full list and `--help` on any command for flags. The complete annotated catalog lives in [CLAUDE.md](CLAUDE.md). Top-level commands by group:
 
-**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`
+| Group | Commands |
+|-------|----------|
+| Getting Started | `vault` (subcommands: `status`, `create`, `set`, `list`, `show`), `init` (deprecated alias for `vault create`), `completion` |
+| Documents | `create`, `read`, `meta`, `delete`, `list` |
+| Search & AI | `search`, `ask`, `chat`, `index`, `suggest-links`, `polish`, `ai` (`status`/`setup`/`local`/`embed`), `models` (`list`/`test`/`add`/`remove`/`enable`/`disable`/`enable-state`/`cost-preview`/`wizard`/`bench`/`calibrate`) |
+| Quality | `lint`, `stale`, `related`, `graph` |
+| Integration | `mcp-server`, `mcp-setup`, `mcp` (`status`), `plugin` (`status`/`install`), `git` (`activity`/`show`/`diff`/`status`, read-only), `export-context`, `skills` (`list`/`install`/`uninstall`/`show`) |
+| Import/Export | `import-obsidian`, `export-obsidian`, `migrate` |
+| Configuration | `config` (`show`/`get`/`set`/`set-key`) |
 
-### MCP Server (9 tools)
+**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`
+
+**Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`.
+
+### MCP Server (16 tools)
 
 | Tool | Purpose |
 |------|---------|
+| `kb_info` | Vault overview: name, doc types, schemas, counts, AI status |
 | `kb_search` | Hybrid search with type/status/tag filters |
-| `kb_read` | Read document or specific chunk by heading path |
+| `kb_ask` | RAG Q&A with source citations |
+| `kb_read` | Read document or chunk by heading path |
+| `kb_list` | List with filters |
+| `kb_create` | Create from template type |
+| `kb_update_meta` | Update frontmatter with validation |
 | `kb_related` | Traverse link graph to depth N |
-| `kb_create` | Create document from template type |
-| `kb_update_meta` | Update frontmatter fields with validation |
-| `kb_structure` | Get document heading hierarchy |
-| `kb_delete` | Delete document from vault and index |
-| `kb_list` | List documents with filters |
-| `kb_ask` | RAG Q&A — answer questions with source citations |
+| `kb_structure` | Document heading hierarchy |
+| `kb_delete` | Delete from vault and index |
+| `kb_index` | Rebuild index and embeddings |
+| `kb_suggest_links` | Find semantically related docs to link from a given doc |
+| `kb_polish` | AI copy-editor returns original + polished for diff |
+| `kb_git_activity` | Recent git commits touching vault files (`since_days`) |
+| `kb_git_diff` | Unified diff of a file vs HEAD |
+| `kb_git_status` | Map of path → porcelain status for uncommitted files |
+
+Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` (PID, start time, last 50 tool invocations). `2nb mcp status --json` enumerates live servers.
 
 ### Testing
 
@@ -178,17 +148,31 @@ Tests use `t.TempDir()` for isolated vaults. Each test creates its own SQLite da
 cd cli && make test    # go test -race -tags fts5 ./...
 ```
 
-## Swift macOS Editor (`app/`)
+## Swift macOS Dashboard (`app/`)
 
 **Framework:** SwiftUI + AppKit, Swift 6.0, macOS 14+
-**Dependencies:** GRDB.swift (SQLite), Yams (YAML), swift-markdown (parsing)
-**Architecture:** MVVM with @Observable, NSTextView for editor
+**Dependencies:** GRDB.swift (SQLite), Yams (YAML), swift-markdown
+**Architecture:** MVVM with `@Observable`
+
+The app is a **configuration and companion dashboard, not an editor**: Obsidian is the editor. It reads the same `.2ndbrain/index.db` the CLI writes (WAL mode) and shells out to `2nb` for all AI / index / lint / git work. On launch it binds to the vault Obsidian currently has open (via `ObsidianRegistry`, which reads `~/Library/Application Support/obsidian/obsidian.json`).
+
+### Dashboard Tabs
+
+| Tab | View | Purpose |
+|-----|------|---------|
+| **Home** (default) | HomeView.swift | Vault card (Obsidian-match badge + plugin Install/Update row), AI card (ready dot, Save-as-default, Test), Index card (Rebuild / Re-embed All), CLI-drift banner with Update CLI button |
+| Vault Status | VaultStatusView.swift | Unified health: index coverage, portability, AI reachability, stale docs |
+| AI Settings | AIHubView.swift | AI Hub: providers, active models, full catalog (Cmd+Shift+,) |
+| MCP Server | MCPStatusView.swift | Live MCP processes + recent tool invocations (Cmd+Shift+M) |
+| Git Integration | GitActivityView.swift | Recent commits (Cmd+Shift+G); click a row for per-file diffs |
+| Validation | LintResultsView.swift | Renders `2nb lint --json` findings |
 
 ### macOS SwiftUI Gotchas
 
-- **Sheets are broken with NSViewRepresentable**: SwiftUI `.sheet()` modals don't receive button/keyboard events when the parent view contains an NSViewRepresentable (like our NSTextView editor). Use AppKit dialogs (`NSAlert.runModal()` or `NSOpenPanel.runModal()`) instead — never `beginSheetModal` which has the same issue.
-- **Computer-use access**: The `.app` bundle must have a real binary (not symlink) and be ad-hoc codesigned (`codesign -s - --deep --force`). The Makefile handles this automatically.
-- **Troubleshooting**: When hitting SwiftUI platform bugs, use Context7 and Brave Search to find current guidance before guessing at fixes.
+- **Use AppKit dialogs for modals:** prefer `NSAlert.runModal()` / `NSOpenPanel.runModal()` over SwiftUI `.sheet()` / `beginSheetModal` when a modal needs reliable button/keyboard events.
+- **Computer-use access:** The `.app` bundle must have a real binary (not symlink) and be ad-hoc codesigned (`codesign -s - --deep --force`). The Makefile handles this.
+- **Yams traps, uncatchably:** `Yams.load` can `fatalError` (NOT throw) on malformed YAML such as Obsidian template placeholders (`date: {{date}}`); parse untrusted frontmatter via `Yams.compose` plus a manual `Node` walk. See `FrontmatterParser`.
+- **Troubleshooting:** When hitting SwiftUI platform bugs, use Context7 and Brave Search before guessing.
 
 ### Context7 Library IDs (for real-time docs lookup)
 
@@ -199,57 +183,6 @@ cd cli && make test    # go test -race -tags fts5 ./...
 | Swift concurrency migration | `/swiftlang/swift-migration-guide` |
 | GRDB.swift (SQLite) | `/groue/grdb.swift` |
 
-The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL mode for concurrent access).
-
-### GUI Features
-
-| Feature | File | Description |
-|---------|------|-------------|
-| Vault creation | VaultManager.swift | Create new vault with .2ndbrain directory |
-| Vault opening | SecondBrainApp.swift | Open existing vault via folder picker (Cmd+Shift+O) |
-| Document editing | EditorArea.swift | NSTextView with monospace font, debounced sync |
-| Live preview | EditorArea.swift | Side-by-side HTML preview via WKWebView |
-| Document templates | AppState.swift | Create from ADR, Runbook, Note, Postmortem templates |
-| Document deletion | SidebarView.swift | Context menu delete with confirmation |
-| Frontmatter editing | PropertiesView.swift | Editable properties with type-appropriate controls |
-| Wikilink autocomplete | MentionAutocompleteController.swift | `@` and `[[` triggered popover with document search |
-| Search panel | SearchPanelView.swift | Vault-wide search with type filters (Cmd+Shift+F) |
-| Quick open | QuickOpenView.swift | Fuzzy filename search (Cmd+P) |
-| Command palette | CommandPaletteView.swift | All commands with fuzzy search (Cmd+Shift+P) |
-| Graph view | GraphView.swift | Interactive force-directed link graph |
-| Backlinks panel | BacklinksView.swift | Documents linking to current document |
-| Outline panel | SidebarView.swift | Document heading hierarchy |
-| Properties panel | PropertiesView.swift | Editable frontmatter fields (Cmd+Option+I) |
-| Tab system | TabBarView.swift | Multiple documents with dirty indicators |
-| Focus mode | ContentView.swift | Distraction-free editing (Cmd+Shift+E) |
-| Status bar | StatusBarView.swift | Doc type, status, word count |
-| Index rebuild | AppState.swift | Shell out to `2nb index` |
-| Lint validation | LintResultsView.swift | Shell out to `2nb lint --json` |
-| Obsidian import | SecondBrainApp.swift | Import via CLI with folder picker |
-| Obsidian export | SecondBrainApp.swift | Export via CLI with folder picker |
-| Spotlight indexing | SpotlightIndexer | CoreSpotlight integration |
-| Crash recovery | CrashJournal | Recovery dialog on launch |
-| File watching | FSEventsWatcher | Auto-reload on external changes |
-| Ask AI panel | AskAIView.swift | RAG Q&A overlay via `2nb ask` (Cmd+Shift+A) |
-| AI status indicator | StatusBarView.swift | Provider readiness + embedding progress in status bar |
-| Semantic search | SearchPanelView.swift | Toggle for AI-powered hybrid search |
-| Find Similar | SidebarView.swift | Context menu → semantic search for similar docs |
-
-### Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| Cmd+N | New Document |
-| Cmd+S | Save |
-| Cmd+Shift+O | Open Vault |
-| Cmd+P | Quick Open |
-| Cmd+Shift+P | Command Palette |
-| Cmd+Shift+A | Ask AI |
-| Cmd+Shift+F | Search Panel |
-| Cmd+Shift+E | Focus Mode |
-| Cmd+Option+I | Properties Panel |
-| Cmd+\\ | Toggle Sidebar |
-
 ## Vault Format
 
 ### Directory Structure
@@ -258,16 +191,17 @@ The Swift app reads the same `.2ndbrain/index.db` that the Go CLI writes to (WAL
 vault-root/
 ├── .2ndbrain/
 │   ├── config.yaml      # Vault name, embedding settings
-│   ├── schemas.yaml     # Document type schemas
-│   ├── index.db         # SQLite index (shared between CLI and editor)
-│   ├── models/          # Embedding model files
+│   ├── schemas.yaml     # Document type schemas (committable)
+│   ├── index.db         # SQLite index (shared between CLI and app)
+│   ├── bench.db         # Benchmark history + favorites
+│   ├── mcp/             # <pid>.json per running mcp-server
 │   ├── recovery/        # Crash recovery snapshots
 │   └── logs/            # Error logs
 ├── document-1.md
-├── document-2.md
-└── subdirectory/
-    └── document-3.md
+└── subdirectory/document-2.md
 ```
+
+Beyond `.md`, the indexer parses `.canvas` (JSON Canvas) and `.base` (YAML Bases) files as read-only synthetic views; the CLI never writes back to them.
 
 ### Document Format
 
@@ -277,7 +211,7 @@ Plain `.md` files with YAML frontmatter:
 ---
 id: <UUID>           # Stable unique identifier (survives renames)
 title: Document Title
-type: note           # adr | runbook | note | postmortem
+type: note           # adr | runbook | prd | prfaq | note | postmortem
 status: draft        # Type-specific status values
 tags: [tag1, tag2]
 created: 2026-04-03T00:00:00Z
@@ -296,18 +230,20 @@ Body content with [[wikilinks]] to other documents.
 
 ### Document Type Schemas
 
-Defined in `.2ndbrain/schemas.yaml`. Four built-in types:
+Defined in `.2ndbrain/schemas.yaml`. Six built-in types:
 
-| Type | Required Fields | Status Values | Status Machine |
-|------|----------------|---------------|----------------|
-| **adr** | title, status | proposed, accepted, deprecated, superseded | proposed → accepted/deprecated; accepted → deprecated/superseded |
-| **runbook** | title, status | draft, active, archived | — |
-| **note** | title | draft, complete | — |
-| **postmortem** | title, status, incident-date | draft, reviewed, published | — |
+| Type | Required Fields | Status Values |
+|------|----------------|---------------|
+| **adr** | title, status | proposed → accepted/deprecated → superseded |
+| **runbook** | title, status | draft, active, archived |
+| **prd** | title, status | draft → review → approved → shipped → archived |
+| **prfaq** | title, status | draft → review → final |
+| **note** | title | draft, complete |
+| **postmortem** | title, status, incident-date | draft, reviewed, published |
 
 ### SQLite Schema (index.db)
 
-Tables: `documents`, `chunks`, `chunks_fts` (FTS5), `links`, `tags`, `schema_version`
+Tables: `documents`, `chunks`, `chunks_fts` (FTS5), `links`, `tags`, `aliases`, `schema_version`. Schema v3 adds the `aliases` table and a `block_id` column on `chunks` and `links` for Obsidian block references (`^block-id`).
 
 ## Obsidian Conversion
 
@@ -328,9 +264,12 @@ Tables: `documents`, `chunks`, `chunks_fts` (FTS5), `links`, `tags`, `schema_ver
 - Converts UUID-based references to filename-based wikilinks
 - Optionally strips `id` and `type` fields (`--strip-ids`)
 
+`2nb migrate` upgrades a legacy 2ndbrain vault to the Obsidian-native format (schema v3); `--dry-run` previews without modifying. Source markdown is never changed.
+
 ## MCP Integration
 
-Add to `~/.Codex.json`:
+For Claude Code, add to `~/.claude.json`:
+
 ```json
 {
   "mcpServers": {
@@ -342,3 +281,5 @@ Add to `~/.Codex.json`:
   }
 }
 ```
+
+Run `2nb mcp-setup` for config snippets for other tools (Cursor, Claude Desktop, Gemini CLI, Amazon Q, Kiro).
