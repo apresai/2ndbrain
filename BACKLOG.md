@@ -2,6 +2,17 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## `2nb plugin install/status` — review follow-ups (from PR review, 2026-06-10)
+
+Fixed in-PR: the missed write-boundary doc (`docs/obsidian/vault-coexistence.md`), installed-status test coverage, silent 16MB truncation (now errors), mixed-version partial updates (download-all-then-write), direction-aware drift hints with a dev-build guard, and rate-limit hints on 403/429. Remaining LOWs:
+
+- **LOW — `plugin status` compares the installed plugin against the CLI version, not the latest GitHub release.** Post-0.8.0 alignment that heuristic is right and offline-friendly, but a user whose CLI and plugin are both one release behind sees no nag. A `--check-latest` flag hitting the releases API would close it.
+- **LOW — `plugin install --json` is silently ignored** (human text prints regardless). Consistent with `skills install`, but a JSON result envelope (`{installed_version, previous_version, plugin_dir}`) would help the GUI button consume the result without scraping text.
+- **LOW — install's corrupt-manifest self-heal misclassifies read errors.** `installedPluginVersion` failures other than not-exist (e.g. EACCES) are warned as "manifest unreadable, reinstalling"; the subsequent write then fails loudly, so impact is bounded, but the warning text can mislead.
+- **LOW — `os.WriteFile` is not atomic; two concurrent installs in one vault can tear an asset.** Mitigated by download-first + manifest-written-last, and it's a user-invoked command; a write-temp-then-rename pattern would close it fully.
+- **LOW — install progress/diagnostics print to stderr and bypass the `slog` file logger it sets up**, so `.2ndbrain/logs/cli.log` records nothing about an install. Mirror key steps through `slog`.
+- **LOW — no SIGINT/context cancellation** (`context.Background()` + 30s client timeout), consistent with sibling commands; a repo-wide `cmd.Context()` adoption pass would cover this.
+
 ## Vault resolution — active-vault precedes cwd (from PR review, 2026-06-08)
 
 - **MEDIUM — a bare `2nb` run *inside* vault B's directory resolves to the active vault A, not B.** The resolution order is `--vault` > `2NB_VAULT` > `~/.2ndbrain-active-vault` > cwd (`root.go:218-242`), so the active-vault pointer wins over the current directory. With the new GUI→CLI sync (`AppState.openVault` writes the pointer on every bind), the active pointer is set more often, making this cross-vault surprise likelier for multi-vault users. It's pre-existing, documented precedence and only prints the resolved source on error. Options if it bites: (a) move cwd ahead of the active-vault file when the cwd is itself a vault, or (b) print the resolved vault + source on every run, not just on error. Single-vault users (the common case) are unaffected.

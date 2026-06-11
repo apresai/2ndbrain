@@ -78,7 +78,7 @@ Then build embeddings and confirm:
 
 The plugin is a thin wrapper around the `2nb` CLI, and **it can download and manage the CLI for you**, so most of setup happens inside Obsidian. (If you already ran Steps 1–3, the plugin just detects your existing `2nb`.) Connecting AWS Bedrock still needs your AWS credentials, which the wizard verifies and guides you to set.
 
-1. **Install the plugin.** Easiest via [BRAT](https://github.com/TfTHacker/obsidian42-brat): BRAT → *Add beta plugin* → `apresai/2ndbrain` (BRAT pulls the built `manifest.json` / `main.js` / `styles.css` from the latest release, no `npm build` needed). Or manually: download those three files from the latest [release](https://github.com/apresai/2ndbrain/releases) into `<vault>/.obsidian/plugins/obsidian-2ndbrain/`.
+1. **Install the plugin.** Simplest if you already have the CLI (Steps 1–3): run `2nb plugin install` from inside the vault; it downloads the built `manifest.json` / `main.js` / `styles.css` from the latest release into `<vault>/.obsidian/plugins/obsidian-2ndbrain/`. Or via [BRAT](https://github.com/TfTHacker/obsidian42-brat) for auto-updates: BRAT → *Add beta plugin* → `apresai/2ndbrain`. Or manually: download those three files from the latest [release](https://github.com/apresai/2ndbrain/releases) into the same folder.
 
 2. **Enable it:** Settings → Community plugins → (turn off Restricted mode if needed) → enable **2ndbrain AI**.
 

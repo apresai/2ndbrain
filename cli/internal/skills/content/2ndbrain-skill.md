@@ -60,6 +60,7 @@ Every command group has a useful default action when called without a subcommand
 | `2nb models` | `2nb models list` | Browse verified model catalog |
 | `2nb git` | `2nb git status` | Uncommitted files in a git-backed vault |
 | `2nb mcp` | `2nb mcp status` | Which MCP clients are live? |
+| `2nb plugin` | `2nb plugin status` | Is the Obsidian plugin installed, and at what version? |
 | `2nb skills` | `2nb skills list` | Which agents have this skill installed? |
 | `2nb config` | `2nb config show` | Full config including vault paths |
 
@@ -130,6 +131,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb mcp status` | List live MCP servers via `.2ndbrain/mcp/<pid>.json` sidecar files |
 | `2nb mcp-server` | Start the MCP server on stdio (this is what AI clients invoke) |
 | `2nb skills install <agent> [--all] [--user]` | Install this SKILL.md for Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, or JetBrains Junie |
+| `2nb plugin status` / `plugin install` | Inspect or install/update the Obsidian plugin in the open vault (downloads the latest release assets into `.obsidian/plugins/obsidian-2ndbrain/`; enabling in Obsidian stays manual) |
 | `2nb import-obsidian <path>` / `export-obsidian` | Convert between 2nb and Obsidian vault formats |
 
 ## MCP Server Tools (16)

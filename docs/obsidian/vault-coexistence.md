@@ -50,9 +50,10 @@ The `.obsidian/` directory is used only as the vault marker; its configuration f
 * Only `.2ndbrain/` configuration files and databases.
 * In-place frontmatter modifications when explicitly triggered by CLI metadata write commands (e.g., `2nb meta set`). These operations utilize AST-based parsing to preserve comments and layout.
 * The root `.gitignore` file to add `.2ndbrain/` to the ignore list automatically.
+* The plugin's own bundle under `.obsidian/plugins/obsidian-2ndbrain/`, written only by the explicit `2nb plugin install` command (never notes, never Obsidian settings).
 
 ### 2ndbrain Never Touches
-* Native `.obsidian/` configuration files.
+* Native `.obsidian/` configuration files (settings, workspace, themes); the only write under `.obsidian/` is the plugin bundle installed by an explicit `2nb plugin install`.
 * Original body content of markdown files.
 * Files matching system or user-defined ignore patterns.
 

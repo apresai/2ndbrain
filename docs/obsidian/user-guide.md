@@ -69,7 +69,8 @@ The plugin lets you search and query your knowledge base directly from Obsidian,
 
 ### Installation
 
-- **Via BRAT (recommended):** install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin, then *Add beta plugin* → `apresai/2ndbrain`. BRAT pulls the built `manifest.json` / `main.js` / `styles.css` from the latest release, no local build needed.
+- **Via the CLI (simplest):** if you already have `2nb`, run `2nb plugin install` from inside your vault; it downloads the built `manifest.json` / `main.js` / `styles.css` from the latest release into `<vault>/.obsidian/plugins/obsidian-2ndbrain/`.
+- **Via BRAT (auto-updating):** install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin, then *Add beta plugin* → `apresai/2ndbrain`. BRAT pulls the same three files and checks for new releases on its own.
 - **Manual:** download those three files from the latest [release](https://github.com/apresai/2ndbrain/releases) into `<vault>/.obsidian/plugins/obsidian-2ndbrain/`.
 
 Then enable it: Settings → Community plugins → **2ndbrain AI**.
