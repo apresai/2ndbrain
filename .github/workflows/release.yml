@@ -65,6 +65,19 @@ jobs:
         with:
           node-version: '22'
 
+      # From 0.8.0 every product releases at the VERSION file's version.
+      # `make bump-*` / `make set-version` sync the plugin manifest; this
+      # guard fails the release on any drift instead of silently shipping a
+      # plugin whose version disagrees with the CLI/app/cask.
+      - name: Verify plugin version matches VERSION
+        run: |
+          MANIFEST_VERSION=$(node -p "require('./plugins/obsidian-2ndbrain/manifest.json').version")
+          if [ "${MANIFEST_VERSION}" != "${VERSION}" ]; then
+            echo "::error::Plugin manifest version (${MANIFEST_VERSION}) != VERSION (${VERSION}). Run 'make version-plugin' and re-tag."
+            exit 1
+          fi
+          echo "Plugin version ${MANIFEST_VERSION} matches VERSION."
+
       - name: Build Obsidian plugin
         run: |
           cd plugins/obsidian-2ndbrain

@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app install clean test test-battery test-swift test-gui test-all version-swift bump-major bump-minor bump-build release release-local update-changelog
+.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app install clean test test-battery test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -8,6 +8,21 @@ BUILD := $(word 3,$(subst ., ,$(VERSION)))
 version-swift:
 	@echo '// Auto-generated from VERSION file - do not edit manually.' > app/Sources/SecondBrain/Version.swift
 	@echo 'let appVersion = "$(VERSION)"' >> app/Sources/SecondBrain/Version.swift
+
+# Sync the Obsidian plugin's manifest.json + package.json + package-lock.json
+# to VERSION so the plugin releases at the product version (aligned from
+# 0.8.0 onward). Refuses to LOWER the plugin version (Obsidian/BRAT only see
+# increases as updates); minAppVersion is untouched; release CI fails on any
+# drift (parity guard in .github/workflows/release.yml).
+version-plugin:
+	@node scripts/sync-plugin-version.js
+
+# One-shot version set across every product: make set-version V=0.8.0
+set-version:
+	@test -n "$(V)" || { echo "usage: make set-version V=x.y.z"; exit 1; }
+	@echo "$(V)" > VERSION
+	@$(MAKE) version-swift version-plugin
+	@echo "Version: $$(cat VERSION)"
 
 build-cli:
 	$(MAKE) -C cli build
@@ -105,17 +120,17 @@ test-all: test test-battery test-swift test-gui
 bump-build:
 	@echo "$(MAJOR).$(MINOR).$(shell echo $$(($(BUILD)+1)))" > VERSION
 	@echo "Version: $$(cat VERSION)"
-	@$(MAKE) version-swift
+	@$(MAKE) version-swift version-plugin
 
 bump-minor:
 	@echo "$(MAJOR).$(shell echo $$(($(MINOR)+1))).0" > VERSION
 	@echo "Version: $$(cat VERSION)"
-	@$(MAKE) version-swift
+	@$(MAKE) version-swift version-plugin
 
 bump-major:
 	@echo "$(shell echo $$(($(MAJOR)+1))).0.0" > VERSION
 	@echo "Version: $$(cat VERSION)"
-	@$(MAKE) version-swift
+	@$(MAKE) version-swift version-plugin
 
 update-changelog:
 	@echo "Updating CHANGELOG.md with version $(VERSION)..."
@@ -132,7 +147,7 @@ release:
 	@echo "Step 2: Checking for uncommitted changes..."
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "Found changes, committing..."; \
-		git add CHANGELOG.md VERSION app/Sources/SecondBrain/Version.swift; \
+		git add CHANGELOG.md VERSION app/Sources/SecondBrain/Version.swift plugins/obsidian-2ndbrain/manifest.json plugins/obsidian-2ndbrain/package.json plugins/obsidian-2ndbrain/package-lock.json; \
 		git commit -m "Release v$(VERSION)"; \
 		git push origin main; \
 		echo "Changes committed and pushed"; \
