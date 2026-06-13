@@ -101,3 +101,18 @@ Shipped GO with no CRITICAL/HIGH. In-PR fixes: the two stale plugin-settings doc
 - **MEDIUM — `runMCPConfigured` lacks a CLI contract test.** The `--json` envelope (`[]ConfiguredStatus`) is a consumer contract the plugin parses, but only the `configuredFromFile` core is unit-tested; the cobra handler / JSON output isn't exercised by `core_commands_contract_test.go` the way `create` is. Add a `mcp configured --json --porcelain` contract case asserting the array shape (`client`, `configured`).
 - **LOW — malformed `~/.claude.json` is reported identically to missing (`configured.go:73-79`).** A corrupt or permission-denied config resolves to `Configured:false` (correct fail-soft), but a `--verbose` user gets no signal that the truth is "couldn't read your config." A `slog.Warn` on the malformed/EACCES branch (distinct from `os.IsNotExist`) would aid diagnosis without changing the soft-fail contract.
 - **LOW — `docs/mcp-integration.md` could cross-reference `2nb mcp configured`.** It walks through pasting the server snippet but never mentions how to verify it stuck; a one-line "Verify with `2nb mcp configured`" would close the loop.
+
+## obsidian-CLI parity roadmap (2026-06-13)
+
+Eight phases that bring the `2nb` CLI to parity with common Obsidian vault operations. Each phase is one PR (Phase 6 is a solo PR). MCP `kb_*` twins for the read/query commands are intentionally deferred to a single consolidated MCP PR rather than shipped per-phase, so the CLI surface lands first and the MCP layer mirrors it in one reviewable diff.
+
+1. **Phase 1 — links & health (read-only) [this PR].** `backlinks <path>` (resolved inbound links), `links <path>` (outbound links incl. broken, with a `resolved` flag), `orphans` (no inbound link), `deadends` (no outbound link). New store queries over the existing links/documents tables, no schema change.
+2. **Phase 2 — structure & inventory (read-only).** `outline <path>` (heading hierarchy, sharing a `buildOutline` helper extracted from the MCP `kb_structure` handler), `wordcount`, `folders` (directory tree), `tags-list`, `aliases-list`.
+3. **Phase 3 — frontmatter reads/removes.** `meta --get <key>` and `meta --remove <key>` to round out the existing `meta --set`.
+4. **Phase 4 — body edits.** `append`, `prepend`, `replace` for note bodies/sections, plus the write-invariant change documenting that `2nb` now edits note markdown on explicit user invocation.
+5. **Phase 5 — AI + tag writes.** `polish --write` (apply the copy-edit in place rather than just previewing) and a `tags rename` bulk operation.
+6. **Phase 6 — link-aware move/rename [solo PR].** `move`/`rename` that rewrite inbound `[[wikilinks]]` so links don't break, mirroring Obsidian's own rename behavior.
+7. **Phase 7 — daily notes.** Daily-note create/open/append honoring the vault's daily-note settings.
+8. **Phase 8 — tasks.** Query and toggle Obsidian-style `- [ ]` / `- [x]` task checkboxes across the vault.
+
+**Out of scope (app-coupled / not CLI work):** commands that only make sense inside Obsidian's running process (opening a file in the active pane, focusing a workspace leaf, invoking Obsidian commands/plugins, live-preview rendering). Those belong to the Obsidian plugin, not the headless `2nb` CLI.

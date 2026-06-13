@@ -79,6 +79,10 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb ask "<question>"` | RAG Q&A — searches the vault, synthesizes an answer with source citations. Multi-turn: `--history <path\|->` takes a JSON array of `{role, content}` turns (`-` = stdin); follow-ups are rewritten into standalone retrieval queries (`rewritten_query` in `--json`) |
 | `2nb chat` | Interactive multi-turn REPL over the same pipeline as `ask --history` (human terminal use; agents should prefer `ask --history`, which has `--json`) |
 | `2nb related <path>` | Find docs connected via `[[wikilink]]` graph traversal (`--depth N`) |
+| `2nb backlinks <path>` | List resolved inbound links to a document: which docs link to it (source path/title + the link's heading/alias/raw form) |
+| `2nb links <path>` | List outbound links from a document, including unresolved ones (each row carries a `resolved` bool), so it doubles as a per-file broken-link view |
+| `2nb orphans` | List documents nothing links to (no resolved inbound link) — candidates to wire into the graph |
+| `2nb deadends` | List documents that link to nothing real in the vault (no resolved outbound link; a note with only broken links still counts) |
 | `2nb graph` | Output the full link graph as JSON adjacency list |
 | `2nb suggest-links <path>` | Rank semantically related documents that would make good wikilink targets (excludes docs already linked) |
 | `2nb stale --since 7d` | Docs not modified within N days |
