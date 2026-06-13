@@ -209,6 +209,8 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `meta <path> [--set key=value] [--get <key>] [--remove <key>]` | View frontmatter, or `--set` to write, `--get` to read one field (exit 1 if absent), `--remove` to delete a field in place (preserves comments/order; refuses identity and schema-required keys) |
 | `delete <path> [--force]` | Delete document from vault and index |
 | `list [--type] [--status] [--tag] [--sort]` | List documents with filters |
+| `tasks [--done] [--todo] [--path <file\|dir>]` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault. v1 is GFM open/done only (custom statuses like `[>]`/`[-]` are ignored) |
+| `task <path> <line> [--done \| --todo \| --toggle]` | Toggle a single GFM checkbox at a 1-based body line (default toggle). Errors if the line is not a checkbox; frontmatter is left untouched |
 
 ### Search & AI
 
