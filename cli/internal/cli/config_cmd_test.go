@@ -157,3 +157,60 @@ func TestSettableConfigKeys_includesThreshold(t *testing.T) {
 		t.Error("ai.similarity_threshold missing from settableConfigKeys — shell completion + error messages will be wrong")
 	}
 }
+
+// dummyConfigValue returns a value that setConfigValue will accept for the
+// given key. Boolean keys want "true", the threshold wants a 0..1 float,
+// dimensions wants an integer, and the rest are free-form strings (the
+// provider key needs a real provider name to pass validation).
+func dummyConfigValue(key string) string {
+	switch key {
+	case "ai.provider":
+		return "bedrock"
+	case "ai.dimensions":
+		return "1024"
+	case "ai.similarity_threshold":
+		return "0.5"
+	}
+	if strings.HasSuffix(key, ".disabled") {
+		return "true"
+	}
+	return "x"
+}
+
+// TestConfigGetSetKeyParity asserts that every key in the source-of-truth
+// settableConfigKeys list is accepted by BOTH getConfigValue and
+// setConfigValue. A key readable but not writable (or vice versa) is a silent
+// asymmetry: completion offers it, but one of get/set rejects it with "unknown
+// config key". This is a pure-logic guard, no provider needed.
+func TestConfigGetSetKeyParity(t *testing.T) {
+	if len(settableConfigKeys) == 0 {
+		t.Fatal("settableConfigKeys is empty")
+	}
+	for _, key := range settableConfigKeys {
+		t.Run(key, func(t *testing.T) {
+			// get must accept the key (no "unknown config key" error).
+			if _, err := getConfigValue(ai.AIConfig{}, key); err != nil {
+				t.Errorf("getConfigValue(%q) rejected a settable key: %v", key, err)
+			}
+			// set must accept the key with a type-appropriate dummy value.
+			cfg := ai.DefaultAIConfig()
+			if err := setConfigValue(&cfg, key, dummyConfigValue(key)); err != nil {
+				t.Errorf("setConfigValue(%q, %q) rejected a settable key: %v", key, dummyConfigValue(key), err)
+			}
+		})
+	}
+
+	// The reverse direction: any key getConfigValue or setConfigValue accepts
+	// must be in settableConfigKeys, so completion and the error message stay
+	// in sync with the switches. We probe with a fabricated key that neither
+	// switch should know about and assert both reject it; the per-key loop
+	// above already proves the forward direction.
+	const bogus = "ai.this_key_does_not_exist"
+	if _, err := getConfigValue(ai.AIConfig{}, bogus); err == nil {
+		t.Errorf("getConfigValue(%q) accepted a key absent from settableConfigKeys", bogus)
+	}
+	cfg := ai.DefaultAIConfig()
+	if err := setConfigValue(&cfg, bogus, "x"); err == nil {
+		t.Errorf("setConfigValue(%q) accepted a key absent from settableConfigKeys", bogus)
+	}
+}

@@ -150,8 +150,8 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb config set <key> <value>` | Write one key. Setting `ai.embedding_model` also resyncs `ai.dimensions` from the catalog; setting `ai.provider` validates the name, re-enables that provider, and warns if an active model can't be served |
 | `2nb config set-key <provider>` | Store a provider API key in macOS Keychain |
 | `2nb config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves), each with a fix hint. A genuine config defect exits 2 (so it can gate a script); an unreachable provider is a non-failing warning, so it stays usable offline/in CI. Run it when search degrades or after editing config by hand |
-| `2nb ai status` / `ai setup` / `ai local` / `ai embed <text>` | Provider status, wizard, readiness check, debug embedding |
-| `2nb models list` / `models test <id>` / `models bench` | Verified catalog, smoke test, benchmark favorites |
+| `2nb ai status` / `ai setup` / `ai local` / `ai embed <text>` | Provider status, setup wizard (a model that passes its probe is saved to the user catalog as `user_verified`), readiness check, debug embedding |
+| `2nb models list` / `models test <id>` / `models bench` / `models wizard [--set-active]` | Verified catalog, smoke test, benchmark favorites, end-to-end discover→test→save wizard (`--set-active` also writes the chosen models into the vault config) |
 | `2nb mcp status` | List live MCP servers via `.2ndbrain/mcp/<pid>.json` sidecar files (servers running *right now*) |
 | `2nb mcp configured` | Report whether the 2ndbrain MCP server is wired into the AI client config (`~/.claude.json`) for this vault. The durable "is it set up?" check: answers "will my AI tool find this vault?" even when the client is closed, unlike `mcp status`. If not configured, run `2nb mcp-setup`. |
 | `2nb mcp-server` | Start the MCP server on stdio (this is what AI clients invoke) |

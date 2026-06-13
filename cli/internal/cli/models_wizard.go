@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +23,7 @@ var (
 	wizardSkipDiscover bool
 	wizardCostCap      float64
 	wizardJSON         bool
+	wizardSetActive    bool
 )
 
 var modelsWizardCmd = &cobra.Command{
@@ -43,6 +46,8 @@ func init() {
 		"Abort if estimated test cost exceeds this USD value")
 	modelsWizardCmd.Flags().BoolVar(&wizardJSON, "json", false,
 		"Emit JSON-line events on stdout (non-interactive; uses defaults)")
+	modelsWizardCmd.Flags().BoolVar(&wizardSetActive, "set-active", false,
+		"After saving passing models, write the chosen embedding + generation models into the vault config (provider, ai.embedding_model, ai.generation_model)")
 	_ = modelsWizardCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsWizardCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 	modelsCmd.AddCommand(modelsWizardCmd)
@@ -69,6 +74,9 @@ type wizardEvent struct {
 	Tested    int               `json:"tested,omitempty"`
 	Passed    int               `json:"passed,omitempty"`
 	Saved     int               `json:"saved,omitempty"`
+	// Keys names the config keys written by a set_active event (e.g.
+	// ["ai.provider", "ai.embedding_model", "ai.generation_model"]).
+	Keys []string `json:"keys,omitempty"`
 }
 
 type providerStatus struct {
@@ -88,6 +96,10 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	// Mirror runConfigSet: route slog to .2ndbrain/logs/cli.log so the
+	// --set-active config writes below leave the same durable trail a terminal
+	// `config set` does (without --verbose, only the file logger sees them).
+	setupFileLogging(v)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -189,9 +201,12 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		results = append(results, r)
 	}
 
-	// Step 6: save the ones that passed.
+	// Step 6: save the ones that passed. Track the last passing embedding and
+	// generation model (and its provider) so --set-active can promote them to
+	// the active config slots below.
 	passed := 0
 	saved := 0
+	var activeEmbed, activeGen, activeProvider string
 	for _, r := range results {
 		if !r.OK {
 			continue
@@ -211,6 +226,12 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		saved++
+		switch r.Type {
+		case "embedding":
+			activeEmbed, activeProvider = r.ModelID, r.Provider
+		case "generation":
+			activeGen, activeProvider = r.ModelID, r.Provider
+		}
 		events.emit(wizardEvent{
 			Step:     "saved",
 			ModelID:  entry.ID,
@@ -219,12 +240,105 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		})
 	}
 
+	// Step 7: optionally write the chosen models into the active vault config.
+	// Opt-in via --set-active; in an interactive TTY we may also prompt. This
+	// reuses the EXACT config-write path that `config set ai.provider` /
+	// `ai.embedding_model` / `ai.generation_model` takes (provider validation,
+	// disabled-flag clear, dimension resync), so the wizard cannot leave the
+	// config in a state a manual `config set` couldn't produce.
+	if shouldSetActive(events, activeEmbed, activeGen) {
+		if err := writeActiveModelConfig(v, activeProvider, activeEmbed, activeGen, events); err != nil {
+			// Non-fatal: the catalog saves already succeeded. Surface the failure
+			// as an event/warning but still report done.
+			events.emit(wizardEvent{Step: "set_active_error", Error: err.Error()})
+		}
+	}
+
 	events.emit(wizardEvent{
 		Step:   "done",
 		Tested: len(results),
 		Passed: passed,
 		Saved:  saved,
 	})
+	return nil
+}
+
+// shouldSetActive decides whether to write the active config. It is gated on
+// at least one model having passed (nothing to set otherwise), then: --set-active
+// forces it; an interactive TTY (no flag) offers a y/N prompt that defaults to
+// no; a non-interactive run without the flag does nothing.
+func shouldSetActive(events *wizardEventSink, embed, gen string) bool {
+	if embed == "" && gen == "" {
+		return false
+	}
+	if wizardSetActive {
+		return true
+	}
+	if events.interactive() {
+		return promptYesNo(events.stderr, "Set these as the active embedding/generation models?", false)
+	}
+	return false
+}
+
+// writeActiveModelConfig writes provider + embedding + generation into the vault
+// config via setConfigValue (the same path config set uses), resyncs the
+// embedding dimension, saves, then runs Validate and surfaces any issues as
+// warnings. It emits a set_active event naming the keys it wrote.
+func writeActiveModelConfig(v *vault.Vault, provider, embed, gen string, events *wizardEventSink) error {
+	// Track the key/value pairs written so we can both emit the set_active event
+	// and slog each one (after a successful Save) the way runConfigSet does.
+	type kv struct{ key, value string }
+	var written []kv
+	if provider != "" {
+		if err := setConfigValue(&v.Config.AI, "ai.provider", provider); err != nil {
+			return fmt.Errorf("set ai.provider: %w", err)
+		}
+		written = append(written, kv{"ai.provider", provider})
+	}
+	if embed != "" {
+		if err := setConfigValue(&v.Config.AI, "ai.embedding_model", embed); err != nil {
+			return fmt.Errorf("set ai.embedding_model: %w", err)
+		}
+		written = append(written, kv{"ai.embedding_model", embed})
+		// Mirror runConfigSet: a model switch must resync ai.dimensions or it is
+		// a silent DIMENSION BREAK.
+		resyncEmbeddingDimensions(v, embed, events.stderr)
+	}
+	if gen != "" {
+		if err := setConfigValue(&v.Config.AI, "ai.generation_model", gen); err != nil {
+			return fmt.Errorf("set ai.generation_model: %w", err)
+		}
+		written = append(written, kv{"ai.generation_model", gen})
+	}
+	if len(written) == 0 {
+		return nil
+	}
+	if err := v.Config.Save(v.DotDir); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	// Log each write with the SAME "config set" message + key/value attrs as
+	// runConfigSet, adding a source attr so "what changed my active model?" is
+	// answerable from cli.log whether the change came via `config set` or the
+	// wizard. Logged only after Save succeeds so the log never claims a write
+	// that didn't persist.
+	keys := make([]string, 0, len(written))
+	for _, w := range written {
+		slog.Info("config set", "key", w.key, "value", w.value, "source", "models wizard")
+		keys = append(keys, w.key)
+	}
+	events.emit(wizardEvent{
+		Step:     "set_active",
+		Provider: v.Config.AI.Provider,
+		Keys:     keys,
+	})
+	// Surface any inconsistency the write introduced (e.g. only an embedding
+	// model passed, leaving a generation slot pointing at a different provider).
+	// Warn, do not fail: the catalog saves already happened and the partial
+	// write is still an improvement.
+	for _, issue := range v.Config.AI.Validate(v.Root) {
+		slog.Warn("ai config inconsistency", "issue", issue, "source", "models wizard")
+		events.emit(wizardEvent{Step: "set_active_warning", Message: issue})
+	}
 	return nil
 }
 
@@ -435,6 +549,12 @@ func renderWizardEventText(w io.Writer, e wizardEvent) {
 		fmt.Fprintf(w, "  → saved %s to %s catalog\n", e.ModelID, e.Scope)
 	case "save_error":
 		fmt.Fprintf(w, "  × save failed for %s: %s\n", e.ModelID, e.Error)
+	case "set_active":
+		fmt.Fprintf(w, "  → set active config: %s\n", strings.Join(e.Keys, ", "))
+	case "set_active_warning":
+		fmt.Fprintf(w, "  Warning: %s\n", e.Message)
+	case "set_active_error":
+		fmt.Fprintf(w, "  × set-active failed: %s\n", e.Error)
 	case "done":
 		fmt.Fprintf(w, "\n=== Done ===\nTested: %d   Passed: %d   Saved: %d\n", e.Tested, e.Passed, e.Saved)
 	}

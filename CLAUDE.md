@@ -188,7 +188,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `chat` | Interactive multi-turn REPL over the same pipeline as `ask --history`; conversation lives in-process only, no `--json` |
 | `ai status` | Provider, models, readiness, embedding count, vault portability state with one-line fix hints |
 | `ai embed <text>` | Generate embedding vector (debug) |
-| `ai setup` | Multi-provider setup wizard (`--provider --embedding-model --generation-model`) |
+| `ai setup` | Multi-provider setup wizard (`--provider --embedding-model --generation-model`). A model that passes its probe is persisted to the per-vault user catalog as `tier=user_verified`, so it shows up in `2nb models list` afterward (failed probes are never persisted) |
 | `ai local` | Check local AI readiness (Ollama, models, disk, RAM, embeddings) |
 | `models list` | Verified catalog. Flags: `--type --free --discover --status --provider --promote --scope --enabled-only`. `--discover --promote` tests unverified models concurrently and adds passing ones. `--enabled-only` drops user-disabled (dropdowns pass this; CLI use does not) |
 | `models test <id>` | Smoke-test a model. `--save` writes to user catalog regardless of pass/fail (success → `tier=user_verified`, failure → `test_error`). Default `--scope vault` |
@@ -198,7 +198,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `models disable [id]` | Hide from selection dropdowns (still listed by `models list`). Same `--vendor` bulk mode |
 | `models enable-state <id>` | Tri-state pointer: `--state default|enabled|disabled`. `default` clears for tier defaults. Used by GUI Enable State menu |
 | `models cost-preview [ids...]` | Estimate USD cost across one or more models. `--probe test|bench_embed|bench_gen|bench_rag|retrieval`. Local — no API calls |
-| `models wizard` | Interactive end-to-end: providers → discover → easy-mode → cost preview → test → save. `--json` emits line-delimited events; aborts non-interactively if estimated cost > `--cost-cap` (default $0.10) |
+| `models wizard` | Interactive end-to-end: providers → discover → easy-mode → cost preview → test → save. `--json` emits line-delimited events; aborts non-interactively if estimated cost > `--cost-cap` (default $0.10). `--set-active` writes the chosen embedding + generation models (and their provider) into the vault config via the same path `config set` uses (provider validation, disabled-flag clear, `ai.dimensions` resync), emitting a `set_active` event; an interactive run without the flag offers a y/N prompt (defaults to no), a non-interactive run does nothing unless `--set-active` is passed |
 | `models bench` | Benchmark against the vault. `--probe embed|generate|retrieval|search|rag`. `retrieval` is zero-API (scores stored embeddings). History in `.2ndbrain/bench.db`; per-model summary written at `--summary-scope` (default `global`). `--json` emits line-delimited events |
 | `models calibrate` | Sample baseline cosine distribution and recommend a similarity threshold. `--samples --save --scope --seed` |
 | `models bench fav/unfav/favs/history/compare` | Manage benchmark favorites and view history |

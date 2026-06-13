@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -48,6 +49,11 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	// Mirror runConfigSet: route slog to .2ndbrain/logs/cli.log so the
+	// active-model writes this wizard makes leave the same durable trail a
+	// terminal `config set` does (without --verbose, only the file logger sees
+	// them).
+	setupFileLogging(v)
 
 	cfg := v.Config.AI
 	ctx := context.Background()
@@ -167,23 +173,35 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		ollamaPullIfNeeded(scanner, genID)
 	}
 
-	// Step 4: Probe models.
+	// Step 4: Probe models. A passing probe is persisted to the per-vault user
+	// catalog (as user_verified) so a model that passed setup is not thrown
+	// away: it shows up in `2nb models list` afterward.
 	fmt.Printf("\nTesting embedding model %s...\n", embedID)
-	probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "embedding", &embedID, &dims)
+	embedProbe := probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "embedding", &embedID, &dims)
 	cfg.EmbeddingModel = embedID
 	if dims > 0 {
 		cfg.Dimensions = dims
 	}
+	persistProbe(v.Root, embedProbe)
 
 	fmt.Printf("Testing generation model %s...\n", genID)
-	probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "generation", &genID, &dims)
+	genProbe := probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "generation", &genID, &dims)
 	cfg.GenerationModel = genID
+	persistProbe(v.Root, genProbe)
 
 	// Step 5: Save config.
 	v.Config.AI = cfg
 	if err := v.Config.Save(v.DotDir); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
+	// Log the active-model writes with the SAME "config set" message + key/value
+	// attrs runConfigSet uses (plus a source attr) so "what changed my active
+	// model?" is answerable from cli.log whether the change came via `config set`
+	// or this setup wizard. Logged only after Save succeeds so the log never
+	// claims a write that didn't persist.
+	slog.Info("config set", "key", "ai.provider", "value", cfg.Provider, "source", "ai setup")
+	slog.Info("config set", "key", "ai.embedding_model", "value", cfg.EmbeddingModel, "source", "ai setup")
+	slog.Info("config set", "key", "ai.generation_model", "value", cfg.GenerationModel, "source", "ai setup")
 
 	fmt.Println("\nConfiguration saved:")
 	fmt.Printf("  Provider:         %s\n", cfg.Provider)
@@ -366,12 +384,17 @@ func ollamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 
 // --- Probe with retry ---
 
-func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig, models []ai.ModelInfo, provider, modelType string, modelID *string, dims *int) {
+// probeWithRetry tests the model, offering to pick a different one on failure.
+// It returns the passing *ai.TestProbeResult so the caller can persist it to
+// the user catalog (so a model that passed setup shows as user_verified in
+// `2nb models list`). Returns nil when the user opts to continue without a
+// passing probe.
+func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig, models []ai.ModelInfo, provider, modelType string, modelID *string, dims *int) *ai.TestProbeResult {
 	for {
 		result, err := ai.TestProbeModel(ctx, *cfg, *modelID, provider, modelType)
 		if err == nil && result.OK {
 			fmt.Printf("  OK (%s)\n", result.Latency)
-			return
+			return result
 		}
 		detail := ""
 		if result != nil {
@@ -382,9 +405,31 @@ func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfi
 		fmt.Printf("  Failed: %s\n", detail)
 		if !promptYN(scanner, "Try a different model?", true) {
 			fmt.Println("  Continuing without validation.")
-			return
+			return nil
 		}
 		*modelID, *dims = pickModel(scanner, models, provider, modelType)
+	}
+}
+
+// persistProbe writes a passing probe result to the per-vault user catalog as a
+// user_verified entry, so a model that passed `ai setup` is no longer thrown
+// away: it shows up in `2nb models list` afterward. This reuses the SAME
+// promotion path (promotedEntry + SaveUserCatalogEntry) that `models wizard`
+// uses. A nil result (probe skipped/failed) is a no-op; we never persist a
+// failed probe. Persistence failures are surfaced as a non-fatal warning since
+// the config save is the primary outcome of setup.
+func persistProbe(vaultRoot string, result *ai.TestProbeResult) {
+	if result == nil || !result.OK {
+		return
+	}
+	base := findBuiltinModel(result.Provider, result.ModelID)
+	entry := promotedEntry(base, result)
+	entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, vaultRoot)
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, vaultRoot, entry); err != nil {
+		// Keep the stderr warning (the interactive user needs to see it) and add a
+		// durable slog line so the failure is recoverable from cli.log later.
+		fmt.Fprintf(os.Stderr, "Warning: could not save %s to the model catalog: %v\n", entry.ID, err)
+		slog.Warn("catalog persist failed", "model", entry.ID, "err", err)
 	}
 }
 

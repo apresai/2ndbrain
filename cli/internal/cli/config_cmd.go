@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -160,16 +162,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	// and a bare `config set ai.embedding_model` take, which previously left
 	// the dimension stale.
 	if key == "ai.embedding_model" {
-		if dims := ai.EmbeddingDimensionsFor(v.Root, v.Config.AI.Provider, value); dims > 0 && dims != v.Config.AI.Dimensions {
-			if v.DB != nil {
-				if embCount, _ := v.DB.EmbeddingCount(); embCount > 0 {
-					fmt.Fprintf(os.Stderr,
-						"Note: embedding dimension changes from %d to %d; run `2nb index --force-reembed` to re-embed %d existing document(s).\n",
-						v.Config.AI.Dimensions, dims, embCount)
-				}
-			}
-			v.Config.AI.Dimensions = dims
-		}
+		resyncEmbeddingDimensions(v, value, os.Stderr)
 	}
 
 	if err := v.Config.Save(v.DotDir); err != nil {
@@ -191,6 +184,27 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Set %s = %s\n", key, value)
 	}
 	return nil
+}
+
+// resyncEmbeddingDimensions updates v.Config.AI.Dimensions to match the
+// embedding model `embedID` resolves to, and (when existing embeddings would
+// be invalidated) prints a re-embed hint to `warn`. Factored out of
+// runConfigSet so the wizard's --set-active path takes the EXACT same dimension
+// sync the `config set ai.embedding_model` path takes. A stale dimension is a
+// silent DIMENSION BREAK that disables semantic search.
+func resyncEmbeddingDimensions(v *vault.Vault, embedID string, warn io.Writer) {
+	dims := ai.EmbeddingDimensionsFor(v.Root, v.Config.AI.Provider, embedID)
+	if dims <= 0 || dims == v.Config.AI.Dimensions {
+		return
+	}
+	if v.DB != nil {
+		if embCount, _ := v.DB.EmbeddingCount(); embCount > 0 {
+			fmt.Fprintf(warn,
+				"Note: embedding dimension changes from %d to %d; run `2nb index --force-reembed` to re-embed %d existing document(s).\n",
+				v.Config.AI.Dimensions, dims, embCount)
+		}
+	}
+	v.Config.AI.Dimensions = dims
 }
 
 func runConfigSetKey(cmd *cobra.Command, args []string) error {

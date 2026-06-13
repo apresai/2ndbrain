@@ -166,6 +166,7 @@ Browse verified models across all providers, test any model, and benchmark your 
 # End-to-end wizard: discover → pick → cost preview → test → save
 2nb models wizard                 # TTY interactive flow
 2nb models wizard --json          # JSON-event stream (GUI / automation)
+2nb models wizard --set-active    # also write the chosen models into the vault config
 
 # Estimate before you run
 2nb models cost-preview us.anthropic.claude-opus-4-6-v1 --probe bench_rag
@@ -225,7 +226,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `polish <path> [--system <prompt>] [--write]` | AI copy-edit a document (JSON with original + polished body). `--write` applies the polished body to the document in place (opt-in; default is preview only) |
 | `index [--doc <path>] [--force-reembed]` | Build search index + embeddings (full vault or a single document); `--force-reembed` invalidates every stored embedding for after an intentional provider switch |
 | `ai status` | Show AI provider, models, embedding count, and vault portability state |
-| `ai setup` | Multi-provider setup wizard (easy mode or custom) |
+| `ai setup` | Multi-provider setup wizard (easy mode or custom); a model that passes its probe is saved to the user catalog as `user_verified` |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
 | `ai embed <text>` | Generate embedding vector (debug) |
 | `models list [--discover] [--status] [--provider] [--promote] [--enabled-only]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass; `--enabled-only` filters out user-disabled models (dropdowns use this) |
@@ -235,7 +236,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `models enable <id> --provider [--scope global\|vault]` | Mark a model enabled so it appears in dropdowns |
 | `models disable <id> --provider [--scope global\|vault]` | Hide a model from dropdowns; still listed by bare `models list` |
 | `models cost-preview [ids...] --probe <kind> [--provider] [--all]` | Estimate USD cost of running a probe (test / bench_embed / bench_gen / bench_rag / retrieval) across one or more models before committing |
-| `models wizard [--scope] [--provider] [--skip-discover] [--cost-cap] [--json]` | Interactive discover → pick → cost preview → test → save flow; `--json` emits an event stream for GUI / automation |
+| `models wizard [--scope] [--provider] [--skip-discover] [--cost-cap] [--json] [--set-active]` | Interactive discover → pick → cost preview → test → save flow; `--json` emits an event stream for GUI / automation; `--set-active` also writes the chosen embedding + generation models into the vault config (same write path as `config set`) |
 | `models bench` | Benchmark favorites with persistent history |
 | `models bench fav <model-id>` | Add model to benchmark favorites |
 | `models bench compare` | Side-by-side latency leaderboard |
