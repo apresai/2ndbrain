@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.8.2] - 2026-06-13
+
+### Added
+- Home dashboard "Claude Code" card showing Claude Code skill-installed status (with an Install button shelling `2nb skills install claude-code --user`) and MCP-server-configured status (with a Show-setup button).
+
+### Changed
+- MCP Server tab now leads with a durable "Configured in ~/.claude.json" banner (from `2nb mcp configured`) that reports setup state even when no server is running, distinguishing configured-but-idle from not-configured.
+
+
 ## [0.8.1] - 2026-06-12
 
 ### Added
