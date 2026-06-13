@@ -617,26 +617,8 @@ func (h *handlers) handleKBStructure(ctx context.Context, request mcplib.CallToo
 	}
 	doc.Path = path
 
-	chunks := document.ChunkDocument(doc)
-
-	type headingNode struct {
-		ID          string `json:"id"`
-		HeadingPath string `json:"heading_path"`
-		Level       int    `json:"level"`
-		StartLine   int    `json:"start_line"`
-		EndLine     int    `json:"end_line"`
-	}
-
-	nodes := make([]headingNode, len(chunks))
-	for i, c := range chunks {
-		nodes[i] = headingNode{
-			ID:          c.ID,
-			HeadingPath: c.HeadingPath,
-			Level:       c.Level,
-			StartLine:   c.StartLine,
-			EndLine:     c.EndLine,
-		}
-	}
+	// Shared with the CLI `outline` command so the two never drift.
+	nodes := document.BuildOutline(doc)
 
 	result := map[string]any{
 		"path":     path,

@@ -254,6 +254,11 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `graph <path>` | Output link graph as JSON |
 | `lint [glob]` | Validate schemas, check broken wikilinks |
 | `stale --since <days>` | Find stale documents |
+| `outline <path>` | Heading tree of a document (heading path, level, line span) |
+| `wordcount <path>` | Word, character, and heading counts over the indexable body (alias `wc`) |
+| `folders` | List folders with document counts (root docs under `(root)`) |
+| `tags` | List all tags vault-wide with counts |
+| `aliases` | List frontmatter aliases mapped to their document |
 
 ### Integration
 
