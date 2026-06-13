@@ -48,6 +48,31 @@ interface AIStatus {
 	providers?: { name: string; reachable: boolean; reason?: string }[];
 }
 
+// InstallStatus mirrors one entry of `2nb skills list --json` (the Go
+// skills.InstallStatus struct). Used to check whether the Claude Code skill
+// is installed for this user/project.
+interface InstallStatus {
+	slug: string;
+	name: string;
+	project_path?: string;
+	user_path?: string;
+	project_installed: boolean;
+	user_installed: boolean;
+	note?: string;
+}
+
+// ConfiguredStatus mirrors one entry of `2nb mcp configured --json` (the Go
+// mcp.ConfiguredStatus struct). Reports whether the 2ndbrain MCP server is
+// wired into the AI client config (durable), as opposed to running right now.
+interface ConfiguredStatus {
+	client: string;
+	config_path: string;
+	configured: boolean;
+	scope?: string;
+	server_key?: string;
+	vault_path: string;
+}
+
 // resolveCliPath resolves the 2nb binary path. Pure free function: it takes
 // its filesystem probe (existsFn) and environment (env) as parameters so it
 // can be unit-tested without touching the real disk. GUI apps don't always
@@ -403,6 +428,32 @@ export default class BrainPlugin extends Plugin {
 	async aiStatus(): Promise<AIStatus | null> {
 		try {
 			return JSON.parse(await this.runCommand(['ai', 'status', '--json'])) as AIStatus;
+		} catch {
+			return null;
+		}
+	}
+
+	// skillInstalled reports whether the Claude Code skill is installed (user
+	// or project scope). Returns null if the CLI isn't reachable / can't parse
+	// (e.g. a pre-skills CLI), so the caller can distinguish "no" from "unknown".
+	async skillInstalled(): Promise<boolean | null> {
+		try {
+			const arr = JSON.parse(await this.runCommand(['skills', 'list', '--json'])) as InstallStatus[];
+			const cc = arr.find(s => s.slug === 'claude-code');
+			return !!(cc && (cc.user_installed || cc.project_installed));
+		} catch {
+			return null;
+		}
+	}
+
+	// mcpConfigured reports whether the 2ndbrain MCP server is configured in the
+	// Claude Code client config for the open vault. Returns null if the CLI
+	// isn't reachable / lacks the `mcp configured` subcommand (pre-0.8.x CLI).
+	async mcpConfigured(): Promise<boolean | null> {
+		try {
+			const arr = JSON.parse(await this.runCommand(['mcp', 'configured', '--json'])) as ConfiguredStatus[];
+			const cc = arr.find(s => s.client === 'claude-code');
+			return cc ? cc.configured : false;
 		} catch {
 			return null;
 		}
@@ -899,6 +950,70 @@ class BrainSettingTab extends PluginSettingTab {
 				? formatIndexState(status.document_count ?? 0, status.embedding_count ?? 0)
 				: 'index state unavailable (2nb CLI not reachable)';
 			vaultSetting.setDesc(`${vaultName} — ${vaultPath} · ${state}`);
+		});
+
+		// Claude Code skill: is the 2nb SKILL.md installed for this user? The
+		// Install button shells `2nb skills install claude-code --user` so the
+		// skill is available across all Claude Code sessions.
+		const skillSetting = new Setting(containerEl)
+			.setName('Claude Code skill')
+			.setDesc('Checking…')
+			.addButton(btn => btn
+				.setButtonText('Install skill')
+				.onClick(async () => {
+					btn.setDisabled(true).setButtonText('Installing…');
+					try {
+						await this.plugin.runCommand(['skills', 'install', 'claude-code', '--user']);
+						new Notice('2ndbrain skill installed for Claude Code.');
+					} catch (e) {
+						new Notice(`Skill install failed: ${(e as Error).message}`);
+					} finally {
+						btn.setDisabled(false).setButtonText('Install skill');
+						this.display();
+					}
+				}));
+		this.plugin.skillInstalled().then(installed => {
+			if (installed === null) {
+				skillSetting.setDesc('Status unavailable (2nb CLI not reachable, or too old for `skills list`).');
+			} else if (installed) {
+				skillSetting.setDesc('Installed. Claude Code can use the 2ndbrain skill.');
+			} else {
+				skillSetting.setDesc('Not installed. Click Install skill to teach Claude Code about 2ndbrain.');
+			}
+		});
+
+		// Claude Code MCP server: is it CONFIGURED in ~/.claude.json for this
+		// vault? This is the durable signal, since the server is launched on
+		// demand by Claude Code, so "running" would read red whenever Claude
+		// Code is closed even when set up correctly. The button copies the config
+		// snippet rather than writing ~/.claude.json directly (mutating a user's
+		// global Claude config from a plugin is intentionally out of scope).
+		const mcpSetting = new Setting(containerEl)
+			.setName('Claude Code MCP server')
+			.setDesc('Checking…')
+			.addButton(btn => btn
+				.setButtonText('Copy setup snippet')
+				.onClick(async () => {
+					const snippet = JSON.stringify({
+						mcpServers: {
+							'2ndbrain': { command: '2nb', args: ['mcp-server'], cwd: vaultPath },
+						},
+					}, null, 2);
+					try {
+						await navigator.clipboard.writeText(snippet);
+						new Notice('Copied. Add it to ~/.claude.json, then restart Claude Code.');
+					} catch {
+						new Notice(`Add this to ~/.claude.json:\n\n${snippet}`);
+					}
+				}));
+		this.plugin.mcpConfigured().then(configured => {
+			if (configured === null) {
+				mcpSetting.setDesc('Status unavailable (2nb CLI not reachable, or too old for `mcp configured`).');
+			} else if (configured) {
+				mcpSetting.setDesc('Configured. Claude Code is wired to this vault in ~/.claude.json.');
+			} else {
+				mcpSetting.setDesc('Not configured. Click Copy setup snippet to wire Claude Code to this vault.');
+			}
 		});
 	}
 }
