@@ -102,6 +102,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	polishWrite = false
 	tagsRenameDryRun = false
 	dailyAppendText, dailyAppendFile = "", ""
+	moveDryRun, moveForce = false, false
 	// Body-write commands branch on cmd.Flags().Changed("text"); cobra keeps
 	// that per-flag bit set across Execute() calls, so a prior `append --text`
 	// would make the next `append` (stdin) wrongly take the --text branch.
