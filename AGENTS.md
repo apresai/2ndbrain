@@ -99,17 +99,17 @@ Test scripts live in `tests/`: `gui-helpers.sh` (shared), `gui-test-crud.sh`, `g
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (31 top-level)
+### CLI Commands (48 top-level)
 
 Run `2nb --help` for the full list and `--help` on any command for flags. The complete annotated catalog lives in [CLAUDE.md](CLAUDE.md). Top-level commands by group:
 
 | Group | Commands |
 |-------|----------|
 | Getting Started | `vault` (subcommands: `status`, `create`, `set`, `list`, `show`), `init` (deprecated alias for `vault create`), `completion` |
-| Documents | `create`, `read`, `meta`, `delete`, `list` |
-| Search & AI | `search`, `ask`, `chat`, `index`, `suggest-links`, `polish`, `ai` (`status`/`setup`/`local`/`embed`), `models` (`list`/`test`/`add`/`remove`/`enable`/`disable`/`enable-state`/`cost-preview`/`wizard`/`bench`/`calibrate`) |
-| Quality | `lint`, `stale`, `related`, `graph` |
-| Integration | `mcp-server`, `mcp-setup`, `mcp` (`status`), `plugin` (`status`/`install`), `git` (`activity`/`show`/`diff`/`status`, read-only), `export-context`, `skills` (`list`/`install`/`uninstall`/`show`) |
+| Documents | `create`, `read`, `meta` (`--get`/`--set`/`--remove`), `delete`, `list`, `append`, `prepend`, `replace`, `move`, `rename`, `daily` (`read`/`append`), `tasks`, `task` |
+| Search & AI | `search`, `ask`, `chat`, `index`, `suggest-links`, `polish` (`--write`), `ai` (`status`/`setup`/`local`/`embed`), `models` (`list`/`test`/`add`/`remove`/`enable`/`disable`/`enable-state`/`cost-preview`/`wizard`/`bench`/`calibrate`) |
+| Quality & structure | `lint`, `stale`, `related`, `graph`, `backlinks`, `links`, `orphans`, `deadends`, `outline`, `wordcount`, `folders`, `tags` (`list`/`rename`), `aliases` |
+| Integration | `mcp-server`, `mcp-setup`, `mcp` (`status`/`configured`), `plugin` (`status`/`install`), `git` (`activity`/`show`/`diff`/`status`, read-only), `export-context`, `skills` (`list`/`install`/`uninstall`/`show`) |
 | Import/Export | `import-obsidian`, `export-obsidian`, `migrate` |
 | Configuration | `config` (`show`/`get`/`set`/`set-key`) |
 

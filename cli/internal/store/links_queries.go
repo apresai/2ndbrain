@@ -121,7 +121,7 @@ func (db *DB) Deadends() ([]DocRef, error) {
 		FROM documents
 		WHERE id NOT IN (
 			SELECT DISTINCT source_id FROM links
-			WHERE target_id IS NOT NULL
+			WHERE target_id IS NOT NULL AND resolved = 1
 		)
 		ORDER BY path
 	`)
