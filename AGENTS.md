@@ -99,21 +99,21 @@ Test scripts live in `tests/`: `gui-helpers.sh` (shared), `gui-test-crud.sh`, `g
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (48 top-level)
+### CLI Commands (49 top-level)
 
 Run `2nb --help` for the full list and `--help` on any command for flags. The complete annotated catalog lives in [CLAUDE.md](CLAUDE.md). Top-level commands by group:
 
 | Group | Commands |
 |-------|----------|
 | Getting Started | `vault` (subcommands: `status`, `create`, `set`, `list`, `show`), `init` (deprecated alias for `vault create`), `completion` |
-| Documents | `create`, `read`, `meta` (`--get`/`--set`/`--remove`), `delete`, `list`, `append`, `prepend`, `replace`, `move`, `rename`, `daily` (`read`/`append`), `tasks`, `task` |
-| Search & AI | `search`, `ask`, `chat`, `index`, `suggest-links`, `polish` (`--write`), `ai` (`status`/`setup`/`local`/`embed`), `models` (`list`/`test`/`add`/`remove`/`enable`/`disable`/`enable-state`/`cost-preview`/`wizard`/`bench`/`calibrate`) |
-| Quality & structure | `lint`, `stale`, `related`, `graph`, `backlinks`, `links`, `orphans`, `deadends`, `outline`, `wordcount`, `folders`, `tags` (`list`/`rename`), `aliases` |
+| Documents | `create` (`--path`/`--content`), `read`, `meta` (`--get`/`--set`/`--remove`), `delete`, `list`, `append`, `prepend`, `replace`, `move`, `rename` (both link-aware: rewrite `[[wikilinks]]` + `[text](path.md)`), `daily` (`read`/`append`/`prepend`), `tasks`, `task` |
+| Search & AI | `search`, `ask`, `chat`, `index`, `suggest-links`, `polish` (`--write`), `ai` (`status`/`setup`/`local`/`embed`), `models` (`list`/`test`/`add`/`remove`/`enable`/`disable`/`enable-state`/`cost-preview`/`wizard` (`--set-active`)/`bench`/`calibrate`) |
+| Quality & structure | `lint`, `stale`, `related`, `graph`, `backlinks`, `links`, `orphans`, `deadends`, `unresolved`, `outline`, `wordcount`, `folders`, `tags` (`list`/`rename`), `aliases` |
 | Integration | `mcp-server`, `mcp-setup`, `mcp` (`status`/`configured`), `plugin` (`status`/`install`), `git` (`activity`/`show`/`diff`/`status`, read-only), `export-context`, `skills` (`list`/`install`/`uninstall`/`show`) |
 | Import/Export | `import-obsidian`, `export-obsidian`, `migrate` |
-| Configuration | `config` (`show`/`get`/`set`/`set-key`) |
+| Configuration | `config` (`show`/`get` (`--effective`)/`set`/`set-key`/`doctor`) |
 
-**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`
+**Global flags:** `--format` (json/csv/yaml/raw), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`. Also accepts obsidian-CLI-style `key=value` args and colon-commands (see CLAUDE.md "Obsidian-CLI syntax compatibility").
 
 **Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`.
 
