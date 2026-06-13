@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.8.1] - 2026-06-12
+
+### Added
+- `2nb mcp configured` command (and `mcp__configured`) reporting whether the 2ndbrain MCP server is set up in the AI client config (`~/.claude.json`) for the vault, with `--json` output — a durable "is it set up?" check distinct from `mcp status`.
+- `2nb create --path <subdir>` flag and a `path` argument on the `kb_create` MCP tool to file new documents under a vault-relative subdirectory (created if missing).
+- Obsidian plugin settings rows for Claude Code skill install status and MCP server configured status, with Install and Copy-snippet actions.
+- Quick start guide (`docs/quick-start.md`).
+
+### Changed
+- Reconciled README and project docs with the current implementation; documented `mcp configured` and `create --path` in the CLI command tables.
+
+
 ## [0.8.0] - 2026-06-10
 
 ### Added
