@@ -57,7 +57,7 @@ func runPrepend(cmd *cobra.Command, args []string) error {
 
 	// doc.Body already excludes the frontmatter, so prepending to it inserts
 	// the content right after the closing --- of the frontmatter.
-	doc.Body = content + "\n" + doc.Body
+	doc.Body = document.PrependToBody(doc.Body, content)
 
 	if err := writeBody(v, doc, absPath); err != nil {
 		return err

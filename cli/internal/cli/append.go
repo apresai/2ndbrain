@@ -56,7 +56,7 @@ func runAppend(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	doc.Body = doc.Body + "\n" + content
+	doc.Body = document.AppendToBody(doc.Body, content)
 
 	if err := writeBody(v, doc, absPath); err != nil {
 		return err

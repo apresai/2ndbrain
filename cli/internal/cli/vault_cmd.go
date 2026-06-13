@@ -197,7 +197,13 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	docCount, embeddedCount, embeddableUnembedded, _ := v.DB.EmbeddingCounts()
 	var staleCount int
 	staleCutoff := time.Now().AddDate(0, 0, -staleSinceDays).UTC().Format(time.RFC3339)
-	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents WHERE modified_at < ?", staleCutoff).Scan(&staleCount)
+	// Exclude empty modified_at (e.g. a doc whose `modified` frontmatter was
+	// removed): in SQLite '' < <cutoff> is true, so without this guard such a
+	// doc would falsely count as stale here while `2nb stale` (which has the
+	// same guard) excludes it, making the two diverge.
+	if err := v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents WHERE modified_at < ? AND modified_at != ''", staleCutoff).Scan(&staleCount); err != nil {
+		slog.Warn("vault status: stale-doc count query failed", "err", err)
+	}
 
 	vaultDim, _ := v.DB.SampleEmbeddingDim()
 	vaultModels, _ := v.DB.DistinctEmbeddingModels()

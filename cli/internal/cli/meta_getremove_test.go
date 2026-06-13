@@ -215,6 +215,41 @@ func TestMetaGet_RejectsCombinedWithWrite(t *testing.T) {
 	}
 }
 
+// TestMetaRemove_ClearsTimestampStructFields guards the reverse-sync fix:
+// removing the `created`/`modified` frontmatter key must also clear the
+// document's CreatedAt/ModifiedAt struct fields, because removeMeta re-indexes
+// via UpsertDocument which writes those struct fields into the index columns.
+// Without the sync, the index would keep the stale timestamp after removal.
+func TestMetaRemove_ClearsTimestampStructFields(t *testing.T) {
+	v, root := newContractVault(t)
+
+	rel := "stamped.md"
+	writeVaultDoc(t, root, rel, "---\nid: stamp-1\ntitle: Stamped\ntype: note\nstatus: draft\ncreated: \"2020-01-02T03:04:05Z\"\nmodified: \"2020-01-02T03:04:05Z\"\n---\nbody\n")
+
+	// Index it once so the documents row carries the original timestamps.
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	// Remove the modified key, which re-indexes via UpsertDocument.
+	if _, err := runCLIArgs(t, root, "meta", rel, "--remove", "modified"); err != nil {
+		t.Fatalf("meta --remove modified: %v", err)
+	}
+
+	// The index must reflect the cleared field, not the stale 2020 timestamp.
+	doc, err := v.DB.GetDocumentByPath(rel)
+	if err != nil {
+		t.Fatalf("GetDocumentByPath: %v", err)
+	}
+	if doc.ModifiedAt != "" {
+		t.Errorf("indexed ModifiedAt = %q, want empty after removing the modified key", doc.ModifiedAt)
+	}
+	// created was untouched, so it should still be present in the index.
+	if doc.CreatedAt != "2020-01-02T03:04:05Z" {
+		t.Errorf("indexed CreatedAt = %q, want the untouched original", doc.CreatedAt)
+	}
+}
+
 // TestMetaRemove_MissingKeyNotFound: removing an absent key reports ExitNotFound
 // so a script can tell "nothing to do" from "removed".
 func TestMetaRemove_MissingKeyNotFound(t *testing.T) {

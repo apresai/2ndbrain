@@ -269,6 +269,36 @@ func uniqueFilename(dir, slug, id string) string {
 	}
 }
 
+// AppendToBody appends content to the end of a document body, separating it
+// from existing content with a single newline. If either side is empty the
+// other is returned alone, so neither a fresh/empty note (`"" + "\n" + content`)
+// nor an empty append (`body + "\n" + ""`) picks up a spurious blank line.
+// Shared by the `append` CLI command and the `kb_append` MCP tool so both
+// behave identically.
+func AppendToBody(body, content string) string {
+	if body == "" {
+		return content
+	}
+	if content == "" {
+		return body
+	}
+	return body + "\n" + content
+}
+
+// PrependToBody inserts content at the start of a document body, separating it
+// from existing content with a single newline. If either side is empty the
+// other is returned alone (no stray blank line). Counterpart to AppendToBody,
+// shared by the `prepend` CLI command.
+func PrependToBody(body, content string) string {
+	if body == "" {
+		return content
+	}
+	if content == "" {
+		return body
+	}
+	return content + "\n" + body
+}
+
 func extractTags(meta map[string]any) []string {
 	raw, ok := meta["tags"]
 	if !ok {

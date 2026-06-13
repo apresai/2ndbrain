@@ -229,6 +229,10 @@ func removeMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 		// Mirror SetMeta's struct-field sync in reverse: clearing a key that
 		// shadows a struct field must also clear that field so the re-index
 		// (UpsertDocument reads the struct, not Frontmatter) stays consistent.
+		// created/modified are removable (not identity/required keys) and
+		// UpsertDocument writes doc.CreatedAt/doc.ModifiedAt into the index, so
+		// they must be cleared here too or the index keeps the stale timestamp
+		// until the next full re-index.
 		switch key {
 		case "title":
 			doc.Title = ""
@@ -238,6 +242,10 @@ func removeMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 			doc.Status = ""
 		case "tags":
 			doc.Tags = nil
+		case "created":
+			doc.CreatedAt = ""
+		case "modified":
+			doc.ModifiedAt = ""
 		}
 	}
 
