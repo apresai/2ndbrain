@@ -125,7 +125,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (55)
+### CLI Commands (56)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -156,6 +156,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `mcp-server` | Start MCP server on stdio transport |
 | `mcp-setup` | Show MCP setup instructions for all AI tools |
 | `mcp status` | List live MCP server processes and recent tool invocations (`--json`) |
+| `mcp configured` | Report whether the 2ndbrain MCP server is configured in the AI client config (`~/.claude.json`) for this vault (`--json`). Durable "is it set up?" check, unlike `mcp status` which reports "is it running right now?" |
 | `plugin status` | Installed Obsidian plugin version vs this CLI (`--json`) |
 | `plugin install` | Install or update the Obsidian plugin: downloads `manifest.json`/`main.js`/`styles.css` from the latest GitHub release into `<vault>/.obsidian/plugins/obsidian-2ndbrain/` (manifest written last so a partial install never looks complete). Alias: `plugin update`. Enabling in Obsidian stays manual (no API for it) |
 | `suggest-links` | Suggest semantically related documents to link from a given document (`--limit`) |
@@ -356,7 +357,7 @@ Replaces the AI Setup Wizard, Test AI Connection, and Model Wizard. Observes `mo
 
 A thin wrapper that shells out to the `2nb` CLI; Obsidian remains the editor. Command-palette prefix is **"2ndbrain AI:"**. Commands: Open chat, Semantic Search, Ask AI (RAG Q&A), Find Similar Notes, Rebuild AI Index, and Setup wizard. A **ribbon icon** (custom head-with-brain mark matching the app icon, registered via `addIcon`) toggles a right-sidebar **chat panel** (`ChatView extends ItemView`, view type `2ndbrain-chat`) holding a true multi-turn conversation: each message passes prior turns to `2nb ask --json --history -` via stdin (capped client-side by `trimChatHistory`, mirroring `ai.TrimHistory`) and renders the answer, degradation `warnings`, and source chips via a renderer shared with the Ask AI modal; a pre-`--history` CLI degrades to single-shot with an upgrade hint. It can **download and manage the `2nb` binary itself** (macOS only; resolves the latest GitHub release tag at runtime, ad-hoc signs it, and strips the quarantine xattr because the release isn't notarized) and opens a **first-run setup wizard** (Download CLI → Connect AI → Index).
 
-Install via **BRAT** (`apresai/2ndbrain`) or copy `manifest.json` / `main.js` / `styles.css` from a GitHub release, with **no npm build needed** by end users. Settings: "Download / update CLI", "2nb CLI Path" (defaults to `2nb`; probes Homebrew + `~/go/bin` + PATH), and a read-only **"Vault"** line (open Obsidian vault path + index state). Every CLI call is **pinned to the open Obsidian vault via `--vault adapter.getBasePath()`** (`pinVaultArgs`), so 2nb can never resolve a different vault from `~/.2ndbrain-active-vault` or cwd — the Obsidian vault and the 2nb vault stay joined. Source of record: `plugins/obsidian-2ndbrain/main.ts`.
+Install via **BRAT** (`apresai/2ndbrain`) or copy `manifest.json` / `main.js` / `styles.css` from a GitHub release, with **no npm build needed** by end users. Settings: "Download / update CLI", "2nb CLI Path" (defaults to `2nb`; probes Homebrew + `~/go/bin` + PATH), a read-only **"Vault"** line (open Obsidian vault path + index state), a **"Claude Code skill"** row (installed-status with an Install button that shells `2nb skills install claude-code --user`), and a **"Claude Code MCP server"** row (configured-status from `2nb mcp configured`, with a Copy-setup-snippet button; "configured" is the durable check since the server is launched on demand by the client). Every CLI call is **pinned to the open Obsidian vault via `--vault adapter.getBasePath()`** (`pinVaultArgs`), so 2nb can never resolve a different vault from `~/.2ndbrain-active-vault` or cwd, keeping the Obsidian vault and the 2nb vault joined. Source of record: `plugins/obsidian-2ndbrain/main.ts`.
 
 ## Vault Format
 

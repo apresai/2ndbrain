@@ -128,7 +128,8 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb config set-key <provider>` | Store a provider API key in macOS Keychain |
 | `2nb ai status` / `ai setup` / `ai local` / `ai embed <text>` | Provider status, wizard, readiness check, debug embedding |
 | `2nb models list` / `models test <id>` / `models bench` | Verified catalog, smoke test, benchmark favorites |
-| `2nb mcp status` | List live MCP servers via `.2ndbrain/mcp/<pid>.json` sidecar files |
+| `2nb mcp status` | List live MCP servers via `.2ndbrain/mcp/<pid>.json` sidecar files (servers running *right now*) |
+| `2nb mcp configured` | Report whether the 2ndbrain MCP server is wired into the AI client config (`~/.claude.json`) for this vault. The durable "is it set up?" check: answers "will my AI tool find this vault?" even when the client is closed, unlike `mcp status`. If not configured, run `2nb mcp-setup`. |
 | `2nb mcp-server` | Start the MCP server on stdio (this is what AI clients invoke) |
 | `2nb skills install <agent> [--all] [--user]` | Install this SKILL.md for Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, or JetBrains Junie |
 | `2nb plugin status` / `plugin install` | Inspect or install/update the Obsidian plugin in the open vault (downloads the latest release assets into `.obsidian/plugins/obsidian-2ndbrain/`; enabling in Obsidian stays manual) |
