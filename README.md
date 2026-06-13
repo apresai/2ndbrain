@@ -76,7 +76,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 - **Wikilinks** — `[[target#heading|alias]]` with link resolution and graph traversal
 - **Document templates** — ADR, runbook, prd, prfaq, postmortem, note with enforced schemas
 - **Native macOS dashboard** — SwiftUI + AppKit companion app for vault health, AI configuration, plugin install, MCP monitoring, and git activity; Obsidian remains the editor
-- **Local-first** — All data on disk as plain markdown in your Obsidian vault. `2nb` writes only a gitignored `.2ndbrain/` sidecar and never rewrites your notes.
+- **Local-first** — All data on disk as plain markdown in your Obsidian vault. `2nb` writes only a gitignored `.2ndbrain/` sidecar and never rewrites a note's body except via explicit, user-invoked commands (`append`, `prepend`, `replace`); frontmatter edits via `meta` have always rewritten files in place.
 
 ## AI Providers
 
@@ -202,6 +202,9 @@ Commands are organized into groups (`2nb --help` shows the full list).
 |---------|-------------|
 | `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root |
 | `read <path> [--chunk <heading>]` | Read document or specific section |
+| `append <path> [--text \| --file \| stdin]` | Append content to a document's body. Explicit, opt-in body write; frontmatter is left untouched |
+| `prepend <path> [--text \| --file \| stdin]` | Insert content at the start of a document's body, after the frontmatter |
+| `replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section` (first match wins on duplicate headings) |
 | `meta <path> [--set key=value] [--get <key>] [--remove <key>]` | View frontmatter, or `--set` to write, `--get` to read one field (exit 1 if absent), `--remove` to delete a field in place (preserves comments/order; refuses identity and schema-required keys) |
 | `delete <path> [--force]` | Delete document from vault and index |
 | `list [--type] [--status] [--tag] [--sort]` | List documents with filters |
