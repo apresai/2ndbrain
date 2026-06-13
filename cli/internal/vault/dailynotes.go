@@ -75,10 +75,9 @@ func LoadDailyNotesConfig(v *Vault) (DailyNotesConfig, error) {
 // time.Now()) so the result is deterministic and testable.
 //
 // The path is folder + "/" + formatted-date + ".md", where the date is rendered
-// by translating the configured Moment.js format to a Go time layout (see
-// momentToGoLayout for the supported token subset). Slashes inside the format
-// produce nested subdirectories, matching Obsidian's behavior with formats like
-// "YYYY/MM/DD".
+// by formatMoment (token runs via the momentToGoLayout subset, [...] literals
+// emitted verbatim). Slashes inside the format produce nested subdirectories,
+// matching Obsidian's behavior with formats like "YYYY/MM/DD".
 func DailyNotePath(v *Vault, t time.Time) (string, error) {
 	cfg, err := LoadDailyNotesConfig(v)
 	if err != nil {
@@ -91,17 +90,58 @@ func DailyNotePath(v *Vault, t time.Time) (string, error) {
 // returns the vault-relative path. Split out so tests can exercise the
 // folder/format math without touching disk.
 func dailyNotePathFromConfig(cfg DailyNotesConfig, t time.Time) (string, error) {
-	layout, err := momentToGoLayout(cfg.Format)
-	if err != nil {
-		return "", err
-	}
-	name := t.Format(layout) + ".md"
+	name := formatMoment(cfg.Format, t) + ".md"
 
 	// filepath.Join cleans the result and normalizes separators, so a format
 	// like "YYYY/MM/DD" yields nested directories and a folder of "" (the
 	// default) yields the bare filename at the vault root.
 	rel := filepath.Join(filepath.FromSlash(cfg.Folder), filepath.FromSlash(name))
 	return rel, nil
+}
+
+// formatMoment renders the time t through a Moment.js date format, segment by
+// segment. It is the correct renderer for formats that contain Moment's
+// [...] bracket-escaped literals: a Go time layout has NO escape mechanism, so
+// a literal like "Mon" or "Jan" placed in a layout and fed to t.Format would be
+// (mis)interpreted as the weekday / month token. By rendering token runs with
+// t.Format but emitting bracket-escaped literals directly, the literal text
+// reaches the output untouched regardless of the letters it contains.
+func formatMoment(format string, t time.Time) string {
+	if strings.TrimSpace(format) == "" {
+		format = defaultDailyNoteFormat
+	}
+
+	var out strings.Builder
+	i := 0
+	for i < len(format) {
+		// Bracket-escaped literal: copy bytes verbatim until the matching ']'
+		// (the brackets themselves are dropped). Token letters inside are NOT
+		// interpreted. An unclosed '[' treats the remainder as a literal.
+		if format[i] == '[' {
+			j := i + 1
+			for j < len(format) && format[j] != ']' {
+				j++
+			}
+			out.WriteString(format[i+1 : j])
+			if j < len(format) {
+				j++ // consume the closing ']'
+			}
+			i = j
+			continue
+		}
+
+		// Accumulate a run of non-bracket bytes, translate it to a Go layout,
+		// and render it. Stopping at the next '[' keeps each token run separate
+		// from the following literal so they never bleed into one another.
+		start := i
+		for i < len(format) && format[i] != '[' {
+			i++
+		}
+		layout, _ := momentToGoLayout(format[start:i])
+		out.WriteString(t.Format(layout))
+	}
+
+	return out.String()
 }
 
 // momentToGoLayout translates the common Moment.js date tokens Obsidian uses in
@@ -116,12 +156,16 @@ func dailyNotePathFromConfig(cfg DailyNotesConfig, t time.Time) (string, error) 
 //
 // Everything else (separators like "-", "/", "_", "." and literal text) passes
 // through verbatim. This is deliberately a SMALL subset: exotic Moment tokens
-// (day names, month names, hours/minutes, locale-aware ordinals, escaped
-// literals in [brackets], etc.) are NOT supported and would pass through as
-// literal characters, which is wrong for those tokens. Daily notes in practice
-// use a date-only format built from the tokens above, so the subset covers the
-// real-world cases; callers wanting an exotic format should configure a plainer
-// one in Obsidian.
+// (day names, month names, hours/minutes, locale-aware ordinals, etc.) are NOT
+// supported and would pass through as literal characters, which is wrong for
+// those tokens. Daily notes in practice use a date-only format built from the
+// tokens above, so the subset covers the real-world cases; callers wanting an
+// exotic format should configure a plainer one in Obsidian.
+//
+// Moment's [...] bracket-escaped literals are handled one level up in
+// formatMoment, which splits them out BEFORE calling this function, so the
+// input here never contains brackets and a literal whose text happens to spell
+// a Go layout token (e.g. "Mon", "Jan") is never misinterpreted.
 //
 // Token matching is longest-first (YYYY before YY, MM before M, DD before D) so
 // a longer token is never partially consumed by a shorter one.
