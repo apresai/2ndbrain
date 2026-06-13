@@ -239,6 +239,26 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 		return exitWithError(ExitValidation, fmt.Sprintf("error: move file: %v", err))
 	}
 
+	// (e2) Rewrite the moved note's OWN self-links. A note that links to itself
+	// (e.g. body holds [[old]] or [[old#section]]) is deliberately excluded from
+	// the referencing-note set above, because a referencing-note rewrite would
+	// target the OLD on-disk path which no longer exists after the rename. Its
+	// self-links must instead be rewritten in the moved file at its NEW path:
+	// IndexSingleFile only updates the index, never the body, so without this the
+	// self-links are left pointing at the old name and lint flags them broken.
+	if movedDoc, perr := document.ParseFile(dstAbs); perr == nil {
+		if rewritten, count := document.RewriteWikiLinks(movedDoc.Body, srcRel, dstRel); count > 0 {
+			movedDoc.Body = rewritten
+			movedDoc.Path = v.RelPath(dstAbs)
+			if werr := writeBody(v, movedDoc, dstAbs); werr != nil {
+				slog.Warn("rewrite moved note self-links failed", "path", dstRel, "err", werr)
+				fmt.Fprintf(os.Stderr, "warning: rewrite self-links in %s: %v\n", dstRel, werr)
+			} else {
+				result.Rewritten = append(result.Rewritten, moveRewrite{Path: dstRel, Count: count})
+			}
+		}
+	}
+
 	// (f) Reindex. First purge any pre-existing index row at the destination
 	// path: with --force the destination file was just clobbered on disk, and
 	// documents.path is UNIQUE, so leaving the clobbered file's row would make
@@ -286,8 +306,10 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 
 // dedupeRefPaths merges resolved backlink sources and unresolved-by-name link
 // sources into a sorted, de-duplicated list of referencing note paths, excluding
-// the moved document itself (a note that links to itself is rewritten on its own
-// move via the reindex of the new path, not as a referencing note).
+// the moved document itself. The moved doc's own self-links cannot be rewritten
+// here (a referencing-note rewrite targets the OLD path, which no longer exists
+// after the rename); they are handled separately in step (e2) of moveImpl, which
+// rewrites the moved file's body at its NEW path.
 func dedupeRefPaths(backlinks, rawRefs []store.LinkRef, srcRel string) []string {
 	seen := make(map[string]struct{})
 	for _, b := range backlinks {

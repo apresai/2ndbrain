@@ -141,6 +141,52 @@ func TestContract_Move_RewritesReferencingNotes(t *testing.T) {
 	}
 }
 
+// TestContract_Move_RewritesOwnSelfLinks guards the regression where a moved
+// note's OWN self-links (its body links to itself) were left pointing at the
+// old name on disk, because the moved doc is excluded from the referencing-note
+// set and IndexSingleFile only updates the index, not the body. After the fix,
+// step (e2) rewrites the moved file's body at its new path.
+func TestContract_Move_RewritesOwnSelfLinks(t *testing.T) {
+	_, root := newContractVault(t)
+
+	// hub links to itself by bare name AND path form, plus a heading anchor.
+	writeNote(t, root, "notes/hub.md", "Hub",
+		"See [[hub]] and [[notes/hub]] and [[hub#intro]] for context.")
+
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	if _, err := runCLIArgs(t, root, "move", "notes/hub.md", "notes/center.md", "--json"); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	body := readBody(t, root, "notes/center.md")
+	// No self-link should still point at the old name.
+	if strings.Contains(body, "[[hub") || strings.Contains(body, "[[notes/hub") {
+		t.Errorf("moved note still has self-links to the old name: %q", body)
+	}
+	// The bare, path, and heading forms should all be rewritten to the new name.
+	if !strings.Contains(body, "[[center]]") {
+		t.Errorf("bare self-link not rewritten to [[center]]: %q", body)
+	}
+	if !strings.Contains(body, "[[notes/center]]") {
+		t.Errorf("path self-link not rewritten to [[notes/center]]: %q", body)
+	}
+	if !strings.Contains(body, "[[center#intro]]") {
+		t.Errorf("heading self-link not rewritten to [[center#intro]]: %q", body)
+	}
+
+	// And lint should report zero broken wikilinks for the moved note.
+	out, err := runCLIArgs(t, root, "lint", "notes/center.md", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("lint: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), `"level": "error"`) {
+		t.Errorf("moved note has broken-link lint errors after self-link rewrite:\n%s", out)
+	}
+}
+
 func TestContract_Move_RenameWrapper(t *testing.T) {
 	_, root := newContractVault(t)
 
