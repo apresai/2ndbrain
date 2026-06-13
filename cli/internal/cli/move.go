@@ -283,14 +283,11 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 		slog.Warn("purge old index row failed", "path", srcRel, "err", err)
 		fmt.Fprintf(os.Stderr, "warning: purge old index row %s: %v\n", srcRel, err)
 	}
-	for _, rw := range result.Rewritten {
-		if err := vault.IndexSingleFile(v, v.AbsPath(rw.Path)); err != nil {
-			slog.Warn("reindex rewritten note failed", "path", rw.Path, "err", err)
-			fmt.Fprintf(os.Stderr, "warning: reindex %s: %v\n", rw.Path, err)
-		}
-	}
-	// Final resolve so any rewritten links re-point to the moved doc and the
-	// moved doc's own outbound links re-resolve from its new location.
+	// The referencing notes (and the moved note's own self-link rewrite in e2)
+	// were written via writeBody, which already runs IndexSingleFile + inline
+	// embed per file, so they need no second pass here. A single final
+	// ResolveLinks re-points every rewritten link to the moved doc and
+	// re-resolves the moved doc's own outbound links from its new location.
 	if err := v.DB.ResolveLinks(); err != nil {
 		slog.Warn("resolve links after move failed", "err", err)
 	}

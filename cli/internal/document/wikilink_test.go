@@ -110,6 +110,34 @@ func TestExtractWikiLinks_MultipleInlineCodeMixed(t *testing.T) {
 	}
 }
 
+func TestExtractWikiLinks_IgnoresDoubleBacktickCode(t *testing.T) {
+	// A double-backtick span is used when the inline code itself contains a
+	// backtick. The [[old]] inside must not be treated as a real link, while a
+	// normal [[real-doc]] still resolves.
+	body := "Literal ``[[old]]`` here, but [[real-doc]] is a link."
+	links := ExtractWikiLinks(body)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d: %+v", len(links), links)
+	}
+	if links[0].Target != "real-doc" {
+		t.Errorf("target = %q, want real-doc", links[0].Target)
+	}
+}
+
+func TestExtractWikiLinks_DoubleBacktickSpanWithLiteralBacktick(t *testing.T) {
+	// A double-backtick span whose content holds a literal single backtick AND a
+	// wikilink must be fully masked: the single backtick inside does not close
+	// the span (CommonMark requires a run of exactly N), so [[link]] stays code.
+	body := "Code ``a ` b [[link]]`` and then [[real]]."
+	links := ExtractWikiLinks(body)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d: %+v", len(links), links)
+	}
+	if links[0].Target != "real" {
+		t.Errorf("target = %q, want real", links[0].Target)
+	}
+}
+
 func TestExtractWikiLinks_MarkdownLinksAndEmbeds(t *testing.T) {
 	body := "Here is a standard markdown link [to doc](docs/notes.md#heading), an external one [Google](https://google.com), and an embed ![[my-image.png]]."
 	links := ExtractWikiLinks(body)

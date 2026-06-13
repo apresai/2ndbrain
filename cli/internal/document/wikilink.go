@@ -111,10 +111,14 @@ func isExternalLink(target string) bool {
 //
 // This is a lightweight scanner, not a full CommonMark parser. It handles:
 //   - Triple-backtick (```) and triple-tilde (~~~) fenced blocks at line start
-//   - Single-backtick inline code on a single line
+//   - Inline code spans delimited by a run of N backticks (CommonMark: a span
+//     opened by N backticks ends at the next run of exactly N backticks; runs of
+//     a different length inside don't close it). This covers `foo`, ``[[x]]``
+//     (used when the content itself holds a backtick), and longer runs.
 //
-// Nested or indented fences and multi-backtick runs are intentionally ignored
-// — they're rare in practice and the worst failure is an over-eager lint warning.
+// Nested or indented fences are intentionally ignored — they're rare in practice
+// and the worst failure is an over-eager lint warning. Inline spans stay
+// single-line; the fence branch above handles multi-line code.
 func maskCodeRegions(body string) string {
 	result := []byte(body)
 	inFence := false
@@ -146,22 +150,51 @@ func maskCodeRegions(body string) string {
 			continue
 		}
 
-		// Inline code span: `...` on a single line.
+		// Inline code span on a single line: a run of N backticks opens the span,
+		// the next run of EXACTLY N backticks closes it (CommonMark code-span
+		// rule). Runs of a different length inside don't close it, which is what
+		// lets ``[[x]]`` hold a literal backtick. Stays single-line.
 		if body[i] == '`' {
-			j := i + 1
-			for j < len(body) && body[j] != '`' && body[j] != '\n' {
-				j++
+			// Measure the opening run length.
+			open := i
+			for open < len(body) && body[open] == '`' {
+				open++
 			}
-			if j < len(body) && body[j] == '`' {
-				for k := i + 1; k < j; k++ {
+			n := open - i // number of backticks in the opening run
+
+			// Scan for a closing run of exactly n backticks on the same line.
+			closeStart, closeEnd := -1, -1
+			for j := open; j < len(body) && body[j] != '\n'; {
+				if body[j] != '`' {
+					j++
+					continue
+				}
+				run := j
+				for run < len(body) && body[run] == '`' {
+					run++
+				}
+				if run-j == n {
+					closeStart, closeEnd = j, run
+					break
+				}
+				// Different-length run: not a closer, skip past it.
+				j = run
+			}
+
+			if closeStart >= 0 {
+				// Closing run found: mask brackets in the content between the
+				// opening and closing delimiters, then resume after the closer.
+				for k := open; k < closeStart; k++ {
 					if body[k] == '[' || body[k] == ']' {
 						result[k] = ' '
 					}
 				}
-				i = j + 1
+				i = closeEnd
 				atLineStart = false
 				continue
 			}
+			// No closing run on this line: treat the opening backticks as literal
+			// text and fall through to advance one byte at a time.
 		}
 
 		if body[i] == '\n' {

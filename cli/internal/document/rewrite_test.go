@@ -100,6 +100,14 @@ func TestRewriteWikiLinks_Matrix(t *testing.T) {
 			wantCount: 1,
 		},
 		{
+			name:      "double-backtick code span not rewritten",
+			body:      "Write ``[[old]]`` literally, but [[old]] is a real link.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Write ``[[old]]`` literally, but [[new]] is a real link.",
+			wantCount: 1,
+		},
+		{
 			name:      "fenced code block not rewritten",
 			body:      "```\n[[old]]\n```\nReal: [[old]].",
 			oldTarget: "old.md",
