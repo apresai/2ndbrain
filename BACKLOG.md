@@ -2,6 +2,23 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## obsidian-CLI parity phases 5-8 — review follow-ups (from /chad-review, 2026-06-13)
+
+PRs #43 (P5 polish --write + tags rename), #45 (P6 move/rename), #42 (P7 daily), #44 (P8 tasks) all shipped after review. P6 was CONDITIONAL: the HIGH (moved note's own path/basename self-links left broken on disk) was **fixed before merge** with a regression test (`TestContract_Move_RewritesOwnSelfLinks`); the misleading `dedupeRefPaths` comment was corrected. Remaining LOW/MEDIUM:
+
+- **MEDIUM (P6) — double-backtick inline code is not masked.** `maskCodeRegions` (`cli/internal/document/wikilink.go`) only masks single-backtick spans, so ` ``[[old]]`` ` gets rewritten by `move`. Pre-existing masker limitation, but higher blast radius now that it gates a body-mutating command. Fix: handle multi-backtick runs in `maskCodeRegions` (also improves `lint`/`ExtractWikiLinks`).
+- **MEDIUM (P6) — redundant double-index + re-embed fan-out on move.** The APPLY pass `writeBody` already runs `IndexSingleFile` + inline embed; `move.go` then re-indexes the same rewritten set again in a follow-up loop. Functionally harmless (idempotent) but ~2N indexes + N embedding calls for an N-note move. Drop the redundant loop; defer a single `ResolveLinks` to the end.
+- **LOW (P6) — markdown-style links `[text](old.md)` are not rewritten by move** (documented design choice; they break silently). Add a one-line user-doc caveat.
+- **LOW (P6) — `move`/`rename` share package-global `moveDryRun`/`moveForce` flag vars** (safe for single-shot CLI; latent state-leak only in a future in-process REPL).
+- **LOW (P7) — empty/whitespace-only `.obsidian/daily-notes.json` hard-errors** instead of falling back to defaults (a plausible sync/partial-write artifact). Treat empty body as "no config".
+- **LOW (P7) — Moment->Go translator mis-handles literals containing format letters** (e.g. `Mon-YYYY`). Documented small-subset limitation; real daily formats are date-only. Revisit only if exotic formats are needed.
+- **LOW (P5) — `docs/agent-teaching.md` "Polish prose" row** still says CLI polish is read-only; `2nb polish --write` now exists (kb_polish MCP stays read-only). Reconcile that doc.
+- **LOW (P8) — `AGENTS.md` "CLI Commands (31 top-level)"** is stale (pre-existing, not introduced by P8; main registers far more). Reconcile AGENTS.md's count separately.
+- **LOW (P8) — `2nb tasks` silently skips an index path that no longer parses on disk** with no `slog` trace; a `slog.Debug` would aid phantom-index diagnosis.
+- **LOW (P5/P8) — v1 scope notes:** `tags rename` is frontmatter-only (inline `#old` not rewritten; reported skipped); `tasks` recognizes only strict single-space GFM `- [ ]`/`- [x]` (not `-  [ ]` or tab, nor custom statuses `[>]`/`[-]`). Both documented; revisit for a leniency pass if users hit them.
+- **Process — release test gate flaked on a GitHub 502.** `TestPluginInstall_E2E_GitHub` hits `api.github.com` and blocked release v0.8.3 on a transient 502 (re-run shipped it). A network-dependent E2E test gating releases is fragile; consider marking it skippable under a `RELEASE_GATE`/offline env or moving it out of the default `make test` gate.
+
+
 ## obsidian-CLI parity phases 1-4 — review follow-ups (from /chad-review, 2026-06-13)
 
 All four PRs (#39 P1 links/health, #38 P2 structure/stats, #37 P3 meta --get/--remove, #40 P4 append/prepend/replace) shipped GO with no CRITICAL/HIGH. LOW/MEDIUM nits to revisit:
