@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.8.3] - 2026-06-13
+
+### Added
+- `append`, `prepend`, and `replace` commands for explicit, opt-in body writes; `replace --section <heading>` rewrites a single heading's content while leaving frontmatter untouched.
+- `meta --get <key>` to read a single frontmatter field and `meta --remove <key>` (repeatable) to delete a field in place, preserving comment/key order and refusing identity and schema-required keys.
+- Read-only structure and stats commands: `outline` (heading tree), `wordcount`/`wc`, `folders`, `tags`, and `aliases`.
+- Read-only link-health commands: `backlinks`, `links` (with per-link `resolved` status), `orphans` (no inbound links), and `deadends` (no outbound links).
+
+### Changed
+- Documented the body-write invariant: `2nb` never rewrites a note's body except via the explicit `append`/`prepend`/`replace` commands.
+
+
 ## [0.8.2] - 2026-06-13
 
 ### Added
