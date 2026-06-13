@@ -16,6 +16,7 @@ import (
 	gitpkg "github.com/apresai/2ndbrain/internal/git"
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
 	"github.com/apresai/2ndbrain/internal/search"
+	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -822,6 +823,284 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 		"provider": cfg.Provider,
 		"model":    cfg.GenerationModel,
 	}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+// resolvePathArg validates an untrusted vault-relative path argument and
+// returns its absolute on-disk form. It mirrors the guard used by handleKBRead:
+// reject ".." traversal, resolve against the vault root, and confirm the
+// resolved path stays inside the vault. The second return value is an error
+// CallToolResult ready to return; it is nil when the path is acceptable.
+func (h *handlers) resolvePathArg(path string) (string, *mcplib.CallToolResult) {
+	if path == "" {
+		return "", mcplib.NewToolResultError("path is required")
+	}
+	if strings.Contains(path, "..") {
+		return "", mcplib.NewToolResultError("path traversal not allowed")
+	}
+	absPath := h.vault.AbsPath(path)
+	if !h.vault.ContainsPath(absPath) {
+		return "", mcplib.NewToolResultError("path outside vault")
+	}
+	return absPath, nil
+}
+
+// writeBodyAndReindex persists an edited document body to disk and refreshes the
+// index, mirroring the CLI's writeBody (internal/cli/bodywrite.go) step for
+// step. That helper lives in package cli and can't be imported here without an
+// import cycle, so the steps are replicated:
+//
+//  1. Refuse read-only synthetic types (.canvas/.base) before touching disk
+//     (Serialize would emit synthesized markdown over the original JSON/YAML).
+//  2. Serialize the in-memory doc (Serialize persists doc.Body) with doc.Path
+//     pointed at the absolute path so it works from any cwd, then restore the
+//     vault-relative path for indexing.
+//  3. Atomic temp+rename write.
+//  4. Reindex the single file (chunks/tags/links + ResolveLinks) so newly
+//     appended #tags / [[links]] are picked up.
+//  5. Recompute the content hash and re-embed inline if a provider is
+//     available, then invalidate the embedding cache so the next search sees
+//     the new vector. Embedding is best-effort and silently skipped otherwise.
+//
+// absPath must be the absolute on-disk path; doc.Path is left vault-relative on
+// return. The returned CallToolResult is non-nil only on a hard failure (it is
+// ready to return as the tool result); it is nil on success.
+func (h *handlers) writeBodyAndReindex(ctx context.Context, doc *document.Document, absPath string) *mcplib.CallToolResult {
+	if document.IsReadOnlyType(doc.Type) {
+		return mcplib.NewToolResultError(fmt.Sprintf("cannot edit the body of a read-only %s file (%s); .canvas/.base files are indexed read-only", doc.Type, doc.Path))
+	}
+
+	rel := doc.Path
+	doc.Path = absPath
+	content, err := doc.Serialize()
+	doc.Path = rel
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("serialize document: %v", err))
+	}
+
+	tmp := absPath + ".tmp"
+	if err := os.WriteFile(tmp, content, 0o644); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("write failed: %v", err))
+	}
+	if err := os.Rename(tmp, absPath); err != nil {
+		os.Remove(tmp)
+		return mcplib.NewToolResultError(fmt.Sprintf("rename failed: %v", err))
+	}
+
+	if err := vault.IndexSingleFile(h.vault, absPath); err != nil {
+		slog.Warn("mcp body write: failed to index document", "path", rel, "err", err)
+	}
+
+	// The body changed, so recompute the content hash before re-embedding
+	// (SetEmbedding stores the hash alongside the vector). Embed inline if a
+	// provider is available, then invalidate the cache.
+	doc.ComputeContentHash()
+	cfg := h.vault.Config.AI
+	if embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider); embErr == nil && embedder.Available(ctx) {
+		if vecs, err := embedder.Embed(ctx, []string{doc.IndexableBody()}); err == nil && len(vecs) > 0 {
+			h.vault.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash)
+		}
+		h.invalidateEmbeddings()
+	}
+
+	return nil
+}
+
+func (h *handlers) handleKBBacklinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+	if _, errRes := h.resolvePathArg(path); errRes != nil {
+		return errRes, nil
+	}
+
+	doc, err := h.vault.DB.GetDocumentByPath(path)
+	if err != nil || doc == nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("document not found: %s", path)), nil
+	}
+
+	refs, err := h.vault.DB.Backlinks(doc.ID)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("backlinks failed: %v", err)), nil
+	}
+	if refs == nil {
+		refs = []store.LinkRef{}
+	}
+
+	data, _ := json.MarshalIndent(refs, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (h *handlers) handleKBLinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+	if _, errRes := h.resolvePathArg(path); errRes != nil {
+		return errRes, nil
+	}
+
+	doc, err := h.vault.DB.GetDocumentByPath(path)
+	if err != nil || doc == nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("document not found: %s", path)), nil
+	}
+
+	refs, err := h.vault.DB.OutboundLinks(doc.ID)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("links failed: %v", err)), nil
+	}
+	if refs == nil {
+		refs = []store.LinkRef{}
+	}
+
+	data, _ := json.MarshalIndent(refs, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (h *handlers) handleKBTags(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	counts, err := h.vault.DB.TagCounts()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("tag counts failed: %v", err)), nil
+	}
+	if counts == nil {
+		counts = []store.TagCount{}
+	}
+	data, _ := json.MarshalIndent(counts, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+// kbTaskRow pairs a document.Task with the source document's path so a flat
+// list across the vault stays addressable. It mirrors cli.TaskRow.
+type kbTaskRow struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Done bool   `json:"done"`
+	Text string `json:"text"`
+}
+
+func (h *handlers) handleKBTasks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	scopeArg, _ := request.GetArguments()["path"].(string)
+	onlyDone, _ := request.GetArguments()["done"].(bool)
+	onlyTodo, _ := request.GetArguments()["todo"].(bool)
+	if onlyDone && onlyTodo {
+		return mcplib.NewToolResultError("done and todo are mutually exclusive"), nil
+	}
+
+	// An optional path scope is untrusted input, so guard it like any other
+	// path argument before turning it into a vault-relative prefix.
+	scope := ""
+	if scopeArg != "" {
+		if _, errRes := h.resolvePathArg(scopeArg); errRes != nil {
+			return errRes, nil
+		}
+		scope = filepath.ToSlash(h.vault.RelPath(h.vault.AbsPath(scopeArg)))
+	}
+
+	paths, err := h.vault.DB.AllDocumentPaths()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("list documents: %v", err)), nil
+	}
+
+	rows := make([]kbTaskRow, 0)
+	for _, p := range paths {
+		if !pathInScope(p, scope) {
+			continue
+		}
+		doc, perr := document.ParseFile(h.vault.AbsPath(p))
+		if perr != nil {
+			continue
+		}
+		// Read-only synthetic views (.canvas/.base) don't carry editable GFM
+		// checkboxes; skip them so a task row never points at a non-writable line.
+		if document.IsReadOnlyType(doc.Type) {
+			continue
+		}
+		for _, tk := range document.ExtractTasks(doc.Body) {
+			if onlyDone && !tk.Done {
+				continue
+			}
+			if onlyTodo && tk.Done {
+				continue
+			}
+			rows = append(rows, kbTaskRow{Path: p, Line: tk.Line, Done: tk.Done, Text: tk.Text})
+		}
+	}
+
+	data, _ := json.MarshalIndent(rows, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+// pathInScope reports whether a vault-relative document path falls under the
+// given scope. An empty scope matches everything; a scope equal to the path
+// matches that single file; otherwise the scope is a directory prefix. Mirrors
+// cli.pathInScope so kb_tasks and `2nb tasks` scope identically.
+func pathInScope(p, scope string) bool {
+	if scope == "" {
+		return true
+	}
+	p = filepath.ToSlash(p)
+	if p == scope {
+		return true
+	}
+	prefix := strings.TrimSuffix(scope, "/") + "/"
+	return strings.HasPrefix(p, prefix)
+}
+
+func (h *handlers) handleKBAppend(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+	text, _ := request.GetArguments()["text"].(string)
+
+	absPath, errRes := h.resolvePathArg(path)
+	if errRes != nil {
+		return errRes, nil
+	}
+	if text == "" {
+		return mcplib.NewToolResultError("text is required"), nil
+	}
+
+	doc, err := document.ParseFile(absPath)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
+	}
+	doc.Path = path
+
+	doc.Body = doc.Body + "\n" + text
+
+	if errRes := h.writeBodyAndReindex(ctx, doc, absPath); errRes != nil {
+		return errRes, nil
+	}
+
+	result := map[string]any{"path": doc.Path, "title": doc.Title, "type": doc.Type, "operation": "append"}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcplib.NewToolResultText(string(data)), nil
+}
+
+func (h *handlers) handleKBReplaceSection(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path, _ := request.GetArguments()["path"].(string)
+	section, _ := request.GetArguments()["section"].(string)
+	text, _ := request.GetArguments()["text"].(string)
+
+	absPath, errRes := h.resolvePathArg(path)
+	if errRes != nil {
+		return errRes, nil
+	}
+	if section == "" {
+		return mcplib.NewToolResultError("section is required"), nil
+	}
+
+	doc, err := document.ParseFile(absPath)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
+	}
+	doc.Path = path
+
+	newBody, ok := document.ReplaceSection(doc.Body, section, text)
+	if !ok {
+		return mcplib.NewToolResultError(fmt.Sprintf("section not found: %q (in %s)", section, path)), nil
+	}
+	doc.Body = newBody
+
+	if errRes := h.writeBodyAndReindex(ctx, doc, absPath); errRes != nil {
+		return errRes, nil
+	}
+
+	result := map[string]any{"path": doc.Path, "title": doc.Title, "type": doc.Type, "operation": "replace-section", "section": section}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil
 }

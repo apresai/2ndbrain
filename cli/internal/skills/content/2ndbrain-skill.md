@@ -157,7 +157,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb plugin status` / `plugin install` | Inspect or install/update the Obsidian plugin in the open vault (downloads the latest release assets into `.obsidian/plugins/obsidian-2ndbrain/`; enabling in Obsidian stays manual) |
 | `2nb import-obsidian <path>` / `export-obsidian` | Convert between 2nb and Obsidian vault formats |
 
-## MCP Server Tools (16)
+## MCP Server Tools (22)
 
 The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) exposes these tools. Use these instead of shell-outs when working through an MCP client — they're faster, atomic, and return structured JSON.
 
@@ -177,7 +177,11 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 | `kb_read` | Full document or a specific heading chunk. Call after `kb_search`/`kb_list` to fetch content for the paths you found. |
 | `kb_structure` | Heading tree as JSON. Use to pick a chunk name before calling `kb_read` with `chunk:`. |
 | `kb_related` | BFS over the `[[wikilink]]` graph to depth N. Use for "what connects to this?" questions. |
+| `kb_backlinks` | Resolved INBOUND links to a doc (who links to it). Call before deleting/renaming to see what would dangle. |
+| `kb_links` | OUTBOUND links from a doc, including broken ones (each carries `resolved`). Doubles as a per-file broken-link view. |
 | `kb_suggest_links` | Given a source doc, returns semantically related docs that aren't already linked from it. Useful while drafting to find existing context you should cite. |
+| `kb_tags` | Vault-wide tag list with per-tag document counts. Use to discover the tag vocabulary before filtering or adding a tag. |
+| `kb_tasks` | GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault or one file/dir, with `done`/`todo` filters. Each row is `(path, line, done, text)`. |
 
 **Write**
 
@@ -185,9 +189,13 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 |---|---|
 | `kb_create` | Create a document from a type template. Auto-generates UUID + timestamps. Optional `path` files it under a vault-relative subdirectory (created if missing). **Search first** (`kb_search` or `kb_list`) to avoid duplicating existing content. |
 | `kb_update_meta` | Change frontmatter without touching the body. Enforces schema/state-machine rules (e.g., `adr` status must follow `proposed → accepted → deprecated`). |
+| `kb_append` | Append text to the END of a doc's body (frontmatter untouched), then reindex + re-embed. Explicit body write; rejects read-only `.canvas`/`.base`. |
+| `kb_replace_section` | Replace the content under ONE heading (siblings untouched, first match wins), then reindex + re-embed. Call `kb_structure` first to confirm heading names. Errors if the heading isn't found; rejects read-only `.canvas`/`.base`. |
 | `kb_delete` | Delete from disk + index. Irreversible. Confirm the path is correct before calling. |
 | `kb_polish` | AI copy-edit. Returns both `original` and `polished` — **you decide** whether to apply the changes with a follow-up edit. The server doesn't write the polished text anywhere. |
 | `kb_index` | Force a full reindex + embedding rebuild. Most operations auto-index; only call this after bulk external edits or imports. |
+
+> Note: `move`/`rename` (the wikilink-rewriting vault mutation) is intentionally **CLI-only**: it is the highest-blast-radius write surface (it rewrites links across every note), so it stays behind `2nb move`/`2nb rename` with their mandatory `--dry-run` preview rather than an MCP tool.
 
 **Git (read-only, only when the vault is a git repo)**
 
@@ -207,6 +215,9 @@ Both surfaces share the same vault, schemas, and SQLite index. The differences a
 |---|---|---|
 | Search, ask, read, list, structure, related | Long agent session with repeated calls — MCP caches embeddings + threshold per session, saving a DB roundtrip per call | One-shot, scripted, piping into other tools |
 | Frontmatter edit | **MCP-only**: `kb_update_meta` does atomic schema-validated updates | `2nb meta --set` works for single keys but doesn't match `kb_update_meta`'s validation |
+| Body edit (append / replace one section) | `kb_append` / `kb_replace_section`: structured JSON result, auto reindex + re-embed | `2nb append` / `2nb replace --section`: same write path, plus stdin/`--file` input and whole-body `replace` |
+| Backlinks / outbound links / tags / tasks | `kb_backlinks` / `kb_links` / `kb_tags` / `kb_tasks`: structured JSON in a cached session | `2nb backlinks` / `links` / `tags` / `tasks`: piping, plus `orphans`/`deadends` health views |
+| Move / rename a note (rewrites `[[wikilinks]]`) | (not available) | **CLI-only**: highest-blast-radius write; `2nb move`/`rename` with mandatory `--dry-run` |
 | Create / delete | Either — semantically identical | Either — CLI has human-readable stderr hints |
 | Suggest links, polish | Agent wants structured JSON with scores and snippets | Piping to diff/patch or human review in terminal |
 | Git read operations | Either — output is identical | Either |

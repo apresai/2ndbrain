@@ -60,6 +60,12 @@ func mcpToolRegistrations(h *handlers) []toolRegistration {
 		{kbGitActivityTool(), tCheap, h.handleKBGitActivity},
 		{kbGitDiffTool(), tCheap, h.handleKBGitDiff},
 		{kbGitStatusTool(), tCheap, h.handleKBGitStatus},
+		{kbBacklinksTool(), tCheap, h.handleKBBacklinks},
+		{kbLinksTool(), tCheap, h.handleKBLinks},
+		{kbTagsTool(), tCheap, h.handleKBTags},
+		{kbTasksTool(), tCheap, h.handleKBTasks},
+		{kbAppendTool(), tCreate, h.handleKBAppend},
+		{kbReplaceSectionTool(), tCreate, h.handleKBReplaceSection},
 	}
 }
 
@@ -463,6 +469,153 @@ Example prompts that should trigger this tool:
 				"limit": map[string]any{"type": "integer", "description": "Maximum number of suggestions (default 10)"},
 			},
 			Required: []string{"path"},
+		},
+	}
+}
+
+func kbBacklinksTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_backlinks",
+		Description: `List the resolved inbound links to a document: every other document that links to it via a [[wikilink]] that resolved to a real indexed doc. Returns the source path and title plus the link's heading, alias, and raw form. Paths are always vault-relative (e.g. "use-jwt-for-auth.md"); absolute paths will fail.
+
+kb_backlinks vs kb_links vs kb_related:
+- kb_backlinks (this tool): "what links INTO this doc?" (resolved inbound links only)
+- kb_links: "what does this doc link OUT to?" (outbound links, including broken ones)
+- kb_related: "what is this doc connected to?" (multi-hop [[wikilink]] graph traversal to depth N)
+
+Use kb_backlinks before deleting or renaming a document to see what would dangle.
+
+Example prompts that should trigger this tool:
+- "What links to the JWT auth ADR?"
+- "Show backlinks for stripe.md"
+- "Which notes reference this postmortem?"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path": map[string]any{"type": "string", "description": "Vault-relative path to the document"},
+			},
+			Required: []string{"path"},
+		},
+	}
+}
+
+func kbLinksTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_links",
+		Description: `List the outbound links from a document, INCLUDING unresolved (broken) ones. Each link carries a "resolved" boolean, so this doubles as a per-file broken-link view: a link with resolved=false points at a [[name]] that has no matching document in the vault. For resolved links the path and title name the target document; for unresolved links they are empty. Paths are always vault-relative; absolute paths will fail.
+
+kb_links vs kb_backlinks vs kb_suggest_links:
+- kb_links (this tool): "what does this doc link OUT to, and which links are broken?"
+- kb_backlinks: "what links INTO this doc?" (resolved inbound links)
+- kb_suggest_links: "what SHOULD this doc link to?" (semantic candidates it isn't linked to yet)
+
+Example prompts that should trigger this tool:
+- "What does the auth ADR link to?"
+- "Show outbound links from stripe.md"
+- "Are there any broken links in this note?"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path": map[string]any{"type": "string", "description": "Vault-relative path to the document"},
+			},
+			Required: []string{"path"},
+		},
+	}
+}
+
+func kbTagsTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_tags",
+		Description: `List every tag used in the vault with the number of documents that carry it, ordered by descending count. Use this to discover the vault's tag vocabulary before filtering kb_list / kb_search by tag, or before adding a tag with kb_update_meta so you reuse an existing tag instead of inventing a near-duplicate.
+
+After kb_tags, typical next moves:
+- kb_list (tag="<tag>") to enumerate the documents under a tag
+- kb_search (tag="<tag>") to rank matches within a tag
+
+Example prompts that should trigger this tool:
+- "What tags do I use?"
+- "List all tags with counts"
+- "Which tags are most common in my vault?"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type:       "object",
+			Properties: map[string]any{},
+		},
+	}
+}
+
+func kbTasksTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_tasks",
+		Description: `List GFM checkbox tasks ("- [ ]" open, "- [x]" done) found across the vault, or within one file or directory. Each task carries its document path, the 1-based body line, the done state, and the task text. Checkboxes inside fenced code blocks are ignored. v1 recognizes GFM open/done only; custom statuses such as [>] or [-] (Obsidian Tasks plugin extensions) are not treated as tasks.
+
+Filters:
+- done=true: only completed tasks
+- todo=true: only open tasks (don't set both)
+- path: limit to a vault-relative file (e.g. "projects/launch.md") or a directory subtree (e.g. "projects")
+
+Example prompts that should trigger this tool:
+- "What are my open todos?"
+- "List the checkboxes in projects/launch.md"
+- "Show completed tasks in my vault"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path": map[string]any{"type": "string", "description": "Optional vault-relative file or directory to limit the listing to. Omit to scan the whole vault."},
+				"done": map[string]any{"type": "boolean", "description": "Only completed tasks"},
+				"todo": map[string]any{"type": "boolean", "description": "Only open tasks (do not combine with done)"},
+			},
+		},
+	}
+}
+
+func kbAppendTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_append",
+		Description: `Append text to the END of a document's body. The frontmatter is left untouched; the new text is added after the existing body (separated by a newline), then the document is reindexed and re-embedded so a newly appended [[wikilink]] or #tag is reflected immediately. This is an explicit body write (2nb otherwise never rewrites note bodies). Paths are always vault-relative; absolute paths will fail. Read-only synthetic .canvas/.base files are rejected.
+
+kb_append vs kb_replace_section vs kb_update_meta:
+- kb_append (this tool): add text at the end of the body
+- kb_replace_section: replace the content under one heading, leaving the rest intact
+- kb_update_meta: change frontmatter fields only, never the body
+
+Example prompts that should trigger this tool:
+- "Append a note to my daily log"
+- "Add a new bullet to the runbook's checklist"
+- "Tack this paragraph onto the end of stripe.md"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path": map[string]any{"type": "string", "description": "Vault-relative path to the document"},
+				"text": map[string]any{"type": "string", "description": "Text to append to the end of the body"},
+			},
+			Required: []string{"path", "text"},
+		},
+	}
+}
+
+func kbReplaceSectionTool() mcplib.Tool {
+	return mcplib.Tool{
+		Name: "kb_replace_section",
+		Description: `Replace the content under a single heading, leaving the heading line and every sibling section untouched. Section matching is case-insensitive on the heading title and ignores leading "#" markers, so section="Decision" and section="## Decision" match the same heading; when a heading title appears more than once, the first match wins. Returns a tool error if the heading is not found. After the write the document is reindexed and re-embedded. This is an explicit body write (2nb otherwise never rewrites note bodies). Paths are always vault-relative; absolute paths will fail. Read-only synthetic .canvas/.base files are rejected.
+
+Tip: call kb_structure first to see the exact heading names before replacing.
+
+kb_replace_section vs kb_append vs kb_update_meta:
+- kb_replace_section (this tool): overwrite the body under one heading
+- kb_append: add text at the very end of the body
+- kb_update_meta: change frontmatter fields only, never the body
+
+Example prompts that should trigger this tool:
+- "Rewrite the Decision section of the JWT ADR"
+- "Replace the Steps section in the deploy runbook"`,
+		InputSchema: mcplib.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"path":    map[string]any{"type": "string", "description": "Vault-relative path to the document"},
+				"section": map[string]any{"type": "string", "description": "Heading whose section content to replace (e.g. 'Decision' or '## Decision')"},
+				"text":    map[string]any{"type": "string", "description": "Replacement content for that section"},
+			},
+			Required: []string{"path", "section", "text"},
 		},
 	}
 }

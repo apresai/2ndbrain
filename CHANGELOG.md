@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Added
+- Six new MCP tools mirroring CLI commands added in earlier phases (16 -> 22 total): `kb_backlinks` (resolved inbound links), `kb_links` (outbound links including broken ones), `kb_tags` (vault-wide tag counts), `kb_tasks` (GFM checkbox tasks with `done`/`todo` filters), `kb_append` (append to a body), and `kb_replace_section` (replace one heading's content). The write tools share the same reindex + re-embed path as `kb_create` and reject read-only `.canvas`/`.base` files. `move`/`rename` stays intentionally CLI-only (highest-blast-radius vault mutation), and `kb_structure` already covers the outline so there is no separate `kb_outline`.
 
 ## [0.8.3] - 2026-06-13
 
