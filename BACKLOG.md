@@ -12,7 +12,7 @@ Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH ar
 
 PRs #43 (P5 polish --write + tags rename), #45 (P6 move/rename), #42 (P7 daily), #44 (P8 tasks) all shipped after review. P6 was CONDITIONAL: the HIGH (moved note's own path/basename self-links left broken on disk) was **fixed before merge** with a regression test (`TestContract_Move_RewritesOwnSelfLinks`); the misleading `dedupeRefPaths` comment was corrected. Remaining LOW/MEDIUM:
 
-- **LOW (P6) — markdown-style links `[text](old.md)` are not rewritten by move** (documented design choice; they break silently). Add a one-line user-doc caveat.
+- **RESOLVED: markdown-style links `[text](old.md)` are now rewritten by move/rename** (`document.RewriteWikiLinks` gained an `mdLinkRe` pass: external URLs and anchor-only targets are skipped, the `[label]` text and any `#anchor`/`?query` suffix are preserved, the `.md` extension is kept, and links inside code are masked). Covered by `TestRewriteWikiLinks_MarkdownLinks` and `TestContract_Move_RewritesMarkdownLinks`.
 - **LOW (P6) — `move`/`rename` share package-global `moveDryRun`/`moveForce` flag vars** (safe for single-shot CLI; latent state-leak only in a future in-process REPL).
 - **RESOLVED (shipped in v0.8.4, verified 2026-06-13) — empty/whitespace-only `.obsidian/daily-notes.json` now falls back to defaults** instead of hard-erroring (`dailynotes.go:53` `len(bytes.TrimSpace(data)) == 0 → return cfg, nil`). Covered by `TestLoadDailyNotesConfig_EmptyFile`.
 - **LOW (P7) — Moment->Go translator mis-handles literals containing format letters** (e.g. `Mon-YYYY`). Documented small-subset limitation; real daily formats are date-only. Revisit only if exotic formats are needed.
