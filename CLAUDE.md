@@ -202,7 +202,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `models calibrate` | Sample baseline cosine distribution and recommend a similarity threshold. `--samples --save --scope --seed` |
 | `models bench fav/unfav/favs/history/compare` | Manage benchmark favorites and view history |
 | `skills list/install/uninstall/show` | Generate SKILL.md for AI coding agents (`--user`, `--all`, `--force`) |
-| `config show/get/set/set-key` | Read/write config; `set-key <provider>` stores API key in macOS Keychain |
+| `config show/get/set/set-key/doctor` | Read/write config; `set-key <provider>` stores API key in macOS Keychain; `get --effective` resolves `ai.similarity_threshold` through its full chain (vault > calibration > model > default); `doctor` diagnoses AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves) with fix hints. Genuine config defects fail (exit 2); an environmental condition like an unreachable provider is a non-failing warning so `doctor` stays usable offline/in CI |
 | `completion` | Emit shell completion script (`zsh|bash|fish|powershell`) |
 | `completion install` | Install zsh completion idempotently into existing dir from `.zshrc` (or `~/.zsh/completions/_2nb`, or `--dir`); compinit runs unconditionally; warns on multiple `2nb` binaries on PATH |
 

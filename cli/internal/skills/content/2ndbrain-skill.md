@@ -145,9 +145,10 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | Command | Purpose |
 |---------|---------|
 | `2nb config show` | Full config with `vault_root`, `vault_dir`, `vault_name` |
-| `2nb config get <key>` | Read one key (e.g. `ai.provider`, `ai.similarity_threshold`) |
+| `2nb config get <key>` | Read one key (e.g. `ai.provider`, `ai.similarity_threshold`). `--effective` on `ai.similarity_threshold` prints the resolved value + source (chain: vault > calibration > model > default) instead of the often-zero raw value |
 | `2nb config set <key> <value>` | Write one key. Setting `ai.embedding_model` also resyncs `ai.dimensions` from the catalog; setting `ai.provider` validates the name, re-enables that provider, and warns if an active model can't be served |
 | `2nb config set-key <provider>` | Store a provider API key in macOS Keychain |
+| `2nb config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves), each with a fix hint. A genuine config defect exits 2 (so it can gate a script); an unreachable provider is a non-failing warning, so it stays usable offline/in CI. Run it when search degrades or after editing config by hand |
 | `2nb ai status` / `ai setup` / `ai local` / `ai embed <text>` | Provider status, wizard, readiness check, debug embedding |
 | `2nb models list` / `models test <id>` / `models bench` | Verified catalog, smoke test, benchmark favorites |
 | `2nb mcp status` | List live MCP servers via `.2ndbrain/mcp/<pid>.json` sidecar files (servers running *right now*) |

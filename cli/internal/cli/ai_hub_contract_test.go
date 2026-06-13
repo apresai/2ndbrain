@@ -86,6 +86,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	metaSet = nil
 	metaGet = ""
 	metaRemove = nil
+	configGetEffective = false
 	deleteForce = false
 	initPath = ""
 	indexDocFlag, indexForceReembed = "", false

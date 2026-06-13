@@ -2,6 +2,12 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Phase 3 config tooling + exit-code fix (2026-06-13)
+
+- **RESOLVED — `2nb config doctor` shipped** (`config_doctor.go`): assembles existing validators (`IsKnownProvider`, `ProviderDisabled`, `Validate`, `EmbeddingDimensionsFor`, `derivePortability`, `ResolveSimilarityThresholdFull`) into a per-check report with fix hints; `--json` envelope `{ok, checks[{name, ok, warn, detail, fix}]}`. A genuine config defect exits 2; an unreachable provider (`provider_unavailable`) is a non-failing `warn` so doctor stays usable offline/in CI (chad-review MEDIUM, fixed in-PR). Also `config get ai.similarity_threshold --effective`.
+- **RESOLVED — process exit code no longer collapses to 1** (was a pre-existing LOW). `cmd/2nb/main.go` now calls `cli.ExitCode(cli.Execute())` which honors `*ExitError.Code` (ExitValidation=2 / ExitNotFound=1 / ExitStaleRef=3); generic errors stay 1. Unit-tested (`TestExitCode`). This is what makes `config doctor`'s "exit 2 on failure" contract real.
+- **Process — `completion_install_test.go` (`TestWarnIfMultiple2nbOnPath`, `TestGetBinaryVersion`) is load-flaky.** Both shell out to a built `2nb --version`; under the full `-race` suite the subprocess exec is starved and the timeout fires, returning "unknown" and failing the assertion. Pass cleanly in isolation and on a rerun. Consider a longer per-exec timeout in `getBinaryVersion` or marking these tests to not run in parallel with the embedding-heavy battery.
+
 ## obsidian-CLI parity phases 5-8 — review follow-ups (from /chad-review, 2026-06-13)
 
 PRs #43 (P5 polish --write + tags rename), #45 (P6 move/rename), #42 (P7 daily), #44 (P8 tasks) all shipped after review. P6 was CONDITIONAL: the HIGH (moved note's own path/basename self-links left broken on disk) was **fixed before merge** with a regression test (`TestContract_Move_RewritesOwnSelfLinks`); the misleading `dedupeRefPaths` comment was corrected. Remaining LOW/MEDIUM:
