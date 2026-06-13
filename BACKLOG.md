@@ -2,6 +2,16 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## macOS app "Claude Code" card + MCP configured banner — review follow-ups (from /chad-review, 2026-06-12)
+
+Shipped GO, no CRITICAL/HIGH. In-PR fixes: two stale doc enumerations (README detailed card list + `docs/quick-start.md` "three cards" count) corrected; the duplicate "Show setup" affordance in the non-inline unconfigured MCP panel removed (the `configuredBanner` now owns that action). Remaining LOWs:
+
+- **LOW — Home `.task` runs four CLI shell-outs sequentially** (`HomeView.swift` ~58-61: refreshCLIVersion → refreshAIStatus → refreshSkillStatus → refreshMCPConfigured). Each suspends rather than blocks, and cheap local reads paint first, so render isn't gated; but the Claude Code card settles later than it could. `async let` parallelization would tighten it. Not worth the complexity yet.
+- **LOW — MCP panel "Connect AI Tools" flash.** On first open before `refreshMCPConfigured` resolves, `mcpConfigured` is nil → `?? false`, so a configured vault could momentarily show the not-configured banner button before it vanishes. Cosmetic; `mcpConfigured` persists across opens so it only flashes on first populate.
+- **LOW — inline MCP panel has no in-panel setup action.** Both the banner button and (former) empty-state button are `!isInline`-gated, so an inline-embedded MCP panel shows "not configured" with no action. Intended (Home's `mcpConfiguredRow` carries the action for embedded surfaces), but worth a confirming glance if the panel is ever embedded standalone.
+- **LOW — `MCPStatusView.emptyStateMessage` is a view-private var, untested.** Its configured/not-configured branch mirrors the tested `HomeMCPConfigured.rowState` split. For strict parity it could become a pure `HomeMCPConfigured.emptyStateMessage(configured:)` helper; current convention (extract decision logic to enums, leave string-only view vars inline) is consistently applied, so optional.
+- **LOW — `HomeMCPConfigured.rowState` empty-string-scope sub-branch untested.** The `!scope.isEmpty` guard falls through to plain "configured"; Go emits `scope` as `omitempty` so an empty string never occurs on the wire (it's belt-and-suspenders). Add a `scope: ""` test case if ever paranoid.
+
 ## GUI installer (Home Update CLI + plugin row) — review follow-ups (from PR review, 2026-06-10)
 
 Fixed in-PR: the no-op `brew upgrade` exit-0 case no longer claims "CLI updated" (`HomeCLIUpdate.resultMessage`, unit-tested); non-semver manifest versions render raw; rowState/parse edge cases and the `installObsidianPlugin` noVault guard gained tests. Remaining LOWs:

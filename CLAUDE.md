@@ -307,7 +307,7 @@ The macOS app is a **configuration and companion dashboard, not an editor**: Obs
 
 | Tab | View | Purpose |
 |-----|------|---------|
-| **Home** (default) | HomeView.swift | Consolidated common-case surface: Vault card (name/path + an Obsidian-match badge confirming this is the vault Obsidian has open, plus an Obsidian-plugin row showing the installed plugin version with an Install/Update button that shells `2nb plugin install`; `ObsidianPlugin`/`HomePlugin`), AI card (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2 with a ready/not-ready dot and Save-as-default / Test buttons), and Index card (doc + embedding counts with Rebuild Index / Re-embed All). An orange banner warns when the installed `2nb` CLI is older than the app (`CLIVersion`/`refreshCLIVersion`), since `brew upgrade --cask` bumps the app but not the `twonb` formula; when Homebrew is present (`BrewLocator`) the banner offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` (`AppState.upgradeCLI`). The catalog/benchmark/MCP/git/lint depth lives under Advanced. |
+| **Home** (default) | HomeView.swift | Consolidated common-case surface: Vault card (name/path + an Obsidian-match badge confirming this is the vault Obsidian has open, plus an Obsidian-plugin row showing the installed plugin version with an Install/Update button that shells `2nb plugin install`; `ObsidianPlugin`/`HomePlugin`), AI card (AWS Bedrock + Claude Haiku 4.5 + Amazon Nova-2 with a ready/not-ready dot and Save-as-default / Test buttons), a **Claude Code card** (`HomeSkill`/`HomeMCPConfigured`) with a skill-installed row (Install button shelling `2nb skills install claude-code --user`, from `2nb skills list --json`) and an MCP-server-configured row (from `2nb mcp configured --json`, with a Show-setup button that opens the snippet sheet; "configured" is the durable check since the server is launched on demand by the client), and Index card (doc + embedding counts with Rebuild Index / Re-embed All). An orange banner warns when the installed `2nb` CLI is older than the app (`CLIVersion`/`refreshCLIVersion`), since `brew upgrade --cask` bumps the app but not the `twonb` formula; when Homebrew is present (`BrewLocator`) the banner offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` (`AppState.upgradeCLI`). The catalog/benchmark/MCP/git/lint depth lives under Advanced. |
 
 Advanced section:
 
@@ -315,7 +315,7 @@ Advanced section:
 |-----|------|---------|
 | Vault Status | VaultStatusView.swift | Unified health: vault info, index coverage, portability, AI reachability, stale docs; Rebuild Index + Re-embed All |
 | AI Settings | AIHubView.swift | AI Hub (see below) — providers, active models, full catalog |
-| MCP Server | MCPStatusView.swift | Live MCP server processes + recent tool invocations; polls `2nb mcp status --json` every 5s |
+| MCP Server | MCPStatusView.swift | A durable "Configured in ~/.claude.json" banner (from `2nb mcp configured --json`, via `HomeMCPConfigured`) above live MCP server processes + recent tool invocations; polls `2nb mcp status --json` every 5s. The banner answers "is it set up?" even when no server is running (the client launches it on demand), and the empty state distinguishes configured-but-idle from not-configured |
 | Git Integration | GitActivityView.swift | Recent commits (1/3/7/30-day window); click a row → `CommitDetailView` split pane (file list + per-file diff) |
 | Validation | LintResultsView.swift | Shells out to `2nb lint --json` and renders findings |
 

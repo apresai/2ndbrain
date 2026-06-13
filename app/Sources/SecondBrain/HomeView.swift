@@ -13,6 +13,7 @@ struct HomeView: View {
     @State private var testing = false
     @State private var updatingCLI = false
     @State private var installingPlugin = false
+    @State private var installingSkill = false
     @State private var actionMessage: String?
     @State private var actionIsError = false
     // The vault Obsidian has open, loaded once in `.task` instead of read from
@@ -31,6 +32,8 @@ struct HomeView: View {
                 vaultCard
                 Divider()
                 aiCard
+                Divider()
+                claudeCodeCard
                 Divider()
                 indexCard
                 if let actionMessage {
@@ -54,6 +57,8 @@ struct HomeView: View {
             pluginVersion = appState.vault.flatMap { ObsidianPlugin.installedVersion(vaultRoot: $0.rootURL) }
             await appState.refreshCLIVersion()
             await appState.refreshAIStatus()
+            await appState.refreshSkillStatus()
+            await appState.refreshMCPConfigured()
         }
     }
 
@@ -250,6 +255,70 @@ struct HomeView: View {
         }
     }
 
+    // MARK: - Claude Code
+
+    /// "Is my Claude Code integration ready?": the skill (installed to
+    /// ~/.claude/skills/) and the MCP server (wired into ~/.claude.json). Both
+    /// are Claude Code artifacts, distinct from the Obsidian plugin row on the
+    /// Vault card (which is a vault artifact), so they get their own card.
+    private var claudeCodeCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SheetSectionHeader(title: "Claude Code", systemImage: "terminal")
+            skillRow
+            mcpConfiguredRow
+        }
+    }
+
+    @ViewBuilder
+    private var skillRow: some View {
+        let status = appState.skillStatuses.first { $0.slug == "claude-code" }
+        let state = HomeSkill.rowState(status)
+        HStack(spacing: 8) {
+            Text("Skill: \(state.label)")
+            if let buttonTitle = state.button {
+                Button(installingSkill ? "Installing…" : buttonTitle) {
+                    Task { await installSkill() }
+                }
+                .disabled(installingSkill || appState.vault == nil)
+                .controlSize(.small)
+            }
+        }
+        .font(.callout)
+    }
+
+    @ViewBuilder
+    private var mcpConfiguredRow: some View {
+        let state = HomeMCPConfigured.rowState(appState.mcpConfigured)
+        HStack(spacing: 8) {
+            Text("MCP server: \(state.label)")
+            if let buttonTitle = state.button {
+                Button(buttonTitle) {
+                    Task {
+                        await appState.loadMCPSetup()
+                        appState.showMCPSetup = true
+                    }
+                }
+                .controlSize(.small)
+            }
+        }
+        .font(.callout)
+    }
+
+    private func installSkill() async {
+        installingSkill = true
+        actionMessage = nil
+        defer { installingSkill = false }
+        do {
+            try await appState.installClaudeCodeSkill()
+            await appState.refreshSkillStatus()
+            actionIsError = false
+            actionMessage = HomeSkill.successMessage()
+        } catch {
+            actionIsError = true
+            actionMessage = "Skill install failed: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Index
 
     private var indexCard: some View {
@@ -366,5 +435,41 @@ enum HomeCLIUpdate {
         }
         let current = after ?? before ?? "unknown"
         return "CLI unchanged at \(current). Homebrew found no newer formula; the tap may not have shipped this release yet. Try again in a few minutes."
+    }
+}
+
+/// Pure presentation logic for the Claude Code skill row, extracted (like
+/// `HomePlugin`) so the label/button mapping is unit-testable. A nil status
+/// (slug not found, or a pre-0.8.1 CLI without `skills list`) reads "unknown"
+/// with no button rather than a misleading "not installed".
+enum HomeSkill {
+    static func rowState(_ status: SkillStatusInfo?) -> (label: String, button: String?) {
+        guard let status else { return ("unknown", nil) }
+        if status.userInstalled { return ("installed (user)", nil) }
+        if status.projectInstalled { return ("installed (project)", nil) }
+        return ("not installed", "Install")
+    }
+
+    static func successMessage() -> String {
+        "Skill installed for Claude Code (user scope). It's available in your next Claude Code session."
+    }
+}
+
+/// Pure presentation logic for the Claude Code MCP-server row. "Configured"
+/// (wired into ~/.claude.json) is the durable signal: the server is launched
+/// on demand by Claude Code, so "running" would read red whenever the client
+/// is closed. A nil status (pre-0.8.1 CLI without `mcp configured`) reads
+/// "unknown"; not-configured offers the setup snippet (the app never writes
+/// ~/.claude.json itself).
+enum HomeMCPConfigured {
+    static func rowState(_ status: MCPConfiguredInfo?) -> (label: String, button: String?) {
+        guard let status else { return ("unknown", nil) }
+        if status.configured {
+            if let scope = status.scope, !scope.isEmpty {
+                return ("configured (\(scope) scope)", nil)
+            }
+            return ("configured", nil)
+        }
+        return ("not configured", "Show setup")
     }
 }
