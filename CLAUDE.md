@@ -125,7 +125,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (69)
+### CLI Commands (71)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -158,6 +158,8 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `graph` | Output link graph as JSON adjacency list |
 | `outline <path>` | Heading tree of a document (heading path, level, line span). Shares `document.BuildOutline` with the MCP `kb_structure` tool |
 | `wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `wc` |
+| `tasks` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault. Filters: `--done`, `--todo`, `--path <file\|dir>`. v1 = GFM open/done only (custom statuses like `[>]`/`[-]` ignored). `--json` |
+| `task <path> <line>` | Toggle a single GFM checkbox at a 1-based body line. `--done`/`--todo`/`--toggle` (default toggle); errors if the line is not a checkbox. Writes the body via the shared body-write path (frontmatter untouched) |
 | `folders` | List folders (directory prefixes of `documents.path`) with doc counts; root docs bucket under `(root)` |
 | `tags` | List all tags vault-wide with counts. Parent command (bare `tags` lists; `tags list` is the explicit subcommand) |
 | `tags rename <old> <new>` | Rename a frontmatter tag across every document that carries it: rewrites each doc's frontmatter `tags` array (dedupes when `<new>` is already present) and reindexes. FRONTMATTER-ONLY in v1 (inline body `#old` tags are not rewritten; such docs are skipped). `--dry-run` previews affected docs without writing; per-file atomic with a collected `{renamed, skipped, failed}` summary, non-zero exit on any failure with no rollback of already-written files |

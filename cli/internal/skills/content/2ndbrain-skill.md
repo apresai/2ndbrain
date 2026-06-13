@@ -89,6 +89,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb outline <path>` | Heading tree of a document (heading path, level, line span). Same chunking as `read`; shared with the MCP `kb_structure` tool |
 | `2nb wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `2nb wc` |
 | `2nb folders` | List folders (directory prefixes of doc paths) with counts; root docs bucket under `(root)` |
+| `2nb tasks` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault. Filters: `--done`, `--todo`, `--path <file\|dir>`. v1 = GFM open/done only (custom statuses like `[>]`/`[-]` ignored) |
 | `2nb tags` | List all tags vault-wide with counts (parent command: bare `tags` lists, `tags list` is explicit) |
 | `2nb aliases` | List frontmatter aliases mapped to their document (alias to path/title) |
 
@@ -103,6 +104,8 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb prepend <path> [--text \| --file \| stdin]` | Insert content at the start of the body, after the frontmatter. Explicit, opt-in body write. |
 | `2nb replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section`. First match wins on duplicate headings. Explicit, opt-in body write. |
 | `2nb daily` / `2nb daily read` / `2nb daily append [--text \| --file \| stdin]` | Resolve today's daily note from Obsidian's core daily-notes config (`.obsidian/daily-notes.json`: folder, filename format, optional template). Bare `daily` resolves + creates + prints the path; `read` prints its body; `append` adds to the body (explicit, opt-in body write). Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled. |
+| `2nb tasks [--done \| --todo] [--path <file\|dir>]` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault, with file + 1-based line + done state. v1 = GFM open/done only. `--json` |
+| `2nb task <path> <line> [--done \| --todo \| --toggle]` | Toggle a single GFM checkbox at a 1-based body line (from the `2nb tasks` LINE column). Default toggles; `--done`/`--todo` force a state. Errors if the line is not a checkbox. Explicit, opt-in body write; frontmatter untouched. |
 | `2nb meta <path> --set key=value` | Update one or more frontmatter fields in place, with schema + status-transition validation. Rewrites the file's YAML frontmatter; the body is preserved. |
 | `2nb tags rename <old> <new> [--dry-run]` | Rename a frontmatter tag across every doc that carries it; rewrites each doc's frontmatter `tags` array (dedupes when `<new>` is already present) and reindexes. FRONTMATTER-ONLY in v1 (inline body `#old` tags are not rewritten; such docs are skipped). `--dry-run` previews without writing; per-file atomic, non-zero exit on any failure with no rollback. |
 | `2nb delete <path> [--force]` | Delete from disk and index |

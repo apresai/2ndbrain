@@ -113,6 +113,15 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 			}
 		}
 	}
+	// Phase 8 (tasks/task) package-level flag state + per-flag Changed bits.
+	tasksDone, tasksTodo, tasksPath = false, false, ""
+	taskState = ""
+	for _, name := range []string{"done", "todo", "toggle"} {
+		if f := taskCmd.Flags().Lookup(name); f != nil {
+			_ = taskCmd.Flags().Set(name, "false")
+			f.Changed = false
+		}
+	}
 
 	// Redirect os.Stdout so fmt.Printf in handlers lands in our buffer.
 	// Cobra's SetOut only covers its own output (help/usage text), not
