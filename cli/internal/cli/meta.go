@@ -170,7 +170,7 @@ func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 	}
 
 	// Re-index
-	if err := v.DB.UpsertDocument(doc); err != nil {
+	if err := vault.IndexSingleFile(v, absPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to update index: %v\n", err)
 	}
 
@@ -270,7 +270,7 @@ func removeMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 	}
 
 	// Re-index
-	if err := v.DB.UpsertDocument(doc); err != nil {
+	if err := vault.IndexSingleFile(v, absPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to update index: %v\n", err)
 	}
 

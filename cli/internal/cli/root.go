@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -59,7 +60,7 @@ Quick start:
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "", "Output format: json, csv, yaml")
+	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "", "Output format: json, csv, yaml, raw")
 	rootCmd.PersistentFlags().BoolVar(&flagPorcelain, "porcelain", false, "Machine-readable output (no color, no progress)")
 	rootCmd.PersistentFlags().Bool("json", false, "Output as JSON (shorthand for --format json)")
 	rootCmd.PersistentFlags().Bool("csv", false, "Output as CSV (shorthand for --format csv)")
@@ -90,6 +91,8 @@ func init() {
 }
 
 func Execute() error {
+	os.Args = preprocessArgs(os.Args)
+
 	// Set up slog before any command runs
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		setupLogging()
@@ -341,4 +344,352 @@ func ExitCode(err error) int {
 		return ee.Code
 	}
 	return ExitNotFound // generic failure → 1
+}
+
+func preprocessArgs(args []string) []string {
+	if len(args) <= 1 {
+		return args
+	}
+
+	var newArgs []string
+	newArgs = append(newArgs, args[0])
+
+	var cmdName string
+	var subCmdName string
+	var hasColonCmd bool
+	var colonParts []string
+
+	var knownCommands = map[string]bool{
+		"read": true, "create": true, "append": true, "prepend": true, "delete": true,
+		"move": true, "rename": true, "daily": true, "unresolved": true, "orphans": true,
+		"deadends": true, "outline": true, "aliases": true, "search": true, "task": true,
+		"tasks": true, "tags": true, "links": true, "backlinks": true, "folders": true,
+		"version": true, "help": true, "property": true, "properties": true, "link": true,
+		"vault": true, "init": true, "index": true, "ai": true, "models": true, "polish": true,
+		"suggest-links": true, "graph": true, "related": true, "stale": true, "wordcount": true,
+		"mcp": true, "mcp-server": true, "mcp-setup": true, "plugin": true, "skills": true,
+		"export-context": true, "git": true, "import-obsidian": true, "export-obsidian": true,
+		"migrate": true, "completion": true, "config": true, "ask": true, "chat": true,
+	}
+
+	// freeTextCommands take an arbitrary free-text positional (a query / a
+	// question) that must NEVER be parsed as a key=value parameter, or the user
+	// silently loses any query that happens to contain "=" (a code snippet, a
+	// "key=value" search, etc.). For these, only the obsidian "query=" convenience
+	// plus the universal vault=/format= are honored; everything else passes
+	// through verbatim as the positional.
+	freeTextCommands := map[string]bool{"search": true, "ask": true, "chat": true}
+
+	isCommand := func(arg string) bool {
+		if strings.Contains(arg, ":") {
+			part := strings.SplitN(arg, ":", 2)[0]
+			return knownCommands[part]
+		}
+		return knownCommands[arg]
+	}
+
+	// Find the command name by checking against known command roots
+	var cmdIdx = -1
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+			continue
+		}
+		if isCommand(arg) {
+			cmdIdx = i
+			break
+		}
+	}
+
+	if cmdIdx != -1 {
+		cmdName = args[cmdIdx]
+		if strings.Contains(cmdName, ":") {
+			hasColonCmd = true
+			colonParts = strings.Split(cmdName, ":")
+			cmdName = colonParts[0]
+			if len(colonParts) > 1 {
+				subCmdName = colonParts[1]
+			}
+		}
+	}
+
+	// Extract parameters
+	var fileVal string
+	var pathVal string
+	var toVal string
+	var contentVal string
+	var nameVal string
+	var valueVal string
+	var queryVal string
+	var formatVal string
+	var doneFlag bool
+	var todoFlag bool
+	var toggleFlag bool
+	var overwriteFlag bool
+	var verboseFlag bool
+	var refVal string
+	var lineVal string
+
+	var processed []string
+
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if i == cmdIdx {
+			continue // Handle this separately
+		}
+
+		if strings.HasPrefix(arg, "-") {
+			processed = append(processed, arg)
+			continue
+		}
+
+		if strings.Contains(arg, "=") {
+			parts := strings.SplitN(arg, "=", 2)
+			k, v := parts[0], parts[1]
+			// For free-text commands (search/ask/chat) only the query/vault/format
+			// conveniences are parameters; anything else is part of the query and
+			// must pass through verbatim (e.g. searching for "a=b"). For all
+			// commands, an UNRECOGNIZED key is never silently dropped: it falls
+			// through to `processed` as a literal positional, so a value that
+			// merely contains "=" (a config value, a query) is preserved.
+			isFreeText := freeTextCommands[cmdName]
+			switch {
+			case k == "vault":
+				processed = append(processed, "--vault", v)
+			case k == "format":
+				formatVal = v
+			case k == "query":
+				queryVal = v
+			case isFreeText:
+				// Not a recognized param for a free-text command: it is query text.
+				processed = append(processed, arg)
+			case k == "file":
+				fileVal = v
+			case k == "path":
+				pathVal = v
+			case k == "to":
+				toVal = v
+			case k == "content":
+				contentVal = v
+			case k == "name":
+				nameVal = v
+			case k == "value":
+				valueVal = v
+			case k == "ref":
+				refVal = v
+			case k == "line":
+				lineVal = v
+			default:
+				// Unknown key=value for a structured command: preserve it verbatim
+				// rather than dropping it, so e.g. `config set ai.x a=b` survives.
+				processed = append(processed, arg)
+			}
+			continue
+		}
+
+		// Bare flag-words (done/todo/toggle/overwrite/verbose) are only the
+		// obsidian-style spelling of a flag for the commands that actually take
+		// them. For a free-text command (search/ask/chat) every bare token is
+		// part of the query and must pass through verbatim, or `2nb search
+		// verbose` / `2nb search done` would silently lose the query word. Each
+		// flag-word is also scoped to its owning command so an unrelated command
+		// can't have a positional eaten.
+		if freeTextCommands[cmdName] {
+			processed = append(processed, arg)
+			continue
+		}
+		switch {
+		case arg == "done" && (cmdName == "task" || cmdName == "tasks"):
+			doneFlag = true
+		case arg == "todo" && (cmdName == "task" || cmdName == "tasks"):
+			todoFlag = true
+		case arg == "toggle" && cmdName == "task":
+			toggleFlag = true
+		case arg == "overwrite" && cmdName == "create":
+			overwriteFlag = true
+		case arg == "verbose":
+			// --verbose is a universal flag, so the bare obsidian spelling maps
+			// for any structured (non-free-text) command.
+			verboseFlag = true
+		default:
+			processed = append(processed, arg)
+		}
+	}
+
+	// Command translation
+	var finalCmd []string
+	if cmdIdx != -1 {
+		switch {
+		case hasColonCmd:
+			switch cmdName {
+			case "daily":
+				finalCmd = append(finalCmd, "daily")
+				switch subCmdName {
+				case "read", "append", "prepend":
+					finalCmd = append(finalCmd, subCmdName)
+				case "path":
+					// daily:path maps to daily (resolve)
+				}
+			case "property":
+				finalCmd = append(finalCmd, "meta")
+			case "link":
+				switch subCmdName {
+				case "unresolved":
+					finalCmd = append(finalCmd, "unresolved")
+				case "orphans":
+					finalCmd = append(finalCmd, "orphans")
+				case "deadends":
+					finalCmd = append(finalCmd, "deadends")
+				}
+			case "search":
+				if subCmdName == "context" {
+					finalCmd = append(finalCmd, "search")
+				}
+			default:
+				finalCmd = append(finalCmd, colonParts...)
+			}
+		default:
+			switch cmdName {
+			case "version":
+				finalCmd = append(finalCmd, "--version")
+			case "unresolved":
+				finalCmd = append(finalCmd, "unresolved")
+			case "property":
+				finalCmd = append(finalCmd, "meta")
+			default:
+				finalCmd = append(finalCmd, cmdName)
+			}
+		}
+	}
+
+	newArgs = append(newArgs, finalCmd...)
+	newArgs = append(newArgs, processed...)
+
+	if formatVal != "" {
+		newArgs = append(newArgs, "--format", formatVal)
+	}
+	if verboseFlag {
+		newArgs = append(newArgs, "--verbose")
+	}
+
+	targetPath := pathVal
+	if targetPath == "" {
+		targetPath = fileVal
+	}
+
+	primaryCmd := ""
+	secondaryCmd := ""
+	if len(finalCmd) > 0 {
+		primaryCmd = finalCmd[0]
+	}
+	if len(finalCmd) > 1 {
+		secondaryCmd = finalCmd[1]
+	}
+
+	switch primaryCmd {
+	case "read":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+	case "create":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+		if contentVal != "" {
+			newArgs = append(newArgs, "--content", contentVal)
+		}
+		if overwriteFlag {
+			newArgs = append(newArgs, "--allow-duplicate")
+		}
+	case "append":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+		if contentVal != "" {
+			newArgs = append(newArgs, "--text", contentVal)
+		}
+	case "prepend":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+		if contentVal != "" {
+			newArgs = append(newArgs, "--text", contentVal)
+		}
+	case "delete":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+	case "move":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+		if toVal != "" {
+			newArgs = append(newArgs, toVal)
+		}
+	case "rename":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+		if nameVal != "" {
+			newArgs = append(newArgs, nameVal)
+		}
+	case "daily":
+		switch secondaryCmd {
+		case "append", "prepend":
+			if contentVal != "" {
+				newArgs = append(newArgs, "--text", contentVal)
+			}
+		}
+	case "meta":
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+		if hasColonCmd && cmdName == "property" {
+			switch subCmdName {
+			case "read":
+				if nameVal != "" {
+					newArgs = append(newArgs, "--get", nameVal)
+				}
+			case "set":
+				if nameVal != "" {
+					newArgs = append(newArgs, "--set", fmt.Sprintf("%s=%s", nameVal, valueVal))
+				}
+			case "remove":
+				if nameVal != "" {
+					newArgs = append(newArgs, "--remove", nameVal)
+				}
+			}
+		}
+	case "search":
+		if queryVal != "" {
+			newArgs = append(newArgs, queryVal)
+		}
+	case "task":
+		resolvedPath := targetPath
+		resolvedLine := lineVal
+		if refVal != "" {
+			parts := strings.SplitN(refVal, ":", 2)
+			resolvedPath = parts[0]
+			if len(parts) > 1 {
+				resolvedLine = parts[1]
+			}
+		}
+		if resolvedPath != "" {
+			newArgs = append(newArgs, resolvedPath)
+		}
+		if resolvedLine != "" {
+			newArgs = append(newArgs, resolvedLine)
+		}
+		if doneFlag {
+			newArgs = append(newArgs, "--done")
+		}
+		if todoFlag {
+			newArgs = append(newArgs, "--todo")
+		}
+		if toggleFlag {
+			newArgs = append(newArgs, "--toggle")
+		}
+	}
+
+	return newArgs
 }

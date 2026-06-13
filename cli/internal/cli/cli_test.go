@@ -98,3 +98,163 @@ func TestActiveVaultHelpers(t *testing.T) {
 	// This reads the real file but doesn't write
 	_ = getActiveVault()
 }
+
+func TestPreprocessArgs(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []string
+		want  []string
+	}{
+		{
+			"read command with key=value",
+			[]string{"2nb", "read", "file=My Note", "format=raw"},
+			[]string{"2nb", "read", "--format", "raw", "My Note"},
+		},
+		{
+			"daily read command",
+			[]string{"2nb", "daily:read"},
+			[]string{"2nb", "daily", "read"},
+		},
+		{
+			"daily append with content",
+			[]string{"2nb", "daily:append", "content=- my bullet"},
+			[]string{"2nb", "daily", "append", "--text", "- my bullet"},
+		},
+		{
+			"property read",
+			[]string{"2nb", "property:read", "name=status", "file=projects/gimage.md"},
+			[]string{"2nb", "meta", "projects/gimage.md", "--get", "status"},
+		},
+		{
+			"property set",
+			[]string{"2nb", "property:set", "name=status", "value=active", "file=projects/gimage.md"},
+			[]string{"2nb", "meta", "projects/gimage.md", "--set", "status=active"},
+		},
+		{
+			"property remove",
+			[]string{"2nb", "property:remove", "name=status", "file=projects/gimage.md"},
+			[]string{"2nb", "meta", "projects/gimage.md", "--remove", "status"},
+		},
+		{
+			"unresolved links list",
+			[]string{"2nb", "unresolved"},
+			[]string{"2nb", "unresolved"},
+		},
+		{
+			"unresolved links namespace",
+			[]string{"2nb", "link:unresolved"},
+			[]string{"2nb", "unresolved"},
+		},
+		{
+			"search query",
+			[]string{"2nb", "search", "query=gimage"},
+			[]string{"2nb", "search", "gimage"},
+		},
+		{
+			"task ref",
+			[]string{"2nb", "task", "ref=note.md:12", "done"},
+			[]string{"2nb", "task", "note.md", "12", "--done"},
+		},
+		{
+			"move note",
+			[]string{"2nb", "move", "file=note.md", "to=archive/"},
+			[]string{"2nb", "move", "note.md", "archive/"},
+		},
+		{
+			"rename note",
+			[]string{"2nb", "rename", "file=note.md", "name=new-note.md"},
+			[]string{"2nb", "rename", "note.md", "new-note.md"},
+		},
+		// Regression: a free-text query containing "=" must NOT be parsed as a
+		// key=value param and silently dropped. Before the fix, "a=b test" was
+		// split into key "a" (unrecognized) and the whole query vanished.
+		{
+			"search query containing equals passes through verbatim",
+			[]string{"2nb", "search", "a=b test"},
+			[]string{"2nb", "search", "a=b test"},
+		},
+		{
+			"ask question containing equals passes through verbatim",
+			[]string{"2nb", "ask", "what is x=y?"},
+			[]string{"2nb", "ask", "what is x=y?"},
+		},
+		{
+			"search query= convenience still maps to the positional",
+			[]string{"2nb", "search", "query=a=b"},
+			[]string{"2nb", "search", "a=b"},
+		},
+		// Regression: an unrecognized key=value on a STRUCTURED command is
+		// preserved verbatim rather than dropped, so a config value with "="
+		// (or any positional that happens to contain "=") survives.
+		{
+			"config set value with equals is preserved",
+			[]string{"2nb", "config", "set", "ai.x", "k=v"},
+			[]string{"2nb", "config", "set", "ai.x", "k=v"},
+		},
+		// vault= is honored for free-text commands too; the query and the
+		// translated --vault flag both land after the command (cobra accepts the
+		// flag in any position). The positional query precedes vault= here
+		// because processed args keep their original relative order.
+		{
+			"search with a query containing equals plus vault=",
+			[]string{"2nb", "search", "a=b", "vault=/tmp/v"},
+			[]string{"2nb", "search", "a=b", "--vault", "/tmp/v"},
+		},
+		// Regression: a bare flag-word (done/todo/toggle/verbose/overwrite) that
+		// is part of a free-text query must NOT be consumed as a flag, or
+		// `2nb search verbose` / `2nb search done` silently loses the query word.
+		{
+			"search query word 'verbose' is not consumed as a flag",
+			[]string{"2nb", "search", "verbose"},
+			[]string{"2nb", "search", "verbose"},
+		},
+		{
+			"search query word 'done' is not consumed as a flag",
+			[]string{"2nb", "search", "done"},
+			[]string{"2nb", "search", "done"},
+		},
+		{
+			"ask question word 'toggle' is not consumed as a flag",
+			[]string{"2nb", "ask", "toggle"},
+			[]string{"2nb", "ask", "toggle"},
+		},
+		// The flag-word IS honored for the command that owns it.
+		{
+			"task done maps to --done",
+			[]string{"2nb", "task", "note.md", "12", "done"},
+			[]string{"2nb", "task", "note.md", "12", "--done"},
+		},
+		// Native flag-style invocations must pass through the shim unmangled:
+		// a -prefixed flag (even with an attached =value) is never parsed as a
+		// key=value param, and a bare positional after it survives.
+		{
+			"native --flag value passes through",
+			[]string{"2nb", "search", "foo", "--threshold", "0.35", "--limit", "5"},
+			[]string{"2nb", "search", "foo", "--threshold", "0.35", "--limit", "5"},
+		},
+		{
+			"native --flag=value (attached equals) is not parsed as key=value",
+			[]string{"2nb", "search", "foo", "--threshold=0.35"},
+			[]string{"2nb", "search", "foo", "--threshold=0.35"},
+		},
+		{
+			"native config doctor subcommand + flag passes through",
+			[]string{"2nb", "config", "doctor", "--json"},
+			[]string{"2nb", "config", "doctor", "--json"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := preprocessArgs(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("length mismatch: got %v (len %d), want %v (len %d)", got, len(got), tt.want, len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("at index %d: got %q, want %q\nFull: got %v, want %v", i, got[i], tt.want[i], got, tt.want)
+				}
+			}
+		})
+	}
+}

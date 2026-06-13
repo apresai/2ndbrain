@@ -36,6 +36,7 @@ var (
 	createTitle          string
 	createPath           string
 	createAllowDuplicate bool
+	createContent        string
 )
 
 var createCmd = &cobra.Command{
@@ -56,6 +57,7 @@ func init() {
 	createCmd.Flags().StringVar(&createTitle, "title", "", "Document title")
 	createCmd.Flags().StringVar(&createPath, "path", "", "Vault-relative subdirectory to create the document in (created if missing)")
 	createCmd.Flags().BoolVar(&createAllowDuplicate, "allow-duplicate", false, "Allow creating a document with duplicate content")
+	createCmd.Flags().StringVar(&createContent, "content", "", "Initial content for the document")
 	_ = createCmd.RegisterFlagCompletionFunc("type", completeSchemaTypes)
 	createCmd.GroupID = "docs"
 	rootCmd.AddCommand(createCmd)
@@ -94,7 +96,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	tmplBody = strings.ReplaceAll(tmplBody, "{{.Title}}", createTitle)
 	tmplBody = strings.ReplaceAll(tmplBody, "{{.Status}}", initialStatus)
 
-	doc := document.NewDocument(createTitle, createType, tmplBody)
+	body := tmplBody
+	if cmd.Flags().Changed("content") {
+		body = createContent
+	}
+
+	doc := document.NewDocument(createTitle, createType, body)
 	doc.SetMeta("status", initialStatus)
 	doc.ComputeContentHash()
 

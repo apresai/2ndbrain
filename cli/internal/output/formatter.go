@@ -18,6 +18,7 @@ const (
 	FormatCSV   Format = "csv"
 	FormatYAML  Format = "yaml"
 	FormatTable Format = "table"
+	FormatRaw   Format = "raw"
 )
 
 func Write(w io.Writer, format Format, data any) error {
@@ -28,8 +29,36 @@ func Write(w io.Writer, format Format, data any) error {
 		return writeCSV(w, data)
 	case FormatYAML:
 		return writeYAML(w, data)
+	case FormatRaw:
+		return writeRaw(w, data)
 	default:
 		return writeJSON(w, data)
+	}
+}
+
+func writeRaw(w io.Writer, data any) error {
+	switch v := data.(type) {
+	case string:
+		_, err := io.WriteString(w, v)
+		return err
+	case []byte:
+		_, err := w.Write(v)
+		return err
+	default:
+		// Try duck-typing for Serialize() method (e.g. *document.Document)
+		if s, ok := data.(interface {
+			Serialize() ([]byte, error)
+		}); ok {
+			b, err := s.Serialize()
+			if err != nil {
+				return err
+			}
+			_, err = w.Write(b)
+			return err
+		}
+		// Fallback: print string representation
+		_, err := fmt.Fprintf(w, "%v\n", data)
+		return err
 	}
 }
 

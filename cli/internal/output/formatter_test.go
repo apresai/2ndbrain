@@ -119,6 +119,55 @@ func TestWrite_CSV_EmptySlice(t *testing.T) {
 	}
 }
 
+// serializable is a stand-in for *document.Document: a type whose raw form
+// comes from a Serialize() method, which writeRaw should emit verbatim.
+type serializable struct{ body string }
+
+func (s serializable) Serialize() ([]byte, error) { return []byte(s.body), nil }
+
+func TestWrite_Raw(t *testing.T) {
+	t.Run("string emitted verbatim, no JSON wrapping", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatRaw, "hello world"); err != nil {
+			t.Fatalf("Write(raw, string): %v", err)
+		}
+		if buf.String() != "hello world" {
+			t.Errorf("raw string: got %q, want %q (no quotes/newline added)", buf.String(), "hello world")
+		}
+	})
+
+	t.Run("bytes emitted verbatim", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatRaw, []byte("raw bytes")); err != nil {
+			t.Fatalf("Write(raw, []byte): %v", err)
+		}
+		if buf.String() != "raw bytes" {
+			t.Errorf("raw bytes: got %q", buf.String())
+		}
+	})
+
+	t.Run("Serialize()-able type emits its serialized form", func(t *testing.T) {
+		var buf bytes.Buffer
+		doc := serializable{body: "---\ntitle: X\n---\nbody"}
+		if err := Write(&buf, FormatRaw, doc); err != nil {
+			t.Fatalf("Write(raw, serializable): %v", err)
+		}
+		if buf.String() != "---\ntitle: X\n---\nbody" {
+			t.Errorf("raw Serialize: got %q", buf.String())
+		}
+	})
+
+	t.Run("unknown type falls back to %v without erroring", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatRaw, testItem{Name: "x", Value: 1}); err != nil {
+			t.Fatalf("Write(raw, struct) should not error: %v", err)
+		}
+		if buf.Len() == 0 {
+			t.Errorf("raw fallback produced no output")
+		}
+	})
+}
+
 func TestWrite_DefaultFormat(t *testing.T) {
 	var buf bytes.Buffer
 	item := testItem{Name: "default", Value: 7}

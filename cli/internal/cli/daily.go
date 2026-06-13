@@ -21,8 +21,10 @@ import (
 // note Obsidian itself would open.
 
 var (
-	dailyAppendText string
-	dailyAppendFile string
+	dailyAppendText  string
+	dailyAppendFile  string
+	dailyPrependText string
+	dailyPrependFile string
 )
 
 var dailyCmd = &cobra.Command{
@@ -67,12 +69,30 @@ This is an explicit, opt-in body write: 2nb otherwise never rewrites note bodies
 	RunE: runDailyAppend,
 }
 
+var dailyPrependCmd = &cobra.Command{
+	Use:   "prepend",
+	Short: "Prepend content to today's daily note body",
+	Long: `Prepend content to the start of today's daily note body, after the frontmatter,
+creating the note first if it does not exist. The frontmatter is left untouched.
+
+Content comes from --text, --file, or stdin (in that order of precedence).
+This is an explicit, opt-in body write: 2nb otherwise never rewrites note bodies.`,
+	Example: `  2nb daily prepend --text "- 14:00 standup notes"
+  2nb daily prepend --file snippet.md
+  echo "- via pipe" | 2nb daily prepend`,
+	Args: cobra.NoArgs,
+	RunE: runDailyPrepend,
+}
+
 func init() {
 	dailyCmd.GroupID = "docs"
 	dailyAppendCmd.Flags().StringVar(&dailyAppendText, "text", "", "Content to append (inline string)")
 	dailyAppendCmd.Flags().StringVar(&dailyAppendFile, "file", "", "Read content to append from this file")
+	dailyPrependCmd.Flags().StringVar(&dailyPrependText, "text", "", "Content to prepend (inline string)")
+	dailyPrependCmd.Flags().StringVar(&dailyPrependFile, "file", "", "Read content to prepend from this file")
 	dailyCmd.AddCommand(dailyReadCmd)
 	dailyCmd.AddCommand(dailyAppendCmd)
+	dailyCmd.AddCommand(dailyPrependCmd)
 	rootCmd.AddCommand(dailyCmd)
 }
 
@@ -166,6 +186,41 @@ func runDailyAppend(cmd *cobra.Command, args []string) error {
 	}
 
 	return reportBodyWrite(cmd, doc, "daily-append")
+}
+
+// runDailyPrepend resolves today's daily note (creating it if missing) and
+// prepends content to its body via the shared writeBody helper.
+func runDailyPrepend(cmd *cobra.Command, args []string) error {
+	v, err := openVaultAndSetActive()
+	if err != nil {
+		return err
+	}
+	defer v.Close()
+	setupFileLogging(v)
+
+	_, absPath, _, err := ensureDailyNote(v, time.Now())
+	if err != nil {
+		return err
+	}
+
+	doc, err := document.ParseFile(absPath)
+	if err != nil {
+		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))
+	}
+	doc.Path = v.RelPath(absPath)
+
+	content, err := readWriteContent(dailyPrependText, dailyPrependFile, cmd.Flags().Changed("text"))
+	if err != nil {
+		return err
+	}
+
+	doc.Body = document.PrependToBody(doc.Body, content)
+
+	if err := writeBody(v, doc, absPath); err != nil {
+		return err
+	}
+
+	return reportBodyWrite(cmd, doc, "daily-prepend")
 }
 
 // ensureDailyNote resolves today's daily note from the vault's Obsidian

@@ -167,6 +167,35 @@ func TestContract_Deadends(t *testing.T) {
 	}
 }
 
+// TestContract_Unresolved covers the vault-wide broken-link command. The
+// fixture's a.md links [[b]] (resolves) and [[nope]] (broken), so unresolved
+// must report exactly the a.md -> nope row and nothing for the resolved link.
+func TestContract_Unresolved(t *testing.T) {
+	_, root := newContractVault(t)
+	writeLinkFixture(t, root)
+
+	out, err := runCLIArgs(t, root, "unresolved", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("unresolved: %v\n%s", err, out)
+	}
+	var refs []struct {
+		SourcePath string `json:"source_path"`
+		TargetRaw  string `json:"target_raw"`
+	}
+	if err := json.Unmarshal(out, &refs); err != nil {
+		t.Fatalf("unresolved JSON: %v\n%s", err, out)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("unresolved: got %d rows, want exactly 1 (a.md -> nope): %+v", len(refs), refs)
+	}
+	if refs[0].SourcePath != "a.md" {
+		t.Errorf("unresolved source: got %q, want a.md", refs[0].SourcePath)
+	}
+	if refs[0].TargetRaw != "nope" {
+		t.Errorf("unresolved target: got %q, want nope", refs[0].TargetRaw)
+	}
+}
+
 // TestContract_BacklinksMissingDoc confirms an unknown path exits non-zero
 // rather than emitting an empty success.
 func TestContract_BacklinksMissingDoc(t *testing.T) {
