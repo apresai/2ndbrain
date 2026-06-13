@@ -125,7 +125,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (60)
+### CLI Commands (65)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -152,6 +152,11 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `orphans` | List documents with no resolved inbound link (nothing in the vault links to them) |
 | `deadends` | List documents with no resolved outbound link (they link to nothing real in the vault) |
 | `graph` | Output link graph as JSON adjacency list |
+| `outline <path>` | Heading tree of a document (heading path, level, line span). Shares `document.BuildOutline` with the MCP `kb_structure` tool |
+| `wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `wc` |
+| `folders` | List folders (directory prefixes of `documents.path`) with doc counts; root docs bucket under `(root)` |
+| `tags` | List all tags vault-wide with counts. Parent command (bare `tags` lists; `tags list` is the explicit subcommand) |
+| `aliases` | List frontmatter aliases mapped to their document (alias to path/title) |
 | `export-context` | Generate CLAUDE.md-compatible context bundle (`--types --status --limit`) |
 | `delete` | Delete document from disk and index (`--force`) |
 | `import-obsidian` | Import Obsidian vault (adds UUIDs, normalizes tags, builds index) |

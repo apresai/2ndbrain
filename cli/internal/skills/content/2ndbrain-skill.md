@@ -86,6 +86,11 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb graph` | Output the full link graph as JSON adjacency list |
 | `2nb suggest-links <path>` | Rank semantically related documents that would make good wikilink targets (excludes docs already linked) |
 | `2nb stale --since 7d` | Docs not modified within N days |
+| `2nb outline <path>` | Heading tree of a document (heading path, level, line span). Same chunking as `read`; shared with the MCP `kb_structure` tool |
+| `2nb wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `2nb wc` |
+| `2nb folders` | List folders (directory prefixes of doc paths) with counts; root docs bucket under `(root)` |
+| `2nb tags` | List all tags vault-wide with counts (parent command: bare `tags` lists, `tags list` is explicit) |
+| `2nb aliases` | List frontmatter aliases mapped to their document (alias to path/title) |
 
 ### Write
 
