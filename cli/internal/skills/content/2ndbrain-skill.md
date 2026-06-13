@@ -94,7 +94,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 
 ### Write
 
-`2nb` writes only the gitignored `.2ndbrain/` sidecar and never rewrites a note's body on its own. The body-write commands below (`append`, `prepend`, `replace`) are the explicit, opt-in exceptions: they rewrite the body in place only when you invoke them. `meta --set` rewrites the frontmatter in place (it always has). Everything else here either creates or deletes whole files, or returns text for you to apply yourself.
+`2nb` writes only the gitignored `.2ndbrain/` sidecar and never rewrites a note's body on its own. The body-write commands below (`append`, `prepend`, `replace`, and `polish --write`) are the explicit, opt-in exceptions: they rewrite the body in place only when you invoke them. `meta --set` and `tags rename` rewrite the frontmatter in place. Everything else here either creates or deletes whole files, or returns text for you to apply yourself.
 
 | Command | Purpose |
 |---------|---------|
@@ -103,8 +103,9 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb prepend <path> [--text \| --file \| stdin]` | Insert content at the start of the body, after the frontmatter. Explicit, opt-in body write. |
 | `2nb replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section`. First match wins on duplicate headings. Explicit, opt-in body write. |
 | `2nb meta <path> --set key=value` | Update one or more frontmatter fields in place, with schema + status-transition validation. Rewrites the file's YAML frontmatter; the body is preserved. |
+| `2nb tags rename <old> <new> [--dry-run]` | Rename a frontmatter tag across every doc that carries it; rewrites each doc's frontmatter `tags` array (dedupes when `<new>` is already present) and reindexes. FRONTMATTER-ONLY in v1 (inline body `#old` tags are not rewritten; such docs are skipped). `--dry-run` previews without writing; per-file atomic, non-zero exit on any failure with no rollback. |
 | `2nb delete <path> [--force]` | Delete from disk and index |
-| `2nb polish <path>` | AI copy-edit — returns JSON with `original` and `polished` body for diff review. **Does not write to disk**; you apply the result manually. |
+| `2nb polish <path> [--write]` | AI copy-edit — returns JSON with `original` and `polished` body for diff review. Default is preview only (**does not write to disk**). `--write` applies the polished body in place (opt-in), still returning `original` + `polished` for audit. |
 
 ### Index & housekeeping
 
@@ -383,7 +384,7 @@ Wikilinks inside fenced code blocks or inline backticks are ignored by the extra
 - **Search before create** — the vault accumulates duplicates fast otherwise. `kb_search` + `kb_list --tag` are cheap.
 - **Paths are vault-relative** — always. `2nb read foo.md` works; `2nb read /abs/path/foo.md` does not.
 - **External file edits need a re-index** — if you use `Write` directly instead of `kb_update_meta`, follow up with `2nb index --doc <path>` or expect stale search results.
-- **The polish and suggest-links tools don't write to disk** — they return suggestions. Apply them with a subsequent edit.
+- **The `kb_polish` and `kb_suggest_links` MCP tools don't write to disk** — they return suggestions; apply them with a subsequent edit. (At the CLI, `2nb polish --write` is the explicit opt-in that does write the polished body in place.)
 - **`status` transitions are enforced** — if you try to jump `adr` straight from proposed to superseded, `kb_update_meta` will reject it. Go through accepted first.
 - **Foreign vaults** (Obsidian dir with no `.2ndbrain/`) — `2nb create` won't touch them. Use direct file writes with the frontmatter template above, OR run `2nb vault create <dir>` to convert it into a 2nb vault first.
 
