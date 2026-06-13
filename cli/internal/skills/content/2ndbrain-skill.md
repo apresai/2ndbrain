@@ -94,9 +94,15 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 
 ### Write
 
+`2nb` writes only the gitignored `.2ndbrain/` sidecar and never rewrites a note's body on its own. The body-write commands below (`append`, `prepend`, `replace`) are the explicit, opt-in exceptions: they rewrite the body in place only when you invoke them. `meta --set` rewrites the frontmatter in place (it always has). Everything else here either creates or deletes whole files, or returns text for you to apply yourself.
+
 | Command | Purpose |
 |---------|---------|
 | `2nb create --type <type> --title "Title" [--path <subdir>]` | Create document from template. Generates UUID, timestamps, and type-appropriate frontmatter. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root. |
+| `2nb append <path> [--text \| --file \| stdin]` | Append content to the end of a document's body. Frontmatter is left untouched. Explicit, opt-in body write. |
+| `2nb prepend <path> [--text \| --file \| stdin]` | Insert content at the start of the body, after the frontmatter. Explicit, opt-in body write. |
+| `2nb replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section`. First match wins on duplicate headings. Explicit, opt-in body write. |
+| `2nb meta <path> --set key=value` | Update one or more frontmatter fields in place, with schema + status-transition validation. Rewrites the file's YAML frontmatter; the body is preserved. |
 | `2nb delete <path> [--force]` | Delete from disk and index |
 | `2nb polish <path>` | AI copy-edit — returns JSON with `original` and `polished` body for diff review. **Does not write to disk**; you apply the result manually. |
 

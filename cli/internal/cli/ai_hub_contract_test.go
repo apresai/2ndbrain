@@ -10,6 +10,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/vault"
+	"github.com/spf13/cobra"
 )
 
 // AI Hub contract tests.
@@ -95,6 +96,20 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	listLimit = 100
 	relatedDepth = 2
 	staleSince = 90
+	appendText, appendFile = "", ""
+	prependText, prependFile = "", ""
+	replaceSection, replaceText, replaceFile = "", "", ""
+	// Body-write commands branch on cmd.Flags().Changed("text"); cobra keeps
+	// that per-flag bit set across Execute() calls, so a prior `append --text`
+	// would make the next `append` (stdin) wrongly take the --text branch.
+	// Clear the Changed bit on each body-write text/file flag.
+	for _, c := range []*cobra.Command{appendCmd, prependCmd, replaceCmd} {
+		for _, name := range []string{"text", "file"} {
+			if f := c.Flags().Lookup(name); f != nil {
+				f.Changed = false
+			}
+		}
+	}
 
 	// Redirect os.Stdout so fmt.Printf in handlers lands in our buffer.
 	// Cobra's SetOut only covers its own output (help/usage text), not
