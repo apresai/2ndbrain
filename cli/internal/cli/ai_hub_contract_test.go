@@ -80,6 +80,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	benchSummaryScope = "global"
 	benchHistoryLimit = 20
 	createType, createTitle, createAllowDuplicate = "note", "", false
+	createPath = ""
 	readChunk = ""
 	metaSet = nil
 	deleteForce = false

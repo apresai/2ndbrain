@@ -138,7 +138,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `vault create <path>` | Initialize a new vault and make it active (replaces `init`) |
 | `vault set <path>` | Set existing vault as active |
 | `vault list` | List recently used vaults; reads `~/.2ndbrain-vaults` |
-| `create` | Create document from template (`--type`, `--title`) |
+| `create` | Create document from template (`--type`, `--title`, `--path`). `--path <subdir>` files the doc under a vault-relative subdirectory (created if missing); default is the vault root |
 | `read` | Read full document or specific section (`--chunk`) |
 | `meta` | View or update frontmatter with schema validation (`--set key=value`) |
 | `index` | Rebuild index. `--doc <path>` for a single doc; `--force-reembed` invalidates every stored embedding |
@@ -280,7 +280,7 @@ Each `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json`
 | `kb_ask` | RAG Q&A with source citations |
 | `kb_read` | Read document or chunk by heading path |
 | `kb_list` | List with filters |
-| `kb_create` | Create from template type |
+| `kb_create` | Create from template type; optional `path` files it under a vault-relative subdirectory |
 | `kb_update_meta` | Update frontmatter with validation |
 | `kb_related` | Traverse link graph to depth N |
 | `kb_structure` | Document heading hierarchy |

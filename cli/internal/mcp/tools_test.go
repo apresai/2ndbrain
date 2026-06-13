@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -171,6 +172,60 @@ func TestHandleKBCreate_MissingArgs(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Error("expected an error result when type is missing")
+	}
+}
+
+// TestHandleKBCreate_WithPath verifies that the optional "path" argument
+// files the new document under a subdirectory (created on write) and that the
+// returned path is vault-relative to that subdirectory.
+func TestHandleKBCreate_WithPath(t *testing.T) {
+	h, _ := makeHandlers(t)
+	ctx := context.Background()
+
+	res, err := h.handleKBCreate(ctx, makeRequest(map[string]any{
+		"title": "Subdir Note",
+		"type":  "note",
+		"path":  "resources",
+	}))
+	if err != nil {
+		t.Fatalf("handleKBCreate returned error: %v", err)
+	}
+	text := resultText(t, res)
+	if res.IsError {
+		t.Fatalf("result is an error: %s", text)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("response is not valid JSON: %v\n%s", err, text)
+	}
+	relPath, _ := result["path"].(string)
+	if relPath != filepath.Join("resources", "subdir-note.md") {
+		t.Fatalf("expected path resources/subdir-note.md, got %q", relPath)
+	}
+	if _, statErr := os.Stat(h.vault.AbsPath(relPath)); statErr != nil {
+		t.Errorf("file not written under resources/: %v", statErr)
+	}
+}
+
+// TestHandleKBCreate_PathTraversal verifies that a "path" argument escaping
+// the vault is rejected and writes nothing.
+func TestHandleKBCreate_PathTraversal(t *testing.T) {
+	h, _ := makeHandlers(t)
+	ctx := context.Background()
+
+	for _, bad := range []string{"../escape", "/tmp/abs"} {
+		res, err := h.handleKBCreate(ctx, makeRequest(map[string]any{
+			"title": "Escape Note",
+			"type":  "note",
+			"path":  bad,
+		}))
+		if err != nil {
+			t.Fatalf("unexpected hard error for %q: %v", bad, err)
+		}
+		if !res.IsError {
+			t.Errorf("expected an error result for path %q", bad)
+		}
 	}
 }
 

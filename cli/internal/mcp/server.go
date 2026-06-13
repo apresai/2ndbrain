@@ -226,6 +226,8 @@ IMPORTANT before calling:
 1. Run kb_search (or kb_list with a relevant tag/type filter) to check for duplicates. Vaults accumulate duplicates fast when agents skip this step.
 2. Confirm the vault root via kb_info if you're not sure which vault you're writing to — kb_create writes to the vault configured for this MCP server, not to the filesystem location of any prompts.
 
+Pass "path" to file the new document in a vault-relative subdirectory (e.g. "resources"); the directory is created if missing. Omit it to write to the vault root.
+
 After kb_create, typical next moves:
 - kb_read the new path to get the template body.
 - Use a file-edit tool (or kb_update_meta for frontmatter-only changes) to fill in the body with [[wikilinks]] to related docs found in step 1.
@@ -242,6 +244,7 @@ Example prompts that should trigger this tool:
 			Properties: map[string]any{
 				"title": map[string]any{"type": "string", "description": "Document title"},
 				"type":  map[string]any{"type": "string", "description": "Document type: adr, runbook, prd, prfaq, postmortem, note"},
+				"path":  map[string]any{"type": "string", "description": "Optional vault-relative subdirectory to create the document in (e.g. \"resources\"). Created if missing. Defaults to the vault root."},
 			},
 			Required: []string{"title", "type"},
 		},

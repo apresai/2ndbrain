@@ -38,7 +38,7 @@ Three intents cover almost every request. Pick the path; do not improvise a one-
 
 **2. Save / capture / "write up X" → search FIRST, then create.**
 - Search the topic before creating, every time: `kb_search` / `2nb search`. Vaults accumulate duplicates fast. A near-match (cosine 0.6+) usually means you want to edit or extend that doc, not add a new one.
-- Genuinely new: `kb_create` / `2nb create --type <type> --title "..."` mints the UUID and type-appropriate frontmatter. Then write the body and add `[[wikilinks]]` to the docs search surfaced.
+- Genuinely new: `kb_create` / `2nb create --type <type> --title "..."` mints the UUID and type-appropriate frontmatter. Then write the body and add `[[wikilinks]]` to the docs search surfaced. To file the doc under a subdirectory, pass `--path <subdir>` (CLI) or the `path` argument (`kb_create`); the directory is created if missing, otherwise the doc lands in the vault root. Titles allow only letters, numbers, spaces, and basic punctuation (no em-dashes or slashes) since the title becomes the filename slug.
 - `kb_suggest_links <path>` ranks docs you SHOULD link but have not yet (semantic similarity), which is different from `kb_related` (docs you already link via the wikilink graph).
 
 **3. Answer a question from the notes → ask, then verify.**
@@ -87,7 +87,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 
 | Command | Purpose |
 |---------|---------|
-| `2nb create --type <type> --title "Title"` | Create document from template. Generates UUID, timestamps, and type-appropriate frontmatter. |
+| `2nb create --type <type> --title "Title" [--path <subdir>]` | Create document from template. Generates UUID, timestamps, and type-appropriate frontmatter. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root. |
 | `2nb delete <path> [--force]` | Delete from disk and index |
 | `2nb polish <path>` | AI copy-edit — returns JSON with `original` and `polished` body for diff review. **Does not write to disk**; you apply the result manually. |
 
@@ -160,7 +160,7 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 
 | Tool | When to call it |
 |---|---|
-| `kb_create` | Create a document from a type template. Auto-generates UUID + timestamps. **Search first** (`kb_search` or `kb_list`) to avoid duplicating existing content. |
+| `kb_create` | Create a document from a type template. Auto-generates UUID + timestamps. Optional `path` files it under a vault-relative subdirectory (created if missing). **Search first** (`kb_search` or `kb_list`) to avoid duplicating existing content. |
 | `kb_update_meta` | Change frontmatter without touching the body. Enforces schema/state-machine rules (e.g., `adr` status must follow `proposed → accepted → deprecated`). |
 | `kb_delete` | Delete from disk + index. Irreversible. Confirm the path is correct before calling. |
 | `kb_polish` | AI copy-edit. Returns both `original` and `polished` — **you decide** whether to apply the changes with a follow-up edit. The server doesn't write the polished text anywhere. |

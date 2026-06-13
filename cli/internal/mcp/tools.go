@@ -459,9 +459,24 @@ func (h *handlers) handleKBRelated(ctx context.Context, request mcplib.CallToolR
 func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	title, _ := request.GetArguments()["title"].(string)
 	docType, _ := request.GetArguments()["type"].(string)
+	subdir, _ := request.GetArguments()["path"].(string)
 
 	if title == "" || docType == "" {
 		return mcplib.NewToolResultError("title and type are required"), nil
+	}
+
+	// Optional subdirectory placement. This is untrusted agent input, so guard
+	// it unconditionally: reject ".." and absolute paths, then confirm the
+	// resolved dir stays inside the vault.
+	writeDir := h.vault.Root
+	if subdir != "" {
+		if strings.Contains(subdir, "..") || filepath.IsAbs(subdir) {
+			return mcplib.NewToolResultError("path traversal not allowed"), nil
+		}
+		writeDir = h.vault.AbsPath(subdir)
+		if !h.vault.ContainsPath(writeDir) {
+			return mcplib.NewToolResultError("path outside vault"), nil
+		}
 	}
 
 	// Determine initial status from schema
@@ -478,7 +493,7 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 	doc.SetMeta("status", initialStatus)
 	doc.ComputeContentHash()
 
-	writePath, err := doc.WriteFile(h.vault.Root)
+	writePath, err := doc.WriteFile(writeDir)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("create failed: %v", err)), nil
 	}
