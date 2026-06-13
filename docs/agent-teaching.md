@@ -25,7 +25,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 | Frontmatter edit | **MCP-only** (`kb_update_meta`) | — | There is no CLI equivalent that does atomic schema-validated frontmatter edits. `2nb meta --set` handles one key at a time and re-reads the file. |
 | Create document | Either — both return JSON + auto-index | Either — CLI prints to stderr with human-readable hints | Semantically identical. |
 | Suggest links | Agent wants JSON with scores + snippets | Human wants readable terminal output | Same result set, different format. |
-| Polish prose | Agent wants `{original, polished}` pair for diff | Piping into `diff`/`patch`/external tooling | Both are read-only — neither writes the polished body back. |
+| Polish prose | Agent wants `{original, polished}` pair for diff | Piping into `diff`/`patch`/external tooling | `kb_polish` (MCP) is read-only; the CLI `2nb polish` adds an opt-in `--write` that applies the polished body in place (still returning `{original, polished}` for audit). |
 | Git read operations | Either | Either | `kb_git_*` and `2nb git *` return identical data. |
 | **Vault lifecycle** (create/set/list/status) | — | **CLI-only** — `--vault` flag on every command | MCP is scoped to an already-open vault. Creating or switching vaults happens outside any MCP session. |
 | **Skills install**, **models bench/calibrate**, **config set/get**, **import-obsidian** | — | **CLI-only** | Session-setup operations that don't belong in an MCP server. |

@@ -57,6 +57,30 @@ func TestLoadDailyNotesConfig_Absent(t *testing.T) {
 	}
 }
 
+// TestLoadDailyNotesConfig_EmptyFile guards the fix for an empty or
+// whitespace-only daily-notes.json (a plausible sync / partial-write artifact):
+// it must fall back to Obsidian defaults rather than hard-error on json
+// "unexpected end of JSON input".
+func TestLoadDailyNotesConfig_EmptyFile(t *testing.T) {
+	for _, body := range []string{"", "   ", "\n\t\n"} {
+		v := newDailyTestVault(t)
+		dir := filepath.Join(v.Root, ".obsidian")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "daily-notes.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadDailyNotesConfig(v)
+		if err != nil {
+			t.Fatalf("empty config (%q) should not error: %v", body, err)
+		}
+		if cfg.Folder != "" || cfg.Format != defaultDailyNoteFormat {
+			t.Errorf("empty config (%q) -> %+v, want defaults (root, %q)", body, cfg, defaultDailyNoteFormat)
+		}
+	}
+}
+
 func TestLoadDailyNotesConfig_Custom(t *testing.T) {
 	v := newDailyTestVault(t)
 	writeDailyNotesJSON(t, v, `{"folder":"journal/daily","format":"YYYY/MM/DD","template":"templates/daily.md"}`)

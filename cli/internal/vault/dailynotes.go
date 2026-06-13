@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -44,6 +45,13 @@ func LoadDailyNotesConfig(v *Vault) (DailyNotesConfig, error) {
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("read daily-notes.json: %w", err)
+	}
+
+	// An empty or whitespace-only file is a plausible sync / partial-write
+	// artifact; treat it as "no config" and fall back to defaults rather than
+	// hard-erroring on json.Unmarshal ("unexpected end of JSON input").
+	if len(bytes.TrimSpace(data)) == 0 {
+		return cfg, nil
 	}
 
 	var parsed DailyNotesConfig
