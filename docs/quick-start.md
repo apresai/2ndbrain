@@ -120,7 +120,7 @@ Inside Obsidian: click the 2ndbrain ribbon icon to open the chat panel for multi
 
 ## 7. Connect your AI coding assistant (optional)
 
-The MCP server exposes 16 tools (`kb_search`, `kb_ask`, `kb_read`, ...) to any MCP client. For Claude Code, add to `~/.claude.json`:
+The MCP server exposes 22 tools (`kb_search`, `kb_ask`, `kb_read`, ...) to any MCP client. For Claude Code, add to `~/.claude.json`:
 
 ```json
 {

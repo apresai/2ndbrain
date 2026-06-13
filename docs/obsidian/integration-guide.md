@@ -26,15 +26,21 @@ Add the following to your AI client's configuration file (for example, `~/.claud
 
 ### Supported Tools
 
-The MCP server exposes 16 tools to the LLM:
+The MCP server exposes 22 tools to the LLM:
 
 * `kb_info`: Returns a vault overview — name, document types, schemas, counts, and AI status.
 * `kb_search`: Runs a hybrid search query with optional filters for document type, status, or tag.
 * `kb_read`: Reads document body content or a specific chunk by its heading path.
 * `kb_related`: Traverses the link graph to a depth of N and returns connected nodes.
+* `kb_backlinks`: Lists the resolved inbound links to a document (who links to it).
+* `kb_links`: Lists the outbound links from a document, including unresolved/broken ones (each carries a `resolved` flag).
 * `kb_create`: Creates a new note in the vault using a document template.
 * `kb_update_meta`: Updates YAML frontmatter properties using AST nodes to preserve comments. Refuses `.canvas` and `.base` files, which are indexed read-only.
+* `kb_append`: Appends text to a note's body (frontmatter untouched), then reindexes and re-embeds. Refuses read-only `.canvas`/`.base` files.
+* `kb_replace_section`: Replaces the content under one heading (siblings untouched), then reindexes and re-embeds. Errors if the heading is not found; refuses read-only `.canvas`/`.base` files.
 * `kb_structure`: Returns the heading outline tree of a specific document.
+* `kb_tags`: Lists every tag in the vault with its document count.
+* `kb_tasks`: Lists GFM checkbox tasks across the vault or one file/dir, with `done`/`todo` filters.
 * `kb_delete`: Deletes a note from the disk and removes it from the search index.
 * `kb_list`: Lists all documents matching the specified filters.
 * `kb_ask`: Performs RAG Q&A retrieval and returns an inline response with citations.
@@ -44,6 +50,8 @@ The MCP server exposes 16 tools to the LLM:
 * `kb_git_activity`: Lists recent git commits touching vault files.
 * `kb_git_diff`: Returns the unified diff of a file versus HEAD.
 * `kb_git_status`: Maps vault paths to their porcelain git status.
+
+Note: `move`/`rename` (the wikilink-rewriting vault mutation) is intentionally CLI-only: the highest-blast-radius write stays behind `2nb move`/`2nb rename` with their mandatory `--dry-run` rather than an MCP tool.
 
 ---
 

@@ -117,7 +117,7 @@ Key patterns:
 | `internal/store` | SQLite CRUD, migrations, link resolution |
 | `internal/search` | BM25 search engine with structured filters |
 | `internal/graph` | Link graph BFS traversal |
-| `internal/mcp` | MCP server with 16 tools + sidecar status files |
+| `internal/mcp` | MCP server with 22 tools + sidecar status files |
 | `internal/git` | Read-only git wrappers (IsRepo, Activity, DiffFile, StatusFiles) |
 | `internal/skills` | Skill file generation and agent registry |
 | `internal/output` | JSON/CSV/YAML formatters |
@@ -288,7 +288,7 @@ tar czf vault.tar.gz \
 
 **JSON envelope (breaking change from 0.1.12):** `2nb search --json` and `2nb ask --json` return `{mode, warnings, results}` / `{mode, warnings, answer, sources}` envelopes. Programmatic consumers that decoded a raw array/object need to extract `.results` / `.answer`. The Swift app decodes via `CLISearchResponse` / `CLIAskResponse` in `AppState.swift`.
 
-### MCP Server (16 tools)
+### MCP Server (22 tools)
 
 Each `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` (PID, start time, parent PID, last 50 invocations: tool, timestamp, duration, ok/error). The dashboard polls `2nb mcp status --json` every 5s. mark3labs/mcp-go has no client-connected hook, so sidecar files are the only enumeration mechanism.
 
@@ -302,14 +302,22 @@ Each `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json`
 | `kb_create` | Create from template type; optional `path` files it under a vault-relative subdirectory |
 | `kb_update_meta` | Update frontmatter with validation |
 | `kb_related` | Traverse link graph to depth N |
-| `kb_structure` | Document heading hierarchy |
+| `kb_structure` | Document heading hierarchy (also covers the `outline` view via `BuildOutline`) |
+| `kb_backlinks` | Resolved inbound links to a document (store `Backlinks`) |
+| `kb_links` | Outbound links from a document, including unresolved/broken ones (store `OutboundLinks`) |
+| `kb_tags` | Vault-wide tag list with per-tag document counts (store `TagCounts`) |
+| `kb_tasks` | GFM checkbox tasks across the vault or a file/dir, with `done`/`todo` filters (`document.ExtractTasks`) |
 | `kb_delete` | Delete from vault and index |
 | `kb_index` | Rebuild index and embeddings |
+| `kb_append` | Append text to a document body; reindex + re-embed (shared body-write path); rejects read-only `.canvas`/`.base` |
+| `kb_replace_section` | Replace one heading's section content (`document.ReplaceSection`); reindex + re-embed; rejects read-only `.canvas`/`.base` |
 | `kb_suggest_links` | Find semantically related docs to link from a given doc |
 | `kb_polish` | AI copy-editor returns original + polished for diff |
 | `kb_git_activity` | Recent git commits touching vault files |
 | `kb_git_diff` | Unified diff of a file vs HEAD |
 | `kb_git_status` | Map of path → porcelain status for uncommitted files |
+
+`move`/`rename` (the wikilink-rewriting vault mutation) is intentionally **CLI-only**: it is the highest-blast-radius write surface, so it stays behind `2nb move`/`2nb rename` (with their mandatory `--dry-run`) rather than an MCP tool. `kb_outline` is not a separate tool: `kb_structure` already returns the outline via the shared `document.BuildOutline`.
 
 ### Testing
 

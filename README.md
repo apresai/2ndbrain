@@ -61,7 +61,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 
 - **Hybrid search** — BM25 keyword + vector semantic search with Reciprocal Rank Fusion
 - **RAG Q&A** — Ask questions, get answers with source citations
-- **MCP server** — 16 tools for Claude Code, Cursor, and any MCP client, with live status sidecar files and an observability panel
+- **MCP server** — 22 tools for Claude Code, Cursor, and any MCP client, with live status sidecar files and an observability panel
 - **Suggest Links** — AI finds semantically related documents in your vault and proposes wikilinks to insert
 - **Polish** — AI copy-editor returns the original and polished text together, so any client (Obsidian plugin, MCP, CLI) can show a diff before applying
 - **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Rebuild Index and Re-embed All
@@ -344,7 +344,7 @@ Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets t
 
 ## MCP Server
 
-The MCP server exposes 16 tools for AI coding assistants:
+The MCP server exposes 22 tools for AI coding assistants:
 
 | Tool | Description |
 |------|-------------|
@@ -356,14 +356,22 @@ The MCP server exposes 16 tools for AI coding assistants:
 | `kb_create` | Create document from template; optional `path` files it under a vault-relative subdirectory |
 | `kb_update_meta` | Update frontmatter with schema validation |
 | `kb_related` | Graph traversal to find connected documents |
-| `kb_structure` | Get document heading tree as JSON |
+| `kb_structure` | Get document heading tree as JSON (also covers the outline view) |
+| `kb_backlinks` | Resolved inbound links to a document |
+| `kb_links` | Outbound links from a document, including unresolved/broken ones |
+| `kb_tags` | Vault-wide tag list with per-tag document counts |
+| `kb_tasks` | GFM checkbox tasks across the vault or a file/dir, with `done`/`todo` filters |
 | `kb_delete` | Delete document from vault and index |
 | `kb_index` | Rebuild search index and generate embeddings |
+| `kb_append` | Append text to a document body, then reindex + re-embed (rejects read-only `.canvas`/`.base`) |
+| `kb_replace_section` | Replace one heading's section content, then reindex + re-embed (rejects read-only `.canvas`/`.base`) |
 | `kb_suggest_links` | Suggest semantically related documents to wikilink from a source doc |
 | `kb_polish` | AI copy-editor returns original + polished body for diff review |
 | `kb_git_activity` | Recent git commits that touched vault files (read-only) |
 | `kb_git_diff` | Unified diff of a file against HEAD |
 | `kb_git_status` | Uncommitted/untracked files in the vault |
+
+`move`/`rename` (the wikilink-rewriting vault mutation) is intentionally CLI-only: the highest-blast-radius write stays behind `2nb move`/`2nb rename` with their mandatory `--dry-run` preview rather than an MCP tool.
 
 Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` with PID, start time, parent PID, and the last 50 tool invocations. Run `2nb mcp status` to list live servers, or use the Cmd+Shift+M status panel in the dashboard.
 

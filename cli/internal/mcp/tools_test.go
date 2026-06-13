@@ -570,8 +570,8 @@ func TestHandleKBIndex(t *testing.T) {
 func TestMCPToolRegistrationsIncludesAllTools(t *testing.T) {
 	h, _ := makeHandlers(t)
 	regs := mcpToolRegistrations(h)
-	if len(regs) != 16 {
-		t.Fatalf("registered tools = %d, want 16", len(regs))
+	if len(regs) != 22 {
+		t.Fatalf("registered tools = %d, want 22", len(regs))
 	}
 	names := make(map[string]bool, len(regs))
 	for _, reg := range regs {
@@ -584,6 +584,7 @@ func TestMCPToolRegistrationsIncludesAllTools(t *testing.T) {
 		"kb_info", "kb_search", "kb_ask", "kb_read", "kb_list", "kb_create",
 		"kb_update_meta", "kb_related", "kb_structure", "kb_delete", "kb_index",
 		"kb_suggest_links", "kb_polish", "kb_git_activity", "kb_git_diff", "kb_git_status",
+		"kb_backlinks", "kb_links", "kb_tags", "kb_tasks", "kb_append", "kb_replace_section",
 	} {
 		if !names[name] {
 			t.Fatalf("missing MCP tool registration %q", name)

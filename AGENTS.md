@@ -85,7 +85,7 @@ Test scripts live in `tests/`: `gui-helpers.sh` (shared), `gui-test-crud.sh`, `g
 | `internal/store` | SQLite CRUD, migrations, link resolution |
 | `internal/search` | BM25 search engine with structured filters |
 | `internal/graph` | Link graph BFS traversal |
-| `internal/mcp` | MCP server with 16 tools + sidecar status files |
+| `internal/mcp` | MCP server with 22 tools + sidecar status files |
 | `internal/git` | Read-only git wrappers (IsRepo, Activity, DiffFile, StatusFiles) |
 | `internal/skills` | Skill file generation and agent registry |
 | `internal/output` | JSON/CSV/YAML formatters |
@@ -117,7 +117,7 @@ Run `2nb --help` for the full list and `--help` on any command for flags. The co
 
 **Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`.
 
-### MCP Server (16 tools)
+### MCP Server (22 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -129,14 +129,22 @@ Run `2nb --help` for the full list and `--help` on any command for flags. The co
 | `kb_create` | Create from template type |
 | `kb_update_meta` | Update frontmatter with validation |
 | `kb_related` | Traverse link graph to depth N |
-| `kb_structure` | Document heading hierarchy |
+| `kb_structure` | Document heading hierarchy (also covers the outline view) |
+| `kb_backlinks` | Resolved inbound links to a document |
+| `kb_links` | Outbound links from a document, including unresolved/broken ones |
+| `kb_tags` | Vault-wide tag list with per-tag document counts |
+| `kb_tasks` | GFM checkbox tasks across the vault or a file/dir (`done`/`todo` filters) |
 | `kb_delete` | Delete from vault and index |
 | `kb_index` | Rebuild index and embeddings |
+| `kb_append` | Append text to a document body; reindex + re-embed; rejects read-only `.canvas`/`.base` |
+| `kb_replace_section` | Replace one heading's section content; reindex + re-embed; rejects read-only `.canvas`/`.base` |
 | `kb_suggest_links` | Find semantically related docs to link from a given doc |
 | `kb_polish` | AI copy-editor returns original + polished for diff |
 | `kb_git_activity` | Recent git commits touching vault files (`since_days`) |
 | `kb_git_diff` | Unified diff of a file vs HEAD |
 | `kb_git_status` | Map of path → porcelain status for uncommitted files |
+
+`move`/`rename` (the wikilink-rewriting vault mutation) is intentionally CLI-only: the highest-blast-radius write surface stays behind `2nb move`/`2nb rename` with their mandatory `--dry-run`. `kb_structure` already covers the outline, so there is no separate `kb_outline`.
 
 Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` (PID, start time, last 50 tool invocations). `2nb mcp status --json` enumerates live servers.
 
