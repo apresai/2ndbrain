@@ -205,6 +205,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `append <path> [--text \| --file \| stdin]` | Append content to a document's body. Explicit, opt-in body write; frontmatter is left untouched |
 | `prepend <path> [--text \| --file \| stdin]` | Insert content at the start of a document's body, after the frontmatter |
 | `replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section` (first match wins on duplicate headings) |
+| `daily` | Resolve today's daily note from Obsidian's daily-notes config (`.obsidian/daily-notes.json`), create it if missing, and print the path. `daily read` prints its body; `daily append [--text \| --file \| stdin]` appends to it. Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled or unconfigured |
 | `meta <path> [--set key=value] [--get <key>] [--remove <key>]` | View frontmatter, or `--set` to write, `--get` to read one field (exit 1 if absent), `--remove` to delete a field in place (preserves comments/order; refuses identity and schema-required keys) |
 | `delete <path> [--force]` | Delete document from vault and index |
 | `list [--type] [--status] [--tag] [--sort]` | List documents with filters |
