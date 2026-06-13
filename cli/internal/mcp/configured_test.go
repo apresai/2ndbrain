@@ -66,31 +66,54 @@ func TestConfiguredFromFile(t *testing.T) {
 			wantKey:    "kb",
 		},
 		{
-			// A user-scope server that runs `2nb mcp-server` matches on args
-			// regardless of cwd: it's a vault-agnostic server the client points
-			// at whatever directory it launches in.
-			name:       "2nb mcp-server matches on args even with cwd to another vault",
-			config:     `{"mcpServers": {"other": {"command": "2nb", "args": ["mcp-server"], "cwd": "/Users/test/dev/other-vault"}}}`,
+			// An unpinned `2nb mcp-server` (no --vault, no cwd) is vault-agnostic:
+			// the client resolves the vault at launch, so it counts for any vault.
+			name:       "unpinned 2nb mcp-server is vault-agnostic and matches",
+			config:     `{"mcpServers": {"other": {"command": "2nb", "args": ["mcp-server"]}}}`,
 			wantConfig: true,
 			wantScope:  "user",
 			wantKey:    "other",
 		},
 		{
-			// The cwd branch in isolation: command is 2nb but args do NOT name
-			// mcp-server and the key isn't 2ndbrain/2nb, so the only way to match
-			// is cwd. With cwd pointing at a different vault, it must NOT match.
-			name:       "2nb command with cwd to a different vault and no mcp-server arg is not configured",
-			config:     `{"mcpServers": {"weird": {"command": "2nb", "args": ["something-else"], "cwd": "/Users/test/dev/other-vault"}}}`,
+			// The false-positive fix: an entry whose cwd pins a DIFFERENT vault
+			// must NOT report configured for this vault, even though its args
+			// name mcp-server.
+			name:       "2nb mcp-server with cwd to another vault is not configured for this vault",
+			config:     `{"mcpServers": {"other": {"command": "2nb", "args": ["mcp-server"], "cwd": "/Users/test/dev/other-vault"}}}`,
 			wantConfig: false,
 		},
 		{
-			// Same shape, but cwd matches THIS vault: the cwd branch alone makes
-			// it configured.
-			name:       "2nb command matched by cwd alone when cwd is this vault",
-			config:     `{"mcpServers": {"weird": {"command": "2nb", "args": ["something-else"], "cwd": "/Users/test/dev/obsidian"}}}`,
+			// The real-world shape (`claude mcp add`): the vault is pinned via a
+			// --vault arg, not cwd. Pinned to a DIFFERENT vault → not configured
+			// for this one.
+			name:       "2nb mcp-server --vault pinned to another vault is not configured",
+			config:     `{"mcpServers": {"2ndbrain": {"command": "2nb", "args": ["mcp-server", "--vault", "/Users/test/dev/other-vault"]}}}`,
+			wantConfig: false,
+		},
+		{
+			// Same --vault pin, but pointing at THIS vault → configured. This is
+			// exactly how the shipped `~/.claude.json` entry is shaped.
+			name:       "2nb mcp-server --vault pinned to this vault is configured",
+			config:     `{"mcpServers": {"2ndbrain": {"command": "2nb", "args": ["mcp-server", "--vault", "/Users/test/dev/obsidian"]}}}`,
 			wantConfig: true,
 			wantScope:  "user",
-			wantKey:    "weird",
+			wantKey:    "2ndbrain",
+		},
+		{
+			// The --vault=<path> equals spelling is honored too.
+			name:       "2nb mcp-server --vault=<this> equals form is configured",
+			config:     `{"mcpServers": {"kb": {"command": "2nb", "args": ["mcp-server", "--vault=/Users/test/dev/obsidian"]}}}`,
+			wantConfig: true,
+			wantScope:  "user",
+			wantKey:    "kb",
+		},
+		{
+			// A non-conventional key whose command never runs `mcp-server` is not
+			// the MCP server, even with cwd pointing at this vault: that's some
+			// other 2nb invocation (e.g. `2nb search`), not the server.
+			name:       "2nb command without mcp-server arg is not the server even with matching cwd",
+			config:     `{"mcpServers": {"weird": {"command": "2nb", "args": ["something-else"], "cwd": "/Users/test/dev/obsidian"}}}`,
+			wantConfig: false,
 		},
 	}
 
@@ -148,5 +171,69 @@ func TestConfiguredFromFile_ProjectScopeOnlyMatchesOwnVault(t *testing.T) {
 	st := configuredFromFile(path, "/Users/test/dev/vault-b")
 	if st.Configured {
 		t.Errorf("vault-b should not see vault-a's project-scoped server as configured")
+	}
+}
+
+// TestConfiguredFromFile_ProjectScopeSymlinkKey proves the symlink false-negative
+// fix: when the projects key in ~/.claude.json is a symlinked spelling of the
+// vault path (the client launched from the symlink) but the caller passes the
+// resolved real path (or vice versa), detection must still match. Uses real
+// on-disk dirs + a symlink so EvalSymlinks actually resolves both spellings to
+// the same target.
+func TestConfiguredFromFile_ProjectScopeSymlinkKey(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real-vault")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "linked-vault")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	// Config keys the project by the SYMLINK spelling; we query by the REAL
+	// resolved path. Pre-fix this was a false negative.
+	config := `{"projects": {"` + link + `": {"mcpServers": {"2ndbrain": {"command": "2nb", "args": ["mcp-server"]}}}}}`
+	path := writeConfig(t, config)
+
+	st := configuredFromFile(path, real)
+	if !st.Configured {
+		t.Fatalf("symlinked project key should match the resolved vault path; got not configured")
+	}
+	if st.Scope != "project" {
+		t.Errorf("Scope = %q, want project", st.Scope)
+	}
+
+	// And the reverse: query by the symlink spelling, config keyed by the real
+	// path. Also must match.
+	config2 := `{"projects": {"` + real + `": {"mcpServers": {"2ndbrain": {"command": "2nb", "args": ["mcp-server"]}}}}}`
+	path2 := writeConfig(t, config2)
+	if st2 := configuredFromFile(path2, link); !st2.Configured {
+		t.Errorf("querying by symlink spelling against a real-path config key should match")
+	}
+}
+
+// TestVaultFlagValue exercises the --vault arg extractor directly: both
+// spellings, a dangling flag, and absence.
+func TestVaultFlagValue(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      []string
+		wantVal   string
+		wantFound bool
+	}{
+		{"space form", []string{"mcp-server", "--vault", "/v"}, "/v", true},
+		{"equals form", []string{"mcp-server", "--vault=/v"}, "/v", true},
+		{"no vault flag", []string{"mcp-server"}, "", false},
+		{"dangling flag", []string{"mcp-server", "--vault"}, "", false},
+		{"empty args", nil, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			val, found := vaultFlagValue(tc.args)
+			if found != tc.wantFound || val != tc.wantVal {
+				t.Errorf("vaultFlagValue(%v) = (%q, %v), want (%q, %v)", tc.args, val, found, tc.wantVal, tc.wantFound)
+			}
+		})
 	}
 }
