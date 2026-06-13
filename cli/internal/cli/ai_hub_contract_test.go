@@ -101,11 +101,12 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	replaceSection, replaceText, replaceFile = "", "", ""
 	polishWrite = false
 	tagsRenameDryRun = false
+	dailyAppendText, dailyAppendFile = "", ""
 	// Body-write commands branch on cmd.Flags().Changed("text"); cobra keeps
 	// that per-flag bit set across Execute() calls, so a prior `append --text`
 	// would make the next `append` (stdin) wrongly take the --text branch.
 	// Clear the Changed bit on each body-write text/file flag.
-	for _, c := range []*cobra.Command{appendCmd, prependCmd, replaceCmd} {
+	for _, c := range []*cobra.Command{appendCmd, prependCmd, replaceCmd, dailyAppendCmd} {
 		for _, name := range []string{"text", "file"} {
 			if f := c.Flags().Lookup(name); f != nil {
 				f.Changed = false
