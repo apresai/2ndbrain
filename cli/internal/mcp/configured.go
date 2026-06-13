@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/apresai/2ndbrain/internal/vault"
 )
@@ -71,10 +73,22 @@ func configuredFromFile(configPath, vaultPath string) ConfiguredStatus {
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return st // missing file → not configured, no error
+		// Distinguish "no config yet" (the normal not-set-up case) from
+		// "couldn't read your config" (a permission error or similar). Both
+		// soft-fail to not-configured, but the latter is worth a trace for a
+		// --verbose user wondering why detection says "no" on a config they
+		// know exists.
+		if !os.IsNotExist(err) {
+			slog.Warn("mcp configured: could not read client config", "path", configPath, "err", err)
+		}
+		return st // missing/unreadable file → not configured, no error
 	}
 	var cfg claudeConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
+		// Malformed JSON soft-fails to not-configured (Anthropic owns this
+		// file; we never block on its contents), but trace it so a --verbose
+		// user can tell a corrupt config apart from a missing 2ndbrain entry.
+		slog.Warn("mcp configured: client config is not valid JSON", "path", configPath, "err", err)
 		return st // malformed JSON → not configured, no error
 	}
 
@@ -86,11 +100,15 @@ func configuredFromFile(configPath, vaultPath string) ConfiguredStatus {
 		return st
 	}
 
-	// Project scope: projects[<vaultPath>].mcpServers. Match the vault path
-	// both verbatim and cleaned, since either spelling may be the config key.
-	for _, candidate := range projectKeyCandidates(vaultPath) {
-		proj, ok := cfg.Projects[candidate]
-		if !ok {
+	// Project scope: projects[<path>].mcpServers, keyed by the absolute cwd the
+	// client launched from. We can't assume that key is spelled the same way as
+	// vaultPath (one may be a symlink, one resolved, or differ only by a
+	// trailing slash), so compare every project key to this vault with the same
+	// symlink-aware sameDir used elsewhere rather than indexing by an exact
+	// string. This closes the false-negative where a genuinely-configured
+	// project server read "not configured" because the key was a symlinked form.
+	for projKey, proj := range cfg.Projects {
+		if !sameDir(projKey, vaultPath) {
 			continue
 		}
 		if key, ok := match2ndbrainServer(proj.MCPServers, vaultPath); ok {
@@ -105,25 +123,69 @@ func configuredFromFile(configPath, vaultPath string) ConfiguredStatus {
 }
 
 // match2ndbrainServer scans a mcpServers map for an entry that runs the 2nb MCP
-// server. The match is deliberately liberal so a user who renamed the server
-// key (or set a cwd instead of args) is still recognized:
-//   - key is "2ndbrain" or "2nb", OR
-//   - command basename is "2nb" AND args contains "mcp-server", OR
-//   - command basename is "2nb" AND cwd is this vault.
+// server for THIS vault, and returns its key. Matching is two stages:
 //
-// The command/args match is preferred over the key name, so a renamed key with
-// the right command still counts. Returns the matched key.
+//  1. Is this entry a 2ndbrain MCP server at all? Yes if its key is the
+//     conventional "2ndbrain"/"2nb", or its command basename is "2nb" and its
+//     args name the "mcp-server" subcommand. (A "2nb" command without the
+//     mcp-server subcommand is some other 2nb invocation, not the server.)
+//  2. Does it serve THIS vault? An entry pinned to a specific vault, via a
+//     "--vault <path>" arg (preferred, mirroring 2nb's own resolution order) or
+//     a "cwd", counts only when that pin matches this vault. An entry with no
+//     pin is vault-agnostic: the client resolves the vault at launch (the
+//     active-vault file or cwd), so it counts for any vault.
+//
+// Stage 2 is the fix for the false positive where `2nb mcp-server --vault
+// /other` (or `cwd: /other`) used to report "configured for THIS vault" purely
+// because its args named mcp-server.
 func match2ndbrainServer(servers map[string]mcpServerEntry, vaultPath string) (string, bool) {
 	for key, entry := range servers {
-		cmdIs2nb := filepath.Base(entry.Command) == "2nb"
-		if cmdIs2nb && argsContain(entry.Args, "mcp-server") {
-			return key, true
+		if !isSecondBrainServer(key, entry) {
+			continue
 		}
-		if cmdIs2nb && entry.Cwd != "" && sameDir(entry.Cwd, vaultPath) {
-			return key, true
+		if pin, pinned := pinnedVault(entry); pinned && !sameDir(pin, vaultPath) {
+			continue // pinned to a different vault, not this one
 		}
-		if key == "2ndbrain" || key == "2nb" {
-			return key, true
+		return key, true
+	}
+	return "", false
+}
+
+// isSecondBrainServer reports whether an mcpServers entry runs the 2nb MCP
+// server, recognized either by a conventional key name or by command + args.
+func isSecondBrainServer(key string, entry mcpServerEntry) bool {
+	if key == "2ndbrain" || key == "2nb" {
+		return true
+	}
+	return filepath.Base(entry.Command) == "2nb" && argsContain(entry.Args, "mcp-server")
+}
+
+// pinnedVault returns the vault path an mcpServers entry is bound to, if any. A
+// "--vault <path>" (or "--vault=<path>") arg wins over cwd, mirroring 2nb's own
+// resolution order (--vault > 2NB_VAULT > active-vault file > cwd). An entry
+// with neither is vault-agnostic and pinned is false.
+func pinnedVault(entry mcpServerEntry) (path string, pinned bool) {
+	if v, ok := vaultFlagValue(entry.Args); ok {
+		return v, true
+	}
+	if entry.Cwd != "" {
+		return entry.Cwd, true
+	}
+	return "", false
+}
+
+// vaultFlagValue extracts the value of a --vault flag from an argv slice,
+// supporting both "--vault <path>" and "--vault=<path>" spellings.
+func vaultFlagValue(args []string) (string, bool) {
+	for i, a := range args {
+		if a == "--vault" {
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", false // dangling flag, no value
+		}
+		if v, ok := strings.CutPrefix(a, "--vault="); ok {
+			return v, true
 		}
 	}
 	return "", false
@@ -138,18 +200,23 @@ func argsContain(args []string, want string) bool {
 	return false
 }
 
-// sameDir reports whether two directory paths refer to the same location,
-// comparing cleaned absolute forms.
+// sameDir reports whether two directory paths refer to the same location. It
+// first tries to canonicalize each path (absolute + symlinks resolved) so a
+// symlinked spelling matches its target; if a path can't be resolved (e.g. it
+// doesn't exist on this machine, common for a config written elsewhere), it
+// falls back to a cleaned-absolute comparison so detection still works.
 func sameDir(a, b string) bool {
-	return filepath.Clean(a) == filepath.Clean(b)
+	return canonicalDir(a) == canonicalDir(b)
 }
 
-// projectKeyCandidates returns the spellings of a vault path that might be used
-// as a projects map key in ~/.claude.json.
-func projectKeyCandidates(vaultPath string) []string {
-	clean := filepath.Clean(vaultPath)
-	if clean == vaultPath {
-		return []string{vaultPath}
+// canonicalDir returns the most canonical form of a path available: absolute
+// with symlinks resolved when possible, else cleaned-absolute, else cleaned.
+func canonicalDir(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
 	}
-	return []string{vaultPath, clean}
+	if abs, err := filepath.Abs(p); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(p)
 }
