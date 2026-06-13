@@ -199,7 +199,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note]` | Create document from template |
+| `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root |
 | `read <path> [--chunk <heading>]` | Read document or specific section |
 | `meta <path> [--set key=value]` | View or update frontmatter |
 | `delete <path> [--force]` | Delete document from vault and index |
@@ -257,6 +257,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `mcp-server` | Start MCP server on stdio |
 | `mcp-setup` | Show MCP setup instructions for all AI tools |
 | `mcp status [--json]` | List live MCP server processes and their recent tool invocations |
+| `mcp configured [--json]` | Report whether the 2ndbrain MCP server is configured in the AI client config (`~/.claude.json`) for this vault. The durable "is it set up?" check, unlike `mcp status` which reports "is it running right now?" |
 | `plugin status [--json]` | Installed Obsidian plugin version vs this CLI |
 | `plugin install` | Install or update the Obsidian plugin in the open vault from the latest release (alias: `plugin update`) |
 | `export-context --types <types>` | Generate CLAUDE.md context bundle |
@@ -333,7 +334,7 @@ The MCP server exposes 16 tools for AI coding assistants:
 | `kb_ask` | RAG Q&A — answer questions with source citations |
 | `kb_read` | Read full document or specific heading chunk |
 | `kb_list` | List documents with metadata filters |
-| `kb_create` | Create document from template |
+| `kb_create` | Create document from template; optional `path` files it under a vault-relative subdirectory |
 | `kb_update_meta` | Update frontmatter with schema validation |
 | `kb_related` | Graph traversal to find connected documents |
 | `kb_structure` | Get document heading tree as JSON |
