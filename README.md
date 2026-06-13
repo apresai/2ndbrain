@@ -217,7 +217,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ask <question> [--history <path\|->]` | RAG Q&A with source citations; `--history` makes it multi-turn |
 | `chat` | Interactive multi-turn Q&A session (REPL over the same pipeline) |
 | `suggest-links <path> [--limit 10]` | Rank semantically related documents for wikilink insertion |
-| `polish <path> [--system <prompt>]` | AI copy-edit a document (JSON with original + polished body) |
+| `polish <path> [--system <prompt>] [--write]` | AI copy-edit a document (JSON with original + polished body). `--write` applies the polished body to the document in place (opt-in; default is preview only) |
 | `index [--doc <path>] [--force-reembed]` | Build search index + embeddings (full vault or a single document); `--force-reembed` invalidates every stored embedding for after an intentional provider switch |
 | `ai status` | Show AI provider, models, embedding count, and vault portability state |
 | `ai setup` | Multi-provider setup wizard (easy mode or custom) |
@@ -261,6 +261,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `wordcount <path>` | Word, character, and heading counts over the indexable body (alias `wc`) |
 | `folders` | List folders with document counts (root docs under `(root)`) |
 | `tags` | List all tags vault-wide with counts |
+| `tags rename <old> <new> [--dry-run]` | Rename a frontmatter tag across every document that carries it (frontmatter-only in v1; dedupes when `<new>` already present; `--dry-run` previews) |
 | `aliases` | List frontmatter aliases mapped to their document |
 
 ### Integration

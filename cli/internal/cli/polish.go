@@ -12,6 +12,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -30,11 +31,13 @@ editor can present a diff and let the user accept, edit, or reject.`,
 
 var polishSystemFlag string
 var polishMaxTokens int
+var polishWrite bool
 
 func init() {
 	polishCmd.GroupID = "ai"
 	polishCmd.Flags().StringVar(&polishSystemFlag, "system", "", "Override the default copy-editor system prompt")
 	polishCmd.Flags().IntVar(&polishMaxTokens, "max-tokens", 4096, "Maximum tokens for the generated response")
+	polishCmd.Flags().BoolVar(&polishWrite, "write", false, "Apply the polished body to the document in place (opt-in; default prints a diff preview only)")
 	rootCmd.AddCommand(polishCmd)
 }
 
@@ -49,7 +52,16 @@ type PolishResult struct {
 }
 
 func runPolish(cmd *cobra.Command, args []string) error {
-	v, err := openVault()
+	// --write mutates the document on disk, so it opens the write path that also
+	// pins the active vault (matching meta/append). The default preview path is
+	// read-only.
+	var v *vault.Vault
+	var err error
+	if polishWrite {
+		v, err = openVaultAndSetActive()
+	} else {
+		v, err = openVault()
+	}
 	if err != nil {
 		return err
 	}
@@ -68,6 +80,13 @@ func runPolish(cmd *cobra.Command, args []string) error {
 	parsed, err := document.ParseFile(absPath)
 	if err != nil {
 		return fmt.Errorf("parse source: %w", err)
+	}
+
+	// Fail early on read-only synthetic types when --write is set: writeBody
+	// would refuse anyway, but spending an AI call first would be wasteful and
+	// the error should be clear before any provider work.
+	if polishWrite && document.IsReadOnlyType(parsed.Type) {
+		return exitWithError(ExitValidation, fmt.Sprintf("error: cannot apply --write to a read-only %s file (%s); .canvas/.base files are indexed read-only", parsed.Type, v.RelPath(absPath)))
 	}
 
 	initAIProviders(v)
@@ -107,6 +126,19 @@ func runPolish(cmd *cobra.Command, args []string) error {
 		Provider:   cfg.Provider,
 		Model:      cfg.GenerationModel,
 		DurationMs: time.Since(start).Milliseconds(),
+	}
+
+	// --write applies the polished text to the document body in place via the
+	// shared body-write path (atomic temp+rename, reindex, re-embed). The
+	// PolishResult is still emitted so JSON consumers keep original + polished
+	// for audit; without --write the behavior is unchanged (preview only).
+	if polishWrite {
+		parsed.Body = polished
+		parsed.Path = v.RelPath(absPath)
+		if err := writeBody(v, parsed, absPath); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Wrote polished body to %s (%s / %s)\n", result.Path, result.Provider, result.Model)
 	}
 
 	if getFormat(cmd) == output.FormatJSON {

@@ -159,6 +159,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `wc` |
 | `folders` | List folders (directory prefixes of `documents.path`) with doc counts; root docs bucket under `(root)` |
 | `tags` | List all tags vault-wide with counts. Parent command (bare `tags` lists; `tags list` is the explicit subcommand) |
+| `tags rename <old> <new>` | Rename a frontmatter tag across every document that carries it: rewrites each doc's frontmatter `tags` array (dedupes when `<new>` is already present) and reindexes. FRONTMATTER-ONLY in v1 (inline body `#old` tags are not rewritten; such docs are skipped). `--dry-run` previews affected docs without writing; per-file atomic with a collected `{renamed, skipped, failed}` summary, non-zero exit on any failure with no rollback of already-written files |
 | `aliases` | List frontmatter aliases mapped to their document (alias to path/title) |
 | `export-context` | Generate CLAUDE.md-compatible context bundle (`--types --status --limit`) |
 | `delete` | Delete document from disk and index (`--force`) |
@@ -172,7 +173,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `plugin status` | Installed Obsidian plugin version vs this CLI (`--json`) |
 | `plugin install` | Install or update the Obsidian plugin: downloads `manifest.json`/`main.js`/`styles.css` from the latest GitHub release into `<vault>/.obsidian/plugins/obsidian-2ndbrain/` (manifest written last so a partial install never looks complete). Alias: `plugin update`. Enabling in Obsidian stays manual (no API for it) |
 | `suggest-links` | Suggest semantically related documents to link from a given document (`--limit`) |
-| `polish` | AI copy-edit (`--system`, `--max-tokens`) — returns original + polished for diff preview |
+| `polish` | AI copy-edit (`--system`, `--max-tokens`) — returns original + polished for diff preview. `--write` applies the polished body to the document in place via the shared body-write path (opt-in; never default), still emitting original + polished for audit |
 | `git activity` | Recent commits touching vault files (`--since 7d`, `--json`) |
 | `git show <hash>` | Full commit detail: metadata, stats, per-file diffs |
 | `git diff <path>` | Unified diff of a file vs HEAD |
