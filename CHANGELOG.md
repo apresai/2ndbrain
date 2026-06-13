@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.8.4] - 2026-06-13
+
 ### Added
-- Six new MCP tools mirroring CLI commands added in earlier phases (16 -> 22 total): `kb_backlinks` (resolved inbound links), `kb_links` (outbound links including broken ones), `kb_tags` (vault-wide tag counts), `kb_tasks` (GFM checkbox tasks with `done`/`todo` filters), `kb_append` (append to a body), and `kb_replace_section` (replace one heading's content). The write tools share the same reindex + re-embed path as `kb_create` and reject read-only `.canvas`/`.base` files. `move`/`rename` stays intentionally CLI-only (highest-blast-radius vault mutation), and `kb_structure` already covers the outline so there is no separate `kb_outline`.
+- `daily` command: resolve, create, read, and append to today's daily note using Obsidian's daily-notes plugin config (folder, format, template), with safe fallback to defaults
+- `move` / `rename` commands: link-aware note relocation that rewrites every `[[wikilink]]` across the vault, gated by `--dry-run`, crash-safe ordering, and an ambiguity guard
+- `tasks` / `task` commands: list GFM checkbox tasks vault-wide (`--done`/`--todo`/`--path` filters) and toggle a single checkbox by line
+- `tags rename` command: rename a frontmatter tag across every document that carries it, with `--dry-run` and per-file atomic writes
+- `polish --write`: applies the AI-polished body in place (opt-in), still emitting original + polished for audit
+- MCP `kb_*` twins: `kb_backlinks`, `kb_links`, `kb_tags`, `kb_tasks`, `kb_append`, and `kb_replace_section`
+
+### Fixed
+- `create` now dedupes duplicate-title filenames instead of silently overwriting an existing note
+- `move` correctly masks multi-backtick inline code spans so links inside code are never rewritten
+- MCP server now initializes AI providers so inline embeds run during indexing
+- `move` drops a redundant reindex pass
+- `daily` handles empty/missing daily-notes config without erroring; `deadends` predicate corrected
+
 
 ## [0.8.3] - 2026-06-13
 
