@@ -147,6 +147,75 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
+func TestUniqueFilename(t *testing.T) {
+	dir := t.TempDir()
+
+	// First create: the bare slug.
+	p1 := uniqueFilename(dir, "my-note", "id-1")
+	if filepath.Base(p1) != "my-note.md" {
+		t.Fatalf("first = %q, want my-note.md", filepath.Base(p1))
+	}
+	if err := os.WriteFile(p1, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second create with the same slug: appends -1.
+	p2 := uniqueFilename(dir, "my-note", "id-2")
+	if filepath.Base(p2) != "my-note-1.md" {
+		t.Fatalf("second = %q, want my-note-1.md", filepath.Base(p2))
+	}
+	if err := os.WriteFile(p2, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Third: -2.
+	p3 := uniqueFilename(dir, "my-note", "id-3")
+	if filepath.Base(p3) != "my-note-2.md" {
+		t.Fatalf("third = %q, want my-note-2.md", filepath.Base(p3))
+	}
+
+	// Empty slug (e.g. an all-CJK title) falls back to the document id.
+	pEmpty := uniqueFilename(dir, "", "id-cjk")
+	if filepath.Base(pEmpty) != "id-cjk.md" {
+		t.Fatalf("empty slug = %q, want id-cjk.md (UUID fallback)", filepath.Base(pEmpty))
+	}
+}
+
+// TestWriteFile_NoSilentOverwriteOnDuplicateTitle guards the fix where two
+// fresh creates with the same title in one directory silently clobbered each
+// other (the second's WriteFile overwrote the first). They must now land at
+// distinct paths.
+func TestWriteFile_NoSilentOverwriteOnDuplicateTitle(t *testing.T) {
+	dir := t.TempDir()
+
+	a := NewDocument("API Keys", "note", "first body")
+	pa, err := a.WriteFile(dir)
+	if err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+
+	b := NewDocument("API Keys", "note", "second body")
+	pb, err := b.WriteFile(dir)
+	if err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+
+	if pa == pb {
+		t.Fatalf("both docs wrote to the same path %q (silent overwrite)", pa)
+	}
+	if filepath.Base(pa) != "api-keys.md" || filepath.Base(pb) != "api-keys-1.md" {
+		t.Errorf("paths = %q, %q; want api-keys.md, api-keys-1.md", filepath.Base(pa), filepath.Base(pb))
+	}
+	// The first file's content must survive.
+	first, err := os.ReadFile(pa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(first), "first body") {
+		t.Errorf("first doc was overwritten; content = %q", string(first))
+	}
+}
+
 func TestSerialize_SurgicalASTPreservesCommentsAndOrder(t *testing.T) {
 	// 1. Create a temporary file representing the original note on disk
 	tmpFile := filepath.Join(t.TempDir(), "note.md")
