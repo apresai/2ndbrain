@@ -32,6 +32,15 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 	setupFileLogging(v)
+
+	// Register AI providers so kb_create / kb_append / kb_replace_section /
+	// kb_index can embed inline, matching the CLI write path. Without this the
+	// MCP server's embedder lookup fails and every embed silently skips, so
+	// agent-authored docs would have no vector embedding until a later
+	// `2nb index`. Idempotent; warnings go to stderr (never stdout, which
+	// carries the JSON-RPC stream).
+	initAIProviders(v)
+
 	slog.Info("MCP server started", "transport", "stdio")
 
 	return mcppkg.Start(v, Version)
