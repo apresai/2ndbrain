@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.9.0] - 2026-06-13
+
+### Added
+- `config doctor` command that diagnoses AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` match, threshold resolution) with fix hints, and `config get --effective` to resolve `ai.similarity_threshold` through its full chain.
+- `unresolved` command listing every broken wikilink across the vault (source doc paired with the unresolved `[[target]]`).
+- Obsidian-CLI syntax compatibility: `2nb` now accepts `key=value` arguments and colon-commands (`daily:read`, `property:set`, `link:unresolved`, `search:context`, etc.) as a drop-in.
+- `--format raw` global output mode that emits a value verbatim with no JSON wrapping, for piping a document body.
+- `daily prepend` to insert content at the start of today's daily note.
+
+### Changed
+- `ai setup` and `models wizard` now share the same write path when setting active models (provider validation, disabled-flag clear, `ai.dimensions` resync).
+- `move`/`rename` now rewrite markdown-style `[text](path.md)` links across the vault, not just `[[wikilinks]]`.
+- `config doctor`/`config get` honor exit codes (genuine defects exit non-zero; unreachable provider is a non-failing warning).
+
+### Fixed
+- `daily` now honors Moment `[literal]` bracket-escaping in the date format.
+- `mcp configured` detection hardened against vault-pin and symlink edge cases.
+- `meta --remove` now syncs the `modified` timestamp; corrected empty-body join and `vault status` stale-doc count.
+
+
 ## [0.8.4] - 2026-06-13
 
 ### Added
