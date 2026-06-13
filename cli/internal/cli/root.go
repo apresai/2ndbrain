@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -324,4 +325,20 @@ func (e *ExitError) Error() string {
 
 func exitWithError(code int, msg string) error {
 	return &ExitError{Code: code, Message: msg}
+}
+
+// ExitCode maps an error returned by Execute to a process exit code. An
+// *ExitError carries its own code (ExitValidation=2, ExitNotFound=1,
+// ExitStaleRef=3) so scripts can distinguish "bad input" from "not found"; any
+// other non-nil error is a generic failure (1). nil → 0. main() calls this
+// instead of a blanket os.Exit(1), which previously flattened every code to 1.
+func ExitCode(err error) int {
+	if err == nil {
+		return ExitOK
+	}
+	var ee *ExitError
+	if errors.As(err, &ee) {
+		return ee.Code
+	}
+	return ExitNotFound // generic failure → 1
 }

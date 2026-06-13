@@ -297,9 +297,10 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | Command | Description |
 |---------|-------------|
 | `config show` | Show full vault configuration (vault root + dir + name + all `ai.*` keys) |
-| `config get <key>` | Get a config value (e.g., `ai.provider`, `ai.similarity_threshold`) |
+| `config get <key>` | Get a config value (e.g., `ai.provider`, `ai.similarity_threshold`). `--effective` on `ai.similarity_threshold` resolves the full chain (vault > calibration > model > default) instead of the raw stored value |
 | `config set <key> <value>` | Set a config value |
 | `config set-key <provider>` | Store API key in macOS Keychain |
+| `config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves) with one-line fix hints. Config defects fail (exit 2); an unreachable provider is a non-failing warning, so it stays usable offline/in CI |
 
 All commands support `--json`, `--yaml`, `--csv` for machine-readable output.
 

@@ -26,9 +26,17 @@ var configShowCmd = &cobra.Command{
 	RunE:  runConfigShow,
 }
 
+var configGetEffective bool
+
 var configGetCmd = &cobra.Command{
-	Use:               "get <key>",
-	Short:             "Get a configuration value",
+	Use:   "get <key>",
+	Short: "Get a configuration value",
+	Long: `Get a configuration value.
+
+With --effective on ai.similarity_threshold, print the RESOLVED threshold and
+its source (vault config > user calibration > model recommendation > default)
+instead of the raw stored value, which is often 0/unset because the real value
+falls through to the active embedding model's recommendation.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeConfigKeys,
 	RunE:              runConfigGet,
@@ -58,6 +66,8 @@ var configSetKeyCmd = &cobra.Command{
 }
 
 func init() {
+	configGetCmd.Flags().BoolVar(&configGetEffective, "effective", false,
+		"Print the resolved value + source instead of the raw stored value (ai.similarity_threshold only)")
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configGetCmd)
 	configCmd.AddCommand(configSetCmd)
@@ -102,6 +112,24 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 
 	key := args[0]
+
+	// --effective resolves the value through its full resolution chain rather
+	// than reading the raw stored key. Only ai.similarity_threshold has a
+	// resolution chain today (raw is often 0/unset, with the real value coming
+	// from the model recommendation), so --effective is meaningful only there.
+	if configGetEffective {
+		if key != "ai.similarity_threshold" {
+			return exitWithError(ExitValidation, fmt.Sprintf("--effective is only supported for ai.similarity_threshold (got %q)", key))
+		}
+		threshold, src := v.Config.AI.ResolveSimilarityThresholdFull(v.Root)
+		if flagPorcelain {
+			fmt.Println(strconv.FormatFloat(threshold, 'g', -1, 64))
+		} else {
+			fmt.Printf("%g (%s)\n", threshold, src)
+		}
+		return nil
+	}
+
 	value, err := getConfigValue(v.Config.AI, key)
 	if err != nil {
 		return err

@@ -1,9 +1,37 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
+
+// TestExitCode guards the main() exit-code contract: an *ExitError carries its
+// own code (so scripts can tell ExitValidation=2 from ExitNotFound=1), a plain
+// error is a generic failure (1), a wrapped *ExitError is still unwrapped, and
+// nil is success (0). Before this, main() flattened everything to 1.
+func TestExitCode(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"nil is success", nil, ExitOK},
+		{"validation error", exitWithError(ExitValidation, "bad input"), ExitValidation},
+		{"not-found error", exitWithError(ExitNotFound, "missing"), ExitNotFound},
+		{"stale-ref error", exitWithError(ExitStaleRef, "stale"), ExitStaleRef},
+		{"wrapped exit error is unwrapped", fmt.Errorf("context: %w", exitWithError(ExitValidation, "x")), ExitValidation},
+		{"plain error is generic failure", errors.New("boom"), ExitNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExitCode(tc.err); got != tc.want {
+				t.Errorf("ExitCode(%v) = %d, want %d", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 // TestRootCmdSilencesUsageOnError guards the SilenceUsage/SilenceErrors contract
 // the macOS app depends on. When a command fails at runtime (a RunE error),
