@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -48,6 +49,11 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	// Mirror runConfigSet: route slog to .2ndbrain/logs/cli.log so the
+	// active-model writes this wizard makes leave the same durable trail a
+	// terminal `config set` does (without --verbose, only the file logger sees
+	// them).
+	setupFileLogging(v)
 
 	cfg := v.Config.AI
 	ctx := context.Background()
@@ -188,6 +194,14 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	if err := v.Config.Save(v.DotDir); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
+	// Log the active-model writes with the SAME "config set" message + key/value
+	// attrs runConfigSet uses (plus a source attr) so "what changed my active
+	// model?" is answerable from cli.log whether the change came via `config set`
+	// or this setup wizard. Logged only after Save succeeds so the log never
+	// claims a write that didn't persist.
+	slog.Info("config set", "key", "ai.provider", "value", cfg.Provider, "source", "ai setup")
+	slog.Info("config set", "key", "ai.embedding_model", "value", cfg.EmbeddingModel, "source", "ai setup")
+	slog.Info("config set", "key", "ai.generation_model", "value", cfg.GenerationModel, "source", "ai setup")
 
 	fmt.Println("\nConfiguration saved:")
 	fmt.Printf("  Provider:         %s\n", cfg.Provider)
@@ -412,7 +426,10 @@ func persistProbe(vaultRoot string, result *ai.TestProbeResult) {
 	entry := promotedEntry(base, result)
 	entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, vaultRoot)
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, vaultRoot, entry); err != nil {
+		// Keep the stderr warning (the interactive user needs to see it) and add a
+		// durable slog line so the failure is recoverable from cli.log later.
 		fmt.Fprintf(os.Stderr, "Warning: could not save %s to the model catalog: %v\n", entry.ID, err)
+		slog.Warn("catalog persist failed", "model", entry.ID, "err", err)
 	}
 }
 

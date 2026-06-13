@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -95,6 +96,10 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer v.Close()
+	// Mirror runConfigSet: route slog to .2ndbrain/logs/cli.log so the
+	// --set-active config writes below leave the same durable trail a terminal
+	// `config set` does (without --verbose, only the file logger sees them).
+	setupFileLogging(v)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -280,18 +285,21 @@ func shouldSetActive(events *wizardEventSink, embed, gen string) bool {
 // embedding dimension, saves, then runs Validate and surfaces any issues as
 // warnings. It emits a set_active event naming the keys it wrote.
 func writeActiveModelConfig(v *vault.Vault, provider, embed, gen string, events *wizardEventSink) error {
-	var keys []string
+	// Track the key/value pairs written so we can both emit the set_active event
+	// and slog each one (after a successful Save) the way runConfigSet does.
+	type kv struct{ key, value string }
+	var written []kv
 	if provider != "" {
 		if err := setConfigValue(&v.Config.AI, "ai.provider", provider); err != nil {
 			return fmt.Errorf("set ai.provider: %w", err)
 		}
-		keys = append(keys, "ai.provider")
+		written = append(written, kv{"ai.provider", provider})
 	}
 	if embed != "" {
 		if err := setConfigValue(&v.Config.AI, "ai.embedding_model", embed); err != nil {
 			return fmt.Errorf("set ai.embedding_model: %w", err)
 		}
-		keys = append(keys, "ai.embedding_model")
+		written = append(written, kv{"ai.embedding_model", embed})
 		// Mirror runConfigSet: a model switch must resync ai.dimensions or it is
 		// a silent DIMENSION BREAK.
 		resyncEmbeddingDimensions(v, embed, events.stderr)
@@ -300,13 +308,23 @@ func writeActiveModelConfig(v *vault.Vault, provider, embed, gen string, events 
 		if err := setConfigValue(&v.Config.AI, "ai.generation_model", gen); err != nil {
 			return fmt.Errorf("set ai.generation_model: %w", err)
 		}
-		keys = append(keys, "ai.generation_model")
+		written = append(written, kv{"ai.generation_model", gen})
 	}
-	if len(keys) == 0 {
+	if len(written) == 0 {
 		return nil
 	}
 	if err := v.Config.Save(v.DotDir); err != nil {
 		return fmt.Errorf("save config: %w", err)
+	}
+	// Log each write with the SAME "config set" message + key/value attrs as
+	// runConfigSet, adding a source attr so "what changed my active model?" is
+	// answerable from cli.log whether the change came via `config set` or the
+	// wizard. Logged only after Save succeeds so the log never claims a write
+	// that didn't persist.
+	keys := make([]string, 0, len(written))
+	for _, w := range written {
+		slog.Info("config set", "key", w.key, "value", w.value, "source", "models wizard")
+		keys = append(keys, w.key)
 	}
 	events.emit(wizardEvent{
 		Step:     "set_active",
@@ -318,6 +336,7 @@ func writeActiveModelConfig(v *vault.Vault, provider, embed, gen string, events 
 	// Warn, do not fail: the catalog saves already happened and the partial
 	// write is still an improvement.
 	for _, issue := range v.Config.AI.Validate(v.Root) {
+		slog.Warn("ai config inconsistency", "issue", issue, "source", "models wizard")
 		events.emit(wizardEvent{Step: "set_active_warning", Message: issue})
 	}
 	return nil

@@ -2,12 +2,26 @@ package cli
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
+
+// captureSlog swaps the global slog default for a text handler writing into a
+// returned builder, restoring the previous default at test cleanup. slog is a
+// global singleton, so this is the only way to assert the log trail; the
+// save/restore keeps it from leaking into other tests in the package.
+func captureSlog(t *testing.T) *strings.Builder {
+	t.Helper()
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := &strings.Builder{}
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return buf
+}
 
 // TestWriteActiveModelConfig_WritesAllSlots drives the wizard's config-write
 // step in isolation (no discovery, no live provider) and asserts the chosen
@@ -53,6 +67,38 @@ func TestWriteActiveModelConfig_WritesAllSlots(t *testing.T) {
 	if reloaded.AI.EmbeddingModel != d.EmbeddingModel || reloaded.AI.GenerationModel != d.GenerationModel {
 		t.Errorf("persisted config = (%q, %q), want (%q, %q)",
 			reloaded.AI.EmbeddingModel, reloaded.AI.GenerationModel, d.EmbeddingModel, d.GenerationModel)
+	}
+}
+
+// TestWriteActiveModelConfig_LogsConfigSetTrail proves the observability fix:
+// each active-model write emits the SAME "config set" slog event runConfigSet
+// emits (key + value attrs) plus a source attr, so "what changed my active
+// model?" is answerable from cli.log whether the change came via `config set`
+// or the wizard. Without this the wizard mutated the same config keys silently.
+func TestWriteActiveModelConfig_LogsConfigSetTrail(t *testing.T) {
+	v, _ := newContractVault(t)
+	buf := captureSlog(t)
+
+	d := ai.DefaultAIConfig() // bedrock + Nova-2 + Haiku 4.5
+	events := newWizardEventSink(false, &strings.Builder{}, &strings.Builder{})
+
+	if err := writeActiveModelConfig(v, d.Provider, d.EmbeddingModel, d.GenerationModel, events); err != nil {
+		t.Fatalf("writeActiveModelConfig: %v", err)
+	}
+
+	logged := buf.String()
+	if n := strings.Count(logged, `msg="config set"`); n != 3 {
+		t.Errorf("got %d \"config set\" log lines, want 3 (provider + embedding + generation)\nlog:\n%s", n, logged)
+	}
+	for _, want := range []string{
+		`key=ai.provider value=` + d.Provider,
+		`key=ai.embedding_model value=` + d.EmbeddingModel,
+		`key=ai.generation_model value=` + d.GenerationModel,
+		`source="models wizard"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log missing %q\nlog:\n%s", want, logged)
+		}
 	}
 }
 
