@@ -220,9 +220,13 @@ func (d *Document) WriteFile(dir string) (string, error) {
 		return "", err
 	}
 
+	// An explicit d.Path (set by the caller, e.g. daily notes or an in-place
+	// rewrite) is honored verbatim and may overwrite. A fresh create (empty
+	// d.Path) derives a collision-free filename from the title slug so two
+	// same-titled creates in one directory don't silently clobber each other.
 	path := d.Path
 	if path == "" {
-		path = filepath.Join(dir, slugify(d.Title)+".md")
+		path = uniqueFilename(dir, slugify(d.Title), d.ID)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -241,6 +245,28 @@ func (d *Document) WriteFile(dir string) (string, error) {
 
 	d.Path = path
 	return path, nil
+}
+
+// uniqueFilename returns an absolute, collision-free ".md" path in dir for a new
+// document. It prefers the title slug; if a file with that slug already exists
+// it appends "-1", "-2", ... until the name is free. An empty slug (a title that
+// produces no ASCII slug, e.g. all CJK or emoji) falls back to the document's
+// UUID so the file always has a stable, non-empty name. Used only for fresh
+// creates (an empty d.Path); explicit paths are never deduplicated.
+func uniqueFilename(dir, slug, id string) string {
+	if slug == "" {
+		slug = id
+	}
+	candidate := filepath.Join(dir, slug+".md")
+	if _, err := os.Stat(candidate); os.IsNotExist(err) {
+		return candidate
+	}
+	for n := 1; ; n++ {
+		candidate = filepath.Join(dir, fmt.Sprintf("%s-%d.md", slug, n))
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
 }
 
 func extractTags(meta map[string]any) []string {
