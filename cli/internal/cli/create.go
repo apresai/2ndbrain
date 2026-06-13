@@ -34,6 +34,7 @@ func validateTitle(title string) error {
 var (
 	createType           string
 	createTitle          string
+	createPath           string
 	createAllowDuplicate bool
 )
 
@@ -44,7 +45,8 @@ var createCmd = &cobra.Command{
 	Example: `  2nb create "My New Note"                         # default type: note
   2nb create --type adr "Use JWT for Auth"         # architecture decision record
   2nb create --type runbook "Deploy Rotation"      # ops runbook
-  2nb create --type prd "Search Ranking v2"        # product requirements doc`,
+  2nb create --type prd "Search Ranking v2"        # product requirements doc
+  2nb create --type note --path resources "API Keys"  # file under resources/`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runCreate,
 }
@@ -52,6 +54,7 @@ var createCmd = &cobra.Command{
 func init() {
 	createCmd.Flags().StringVar(&createType, "type", "note", "Document type (adr, runbook, note, postmortem, prd, prfaq)")
 	createCmd.Flags().StringVar(&createTitle, "title", "", "Document title")
+	createCmd.Flags().StringVar(&createPath, "path", "", "Vault-relative subdirectory to create the document in (created if missing)")
 	createCmd.Flags().BoolVar(&createAllowDuplicate, "allow-duplicate", false, "Allow creating a document with duplicate content")
 	_ = createCmd.RegisterFlagCompletionFunc("type", completeSchemaTypes)
 	createCmd.GroupID = "docs"
@@ -106,7 +109,22 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	path, err := doc.WriteFile(v.Root)
+	// Resolve the target directory. --path places the document in a
+	// vault-relative subdirectory (created on write by WriteFile). It's
+	// user-supplied, so reject absolute paths and guard against ".." escapes
+	// with the same ContainsPath check the MCP handlers use.
+	writeDir := v.Root
+	if createPath != "" {
+		if filepath.IsAbs(createPath) {
+			return fmt.Errorf("--path must be a vault-relative subdirectory, not an absolute path: %q", createPath)
+		}
+		writeDir = v.AbsPath(createPath)
+		if !v.ContainsPath(writeDir) {
+			return fmt.Errorf("--path escapes the vault: %q", createPath)
+		}
+	}
+
+	path, err := doc.WriteFile(writeDir)
 	if err != nil {
 		return fmt.Errorf("write document: %w", err)
 	}

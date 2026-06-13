@@ -67,6 +67,52 @@ func TestContract_CoreDocumentCommandPaths(t *testing.T) {
 	}
 }
 
+func TestContract_CreateWithPath(t *testing.T) {
+	v, root := newContractVault(t)
+	v.Config.AI.Provider = "no-provider"
+	if err := v.Config.Save(v.DotDir); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	// Positive: --path files the doc under a subdirectory (created on write).
+	created, err := runCLIArgs(t, root, "create", "Subdir Note", "--path", "resources", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("create --path: %v\n%s", err, created)
+	}
+	var createdDoc struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(created, &createdDoc); err != nil {
+		t.Fatalf("create JSON: %v\n%s", err, created)
+	}
+	if createdDoc.Path != filepath.Join("resources", "subdir-note.md") {
+		t.Fatalf("expected path resources/subdir-note.md, got %q", createdDoc.Path)
+	}
+	if _, err := os.Stat(filepath.Join(root, "resources", "subdir-note.md")); err != nil {
+		t.Fatalf("file not written under resources/: %v", err)
+	}
+	// The returned path must be usable by other commands.
+	if out, err := runCLIArgs(t, root, "read", createdDoc.Path, "--json", "--porcelain"); err != nil {
+		t.Fatalf("read subdir doc: %v\n%s", err, out)
+	} else if !strings.Contains(string(out), `"title": "Subdir Note"`) {
+		t.Fatalf("read output missing title:\n%s", out)
+	}
+
+	// Negative: a traversal escape is rejected and writes nothing.
+	out, err := runCLIArgs(t, root, "create", "Escape Note", "--path", "../escape", "--json", "--porcelain")
+	if err == nil {
+		t.Fatalf("expected --path ../escape to fail, got success:\n%s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(root), "escape")); statErr == nil {
+		t.Fatalf("traversal escape wrote a file outside the vault")
+	}
+
+	// Negative: an absolute path is rejected.
+	if _, err := runCLIArgs(t, root, "create", "Abs Note", "--path", "/tmp/abs", "--json", "--porcelain"); err == nil {
+		t.Fatalf("expected absolute --path to fail")
+	}
+}
+
 func TestContract_InitAliasCreatesVault(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "new-vault")
 	out, err := runCLIArgs(t, root, "init", root, "--porcelain")
