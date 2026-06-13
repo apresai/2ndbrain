@@ -74,7 +74,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 |---------|---------|
 | `2nb list` | List documents with `--type`, `--status`, `--tag`, `--sort`, `--limit` filters |
 | `2nb read <path>` | Read full document or a specific heading chunk (`--chunk "Heading"`) |
-| `2nb meta <path>` | View frontmatter; update with `--set key=value` |
+| `2nb meta <path>` | View frontmatter. `--get <key>` reads one field (exits 1 if absent); `--set key=value` writes; `--remove <key>` deletes a field in place (preserves comments/order; refuses id/path/title/type and schema-required keys) |
 | `2nb search <query>` | Hybrid BM25 + vector search. Shows `(rrf=X.XXX, cos=Y.YYY)` per result. `--threshold` overrides `ai.similarity_threshold` per-query. `--bm25-only` skips vector search. |
 | `2nb ask "<question>"` | RAG Q&A — searches the vault, synthesizes an answer with source citations. Multi-turn: `--history <path\|->` takes a JSON array of `{role, content}` turns (`-` = stdin); follow-ups are rewritten into standalone retrieval queries (`rewritten_query` in `--json`) |
 | `2nb chat` | Interactive multi-turn REPL over the same pipeline as `ask --history` (human terminal use; agents should prefer `ask --history`, which has `--json`) |

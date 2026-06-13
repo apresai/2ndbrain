@@ -202,7 +202,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 |---------|-------------|
 | `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root |
 | `read <path> [--chunk <heading>]` | Read document or specific section |
-| `meta <path> [--set key=value]` | View or update frontmatter |
+| `meta <path> [--set key=value] [--get <key>] [--remove <key>]` | View frontmatter, or `--set` to write, `--get` to read one field (exit 1 if absent), `--remove` to delete a field in place (preserves comments/order; refuses identity and schema-required keys) |
 | `delete <path> [--force]` | Delete document from vault and index |
 | `list [--type] [--status] [--tag] [--sort]` | List documents with filters |
 

@@ -140,7 +140,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `vault list` | List recently used vaults; reads `~/.2ndbrain-vaults` |
 | `create` | Create document from template (`--type`, `--title`, `--path`). `--path <subdir>` files the doc under a vault-relative subdirectory (created if missing); default is the vault root |
 | `read` | Read full document or specific section (`--chunk`) |
-| `meta` | View or update frontmatter with schema validation (`--set key=value`) |
+| `meta` | View or update frontmatter with schema validation. `--set key=value` writes; `--get <key>` reads one field (ExitNotFound if absent); `--remove <key>` (repeatable) deletes a field in place, preserving comments/order, and refuses identity keys (id/path/title/type) and schema-required fields |
 | `index` | Rebuild index. `--doc <path>` for a single doc; `--force-reembed` invalidates every stored embedding |
 | `search` | Hybrid BM25 + semantic. Filters: `--type --status --tag --limit`. `--threshold` overrides cosine cutoff. `--bm25-only` |
 | `list` | List documents with filters (`--type --status --tag --limit --sort`) |
