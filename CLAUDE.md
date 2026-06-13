@@ -125,7 +125,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (56)
+### CLI Commands (60)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -147,6 +147,10 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `lint [glob]` | Validate schemas, check broken wikilinks |
 | `stale` | List documents not modified within N days (`--since`) |
 | `related` | Find related docs via link graph (`--depth`) |
+| `backlinks <path>` | List resolved inbound links to a document: which docs link to it, with the source path/title and the link's heading/alias/raw form |
+| `links <path>` | List outbound links from a document, including unresolved ones (each carries a `resolved` bool), so it doubles as a per-file broken-link view |
+| `orphans` | List documents with no resolved inbound link (nothing in the vault links to them) |
+| `deadends` | List documents with no resolved outbound link (they link to nothing real in the vault) |
 | `graph` | Output link graph as JSON adjacency list |
 | `export-context` | Generate CLAUDE.md-compatible context bundle (`--types --status --limit`) |
 | `delete` | Delete document from disk and index (`--force`) |

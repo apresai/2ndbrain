@@ -247,6 +247,10 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | Command | Description |
 |---------|-------------|
 | `related <path> --depth <n>` | Find related docs via link graph |
+| `backlinks <path>` | List resolved inbound links to a document (who links to it) |
+| `links <path>` | List outbound links from a document, including broken ones (each carries a `resolved` flag) |
+| `orphans` | List documents nothing links to (no inbound link) |
+| `deadends` | List documents that link to nothing real in the vault (no outbound link) |
 | `graph <path>` | Output link graph as JSON |
 | `lint [glob]` | Validate schemas, check broken wikilinks |
 | `stale --since <days>` | Find stale documents |
