@@ -2,6 +2,22 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## obsidian-CLI parity phases 1-4 — review follow-ups (from /chad-review, 2026-06-13)
+
+All four PRs (#39 P1 links/health, #38 P2 structure/stats, #37 P3 meta --get/--remove, #40 P4 append/prepend/replace) shipped GO with no CRITICAL/HIGH. LOW/MEDIUM nits to revisit:
+
+- **MEDIUM (pre-existing, surfaced by P4) — CLI write commands don't gate `../` path traversal.** `append`/`prepend`/`replace` (and the pre-existing `meta --set`/`delete`) resolve `v.AbsPath(expandPath(arg))` with no `vault.ContainsPath` check, so `2nb append ../outside/x.md` writes outside the vault. This matches the documented "trusted CLI caller" stance (`vault.go:212`), so it's not a regression. **Must-fix if any of these ever get MCP twins** (MCP callers are untrusted and must gate on `ContainsPath`).
+- **LOW (P1) — orphans/deadends query predicate asymmetry.** `Orphans` uses `target_id IS NOT NULL AND resolved = 1`; `Deadends` uses only `target_id IS NOT NULL`. Functionally identical (ResolveLinks only sets target_id with resolved=1), but the two should use one predicate for clarity (`links_queries.go`).
+- **LOW (P1) — empty-vault stderr copy.** On a zero-document vault, `orphans` prints "every document has at least one inbound link" (there are no documents). stdout JSON is correct; stderr copy only (`health.go`).
+- **LOW (P2) — `tags`/`aliases`/`TagCounts`/`AllAliases` emit JSON `null` not `[]` on an empty vault.** Consistent with the rest of the CLI; only matters for a programmatic consumer expecting an array (`catalog_queries.go`).
+- **LOW (P2) — `folders` doc phrasing.** CLAUDE.md/README say "directory prefixes" but it buckets by full immediate parent (`a/b/c.md` -> `a/b`). Code comment is accurate; prose is loose.
+- **LOW (P2) — `wordcount` character count includes comment-blanking spaces** (`%%comment%%` becomes spaces, counted in chars; words unaffected). Acceptable for v1.
+- **LOW (P3) — `meta --remove created`/`modified` struct desync.** The reverse-sync switch covers title/type/status/tags but not CreatedAt/ModifiedAt, so removing those keys leaves a stale struct field until the next full `2nb index`. Rare.
+- **LOW (pre-existing) — process exit code collapses to 1.** `cmd/2nb/main.go` does `os.Exit(1)` for any error, so `ExitValidation` (2) and `ExitNotFound` (1) are indistinguishable to scripts. Affects all commands, not introduced here.
+- **LOW (P4) — append/prepend to an empty body emits a leading blank line** (`"" + "\n" + content`). Benign markdown, cosmetic.
+
+Also deferred from this batch by design: **consolidated MCP `kb_*` twins PR** for the new read commands (`kb_backlinks`, `kb_links`, optionally `kb_outline`/`kb_tags`/`kb_append`/`kb_replace_section`) — kept out of the parallel phases to avoid `server.go`/`tools.go` collisions. And **roadmap phases 5-8** (polish --write + tags rename; link-aware move/rename [solo]; daily notes; tasks) per `resources/2nb-obsidian-cli-parity-roadmap.md` in the vault.
+
 ## macOS app "Claude Code" card + MCP configured banner — review follow-ups (from /chad-review, 2026-06-12)
 
 Shipped GO, no CRITICAL/HIGH. In-PR fixes: two stale doc enumerations (README detailed card list + `docs/quick-start.md` "three cards" count) corrected; the duplicate "Show setup" affordance in the non-inline unconfigured MCP panel removed (the `configuredBanner` now owns that action). Remaining LOWs:
