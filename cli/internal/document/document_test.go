@@ -216,6 +216,42 @@ func TestWriteFile_NoSilentOverwriteOnDuplicateTitle(t *testing.T) {
 	}
 }
 
+func TestAppendToBody(t *testing.T) {
+	tests := []struct {
+		name, body, content, want string
+	}{
+		{"non-empty body gets a newline separator", "existing", "new", "existing\nnew"},
+		{"empty body has no leading blank line", "", "new", "new"},
+		{"empty content leaves the body unchanged (no trailing blank line)", "existing", "", "existing"},
+		{"both empty", "", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := AppendToBody(tc.body, tc.content); got != tc.want {
+				t.Errorf("AppendToBody(%q, %q) = %q, want %q", tc.body, tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrependToBody(t *testing.T) {
+	tests := []struct {
+		name, body, content, want string
+	}{
+		{"non-empty body gets a newline separator", "existing", "new", "new\nexisting"},
+		{"empty body has no trailing blank line", "", "new", "new"},
+		{"empty content leaves the body unchanged (no leading blank line)", "existing", "", "existing"},
+		{"both empty", "", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PrependToBody(tc.body, tc.content); got != tc.want {
+				t.Errorf("PrependToBody(%q, %q) = %q, want %q", tc.body, tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSerialize_SurgicalASTPreservesCommentsAndOrder(t *testing.T) {
 	// 1. Create a temporary file representing the original note on disk
 	tmpFile := filepath.Join(t.TempDir(), "note.md")

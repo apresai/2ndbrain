@@ -1060,7 +1060,7 @@ func (h *handlers) handleKBAppend(ctx context.Context, request mcplib.CallToolRe
 	}
 	doc.Path = path
 
-	doc.Body = doc.Body + "\n" + text
+	doc.Body = document.AppendToBody(doc.Body, text)
 
 	if errRes := h.writeBodyAndReindex(ctx, doc, absPath); errRes != nil {
 		return errRes, nil
