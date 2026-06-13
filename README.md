@@ -200,12 +200,12 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root |
+| `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>] [--content <body>]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template |
 | `read <path> [--chunk <heading>]` | Read document or specific section |
 | `append <path> [--text \| --file \| stdin]` | Append content to a document's body. Explicit, opt-in body write; frontmatter is left untouched |
 | `prepend <path> [--text \| --file \| stdin]` | Insert content at the start of a document's body, after the frontmatter |
 | `replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section` (first match wins on duplicate headings) |
-| `daily` | Resolve today's daily note from Obsidian's daily-notes config (`.obsidian/daily-notes.json`), create it if missing, and print the path. `daily read` prints its body; `daily append [--text \| --file \| stdin]` appends to it. Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled or unconfigured |
+| `daily` | Resolve today's daily note from Obsidian's daily-notes config (`.obsidian/daily-notes.json`), create it if missing, and print the path. `daily read` prints its body; `daily append`/`daily prepend` `[--text \| --file \| stdin]` add to it. Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled or unconfigured; the date format honors Moment `[literal]` escaping |
 | `meta <path> [--set key=value] [--get <key>] [--remove <key>]` | View frontmatter, or `--set` to write, `--get` to read one field (exit 1 if absent), `--remove` to delete a field in place (preserves comments/order; refuses identity and schema-required keys) |
 | `delete <path> [--force]` | Delete document from vault and index |
 | `move <src> <dst> [--dry-run] [--force]` | Move/rename a note to a new vault-relative path, rewriting every `[[wikilink]]` AND markdown-style `[text](path.md)` link across the vault that points at it (preserving heading/block/alias/embed suffixes on wikilinks, the label text + `#anchor`/`?query` suffix + `.md` extension on markdown links, and the bare-vs-path form; external-URL and anchor-only markdown links are skipped; links inside code are untouched). `--dry-run` previews the rename, per-note rewrites, and ambiguous skips without writing; without `--force` a bare-name-ambiguous move is refused. The target file moves LAST for crash safety |
@@ -259,6 +259,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `links <path>` | List outbound links from a document, including broken ones (each carries a `resolved` flag) |
 | `orphans` | List documents nothing links to (no inbound link) |
 | `deadends` | List documents that link to nothing real in the vault (no outbound link) |
+| `unresolved` | List every broken wikilink across the vault (source doc + the raw `[[target]]` that resolves to no note) |
 | `graph <path>` | Output link graph as JSON |
 | `lint [glob]` | Validate schemas, check broken wikilinks |
 | `stale --since <days>` | Find stale documents |
@@ -302,7 +303,9 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `config set-key <provider>` | Store API key in macOS Keychain |
 | `config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves) with one-line fix hints. Config defects fail (exit 2); an unreachable provider is a non-failing warning, so it stays usable offline/in CI |
 
-All commands support `--json`, `--yaml`, `--csv` for machine-readable output.
+All commands support `--json`, `--yaml`, `--csv` for machine-readable output, plus `--format raw` to emit a document body (or any `Serialize()`-able value) verbatim with no JSON wrapping.
+
+**Obsidian-CLI syntax compatibility.** `2nb` also accepts `obsidian`-CLI-style invocations as a drop-in: `key=value` arguments (`file=`, `path=`, `content=`, `query=`, `vault=`, etc.) and colon-commands (`daily:append`, `property:set` → `meta`, `link:unresolved`). A free-text `search`/`ask` query that contains `=` is preserved (never parsed as a parameter), and an unrecognized `key=value` passes through unchanged.
 
 ### Defaults and search scoring
 

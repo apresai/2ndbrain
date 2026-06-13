@@ -138,13 +138,13 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `vault create <path>` | Initialize a new vault and make it active (replaces `init`) |
 | `vault set <path>` | Set existing vault as active |
 | `vault list` | List recently used vaults; reads `~/.2ndbrain-vaults` |
-| `create` | Create document from template (`--type`, `--title`, `--path`). `--path <subdir>` files the doc under a vault-relative subdirectory (created if missing); default is the vault root |
+| `create` | Create document from template (`--type`, `--title`, `--path`, `--content`). `--path <subdir>` files the doc under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template |
 | `read` | Read full document or specific section (`--chunk`) |
 | `append` | Append content to a document's body (`--text`, `--file`, or stdin). Explicit, opt-in body write; leaves frontmatter untouched |
 | `prepend` | Insert content at the start of a document's body, after the frontmatter (`--text`, `--file`, or stdin) |
 | `replace` | Replace a document's body, or just one heading's section content with `--section <heading>` (`--text`, `--file`, or stdin). First match wins on duplicate headings |
-| `daily` | Resolve today's daily note from Obsidian's core daily-notes plugin config (`.obsidian/daily-notes.json`: folder, format, optional template). Bare `daily` resolves, creates the note if missing, and prints the vault-relative path. `daily read` prints its body; `daily append` (`--text`, `--file`, or stdin) appends to the body via the shared body-write path. Missing/disabled plugin falls back to Obsidian defaults (root folder, `YYYY-MM-DD`); never hard-errors |
-| `meta` | View or update frontmatter with schema validation. `--set key=value` writes; `--get <key>` reads one field (ExitNotFound if absent); `--remove <key>` (repeatable) deletes a field in place, preserving comments/order, and refuses identity keys (id/path/title/type) and schema-required fields |
+| `daily` | Resolve today's daily note from Obsidian's core daily-notes plugin config (`.obsidian/daily-notes.json`: folder, format, optional template). Bare `daily` resolves, creates the note if missing, and prints the vault-relative path. `daily read` prints its body; `daily append`/`daily prepend` (`--text`, `--file`, or stdin) add to the body via the shared body-write path. Missing/disabled plugin falls back to Obsidian defaults (root folder, `YYYY-MM-DD`); never hard-errors. The date format honors Moment's `[literal]` bracket-escaping |
+| `meta` | View or update frontmatter with schema validation. `--set key=value` writes; `--get <key>` reads one field (ExitNotFound if absent); `--remove <key>` (repeatable) deletes a field in place, preserving comments/order, and refuses identity keys (id/path/title/type) and schema-required fields. Writes now re-index the whole file (chunks/tags/links via `IndexSingleFile`), so a frontmatter tag change is reflected in `list --tag` immediately; re-embedding stays gated on the body content hash, so a metadata-only edit does not re-embed |
 | `index` | Rebuild index. `--doc <path>` for a single doc; `--force-reembed` invalidates every stored embedding |
 | `search` | Hybrid BM25 + semantic. Filters: `--type --status --tag --limit`. `--threshold` overrides cosine cutoff. `--bm25-only` |
 | `list` | List documents with filters (`--type --status --tag --limit --sort`) |
@@ -155,6 +155,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `links <path>` | List outbound links from a document, including unresolved ones (each carries a `resolved` bool), so it doubles as a per-file broken-link view |
 | `orphans` | List documents with no resolved inbound link (nothing in the vault links to them) |
 | `deadends` | List documents with no resolved outbound link (they link to nothing real in the vault) |
+| `unresolved` | List every unresolved (broken) wikilink across the vault: each source doc path paired with the raw `[[target]]` that resolves to no note. Vault-wide complement to `links <path>` (which is per-file) |
 | `graph` | Output link graph as JSON adjacency list |
 | `outline <path>` | Heading tree of a document (heading path, level, line span). Shares `document.BuildOutline` with the MCP `kb_structure` tool |
 | `wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `wc` |
@@ -208,7 +209,9 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 
 **Shell completion** dispatches to the built binary so it stays fresh. Homebrew installs scripts via GoReleaser; non-brew users run `completion install`.
 
-**Global flags:** `--format` (json/csv/yaml), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`.
+**Global flags:** `--format` (json/csv/yaml/raw), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`. `--format raw` emits a value's `Serialize()` output (or the raw string/bytes) with no JSON wrapping, for piping a document body verbatim.
+
+**Obsidian-CLI syntax compatibility:** an argv preprocessor (`preprocessArgs` in `root.go`) lets `2nb` accept `obsidian`-CLI-style invocations as a drop-in: `key=value` arguments (`file=`, `path=`, `to=`, `content=`, `name=`, `value=`, `query=`, `ref=`, `vault=`, `format=`) and colon-commands (`daily:read`/`daily:append`, `property:read`/`property:set`/`property:remove` → `meta`, `link:unresolved`/`link:orphans`/`link:deadends`, `search:context`). It only rewrites recognized command + parameter shapes; a free-text `search`/`ask`/`chat` query is never parsed as `key=value` (so a query containing `=` is preserved), and an unrecognized `key=value` on any command passes through verbatim rather than being dropped.
 
 **Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works (Cobra intercepts before `RunE`).
 

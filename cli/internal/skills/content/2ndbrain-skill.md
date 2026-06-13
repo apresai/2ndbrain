@@ -83,6 +83,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb links <path>` | List outbound links from a document, including unresolved ones (each row carries a `resolved` bool), so it doubles as a per-file broken-link view |
 | `2nb orphans` | List documents nothing links to (no resolved inbound link) — candidates to wire into the graph |
 | `2nb deadends` | List documents that link to nothing real in the vault (no resolved outbound link; a note with only broken links still counts) |
+| `2nb unresolved` | List every broken wikilink across the whole vault (source doc + the raw `[[target]]` that resolves to no note). Vault-wide complement to the per-file view in `2nb links` |
 | `2nb graph` | Output the full link graph as JSON adjacency list |
 | `2nb suggest-links <path>` | Rank semantically related documents that would make good wikilink targets (excludes docs already linked) |
 | `2nb stale --since 7d` | Docs not modified within N days |
@@ -103,7 +104,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--
 | `2nb append <path> [--text \| --file \| stdin]` | Append content to the end of a document's body. Frontmatter is left untouched. Explicit, opt-in body write. |
 | `2nb prepend <path> [--text \| --file \| stdin]` | Insert content at the start of the body, after the frontmatter. Explicit, opt-in body write. |
 | `2nb replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section`. First match wins on duplicate headings. Explicit, opt-in body write. |
-| `2nb daily` / `2nb daily read` / `2nb daily append [--text \| --file \| stdin]` | Resolve today's daily note from Obsidian's core daily-notes config (`.obsidian/daily-notes.json`: folder, filename format, optional template). Bare `daily` resolves + creates + prints the path; `read` prints its body; `append` adds to the body (explicit, opt-in body write). Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled. |
+| `2nb daily` / `2nb daily read` / `2nb daily append [--text \| --file \| stdin]` / `2nb daily prepend [...]` | Resolve today's daily note from Obsidian's core daily-notes config (`.obsidian/daily-notes.json`: folder, filename format, optional template). Bare `daily` resolves + creates + prints the path; `read` prints its body; `append`/`prepend` add to the body (explicit, opt-in body write). Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled; the date format honors Moment `[literal]` escaping. |
 | `2nb tasks [--done \| --todo] [--path <file\|dir>]` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault, with file + 1-based line + done state. v1 = GFM open/done only. `--json` |
 | `2nb task <path> <line> [--done \| --todo \| --toggle]` | Toggle a single GFM checkbox at a 1-based body line (from the `2nb tasks` LINE column). Default toggles; `--done`/`--todo` force a state. Errors if the line is not a checkbox. Explicit, opt-in body write; frontmatter untouched. |
 | `2nb meta <path> --set key=value` | Update one or more frontmatter fields in place, with schema + status-transition validation. Rewrites the file's YAML frontmatter; the body is preserved. |
