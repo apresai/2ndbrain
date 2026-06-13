@@ -63,25 +63,22 @@ struct MCPStatusView: View {
 
             Divider()
 
+            configuredBanner
+
             if appState.mcpStatuses.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "network.slash")
                         .font(.system(size: 32))
                         .foregroundStyle(.secondary)
-                    Text("No MCP servers connected")
+                    Text("No MCP servers running")
                         .font(.headline)
-                    Text("Configure your AI client to run `2nb mcp-server` against this vault to see live activity here.")
+                    Text(emptyStateMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
-                    if !isInline {
-                        Button("Connect AI Tools...") {
-                            isPresented = false
-                            appState.showMCPSetup = true
-                        }
-                        .padding(.top, 4)
-                    }
+                    // The not-configured setup action lives in `configuredBanner`
+                    // above; no second button here (it would duplicate it).
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()
@@ -96,8 +93,39 @@ struct MCPStatusView: View {
         }
         .frame(width: isInline ? nil : 640, height: isInline ? nil : 480)
         .onAppear {
-            Task { await appState.refreshMCPStatus() }
+            Task {
+                await appState.refreshMCPStatus()
+                await appState.refreshMCPConfigured()
+            }
         }
+    }
+
+    /// Durable "is the server set up?" line above the live-activity list. The
+    /// server is launched on demand by the AI client, so the list below is
+    /// empty whenever the client is closed; this banner answers "will my AI
+    /// tool find this vault?" independent of whether a server is running now.
+    @ViewBuilder
+    private var configuredBanner: some View {
+        let state = HomeMCPConfigured.rowState(appState.mcpConfigured)
+        let isConfigured = appState.mcpConfigured?.configured ?? false
+        HStack(spacing: 8) {
+            Image(systemName: isConfigured ? "checkmark.seal.fill" : "questionmark.circle")
+                .foregroundStyle(isConfigured ? Color.green : Color.secondary)
+            Text("Configured in ~/.claude.json: \(state.label)")
+                .font(.callout)
+            Spacer()
+            if !isConfigured, !isInline {
+                Button("Show setup") {
+                    Task {
+                        await appState.loadMCPSetup()
+                        appState.showMCPSetup = true
+                    }
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -177,6 +205,16 @@ struct MCPStatusView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// When the server is configured but nothing is running, that's the normal
+    /// resting state (the client starts it on demand); say so, rather than
+    /// implying it isn't set up. When it isn't configured, point at setup.
+    private var emptyStateMessage: String {
+        if appState.mcpConfigured?.configured ?? false {
+            return "The server is configured. Your AI client launches it on demand, so live activity appears here only while the client is connected to this vault."
+        }
+        return "Configure your AI client to run `2nb mcp-server` against this vault to see live activity here."
     }
 
     private func formatTimestamp(_ raw: String) -> String {

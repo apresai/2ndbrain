@@ -105,6 +105,12 @@ final class AppState {
     var showMCPStatus = false
     var mcpStatuses: [MCPServerStatusInfo] = []
     private var mcpStatusTimer: Timer?
+    // Claude Code integration status for the Home "Claude Code" card: whether
+    // the 2ndbrain skill is installed (skillStatuses) and whether the MCP
+    // server is configured in ~/.claude.json (mcpConfigured). Refreshed on
+    // vault switch; empty/nil when the CLI is unreachable or too old.
+    var skillStatuses: [SkillStatusInfo] = []
+    var mcpConfigured: MCPConfiguredInfo?
     var spotlightIndexer: SpotlightIndexer?
     var crashJournal: CrashJournal?
     var errorLogger: ErrorLogger?
@@ -1361,6 +1367,58 @@ final class AppState {
         _ = try await runCLI(["plugin", "install"], cwd: vault.rootURL)
     }
 
+    /// Refreshes the Claude Code skill install status via `2nb skills list
+    /// --json`. Best-effort: an unreachable or pre-0.8.1 CLI (no `skills list`)
+    /// leaves `skillStatuses` empty and is logged, not surfaced (the Home row
+    /// then reads "unknown").
+    func refreshSkillStatus() async {
+        guard let vault else {
+            skillStatuses = []
+            return
+        }
+        do {
+            let data = try await runCLI(["skills", "list", "--json"], cwd: vault.rootURL)
+            if data.isEmpty {
+                skillStatuses = []
+                return
+            }
+            skillStatuses = try JSONDecoder().decode([SkillStatusInfo].self, from: data)
+        } catch {
+            log.warning("skills list unavailable: \(error.localizedDescription)")
+            skillStatuses = []
+        }
+    }
+
+    /// Refreshes whether the 2ndbrain MCP server is configured for this vault
+    /// via `2nb mcp configured --json` (a slice-of-one we unwrap). Best-effort,
+    /// same as `refreshSkillStatus`: empty/unparseable/older-CLI → nil → the
+    /// Home row reads "unknown".
+    func refreshMCPConfigured() async {
+        guard let vault else {
+            mcpConfigured = nil
+            return
+        }
+        do {
+            let data = try await runCLI(["mcp", "configured", "--json"], cwd: vault.rootURL)
+            if data.isEmpty {
+                mcpConfigured = nil
+                return
+            }
+            mcpConfigured = try JSONDecoder().decode([MCPConfiguredInfo].self, from: data).first
+        } catch {
+            log.warning("mcp configured unavailable: \(error.localizedDescription)")
+            mcpConfigured = nil
+        }
+    }
+
+    /// Installs the Claude Code skill at user scope via
+    /// `2nb skills install claude-code --user`, so it's available across all
+    /// Claude Code sessions (matches the Obsidian plugin settings row).
+    func installClaudeCodeSkill() async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await runCLI(["skills", "install", "claude-code", "--user"], cwd: vault.rootURL)
+    }
+
     func askAI(question: String) async throws -> AIAskResult {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)
@@ -2190,6 +2248,52 @@ struct ProviderStatusInfo: Codable, Identifiable {
         case reachable
         case reason
         case detail
+    }
+}
+
+/// One entry of `2nb skills list --json`, mirroring the Go `skills.InstallStatus`
+/// struct. Used to show whether the Claude Code skill is installed for this user.
+struct SkillStatusInfo: Codable, Identifiable {
+    var id: String { slug }
+    let slug: String
+    let name: String
+    let projectPath: String?
+    let userPath: String?
+    let projectInstalled: Bool
+    let userInstalled: Bool
+    let note: String?
+
+    enum CodingKeys: String, CodingKey {
+        case slug
+        case name
+        case projectPath = "project_path"
+        case userPath = "user_path"
+        case projectInstalled = "project_installed"
+        case userInstalled = "user_installed"
+        case note
+    }
+}
+
+/// One entry of `2nb mcp configured --json`, mirroring the Go
+/// `mcp.ConfiguredStatus` struct. Reports whether the 2ndbrain MCP server is
+/// wired into the AI client config (durable), distinct from `mcp status` which
+/// only sees servers running right now.
+struct MCPConfiguredInfo: Codable, Identifiable {
+    var id: String { client }
+    let client: String
+    let configPath: String
+    let configured: Bool
+    let scope: String?
+    let serverKey: String?
+    let vaultPath: String
+
+    enum CodingKeys: String, CodingKey {
+        case client
+        case configPath = "config_path"
+        case configured
+        case scope
+        case serverKey = "server_key"
+        case vaultPath = "vault_path"
     }
 }
 

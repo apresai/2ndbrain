@@ -41,7 +41,7 @@ Verify:
 open /Applications/SecondBrain.app
 ```
 
-The dashboard reads Obsidian's own registry and binds to the vault Obsidian currently has open. On first launch the Welcome screen offers "Open your Obsidian vault: \<name\>"; accept it. The Home screen then shows three cards: Vault (with a badge confirming it matches Obsidian's open vault), AI, and Index.
+The dashboard reads Obsidian's own registry and binds to the vault Obsidian currently has open. On first launch the Welcome screen offers "Open your Obsidian vault: \<name\>"; accept it. The Home screen then shows four cards: Vault (with a badge confirming it matches Obsidian's open vault), AI, Claude Code (skill + MCP-server setup status), and Index.
 
 Opening a vault in the dashboard also points the CLI's active vault at it, so a bare `2nb` command in your terminal resolves to the same vault. To do that from the terminal instead:
 

@@ -66,6 +66,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 - **Polish** — AI copy-editor returns the original and polished text together, so any client (Obsidian plugin, MCP, CLI) can show a diff before applying
 - **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Rebuild Index and Re-embed All
 - **Built-in installer**: the dashboard updates the CLI (`brew upgrade` behind an Update CLI button) and installs or updates the Obsidian plugin into the bound vault (`2nb plugin install` behind an Install/Update button)
+- **Claude Code integration card**: shows whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
 - **AI connection testing** — one-click probe of your configured embedding and generation models with live latency
 - **Incremental re-embed** — `2nb index` rebuilds embeddings only for documents whose content hash changed
 - **Git integration (read-only)** — Recent Activity panel with per-commit file diffs in the dashboard, plus MCP git tools for AI clients
@@ -426,6 +427,7 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 
 - **Vault card**: active vault name and path, a badge confirming it matches the vault Obsidian has open, and an Obsidian plugin row showing the installed plugin version with an Install/Update button (runs `2nb plugin install`)
 - **AI card**: provider and models (AWS Bedrock with Claude Haiku 4.5 + Amazon Nova-2 by default) with a readiness dot, Save-as-default, and Test buttons
+- **Claude Code card**: whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
 - **Index card**: document and embedding counts with Rebuild Index and Re-embed All
 - An orange banner warns when the installed `2nb` CLI is older than the app (a cask upgrade does not bump the CLI formula); when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` for you
 
