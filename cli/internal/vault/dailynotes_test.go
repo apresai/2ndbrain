@@ -41,6 +41,46 @@ func TestMomentToGoLayout(t *testing.T) {
 	}
 }
 
+// TestFormatMoment covers the renderer that honors Moment's [...] bracket
+// escaping. A Go time layout has no escape mechanism, so a literal that spells a
+// Go token (e.g. "Mon", "Jan") would be misinterpreted if fed straight to
+// t.Format; formatMoment emits bracket literals verbatim and renders only the
+// token runs around them. fixedDay is 2026-06-13, a Saturday.
+func TestFormatMoment(t *testing.T) {
+	cases := []struct {
+		name   string
+		moment string
+		want   string
+	}{
+		// Bracket-escaped literals: the brackets are dropped and the inner text
+		// renders verbatim, while surrounding tokens still translate.
+		{"leading literal then token", "[Week] YYYY", "Week 2026"},
+		{"token then trailing literal", "YYYY-[backup]", "2026-backup"},
+		// A literal whose text spells a Go layout token ("Mon" = weekday) must
+		// stay literal, NOT render as the day name (Sat).
+		{"literal that collides with go token", "[Mon]", "Mon"},
+		{"literal Jan stays literal", "[Jan]-YYYY", "Jan-2026"},
+		// Literal embedded between two token runs.
+		{"literal between tokens", "YYYY[at]MM", "2026at06"},
+		// Unclosed bracket: treat the remainder as a literal (sane fallback).
+		{"unclosed bracket is literal", "YYYY-[oops", "2026-oops"},
+		// Empty brackets emit nothing.
+		{"empty brackets", "YYYY[]MM", "202606"},
+		// No brackets: identical to the plain token translation.
+		{"plain format unchanged", "YYYY-MM-DD", "2026-06-13"},
+		{"empty falls back to default", "", "2026-06-13"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatMoment(tc.moment, fixedDay)
+			if got != tc.want {
+				t.Errorf("formatMoment(%q) = %q, want %q", tc.moment, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadDailyNotesConfig_Absent(t *testing.T) {
 	v := newDailyTestVault(t)
 
@@ -142,6 +182,15 @@ func TestDailyNotePath(t *testing.T) {
 			name:     "custom dotted format at root",
 			json:     `{"format":"YYYY.MM.DD"}`,
 			wantPath: "2026.06.13.md",
+		},
+		{
+			// Bracket-escaped literal in the filename, verified end-to-end
+			// through the resolver: "[Week-]GGGG" is not a real Obsidian format,
+			// but "[Daily] YYYY-MM-DD" is a common pattern. The literal "Daily "
+			// must survive verbatim.
+			name:     "bracket literal in filename",
+			json:     `{"folder":"journal","format":"[Daily] YYYY-MM-DD"}`,
+			wantPath: filepath.Join("journal", "Daily 2026-06-13.md"),
 		},
 	}
 

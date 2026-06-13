@@ -183,6 +183,129 @@ func TestRewriteWikiLinks_Matrix(t *testing.T) {
 	}
 }
 
+// TestRewriteWikiLinks_MarkdownLinks covers the markdown-style [label](target)
+// link form, which move/rename now rewrites alongside [[wikilinks]] so a rename
+// no longer silently breaks them.
+func TestRewriteWikiLinks_MarkdownLinks(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		oldTarget string
+		newTarget string
+		want      string
+		wantCount int
+	}{
+		{
+			name:      "bare md link rewritten with .md preserved",
+			body:      "See [see](old.md) here.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "See [see](new.md) here.",
+			wantCount: 1,
+		},
+		{
+			name:      "md link with heading anchor preserved",
+			body:      "See [see](old.md#heading) here.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "See [see](new.md#heading) here.",
+			wantCount: 1,
+		},
+		{
+			name:      "label text preserved exactly",
+			body:      "Read [the **important** doc](old.md) now.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Read [the **important** doc](new.md) now.",
+			wantCount: 1,
+		},
+		{
+			name:      "external https link untouched",
+			body:      "Visit [x](https://example.com) please.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Visit [x](https://example.com) please.",
+			wantCount: 0,
+		},
+		{
+			name:      "mailto link untouched",
+			body:      "Mail [me](mailto:a@b.com) now.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Mail [me](mailto:a@b.com) now.",
+			wantCount: 0,
+		},
+		{
+			name:      "anchor-only md link untouched",
+			body:      "Jump [up](#top) here.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Jump [up](#top) here.",
+			wantCount: 0,
+		},
+		{
+			name:      "md link inside inline code span not rewritten",
+			body:      "Write `[see](old.md)` literally, but [see](old.md) is real.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Write `[see](old.md)` literally, but [see](new.md) is real.",
+			wantCount: 1,
+		},
+		{
+			name:      "md link inside fenced code block not rewritten",
+			body:      "```\n[see](old.md)\n```\nReal: [see](old.md).",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "```\n[see](old.md)\n```\nReal: [see](new.md).",
+			wantCount: 1,
+		},
+		{
+			name:      "image embed md link rewritten",
+			body:      "Embed ![alt](old.md) here.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Embed ![alt](new.md) here.",
+			wantCount: 1,
+		},
+		{
+			name:      "path-form md link rewritten to new path",
+			body:      "See [doc](dir/old.md) here.",
+			oldTarget: "dir/old.md",
+			newTarget: "newdir/new.md",
+			want:      "See [doc](newdir/new.md) here.",
+			wantCount: 1,
+		},
+		{
+			name:      "wikilink and md link both rewritten in one pass",
+			body:      "Both [[old]] and [see](old.md) point at it.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "Both [[new]] and [see](new.md) point at it.",
+			wantCount: 2,
+		},
+		{
+			name:      "md link to other note untouched",
+			body:      "See [other](other.md) here.",
+			oldTarget: "old.md",
+			newTarget: "new.md",
+			want:      "See [other](other.md) here.",
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, count := RewriteWikiLinks(tt.body, tt.oldTarget, tt.newTarget)
+			if got != tt.want {
+				t.Errorf("body mismatch:\n got: %q\nwant: %q", got, tt.want)
+			}
+			if count != tt.wantCount {
+				t.Errorf("count = %d, want %d", count, tt.wantCount)
+			}
+		})
+	}
+}
+
 // TestRewriteWikiLinks_PathSuffixMatch verifies a multi-segment path suffix
 // (not just the basename) resolves and rewrites to the new path, mirroring the
 // shortest-unique-path tier of store.ResolveLinks.

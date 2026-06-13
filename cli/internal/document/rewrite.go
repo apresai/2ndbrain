@@ -1,6 +1,9 @@
 package document
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // RewriteWikiLinks returns a copy of body in which every [[wikilink]] whose
 // target resolves to oldTarget has had its target portion rewritten to point at
@@ -9,11 +12,13 @@ import "strings"
 // preserves whichever form the author wrote (a bare basename stays a basename,
 // a path stays a path) so the rewritten link reads as naturally as the original.
 //
-// Only standard double-bracket wikilinks are rewritten ([[target]],
-// [[target#heading]], [[target#^block]], [[target|alias]], and the leading-!
-// embed forms). Markdown-style links ([text](path)) are left untouched: they
-// carry percent-encoding and relative-path semantics that a conservative
-// rename should not silently rewrite.
+// Both double-bracket wikilinks ([[target]], [[target#heading]], [[target#^block]],
+// [[target|alias]], and the leading-! embed forms) AND markdown-style links
+// ([text](target), ![alt](target)) are rewritten. Markdown links carry their
+// own subtleties (percent-encoding, anchor-only targets, external URLs); the
+// markdown pass is deliberately conservative: it skips external URLs and
+// anchor-only targets, and any path it cannot confidently match is left
+// untouched (a missed rewrite is far safer than a corrupted path).
 //
 // Three invariants make this safe to run across every note in a vault:
 //
@@ -21,31 +26,34 @@ import "strings"
 //     regions (the same maskCodeRegions ExtractWikiLinks uses), find link spans
 //     on the masked copy, and apply edits to the REAL body at those offsets, so
 //     documentation discussing [[wikilink]] syntax in a code span is preserved.
-//   - The #heading / #^block / |alias suffix and any leading "!" embed marker
-//     are preserved verbatim; only the target portion changes.
+//   - The #heading / #^block / |alias suffix (wikilinks) and the [label] text +
+//     any #anchor / ?query suffix (markdown links) and any leading "!" embed
+//     marker are preserved verbatim; only the target portion changes.
 //   - Matching mirrors the resolution tiers in store.ResolveLinks: a link
 //     matches oldTarget when its (slash-normalized, extension-insensitive)
 //     target equals the old full path, the old basename, or a "/"-delimited
 //     path suffix of the old path. The author's chosen form determines the
 //     replacement form: a bare basename link becomes the new basename, a path
-//     link becomes the new path.
+//     link becomes the new path. A markdown link additionally keeps its ".md"
+//     extension since the file-path form is the markdown convention.
 func RewriteWikiLinks(body, oldTarget, newTarget string) (string, int) {
 	return rewriteWikiLinks(body, oldTarget, newTarget, false)
 }
 
 // RewriteWikiLinksPathOnly is RewriteWikiLinks restricted to path-bearing link
 // forms (the full path or a multi-segment suffix); it never touches a bare
-// [[basename]] link. The move command uses it when the old basename is ambiguous
-// (names more than one note in the vault): a bare-name link can't be safely
-// attributed to the moved note, but a path-qualified link still can be, so the
-// path-form links are rewritten and the bare ones are left for the operator to
-// resolve.
+// [[basename]] (or [label](basename.md)) link. The move command uses it when the
+// old basename is ambiguous (names more than one note in the vault): a bare-name
+// link can't be safely attributed to the moved note, but a path-qualified link
+// still can be, so the path-form links are rewritten and the bare ones are left
+// for the operator to resolve.
 func RewriteWikiLinksPathOnly(body, oldTarget, newTarget string) (string, int) {
 	return rewriteWikiLinks(body, oldTarget, newTarget, true)
 }
 
 // rewriteWikiLinks is the shared engine for the two exported variants. When
-// pathOnly is true, bare-basename matches are skipped.
+// pathOnly is true, bare-basename matches are skipped. It rewrites both
+// [[wikilink]] and markdown [label](target) forms that resolve to oldTarget.
 func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string, int) {
 	oldForms := targetForms(oldTarget)
 	if len(oldForms) == 0 {
@@ -60,10 +68,16 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 	// and splice replacements into the real body at the same offsets.
 	scan := maskCodeRegions(body)
 
-	var out strings.Builder
-	out.Grow(len(body))
-	count := 0
-	last := 0
+	// Collect the rewrite edits from both link forms. An edit replaces the byte
+	// span [start,end) of the body with newText. Wikilinks and markdown links
+	// are scanned independently, then merged and applied left-to-right; on the
+	// rare overlap (a wikilink and a markdown match touching the same bytes) the
+	// earlier-starting edit wins and the overlapping one is dropped.
+	type edit struct {
+		start, end int
+		newText    string
+	}
+	var edits []edit
 
 	for _, m := range wikilinkRe.FindAllStringSubmatchIndex(scan, -1) {
 		inner := scan[m[2]:m[3]]
@@ -96,21 +110,80 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 		if replacement == target {
 			continue // no-op (target text already matches the replacement)
 		}
-
-		// Splice the real body: keep everything up to the inner target start,
-		// write the replacement, then resume after the original target text.
-		out.WriteString(body[last:m[2]])
-		out.WriteString(replacement)
-		// Re-emit the alias/anchor suffix from the real body to preserve its
-		// exact bytes (anchors/aliases don't legally contain brackets, so the
-		// masked copy equals the real body across this span).
-		out.WriteString(body[m[2]+len(target) : m[3]])
-		last = m[3]
-		count++
+		// Edit only the target portion (the inner start through the end of the
+		// raw target text); the alias/anchor suffix is left in place by ending
+		// the span at m[2]+len(target).
+		edits = append(edits, edit{start: m[2], end: m[2] + len(target), newText: replacement})
 	}
 
-	if count == 0 {
+	for _, m := range mdLinkRe.FindAllStringSubmatchIndex(scan, -1) {
+		// Group 2 (m[4]:m[5]) is the (target) portion inside the parentheses.
+		rawTarget := scan[m[4]:m[5]]
+
+		// Skip external URLs (http/https/mailto/file/ftp) and anchor-only or
+		// query-only targets ("#foo", "?bar"): those never name a vault note.
+		if isExternalLink(rawTarget) || strings.HasPrefix(rawTarget, "#") || strings.HasPrefix(rawTarget, "?") {
+			continue
+		}
+
+		// Split off a #anchor or ?query suffix; only the path part is matched
+		// and rewritten, the suffix is preserved verbatim. Whichever delimiter
+		// appears first bounds the path (Obsidian writes the anchor as #heading;
+		// a ?query is rare but kept intact if present).
+		pathPart := rawTarget
+		if idx := strings.IndexAny(pathPart, "#?"); idx >= 0 {
+			pathPart = pathPart[:idx]
+		}
+		if pathPart == "" {
+			continue
+		}
+
+		form, ok := matchForm(pathPart, oldForms)
+		if !ok {
+			continue
+		}
+		if pathOnly && form == formBasename {
+			continue
+		}
+
+		// Markdown links keep the ".md" extension (the file-path convention),
+		// unlike wikilinks which drop it. A bare basename match stays a bare
+		// basename; a path match becomes the new path. We never invent a folder
+		// prefix a bare authored link didn't have.
+		replacement := newPath + ".md"
+		if form == formBasename {
+			replacement = newBase + ".md"
+		}
+		if replacement == pathPart {
+			continue // no-op (path text already matches the replacement)
+		}
+		// Edit only the path part inside the parentheses (m[4] through
+		// m[4]+len(pathPart)); the #anchor/?query suffix and the closing ")"
+		// stay untouched, as does the [label] text before the "(".
+		edits = append(edits, edit{start: m[4], end: m[4] + len(pathPart), newText: replacement})
+	}
+
+	if len(edits) == 0 {
 		return body, 0
+	}
+
+	// Apply edits left-to-right, dropping any whose span overlaps an already
+	// applied one (defensive: the two regexes can in theory both claim adjacent
+	// or nested bytes).
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
+
+	var out strings.Builder
+	out.Grow(len(body))
+	count := 0
+	last := 0
+	for _, e := range edits {
+		if e.start < last {
+			continue // overlaps a prior edit, skip
+		}
+		out.WriteString(body[last:e.start])
+		out.WriteString(e.newText)
+		last = e.end
+		count++
 	}
 	out.WriteString(body[last:])
 	return out.String(), count

@@ -259,6 +259,73 @@ func TestContract_Move_DryRunWritesNothing(t *testing.T) {
 	}
 }
 
+// TestContract_Move_RewritesMarkdownLinks guards that move/rename rewrites
+// markdown-style [label](old.md) links (not just [[wikilinks]]) so a rename no
+// longer silently breaks them, and that the dry-run preview counts the md-link
+// rewrite. The links use the path form ([..](notes/C.md)) so the rewrite is
+// confidently correct: a path-form md-link becomes the new vault-relative path
+// keeping its ".md" extension, the [label] text, and any #anchor suffix.
+func TestContract_Move_RewritesMarkdownLinks(t *testing.T) {
+	_, root := newContractVault(t)
+
+	writeNote(t, root, "notes/C.md", "C note", "I am C.")
+	// A references C via a path-form markdown link with a heading anchor;
+	// B references C via a plain path-form markdown link. Neither uses [[..]].
+	writeNote(t, root, "A.md", "A note", "A links to [see C](notes/C.md#intro) here.")
+	writeNote(t, root, "B.md", "B note", "B also links to [the C doc](notes/C.md).")
+
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	// Dry-run first: it must plan to rewrite both referencing notes' md-links
+	// without touching disk.
+	beforeA := readBody(t, root, "A.md")
+	beforeB := readBody(t, root, "B.md")
+	out, err := runCLIArgs(t, root, "move", "notes/C.md", "notes/renamed.md", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("dry-run move: %v (out=%s)", err, out)
+	}
+	var dry moveResult
+	if err := json.Unmarshal(out, &dry); err != nil {
+		t.Fatalf("decode dry-run: %v (out=%s)", err, out)
+	}
+	if !dry.DryRun {
+		t.Error("dry_run flag should be true")
+	}
+	if len(dry.Rewritten) != 2 {
+		t.Errorf("dry-run should plan 2 md-link rewrites, got %+v", dry.Rewritten)
+	}
+	if got := readBody(t, root, "A.md"); got != beforeA {
+		t.Errorf("dry-run must not modify A.md")
+	}
+	if got := readBody(t, root, "B.md"); got != beforeB {
+		t.Errorf("dry-run must not modify B.md")
+	}
+
+	// Real move: rewrite both md-links, preserving label text and the #intro anchor.
+	out, err = runCLIArgs(t, root, "move", "notes/C.md", "notes/renamed.md", "--json")
+	if err != nil {
+		t.Fatalf("move: %v (out=%s)", err, out)
+	}
+	var res moveResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode move result: %v (out=%s)", err, out)
+	}
+	if len(res.Rewritten) != 2 {
+		t.Errorf("rewritten = %d notes, want 2: %+v", len(res.Rewritten), res.Rewritten)
+	}
+
+	aBody := readBody(t, root, "A.md")
+	if !strings.Contains(aBody, "[see C](notes/renamed.md#intro)") {
+		t.Errorf("A md-link should be rewritten with label + #intro preserved: %q", aBody)
+	}
+	bBody := readBody(t, root, "B.md")
+	if !strings.Contains(bBody, "[the C doc](notes/renamed.md)") {
+		t.Errorf("B md-link should be rewritten with label preserved: %q", bBody)
+	}
+}
+
 func TestContract_Move_MissingSourceErrors(t *testing.T) {
 	_, root := newContractVault(t)
 	if _, err := runCLIArgs(t, root, "index"); err != nil {
