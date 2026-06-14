@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.9.4] - 2026-06-13
+
+### Added
+- Obsidian-CLI syntax compatibility: `2nb` now accepts `obsidian`-CLI-style invocations as a drop-in via an argv preprocessor — `key=value` arguments (`file=`, `path=`, `to=`, `content=`, `query=`, `template=`, `old=`/`new=`, etc.), boolean tokens (`total`, `append`, `overwrite`, `done`/`todo`/`toggle`), and colon-commands (`daily:read`/`daily:append`/`daily:path`, `property:read`/`property:set`/`property:remove`, `tags:rename`, `link:unresolved`/`link:orphans`/`link:deadends`, `search:context`).
+- Shared fuzzy target resolver (`store.ResolveTarget`): exact path → shortest-unique basename/suffix → title → alias, with loud failure and candidate listing on ambiguity. `path=` resolves strictly, `file=` fuzzily, and a bare positional auto-detects; exposed via a hidden `--resolve exact|fuzzy|auto` flag.
+- `--copy` global flag: writes a command's rendered output to the clipboard (macOS `pbcopy`; clear unsupported error elsewhere). Covers `read`/`print` bodies, `meta`/`property:read` values, `daily` paths, and any machine-format output (`--json`/`--csv`/`--format`).
+- New output formats: `raw`/`md` emit a value's `Serialize()` output with no JSON wrapping (for piping a document body verbatim), `tsv` is tab-separated, and `text` is best-effort plain text. Listings add `paths` (one vault-relative path per line) and `tree` (indented directory hierarchy).
+- `docs/obsidian-cli-mapping.md`: full Obsidian-CLI compatibility reference (command mapping table, accepted argument forms, intentional non-goals).
+
+### Changed
+- Compatibility command translations: `print` → `read`, `frontmatter`/`fm`/`properties` → `meta`, `files` → `list`, `search-content` → `search --bm25-only`, and `list-vaults`/`set-default-vault`/`add-vault` → `vault list`/`set`/`create`.
+- The preprocessor only rewrites recognized command and parameter shapes: free-text `search`/`ask`/`chat` queries (including those containing `=`) are preserved, and unrecognized `key=value` arguments pass through verbatim rather than being dropped.
+
+
 ## [0.9.0] - 2026-06-13
 
 ### Added
