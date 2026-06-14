@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.9.6] - 2026-06-14
+
+### Added
+- `tag add <note> <tag>...` and `tag remove <note> <tag>...` commands to add or remove frontmatter tags on a single note (dedupe, schema validation, reindex via the shared write path; tags accepted as separate args or comma-separated). Obsidian-CLI `tag:add`/`tag:remove` and `tag=` forms supported.
+
+### Changed
+- `meta --set` now coerces array-typed fields (`tags`, `aliases`, any schema `list`/`tags` field) to a YAML list with comma-split, replace semantics (`--set tags=a,b` → `[a, b]`, `--set tags=` clears).
+
+
 ## [0.9.5] - 2026-06-14
 
 ### Fixed
