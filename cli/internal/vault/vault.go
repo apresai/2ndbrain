@@ -213,9 +213,16 @@ func (v *Vault) AbsPath(relPath string) string {
 // inside the vault root (or the root itself). Uses filepath.Rel so a
 // sibling "<root>2" directory or a ".." climb can't pass a prefix check.
 // Trusted CLI callers don't need this; MCP handlers must.
+//
+// Both sides are symlink-resolved before the check: a lexical-only guard would
+// let an in-vault symlink (e.g. "<root>/escape" -> "/etc") redirect a write
+// outside the vault, which the untrusted MCP write handlers must not allow.
+// Canonicalizing both sides is required, not just the target: on macOS the
+// vault root often lives under "/var" -> "/private/var", so resolving only the
+// target would falsely reject every legitimate in-vault path.
 func (v *Vault) ContainsPath(absPath string) bool {
-	root := filepath.Clean(v.Root)
-	p := filepath.Clean(absPath)
+	root := resolveSymlinksLenient(v.Root)
+	p := resolveSymlinksLenient(absPath)
 	if p == root {
 		return true
 	}
@@ -226,6 +233,38 @@ func (v *Vault) ContainsPath(absPath string) bool {
 	// !IsAbs is a Windows safety net: filepath.Rel returns an absolute
 	// path when source and dest sit on different drives.
 	return !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
+}
+
+// resolveSymlinksLenient returns path with symlinks resolved. If path itself
+// doesn't exist yet (the common case for a not-yet-created target file), it
+// resolves the deepest existing ancestor and re-joins the non-existent
+// remainder. That still catches a symlinked intermediate directory (the escape
+// vector) while letting a brand-new file path resolve. Falls back to a cleaned
+// lexical path if nothing along the chain resolves.
+//
+// Limitation: a *dangling* symlink (an in-vault symlink whose target does not
+// exist yet) is treated as an ordinary non-existent component, so it isn't
+// caught here; it would only escape if the external target later materializes
+// and a write then follows the link. Not a regression (the prior lexical guard
+// allowed it too); a per-component Lstat walk to catch it is a tracked follow-up.
+func resolveSymlinksLenient(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	dir := path
+	var tail []string
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return path // reached the root with nothing resolvable; lexical fallback
+		}
+		tail = append([]string{filepath.Base(dir)}, tail...)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(append([]string{resolved}, tail...)...)
+		}
+	}
 }
 
 // IsVaultRoot reports whether dir itself is a vault root: a directory
