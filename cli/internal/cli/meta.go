@@ -149,8 +149,10 @@ func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 		// found nothing), and even a single value wrote a non-idiomatic scalar.
 		// Comma-split with replace semantics (`--set tags=a,b` -> [a, b];
 		// `--set tags=` clears). Validate each element so enum-constrained list
-		// fields still validate.
-		if v.Schemas.IsListField(doc.Type, key) {
+		// fields still validate. `status` is excluded: it is always a scalar
+		// state-machine field, so a (pathological) schema declaring it `type: list`
+		// must not let the array branch skip the status-transition validation below.
+		if key != "status" && v.Schemas.IsListField(doc.Type, key) {
 			parts := splitCSV(value)
 			elems := make([]any, len(parts))
 			for i, p := range parts {

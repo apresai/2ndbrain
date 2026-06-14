@@ -194,7 +194,10 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	initAIProviders(v)
 
 	const staleSinceDays = 90
-	docCount, embeddedCount, embeddableUnembedded, _ := v.DB.EmbeddingCounts()
+	docCount, embeddedCount, embeddableUnembedded, errCounts := v.DB.EmbeddingCounts()
+	if errCounts != nil {
+		slog.Warn("embedding counts query failed", "err", errCounts)
+	}
 	var staleCount int
 	staleCutoff := time.Now().AddDate(0, 0, -staleSinceDays).UTC().Format(time.RFC3339)
 	// Exclude empty modified_at (e.g. a doc whose `modified` frontmatter was

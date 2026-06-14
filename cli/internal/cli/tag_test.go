@@ -139,6 +139,24 @@ func TestTagAdd_ResolvesByTitle(t *testing.T) {
 	}
 }
 
+func TestRemoveTagsList_DedupesKeptTags(t *testing.T) {
+	// A note that already carried duplicate tags must come out deduped after a
+	// remove (symmetric with mergeTagsList), not just have the named tag dropped.
+	got := removeTagsList([]string{"a", "b", "a", "c", "b"}, []string{"c"})
+	want := []string{"a", "b"}
+	if !sameStringSlice(got, want) {
+		t.Errorf("removeTagsList dedupe = %v, want %v", got, want)
+	}
+}
+
+func TestRemoveTagsList_PreservesOrderAndDropsNamed(t *testing.T) {
+	got := removeTagsList([]string{"x", "y", "z"}, []string{"y"})
+	want := []string{"x", "z"}
+	if !sameStringSlice(got, want) {
+		t.Errorf("removeTagsList = %v, want %v", got, want)
+	}
+}
+
 func TestTag_ReadOnlyRejected(t *testing.T) {
 	_, root := newContractVault(t)
 	if err := os.WriteFile(filepath.Join(root, "board.canvas"), []byte(`{"nodes":[],"edges":[]}`), 0o644); err != nil {
