@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -199,13 +200,86 @@ func TestPluginStatus_CorruptManifest(t *testing.T) {
 	}
 }
 
-// skipIfRateLimited skips instead of failing when a live-GitHub step hit
-// the unauthenticated rate limit (the connectivity probe and the install
-// share the same 60/hr bucket).
-func skipIfRateLimited(t *testing.T, err error) {
+// isTransientGitHubErr reports whether a live-GitHub error is a transient
+// infrastructure failure rather than a real bug: the unauthenticated rate limit
+// (403/429, the connectivity probe and install share the same 60/hr bucket), a
+// server-side 5xx (500/502/503/504, e.g. the GitHub 502 that blocked release
+// v0.8.3), or a network-layer error (DNS, dial, TLS, reset, timeout) raised
+// before any HTTP status is reached. A genuine defect is NOT transient: a 404
+// from a wrong release/asset URL, a parse error, or an over-cap asset produces
+// an error string that is intentionally not matched here, so it still fails.
+// Kept as a pure predicate (no *testing.T) so the matching logic is table-testable.
+func isTransientGitHubErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// Rate-limit + server-side statuses carry the "HTTP <code>" shape that
+	// fetchPluginAsset formats. 4xx other than 403/429 (notably 404) are real
+	// bugs and intentionally absent.
+	for _, code := range []string{"HTTP 403", "HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	// Network-layer failures (no HTTP status reached): http.Client.Do returns
+	// these before any response. In a live-GitHub install test these are always
+	// connectivity, not a logic bug.
+	for _, sig := range []string{
+		"no such host", "connection refused", "connection reset",
+		"network is unreachable", "i/o timeout", "context deadline exceeded",
+		"TLS handshake", "EOF", "timeout",
+	} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// skipIfTransientGitHub skips (rather than fails) a live-GitHub step when the
+// error is transient per isTransientGitHubErr.
+func skipIfTransientGitHub(t *testing.T, err error) {
 	t.Helper()
-	if err != nil && (strings.Contains(err.Error(), "HTTP 403") || strings.Contains(err.Error(), "HTTP 429")) {
-		t.Skipf("GitHub rate-limited mid-test: %v", err)
+	if isTransientGitHubErr(err) {
+		t.Skipf("GitHub transient failure mid-test: %v", err)
+	}
+}
+
+func TestIsTransientGitHubErr(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{"nil", "", false}, // handled via the nil-error case below
+		{"rate limit 403", "GET https://api.github.com/x: HTTP 403 (GitHub rate limit?)", true},
+		{"rate limit 429", "GET x: HTTP 429", true},
+		{"server 500", "GET x: HTTP 500", true},
+		{"server 502", "GET x: HTTP 502", true},
+		{"server 503", "GET x: HTTP 503", true},
+		{"server 504", "GET x: HTTP 504", true},
+		{"dns", "Get \"https://github.com\": dial tcp: lookup github.com: no such host", true},
+		{"refused", "dial tcp 1.2.3.4:443: connect: connection refused", true},
+		{"reset", "read tcp: connection reset by peer", true},
+		{"client timeout", "Get \"https://...\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)", true},
+		{"tls", "remote error: TLS handshake failure", true},
+		{"truncated body", "unexpected EOF", true},
+		// Real bugs: must NOT be treated as transient (so they fail loudly).
+		{"not found 404", "GET https://github.com/.../main.js: HTTP 404", false},
+		{"over-cap asset", "GET x: asset exceeds 16777216 bytes, refusing what looks like a wrong or corrupt download", false},
+		{"bad manifest", "parse manifest.json: unexpected end of JSON input", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var err error
+			if tt.msg != "" {
+				err = errors.New(tt.msg)
+			}
+			if got := isTransientGitHubErr(err); got != tt.want {
+				t.Errorf("isTransientGitHubErr(%q) = %v, want %v", tt.msg, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -228,7 +302,7 @@ func TestPluginInstall_E2E_GitHub(t *testing.T) {
 
 	_, root := newContractVault(t)
 	out, err := runCLIArgs(t, root, "plugin", "install")
-	skipIfRateLimited(t, err)
+	skipIfTransientGitHub(t, err)
 	if err != nil {
 		t.Fatalf("plugin install: %v", err)
 	}
@@ -249,7 +323,7 @@ func TestPluginInstall_E2E_GitHub(t *testing.T) {
 	// Seed an older manifest to deterministically hit the updated branch.
 	seedPluginManifest(t, root, "0.0.1")
 	out, err = runCLIArgs(t, root, "plugin", "install")
-	skipIfRateLimited(t, err)
+	skipIfTransientGitHub(t, err)
 	if err != nil {
 		t.Fatalf("plugin install (update path): %v", err)
 	}
@@ -259,7 +333,7 @@ func TestPluginInstall_E2E_GitHub(t *testing.T) {
 
 	// Third run: already at the latest release.
 	out, err = runCLIArgs(t, root, "plugin", "install")
-	skipIfRateLimited(t, err)
+	skipIfTransientGitHub(t, err)
 	if err != nil {
 		t.Fatalf("plugin install (already-latest path): %v", err)
 	}
