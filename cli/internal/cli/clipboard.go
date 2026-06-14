@@ -36,9 +36,8 @@ func writeOut(_ *cobra.Command, format output.Format, data any) error {
 // platforms return a clear ExitValidation error, since the --copy flag is only
 // honored where a clipboard tool is available (no silent no-op).
 func copyToClipboard(s string) error {
-	if runtime.GOOS != "darwin" {
-		return exitWithError(ExitValidation,
-			fmt.Sprintf("--copy is not supported on %s (no clipboard integration available)", runtime.GOOS))
+	if err := clipboardSupported(runtime.GOOS); err != nil {
+		return err
 	}
 	path, err := exec.LookPath("pbcopy")
 	if err != nil {
@@ -48,6 +47,18 @@ func copyToClipboard(s string) error {
 	c.Stdin = strings.NewReader(s)
 	if err := c.Run(); err != nil {
 		return fmt.Errorf("copy to clipboard: %w", err)
+	}
+	return nil
+}
+
+// clipboardSupported returns a clear ExitValidation error when --copy is used on
+// a platform with no clipboard integration (only macOS/pbcopy today), or nil
+// when supported. Extracted so the unsupported-platform branch is unit-testable
+// without depending on the host GOOS.
+func clipboardSupported(goos string) error {
+	if goos != "darwin" {
+		return exitWithError(ExitValidation,
+			fmt.Sprintf("--copy is not supported on %s (no clipboard integration available)", goos))
 	}
 	return nil
 }

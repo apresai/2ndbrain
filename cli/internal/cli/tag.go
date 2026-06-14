@@ -164,11 +164,16 @@ func removeTagsList(current, remove []string) []string {
 	for _, t := range remove {
 		drop[t] = true
 	}
+	// Dedupe the kept tags too (symmetric with mergeTagsList), so a note that
+	// already carried duplicate tags comes out clean after a remove.
+	seen := make(map[string]bool, len(current))
 	out := make([]string, 0, len(current))
 	for _, t := range current {
-		if !drop[t] {
-			out = append(out, t)
+		if drop[t] || seen[t] {
+			continue
 		}
+		seen[t] = true
+		out = append(out, t)
 	}
 	return out
 }

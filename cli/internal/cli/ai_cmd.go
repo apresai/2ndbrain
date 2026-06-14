@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -119,7 +120,10 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 
 	// Portability state: observe the DB directly so status always
 	// reflects reality (not drift-prone config cache).
-	totalDocs, embeddedDocs, embeddableUnembedded, _ := v.DB.EmbeddingCounts()
+	totalDocs, embeddedDocs, embeddableUnembedded, errCounts := v.DB.EmbeddingCounts()
+	if errCounts != nil {
+		slog.Warn("embedding counts query failed", "err", errCounts)
+	}
 	status.VaultTotalDocs = totalDocs
 	status.VaultEmbeddedDocs = embeddedDocs
 	// Embeddable = docs with real content (embedded + still-awaiting). Empty
