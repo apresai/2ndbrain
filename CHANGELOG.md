@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.9.5] - 2026-06-14
+
+### Fixed
+- `kb_update_meta` (MCP) now re-indexes the whole file (chunks, tags, links via `IndexSingleFile`) after a frontmatter update, so tag and status changes are immediately reflected in `kb_list` and `2nb list --tag`; re-embedding stays gated on the body content hash, so a metadata-only edit does not re-embed.
+
+### Added
+- MCP usage round-trip test suite (`usage_roundtrip_test.go`, `battery_usage_test.go`) covering write-tool → query index consistency, catching regressions where a write tool skips reindex. New `make test-usage` target.
+
+
 ## [0.9.4] - 2026-06-13
 
 ### Added
