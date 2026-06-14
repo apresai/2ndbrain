@@ -63,7 +63,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 - **RAG Q&A** — Ask questions, get answers with source citations
 - **MCP server** — 22 tools for Claude Code, Cursor, and any MCP client, with live status sidecar files and an observability panel
 - **Suggest Links** — AI finds semantically related documents in your vault and proposes wikilinks to insert
-- **Polish** — AI copy-editor returns the original and polished text together, so any client (Obsidian plugin, MCP, CLI) can show a diff before applying
+- **Polish** — AI copy-editor that fixes spelling, grammar, and clarity and adds grounded `[[wikilinks]]` to existing notes (never inventing a target). Returns the original and polished text together so any client can show a diff; the Obsidian plugin applies it in one click from the note toolbar, ribbon, command, or right-click menu, with an Undo button
 - **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Rebuild Index and Re-embed All
 - **Built-in installer**: the dashboard updates the CLI (`brew upgrade` behind an Update CLI button) and installs or updates the Obsidian plugin into the bound vault (`2nb plugin install` behind an Install/Update button)
 - **Claude Code integration card**: shows whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
@@ -223,7 +223,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ask <question> [--history <path\|->]` | RAG Q&A with source citations; `--history` makes it multi-turn |
 | `chat` | Interactive multi-turn Q&A session (REPL over the same pipeline) |
 | `suggest-links <path> [--limit 10]` | Rank semantically related documents for wikilink insertion |
-| `polish <path> [--system <prompt>] [--write]` | AI copy-edit a document (JSON with original + polished body). `--write` applies the polished body to the document in place (opt-in; default is preview only) |
+| `polish <path> [--system <prompt>] [--write] [--links] [--undo] [--force]` | AI copy-edit a document (JSON with original + polished body). `--links` also adds grounded `[[wikilinks]]` to existing notes (never invents a target). `--write` applies the polished body in place (opt-in; default is preview only) after snapshotting the original; `--undo` reverts that snapshot (refusing if the file changed since, unless `--force`) |
 | `index [--doc <path>] [--force-reembed]` | Build search index + embeddings (full vault or a single document); `--force-reembed` invalidates every stored embedding for after an intentional provider switch |
 | `ai status` | Show AI provider, models, embedding count, and vault portability state |
 | `ai setup` | Multi-provider setup wizard (easy mode or custom); a model that passes its probe is saved to the user catalog as `user_verified` |
@@ -375,7 +375,7 @@ The MCP server exposes 22 tools for AI coding assistants:
 | `kb_append` | Append text to a document body, then reindex + re-embed (rejects read-only `.canvas`/`.base`) |
 | `kb_replace_section` | Replace one heading's section content, then reindex + re-embed (rejects read-only `.canvas`/`.base`) |
 | `kb_suggest_links` | Suggest semantically related documents to wikilink from a source doc |
-| `kb_polish` | AI copy-editor returns original + polished body for diff review |
+| `kb_polish` | AI copy-editor returns original + polished body for diff review; `links:true` also adds grounded wikilinks to existing notes (never invents a target) |
 | `kb_git_activity` | Recent git commits that touched vault files (read-only) |
 | `kb_git_diff` | Unified diff of a file against HEAD |
 | `kb_git_status` | Uncommitted/untracked files in the vault |
