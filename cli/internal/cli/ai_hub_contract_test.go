@@ -107,7 +107,8 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	appendText, appendFile = "", ""
 	prependText, prependFile = "", ""
 	replaceSection, replaceText, replaceFile = "", "", ""
-	polishWrite = false
+	polishWrite, polishLinks, polishUndo, polishForce = false, false, false, false
+	polishSystemFlag, polishMaxTokens = "", 4096
 	tagsRenameDryRun = false
 	dailyAppendText, dailyAppendFile = "", ""
 	moveDryRun, moveForce = false, false

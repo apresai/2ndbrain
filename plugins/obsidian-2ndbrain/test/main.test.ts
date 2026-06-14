@@ -84,6 +84,10 @@ vi.mock('obsidian', () => {
 		}
 	}
 	class WorkspaceLeaf {}
+	// MarkdownView is imported as a runtime value (getActiveViewOfType /
+	// instanceof), so the mock must provide a constructable class even though
+	// the pure-function tests never instantiate it.
+	class MarkdownView {}
 	const addIcon = vi.fn();
 
 	return {
@@ -98,6 +102,7 @@ vi.mock('obsidian', () => {
 		App,
 		ItemView,
 		WorkspaceLeaf,
+		MarkdownView,
 		addIcon,
 	};
 });
@@ -107,10 +112,13 @@ import {
 	resolveCliPath,
 	parseAskResponse,
 	parseSearchResponse,
+	parsePolishResponse,
+	computeLineDiff,
 	pinVaultArgs,
 	formatIndexState,
 	trimChatHistory,
 	type ChatTurn,
+	type DiffRow,
 } from '../main.ts';
 
 describe('trimChatHistory', () => {
@@ -368,5 +376,91 @@ describe('parseSearchResponse', () => {
 	it('returns an empty result list when results is missing', () => {
 		const response = parseSearchResponse('{"mode":"keyword","warnings":[]}');
 		expect(response.results).toEqual([]);
+	});
+});
+
+describe('parsePolishResponse', () => {
+	it('parses a full polish envelope and tolerates extra fields', () => {
+		const json = JSON.stringify({
+			path: 'note.md',
+			original: 'teh original body',
+			polished: 'The original body.',
+			provider: 'bedrock',
+			model: 'haiku',
+			links_added: ['Auth Flow'],
+			warning: '',
+			duration_ms: 1234, // extra field must be ignored, not rejected
+		});
+		const r = parsePolishResponse(json);
+		expect(r.path).toBe('note.md');
+		expect(r.original).toBe('teh original body');
+		expect(r.polished).toBe('The original body.');
+		expect(r.provider).toBe('bedrock');
+		expect(r.model).toBe('haiku');
+		expect(r.links_added).toEqual(['Auth Flow']);
+	});
+
+	it('defaults missing fields rather than throwing', () => {
+		const r = parsePolishResponse('{"path":"x.md"}');
+		expect(r.original).toBe('');
+		expect(r.polished).toBe('');
+		expect(r.provider).toBe('');
+		expect(r.links_added).toEqual([]);
+		expect(r.warning).toBe('');
+	});
+});
+
+describe('computeLineDiff', () => {
+	// Invariant: context+del rows rejoin to the original; context+add to the new.
+	const reconstruct = (rows: DiffRow[], keep: DiffRow['type'][]) =>
+		rows.filter((r) => keep.includes(r.type)).map((r) => r.text).join('\n');
+
+	it('marks every row as context for identical input', () => {
+		const rows = computeLineDiff('a\nb\nc', 'a\nb\nc');
+		expect(rows.every((r) => r.type === 'context')).toBe(true);
+	});
+
+	it('reports a pure insertion as added rows, originals as context', () => {
+		const rows = computeLineDiff('a\nc', 'a\nb\nc');
+		expect(rows.filter((r) => r.type === 'add').map((r) => r.text)).toEqual(['b']);
+		expect(rows.filter((r) => r.type === 'del')).toHaveLength(0);
+	});
+
+	it('reports a pure deletion as removed rows', () => {
+		const rows = computeLineDiff('a\nb\nc', 'a\nc');
+		expect(rows.filter((r) => r.type === 'del').map((r) => r.text)).toEqual(['b']);
+		expect(rows.filter((r) => r.type === 'add')).toHaveLength(0);
+	});
+
+	it('reports a one-line replacement as exactly one del + one add', () => {
+		const rows = computeLineDiff('teh quick brown fox', 'The quick brown fox');
+		expect(rows.filter((r) => r.type === 'del')).toHaveLength(1);
+		expect(rows.filter((r) => r.type === 'add')).toHaveLength(1);
+	});
+
+	it('preserves the reconstruction invariant across a block edit', () => {
+		const a = 'intro\nold one\nold two\nshared\ntail';
+		const b = 'intro\nnew one\nshared\nnew tail\nextra';
+		const rows = computeLineDiff(a, b);
+		expect(reconstruct(rows, ['context', 'del'])).toBe(a);
+		expect(reconstruct(rows, ['context', 'add'])).toBe(b);
+	});
+
+	it('handles empty-vs-text and text-vs-empty', () => {
+		expect(computeLineDiff('', 'a\nb').filter((r) => r.type === 'add')).toHaveLength(2);
+		expect(computeLineDiff('a\nb', '').filter((r) => r.type === 'del')).toHaveLength(2);
+	});
+
+	it('falls back to a plain del+add block for pathologically large inputs', () => {
+		// n*m must exceed 4_000_000 to trigger the fallback (2001*2001 ≈ 4.004M).
+		const a = Array.from({ length: 2001 }, (_, i) => `a${i}`).join('\n');
+		const b = Array.from({ length: 2001 }, (_, i) => `b${i}`).join('\n');
+		const rows = computeLineDiff(a, b);
+		expect(rows.filter((r) => r.type === 'context')).toHaveLength(0);
+		expect(rows.filter((r) => r.type === 'del')).toHaveLength(2001);
+		expect(rows.filter((r) => r.type === 'add')).toHaveLength(2001);
+		// The fallback still satisfies the reconstruction invariant.
+		expect(reconstruct(rows, ['context', 'del'])).toBe(a);
+		expect(reconstruct(rows, ['context', 'add'])).toBe(b);
 	});
 });

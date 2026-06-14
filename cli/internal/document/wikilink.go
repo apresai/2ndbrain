@@ -113,8 +113,8 @@ func isExternalLink(target string) bool {
 //   - Triple-backtick (```) and triple-tilde (~~~) fenced blocks at line start
 //   - Inline code spans delimited by a run of N backticks (CommonMark: a span
 //     opened by N backticks ends at the next run of exactly N backticks; runs of
-//     a different length inside don't close it). This covers `foo`, ``[[x]]``
-//     (used when the content itself holds a backtick), and longer runs.
+//     a different length inside don't close it). This covers a single-backtick span, a
+//     double-backtick span (used when the content itself holds a backtick), and longer runs.
 //
 // Nested or indented fences are intentionally ignored — they're rare in practice
 // and the worst failure is an over-eager lint warning. Inline spans stay
@@ -206,6 +206,13 @@ func maskCodeRegions(body string) string {
 	}
 	return string(result)
 }
+
+// MaskCodeRegions exposes maskCodeRegions for callers outside this package that
+// need to scan a body while ignoring fenced and inline code, e.g. matching a
+// note title against prose without matching it inside a code sample. Only the
+// '[' and ']' bytes inside code are blanked to spaces; byte positions are
+// preserved, so spans found in the masked copy map 1:1 onto the original.
+func MaskCodeRegions(body string) string { return maskCodeRegions(body) }
 
 func indexOf(s string, c byte) int {
 	for i := range len(s) {

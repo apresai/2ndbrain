@@ -303,3 +303,53 @@
 .brain-wizard-finish {
 	margin-top: 8px;
 }
+
+/* ── Polish diff ──────────────────────────────────────────────────────────── */
+.brain-diff {
+	font-family: var(--font-monospace);
+	font-size: 13px;
+	line-height: 1.5;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	overflow: auto;
+	max-height: 55vh;
+	margin-bottom: 16px;
+}
+.brain-diff-line {
+	display: flex;
+	gap: 8px;
+	padding: 0 8px;
+	white-space: pre-wrap;
+}
+.brain-diff-gutter {
+	user-select: none;
+	opacity: 0.6;
+	flex: 0 0 1ch;
+	text-align: center;
+}
+.brain-diff-text {
+	flex: 1 1 auto;
+	word-break: break-word;
+}
+.brain-diff-add {
+	background-color: var(--background-modifier-success);
+	color: var(--text-success, var(--text-normal));
+}
+.brain-diff-del {
+	background-color: var(--background-modifier-error);
+	color: var(--text-error);
+}
+.brain-diff-context {
+	color: var(--text-muted);
+}
+.brain-polish-actions {
+	justify-content: flex-end;
+	gap: 8px;
+}
+.brain-btn-secondary {
+	background-color: var(--background-secondary);
+	color: var(--text-normal);
+}
+.brain-btn-secondary:hover {
+	background-color: var(--background-secondary-alt);
+}

@@ -19,6 +19,14 @@ type AliasRef struct {
 	Title string `json:"title"`
 }
 
+// DocTitle pairs a document's vault-relative path with its title. Used for
+// substring link-candidate matching, where a note's title is searched for as a
+// surface form in another note's prose.
+type DocTitle struct {
+	Path  string `json:"path"`
+	Title string `json:"title"`
+}
+
 // FolderCount is a directory prefix of documents.path with its document count.
 // Root-level documents are bucketed under the literal label "(root)".
 type FolderCount struct {
@@ -78,6 +86,26 @@ func (db *DB) AllAliases() ([]AliasRef, error) {
 			return nil, fmt.Errorf("scan alias: %w", err)
 		}
 		out = append(out, ar)
+	}
+	return out, rows.Err()
+}
+
+// AllDocTitles returns every document's vault-relative path and title, ordered
+// by path. Titles may be empty for docs that lack a frontmatter title.
+func (db *DB) AllDocTitles() ([]DocTitle, error) {
+	rows, err := db.conn.Query(`SELECT path, title FROM documents ORDER BY path ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query doc titles: %w", err)
+	}
+	defer rows.Close()
+
+	var out []DocTitle
+	for rows.Next() {
+		var dt DocTitle
+		if err := rows.Scan(&dt.Path, &dt.Title); err != nil {
+			return nil, fmt.Errorf("scan doc title: %w", err)
+		}
+		out = append(out, dt)
 	}
 	return out, rows.Err()
 }

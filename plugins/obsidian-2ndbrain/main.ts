@@ -3,6 +3,7 @@ import {
 	FileSystemAdapter,
 	ItemView,
 	MarkdownRenderer,
+	MarkdownView,
 	Modal,
 	Notice,
 	Plugin,
@@ -13,6 +14,7 @@ import {
 	addIcon,
 	requestUrl
 } from 'obsidian';
+import type { Editor, Menu, TFile } from 'obsidian';
 import { execFile } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -36,6 +38,11 @@ const VIEW_TYPE_CHAT = '2ndbrain-chat';
 // (app/Resources/AppIcon-1024.png). Inner SVG content for Obsidian's
 // addIcon() 0-100 viewBox; currentColor so it follows the theme.
 const BRAIN_HEAD_ICON = `<g stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="7" d="M34 92 V70 C22 63 15 50 16 38 C18 21 32 9 49 9 C66 9 79 21 80 37 L88 52 C89 54.5 87.5 57 85 57 H80 V63 C80 69 75 73 69 73 H64 V92"/><path stroke-width="6" d="M35 47 C29 45 26 39 29 34 C27 27 32 21 39 21 C43 16 51 16 55 20 C61 19 66 24 65 30 C68 35 66 42 61 44 C59 48 52 50 48 47 C44 51 38 50 35 47"/><path stroke-width="5" d="M44 21 C45 26 41 29 42 33"/><path stroke-width="5" d="M55 25 C52 28 54 32 50 35"/><path stroke-width="5" d="M32 36 C36 36 39 40 37 44"/></g>`;
+
+// Polish icon: a sparkle/star, the conventional "clean up / enhance" glyph.
+// Registered via addIcon for the Polish button across the ribbon, the note
+// header toolbar, and the right-click menu. currentColor follows the theme.
+const POLISH_ICON = `<g stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="7" d="M50 14 C53 34 56 44 86 50 C56 56 53 66 50 86 C47 66 44 56 14 50 C44 44 47 34 50 14 Z"/><path stroke-width="4" d="M79 16 C80 24 81 27 90 29 C81 31 80 34 79 42 C78 34 77 31 68 29 C77 27 78 24 79 16 Z"/></g>`;
 
 // AIStatus is the subset of `2nb ai status --json` the plugin reads.
 interface AIStatus {
@@ -191,6 +198,79 @@ export function parseSearchResponse(json: string): SearchResponse {
 	};
 }
 
+// PolishResult mirrors the CLI's `2nb polish --json` payload (cli/internal/cli
+// PolishResult). original/polished are the document BODY only (frontmatter is
+// excluded), so the diff is naturally frontmatter-free.
+export interface PolishResult {
+	path: string;
+	original: string;
+	polished: string;
+	provider: string;
+	model: string;
+	links_added?: string[];
+	warning?: string;
+}
+
+// parsePolishResponse normalizes the `2nb polish --json` envelope, tolerant of
+// extra fields (e.g. duration_ms) and missing ones. Pure and exported for tests.
+export function parsePolishResponse(json: string): PolishResult {
+	const raw = JSON.parse(json) as Partial<PolishResult>;
+	return {
+		path: raw.path ?? '',
+		original: raw.original ?? '',
+		polished: raw.polished ?? '',
+		provider: raw.provider ?? '',
+		model: raw.model ?? '',
+		links_added: Array.isArray(raw.links_added) ? raw.links_added : [],
+		warning: raw.warning ?? '',
+	};
+}
+
+// DiffRow is one line of a unified diff: unchanged context, an addition, or a
+// deletion, paired with the line text. Produced by computeLineDiff.
+export type DiffRow = { type: 'context' | 'add' | 'del'; text: string };
+
+// computeLineDiff produces a unified line diff (LCS) between a and b. Note-sized
+// bodies make the O(n*m) table cheap; past a sane size it falls back to a plain
+// before/after block so a pathological input can't freeze the renderer. Pure
+// and exported for tests. Invariant: rows filtered to context+del rejoin to a,
+// and context+add rejoin to b.
+export function computeLineDiff(a: string, b: string): DiffRow[] {
+	const o = a.split('\n');
+	const p = b.split('\n');
+	const n = o.length;
+	const m = p.length;
+	if (n * m > 4_000_000) {
+		return [
+			...o.map((t): DiffRow => ({ type: 'del', text: t })),
+			...p.map((t): DiffRow => ({ type: 'add', text: t })),
+		];
+	}
+	const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+	for (let i = n - 1; i >= 0; i--) {
+		for (let j = m - 1; j >= 0; j--) {
+			dp[i][j] = o[i] === p[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+		}
+	}
+	const rows: DiffRow[] = [];
+	let i = 0;
+	let j = 0;
+	while (i < n && j < m) {
+		if (o[i] === p[j]) {
+			rows.push({ type: 'context', text: o[i] });
+			i++;
+			j++;
+		} else if (dp[i + 1][j] >= dp[i][j + 1]) {
+			rows.push({ type: 'del', text: o[i++] });
+		} else {
+			rows.push({ type: 'add', text: p[j++] });
+		}
+	}
+	while (i < n) rows.push({ type: 'del', text: o[i++] });
+	while (j < m) rows.push({ type: 'add', text: p[j++] });
+	return rows;
+}
+
 // ChatTurn mirrors the CLI's ai.ChatTurn: one prior message passed back to
 // `2nb ask --history` so follow-up questions carry conversational context.
 export interface ChatTurn {
@@ -273,6 +353,11 @@ async function renderAskResponse(
 export default class BrainPlugin extends Plugin {
 	settings!: BrainSettings;
 	statusBarEl!: HTMLElement;
+	// Single-flight lock so the command, ribbon, header action, and right-click
+	// menu can't launch overlapping polishes.
+	private polishing = false;
+	// Dedup: each markdown view gets at most one header Polish action.
+	private polishViews = new WeakSet<MarkdownView>();
 
 	async onload() {
 		await this.loadSettings();
@@ -359,6 +444,50 @@ export default class BrainPlugin extends Plugin {
 			callback: () => new SetupWizardModal(this.app, this).open(),
 		});
 
+		// Polish: clean up the active note and add grounded links, then show a
+		// diff with Undo. Exposed on every surface a user might reach for, since
+		// it acts on the open note: command/hotkey, the note's header toolbar,
+		// the left ribbon, and the right-click editor menu.
+		addIcon('2ndbrain-polish', POLISH_ICON);
+
+		this.addCommand({
+			id: 'polish-current-note',
+			name: 'Polish current note',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ok = !!file && file.extension === 'md' && !this.polishing;
+				if (ok && !checking) void this.polishNote(file!);
+				return ok;
+			},
+		});
+
+		this.addRibbonIcon('2ndbrain-polish', '2ndbrain: polish current note', () => {
+			const file = this.app.workspace.getActiveFile();
+			if (file) void this.polishNote(file);
+			else new Notice('2ndbrain: open a note to polish it.');
+		});
+
+		// Header toolbar action on every markdown pane. Obsidian has no "add an
+		// action to all views" API, so attach to the active view as panes change
+		// (deduped via polishViews); each element is torn down on unload.
+		const attachPolishAction = () => {
+			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (view) this.ensurePolishAction(view);
+		};
+		this.registerEvent(this.app.workspace.on('active-leaf-change', attachPolishAction));
+		this.registerEvent(this.app.workspace.on('file-open', attachPolishAction));
+		this.app.workspace.onLayoutReady(attachPolishAction);
+
+		this.registerEvent(this.app.workspace.on('editor-menu', (menu: Menu, _editor: Editor, view) => {
+			if (view instanceof MarkdownView && view.file && view.file.extension === 'md') {
+				const file = view.file;
+				menu.addItem((item) => item
+					.setTitle('2ndbrain: Polish note')
+					.setIcon('2ndbrain-polish')
+					.onClick(() => void this.polishNote(file)));
+			}
+		}));
+
 		// Add setting tab
 		this.addSettingTab(new BrainSettingTab(this.app, this));
 
@@ -386,6 +515,107 @@ export default class BrainPlugin extends Plugin {
 		}
 		await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
 		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	// ── Polish ───────────────────────────────────────────────────────────────
+
+	// ensurePolishAction adds a one-click Polish button to a markdown view's
+	// header toolbar, at most once per view. The element is removed on unload.
+	private ensurePolishAction(view: MarkdownView) {
+		if (this.polishViews.has(view)) return;
+		this.polishViews.add(view);
+		const el = view.addAction('2ndbrain-polish', 'Polish this note with 2ndbrain', () => {
+			if (view.file) void this.polishNote(view.file);
+		});
+		this.register(() => el.remove());
+	}
+
+	// flushEditor writes the live editor buffer for `file` to disk before the CLI
+	// touches it. Without it, Obsidian's pending debounced save could clobber the
+	// CLI's external write (or vice-versa), losing either the polish or the user's
+	// last keystrokes. The single most important data-safety guard here.
+	//
+	// It scans ALL markdown panes (not just the active one), because Polish can be
+	// triggered on a background pane via the per-note header action, the ribbon, or
+	// the right-click menu, where the target file is not the focused view. Edits
+	// made DURING the multi-second AI call are not a concern: polishNote opens the
+	// result modal first, and an open Obsidian Modal traps focus, so the editor
+	// underneath is not editable while the CLI runs.
+	private async flushEditor(file: TFile) {
+		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+			const view = leaf.view;
+			if (view instanceof MarkdownView && view.file && view.file.path === file.path && view.editor) {
+				await this.app.vault.modify(file, view.editor.getValue());
+				return;
+			}
+		}
+	}
+
+	// polishNote runs `2nb polish <path> --write --json --links`: it copy-edits
+	// the note and weaves in grounded links in place (snapshotting the original),
+	// then shows a diff with Keep/Undo. Single-flight via this.polishing so the
+	// four trigger surfaces can't race.
+	async polishNote(file: TFile) {
+		if (this.polishing) return;
+		if (file.extension !== 'md') {
+			new Notice('2ndbrain: Polish only works on markdown notes.');
+			return;
+		}
+		this.polishing = true;
+		this.statusBarEl.setText('2ndbrain: Polishing…');
+		const modal = new PolishResultModal(this.app, this, file);
+		modal.open();
+		try {
+			await this.flushEditor(file);
+			const stdout = await this.runCommand(['polish', file.path, '--write', '--json', '--links']);
+			modal.showResult(parsePolishResponse(stdout));
+			this.statusBarEl.setText('2ndbrain: Polished');
+		} catch (err) {
+			modal.close();
+			const msg = (err as Error).message;
+			if (/unknown flag/.test(msg)) {
+				new Notice('Installed 2nb is too old for Polish (needs polish --links/--undo). Upgrade: brew upgrade apresai/tap/twonb');
+			} else {
+				new Notice(`Polish failed: ${msg}`);
+			}
+			this.statusBarEl.setText('2ndbrain: Polish failed');
+		} finally {
+			this.polishing = false;
+			setTimeout(() => this.statusBarEl.setText('2ndbrain: Ready'), 3000);
+		}
+	}
+
+	// undoPolish reverts the most recent polish of file via `2nb polish <path>
+	// --undo`. Returns true if reverted. If the note was edited after polishing,
+	// the CLI refuses without --force; we confirm, then retry forced. The TFile
+	// is captured at polish time so undo targets the right note regardless of
+	// which pane is active now.
+	async undoPolish(file: TFile, force = false): Promise<boolean> {
+		try {
+			await this.flushEditor(file);
+			const args = ['polish', file.path, '--undo'];
+			if (force) args.push('--force');
+			await this.runCommand(args);
+			new Notice('Reverted to the pre-polish version.');
+			return true;
+		} catch (err) {
+			const msg = (err as Error).message;
+			if (!force && /changed since/i.test(msg)) {
+				const go = await confirmModal(
+					this.app,
+					'Discard your edits?',
+					'You changed this note since polishing. Undo will discard those changes and restore the pre-polish version. Continue?'
+				);
+				if (go) return this.undoPolish(file, true);
+				return false;
+			}
+			if (/no polish snapshot|nothing to undo/i.test(msg)) {
+				new Notice('Nothing to undo for this note.');
+				return false;
+			}
+			new Notice(`Undo failed: ${msg}`);
+			return false;
+		}
 	}
 
 	async loadSettings() {
@@ -744,6 +974,95 @@ class AskAIModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 	}
+}
+
+// ── Polish Result Modal ──────────────────────────────────────────────────────
+
+// PolishResultModal opens in a spinner state while polish runs, then shows a
+// colored line diff of the applied change with Keep / Undo. It holds the TFile
+// captured at polish time so Undo targets the right note even if the user has
+// switched panes since.
+class PolishResultModal extends Modal {
+	constructor(app: App, private plugin: BrainPlugin, private file: TFile) {
+		super(app);
+	}
+
+	onOpen() {
+		this.contentEl.addClass('brain-ask-modal');
+		this.contentEl.createEl('h2', { text: 'Polishing note…' });
+		const loader = this.contentEl.createDiv({ cls: 'brain-loader-container' });
+		loader.createDiv({ cls: 'brain-spinner' });
+		loader.createDiv({ cls: 'brain-loader-text', text: 'Copy-editing and resolving links…' });
+	}
+
+	showResult(result: PolishResult) {
+		const c = this.contentEl;
+		c.empty();
+		c.createEl('h2', { text: 'Polished' });
+		c.createDiv({ cls: 'brain-loader-text', text: `${result.provider} / ${result.model}` });
+		if (result.links_added && result.links_added.length > 0) {
+			c.createDiv({ cls: 'brain-loader-text', text: `Added links: ${result.links_added.join(', ')}` });
+		}
+		if (result.warning) {
+			c.createDiv({ cls: 'brain-warning', text: result.warning });
+		}
+
+		if (result.original.trim() === result.polished.trim()) {
+			c.createDiv({ cls: 'brain-diff-context', text: 'No changes were needed; the note was already clean.' });
+		} else {
+			const diff = c.createDiv({ cls: 'brain-diff' });
+			for (const row of computeLineDiff(result.original, result.polished)) {
+				const line = diff.createDiv({ cls: `brain-diff-line brain-diff-${row.type}` });
+				line.createSpan({
+					cls: 'brain-diff-gutter',
+					text: row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' ',
+				});
+				line.createSpan({ cls: 'brain-diff-text', text: row.text || ' ' });
+			}
+		}
+
+		const actions = c.createDiv({ cls: 'brain-input-container brain-polish-actions' });
+		const keep = actions.createEl('button', { text: 'Keep', cls: 'brain-ask-button' });
+		const undo = actions.createEl('button', { text: 'Undo', cls: 'brain-ask-button brain-btn-secondary' });
+		keep.addEventListener('click', () => this.close());
+		undo.addEventListener('click', async () => {
+			undo.disabled = true;
+			undo.textContent = 'Reverting…';
+			const ok = await this.plugin.undoPolish(this.file);
+			if (ok) {
+				this.close();
+			} else {
+				undo.disabled = false;
+				undo.textContent = 'Undo';
+			}
+		});
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
+
+// confirmModal is a small yes/no modal returning a Promise<boolean>. It resolves
+// false if dismissed without choosing, so a closed dialog never undoes anything.
+function confirmModal(app: App, title: string, message: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		const modal = new Modal(app);
+		let decided = false;
+		modal.contentEl.addClass('brain-ask-modal');
+		modal.contentEl.createEl('h2', { text: title });
+		modal.contentEl.createEl('p', { text: message });
+		const row = modal.contentEl.createDiv({ cls: 'brain-input-container brain-polish-actions' });
+		const cancel = row.createEl('button', { text: 'Cancel', cls: 'brain-ask-button brain-btn-secondary' });
+		const go = row.createEl('button', { text: 'Discard and undo', cls: 'brain-ask-button' });
+		cancel.addEventListener('click', () => { decided = true; resolve(false); modal.close(); });
+		go.addEventListener('click', () => { decided = true; resolve(true); modal.close(); });
+		modal.onClose = () => {
+			modal.contentEl.empty();
+			if (!decided) resolve(false);
+		};
+		modal.open();
+	});
 }
 
 // ── Chat Panel (sidebar view) ────────────────────────────────────────────────
