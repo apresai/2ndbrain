@@ -53,15 +53,15 @@ build-app-release: version-swift
 	@codesign -s - --deep --force $(APP_BUNDLE_RELEASE) 2>/dev/null || true
 
 package-app: build-app-release
-	@ditto -c -k --keepParent $(APP_BUNDLE_RELEASE) SecondBrain-$(VERSION)-arm64.zip
-	@echo "Created SecondBrain-$(VERSION)-arm64.zip"
-	@shasum -a 256 SecondBrain-$(VERSION)-arm64.zip
+	@bash scripts/make-dmg.sh $(APP_BUNDLE_RELEASE) SecondBrain-$(VERSION)-arm64.dmg
+	@shasum -a 256 SecondBrain-$(VERSION)-arm64.dmg
 
 # Local Developer ID signing + Apple notarization (keys stay on this machine).
 # Reads scripts/sign.env (gitignored). notarize-app produces a notarized,
-# Gatekeeper-clean SecondBrain-<VERSION>-arm64.zip; release-app additionally
-# uploads it to the existing release v<VERSION> and updates the Homebrew cask.
-# Run release-app AFTER `make release` (CI creates the release + ships CLI/plugin).
+# Gatekeeper-clean SecondBrain-<VERSION>-arm64.dmg (app + DMG both stapled);
+# release-app additionally uploads it to the existing release v<VERSION> and
+# updates the Homebrew cask. Run release-app AFTER `make release` (CI creates the
+# release + ships CLI/plugin).
 notarize-app:
 	@bash scripts/release-app-local.sh
 

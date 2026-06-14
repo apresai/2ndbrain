@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DMG installer window background for SecondBrain (660x400, matching the window
+  size in scripts/make-dmg.sh). The app icon tile sits centered at (165,200) and
+  the /Applications drop-link at (495,200); this art keeps those zones clear and
+  places the arrow in the gap between them. Edit here, then re-render the
+  committed PNG (run from the repo root):
+    rsvg-convert -w 660 -h 400 app/Resources/dmg-background.svg -o app/Resources/dmg-background.png
+  Palette tracks the app icon (white head-with-brain on dark navy).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232c3e"/>
+      <stop offset="1" stop-color="#161d2b"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5b6b86"/>
+      <stop offset="1" stop-color="#aab6cc"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="660" height="400" fill="url(#bg)"/>
+
+  <!-- Wordmark, above the icon row (icons span y 136-264). -->
+  <text x="330" y="64" text-anchor="middle"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="30" font-weight="700" fill="#ffffff" letter-spacing="0.5">SecondBrain</text>
+  <text x="330" y="90" text-anchor="middle"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="600" fill="#ffffff" letter-spacing="3">AI COMPANION FOR OBSIDIAN</text>
+
+  <!-- Arrow in the gap between the app tile (~x229) and Applications (~x431),
+       aligned with the icon centers at y=200. -->
+  <g opacity="0.95">
+    <rect x="266" y="193" width="114" height="14" rx="7" fill="url(#arrow)"/>
+    <path d="M 372 179 L 405 200 L 372 221 Z" fill="#aab6cc"/>
+  </g>
+
+  <!-- Install hint, below the icon row. -->
+  <text x="330" y="348" text-anchor="middle"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="500" fill="#ffffff">Drag <tspan font-weight="700">SecondBrain</tspan> onto <tspan font-weight="700">Applications</tspan> to install</text>
+</svg>

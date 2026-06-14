@@ -25,6 +25,8 @@ echo "==> Preflight"
 
 [ -f scripts/sign.env ] || die "scripts/sign.env not found. Run from the canonical clone (worktrees don't carry gitignored signing config); template: scripts/sign.env.example"
 
+command -v create-dmg >/dev/null 2>&1 || die "create-dmg not found (needed to build the installer DMG). Install: brew install create-dmg"
+
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 [ "$BRANCH" = "main" ] || die "releases run from main (currently on $BRANCH)"
 
@@ -124,7 +126,7 @@ for needed in \
   "2nb_${VERSION}_Darwin_arm64.tar.gz" \
   "2nb_${VERSION}_Darwin_x86_64.tar.gz" \
   "manifest.json" "main.js" "styles.css" \
-  "SecondBrain-${VERSION}-arm64.zip"; do
+  "SecondBrain-${VERSION}-arm64.dmg"; do
   case " $ASSETS " in
     *" $needed "*) ;;
     *) die "release asset missing: $needed (have: $ASSETS)" ;;
