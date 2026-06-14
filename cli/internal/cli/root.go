@@ -60,13 +60,19 @@ Quick start:
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "", "Output format: json, csv, yaml, raw")
+	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "", "Output format: json, csv, tsv, yaml, raw, md, text (listings also: paths, tree)")
 	rootCmd.PersistentFlags().BoolVar(&flagPorcelain, "porcelain", false, "Machine-readable output (no color, no progress)")
 	rootCmd.PersistentFlags().Bool("json", false, "Output as JSON (shorthand for --format json)")
 	rootCmd.PersistentFlags().Bool("csv", false, "Output as CSV (shorthand for --format csv)")
 	rootCmd.PersistentFlags().Bool("yaml", false, "Output as YAML (shorthand for --format yaml)")
 	rootCmd.PersistentFlags().StringVar(&flagVault, "vault", "", "Path to vault (default: current directory or 2NB_VAULT env var)")
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose logging (debug level)")
+	rootCmd.PersistentFlags().BoolVar(&flagCopy, "copy", false, "Also copy the output to the clipboard (macOS pbcopy; supported commands only)")
+	// Hidden: set by the obsidian-syntax shim from path=/file=. exact = strict
+	// vault-relative path; fuzzy = always run the title/alias/suffix resolver;
+	// "" (default) = auto (exact path if it exists, else the resolver).
+	rootCmd.PersistentFlags().StringVar(&flagResolveMode, "resolve", "", "Target resolution mode: exact, fuzzy, auto")
+	_ = rootCmd.PersistentFlags().MarkHidden("resolve")
 
 	rootCmd.Version = Version
 
@@ -370,6 +376,10 @@ func preprocessArgs(args []string) []string {
 		"mcp": true, "mcp-server": true, "mcp-setup": true, "plugin": true, "skills": true,
 		"export-context": true, "git": true, "import-obsidian": true, "export-obsidian": true,
 		"migrate": true, "completion": true, "config": true, "ask": true, "chat": true,
+		// Obsidian-CLI compatibility verbs + aliases (see docs/obsidian-cli-mapping.md).
+		"meta": true, "list": true, "files": true, "print": true, "frontmatter": true,
+		"fm": true, "search-content": true, "list-vaults": true, "set-default-vault": true,
+		"add-vault": true,
 	}
 
 	// freeTextCommands take an arbitrary free-text positional (a query / a
@@ -378,7 +388,7 @@ func preprocessArgs(args []string) []string {
 	// "key=value" search, etc.). For these, only the obsidian "query=" convenience
 	// plus the universal vault=/format= are honored; everything else passes
 	// through verbatim as the positional.
-	freeTextCommands := map[string]bool{"search": true, "ask": true, "chat": true}
+	freeTextCommands := map[string]bool{"search": true, "ask": true, "chat": true, "search-content": true}
 
 	isCommand := func(arg string) bool {
 		if strings.Contains(arg, ":") {
@@ -426,9 +436,15 @@ func preprocessArgs(args []string) []string {
 	var todoFlag bool
 	var toggleFlag bool
 	var overwriteFlag bool
+	var appendFlag bool
+	var totalFlag bool
 	var verboseFlag bool
 	var refVal string
 	var lineVal string
+	var templateVal string
+	var oldVal string
+	var newVal string
+	var resolveModeVal string // "exact" (path=) or "fuzzy" (file=); "" = auto
 
 	var processed []string
 
@@ -439,6 +455,12 @@ func preprocessArgs(args []string) []string {
 		}
 
 		if strings.HasPrefix(arg, "-") {
+			// `add-vault --set-default` is a no-op: `vault create` already makes
+			// the new vault active, so drop the flag rather than pass an unknown
+			// flag to cobra.
+			if arg == "--set-default" && cmdName == "add-vault" {
+				continue
+			}
 			processed = append(processed, arg)
 			continue
 		}
@@ -464,9 +486,13 @@ func preprocessArgs(args []string) []string {
 				// Not a recognized param for a free-text command: it is query text.
 				processed = append(processed, arg)
 			case k == "file":
+				// file= is the fuzzy resolver form (title/alias/shortest-unique suffix).
 				fileVal = v
+				resolveModeVal = resolveFuzzy
 			case k == "path":
+				// path= is the strict exact vault-relative form.
 				pathVal = v
+				resolveModeVal = resolveExact
 			case k == "to":
 				toVal = v
 			case k == "content":
@@ -479,6 +505,12 @@ func preprocessArgs(args []string) []string {
 				refVal = v
 			case k == "line":
 				lineVal = v
+			case k == "template" && cmdName == "create":
+				templateVal = v
+			case k == "old" && cmdName == "tags":
+				oldVal = v
+			case k == "new" && cmdName == "tags":
+				newVal = v
 			default:
 				// Unknown key=value for a structured command: preserve it verbatim
 				// rather than dropping it, so e.g. `config set ai.x a=b` survives.
@@ -507,6 +539,11 @@ func preprocessArgs(args []string) []string {
 			toggleFlag = true
 		case arg == "overwrite" && cmdName == "create":
 			overwriteFlag = true
+		case arg == "append" && cmdName == "create":
+			appendFlag = true
+		case arg == "total" && (cmdName == "list" || cmdName == "files" ||
+			cmdName == "tasks" || cmdName == "unresolved"):
+			totalFlag = true
 		case arg == "verbose":
 			// --verbose is a universal flag, so the bare obsidian spelling maps
 			// for any structured (non-free-text) command.
@@ -525,10 +562,13 @@ func preprocessArgs(args []string) []string {
 			case "daily":
 				finalCmd = append(finalCmd, "daily")
 				switch subCmdName {
-				case "read", "append", "prepend":
+				case "read", "append", "prepend", "path":
 					finalCmd = append(finalCmd, subCmdName)
-				case "path":
-					// daily:path maps to daily (resolve)
+				}
+			case "tags":
+				finalCmd = append(finalCmd, "tags")
+				if subCmdName == "rename" {
+					finalCmd = append(finalCmd, "rename")
 				}
 			case "property":
 				finalCmd = append(finalCmd, "meta")
@@ -556,6 +596,24 @@ func preprocessArgs(args []string) []string {
 				finalCmd = append(finalCmd, "unresolved")
 			case "property":
 				finalCmd = append(finalCmd, "meta")
+			// Obsidian-CLI command aliases normalized to their canonical 2nb
+			// command so the parameter handling below applies uniformly. The
+			// cobra Aliases on read/meta/list cover direct (non-shim) use + help.
+			case "print":
+				finalCmd = append(finalCmd, "read")
+			case "frontmatter", "fm", "properties":
+				finalCmd = append(finalCmd, "meta")
+			case "files":
+				finalCmd = append(finalCmd, "list")
+			case "search-content":
+				finalCmd = append(finalCmd, "search")
+			// Vault registry verbs map onto the `vault` subcommands.
+			case "list-vaults":
+				finalCmd = append(finalCmd, "vault", "list")
+			case "set-default-vault":
+				finalCmd = append(finalCmd, "vault", "set")
+			case "add-vault":
+				finalCmd = append(finalCmd, "vault", "create")
 			default:
 				finalCmd = append(finalCmd, cmdName)
 			}
@@ -570,6 +628,18 @@ func preprocessArgs(args []string) []string {
 	}
 	if verboseFlag {
 		newArgs = append(newArgs, "--verbose")
+	}
+	// path=/file= select the target-resolution mode (exact vs fuzzy); a bare
+	// positional leaves it at auto.
+	if resolveModeVal != "" {
+		newArgs = append(newArgs, "--resolve", resolveModeVal)
+	}
+	if totalFlag {
+		newArgs = append(newArgs, "--total")
+	}
+	// search-content is keyword/content search: force BM25-only.
+	if cmdName == "search-content" {
+		newArgs = append(newArgs, "--bm25-only")
 	}
 
 	targetPath := pathVal
@@ -598,8 +668,14 @@ func preprocessArgs(args []string) []string {
 		if contentVal != "" {
 			newArgs = append(newArgs, "--content", contentVal)
 		}
+		if templateVal != "" {
+			newArgs = append(newArgs, "--type", templateVal)
+		}
 		if overwriteFlag {
-			newArgs = append(newArgs, "--allow-duplicate")
+			newArgs = append(newArgs, "--overwrite")
+		}
+		if appendFlag {
+			newArgs = append(newArgs, "--append")
 		}
 	case "append":
 		if targetPath != "" {
@@ -688,6 +764,22 @@ func preprocessArgs(args []string) []string {
 		}
 		if toggleFlag {
 			newArgs = append(newArgs, "--toggle")
+		}
+	case "tags":
+		// tags:rename old=… new=… -> tags rename <old> <new>
+		if secondaryCmd == "rename" {
+			if oldVal != "" {
+				newArgs = append(newArgs, oldVal)
+			}
+			if newVal != "" {
+				newArgs = append(newArgs, newVal)
+			}
+		}
+	case "vault":
+		// add-vault/set-default-vault path=… (or a bare positional) -> the vault
+		// path argument for `vault create`/`vault set`.
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
 		}
 	}
 

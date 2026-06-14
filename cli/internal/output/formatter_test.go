@@ -119,6 +119,56 @@ func TestWrite_CSV_EmptySlice(t *testing.T) {
 	}
 }
 
+func TestWrite_TSV(t *testing.T) {
+	var buf bytes.Buffer
+	items := []testItem{{Name: "alpha", Value: 1}, {Name: "beta", Value: 2}}
+	if err := Write(&buf, FormatTSV, items); err != nil {
+		t.Fatalf("Write(TSV) error: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected header + 2 rows, got %d: %q", len(lines), buf.String())
+	}
+	// Columns are tab-separated, not comma-separated.
+	if !strings.Contains(lines[0], "name\tvalue") {
+		t.Errorf("TSV header not tab-separated, got: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "alpha\t1") {
+		t.Errorf("TSV row not tab-separated, got: %q", lines[1])
+	}
+}
+
+func TestWrite_Text(t *testing.T) {
+	t.Run("string verbatim", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatText, "hello"); err != nil {
+			t.Fatalf("Write(text) error: %v", err)
+		}
+		if buf.String() != "hello" {
+			t.Errorf("text string = %q, want %q", buf.String(), "hello")
+		}
+	})
+	t.Run("slice one item per line", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatText, []string{"a", "b"}); err != nil {
+			t.Fatalf("Write(text slice) error: %v", err)
+		}
+		if buf.String() != "a\nb\n" {
+			t.Errorf("text slice = %q, want %q", buf.String(), "a\nb\n")
+		}
+	})
+}
+
+func TestWrite_MD_IsRaw(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatMD, "# Heading\n\nbody"); err != nil {
+		t.Fatalf("Write(md) error: %v", err)
+	}
+	if buf.String() != "# Heading\n\nbody" {
+		t.Errorf("md = %q, want raw verbatim", buf.String())
+	}
+}
+
 // serializable is a stand-in for *document.Document: a type whose raw form
 // comes from a Serialize() method, which writeRaw should emit verbatim.
 type serializable struct{ body string }

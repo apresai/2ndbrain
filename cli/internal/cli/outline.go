@@ -43,7 +43,10 @@ func runOutline(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	path := v.AbsPath(expandPath(args[0]))
+	path, _, err := resolveTargetArg(v, args[0])
+	if err != nil {
+		return err
+	}
 	doc, err := document.ParseFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

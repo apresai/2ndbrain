@@ -31,7 +31,10 @@ func runLinks(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	relPath := expandPath(args[0])
+	_, relPath, err := resolveTargetArg(v, args[0])
+	if err != nil {
+		return err
+	}
 	doc, err := v.DB.GetDocumentByPath(relPath)
 	if err != nil {
 		return exitWithError(ExitNotFound, fmt.Sprintf("document not found: %s", relPath))

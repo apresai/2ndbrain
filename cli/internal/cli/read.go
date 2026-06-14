@@ -14,8 +14,9 @@ import (
 var readChunk string
 
 var readCmd = &cobra.Command{
-	Use:   "read <path>",
-	Short: "Read a document or specific chunk",
+	Use:     "read <path>",
+	Aliases: []string{"print"},
+	Short:   "Read a document or specific chunk",
 	Example: `  2nb read my-note.md
   2nb read decisions/0001-use-jwt.md --chunk "Decision"
   2nb read my-note.md --json                        # structured output`,
@@ -37,7 +38,10 @@ func runRead(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	path := v.AbsPath(expandPath(args[0]))
+	path, _, err := resolveTargetArg(v, args[0])
+	if err != nil {
+		return err
+	}
 	doc, err := document.ParseFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -53,7 +57,11 @@ func runRead(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, doc)
+	if format == "" && flagCopy {
+		// Copying a read means copying the note body, not the JSON envelope.
+		format = output.FormatRaw
+	}
+	return writeOut(cmd, format, doc)
 }
 
 func readSpecificChunk(cmd *cobra.Command, doc *document.Document) error {
@@ -65,7 +73,7 @@ func readSpecificChunk(cmd *cobra.Command, doc *document.Document) error {
 		// Match by exact heading path or by the last heading component
 		if heading == target || strings.HasSuffix(heading, target) || containsHeading(heading, target) {
 			format := getFormat(cmd)
-			return output.Write(os.Stdout, format, c)
+			return writeOut(cmd, format, c)
 		}
 	}
 

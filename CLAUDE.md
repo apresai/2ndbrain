@@ -14,6 +14,7 @@ Obsidian-native AI companion. **Obsidian stays your editor**; the Go CLI (`2nb`)
 ### Project docs (`docs/`)
 
 - [`agent-teaching.md`](docs/agent-teaching.md) — MCP vs CLI decision matrix + test battery design
+- [`obsidian-cli-mapping.md`](docs/obsidian-cli-mapping.md): Obsidian-CLI compatibility (command mapping table, accepted argument forms, intentional non-goals)
 - [`mcp-integration.md`](docs/mcp-integration.md) — MCP setup snippets for Claude Code, Cursor, and other clients
 - [`templates.md`](docs/templates.md) — Built-in document type templates (adr, runbook, prd, prfaq, note, postmortem)
 - [`vault-structure.md`](docs/vault-structure.md) — On-disk vault layout reference (Superseded for 0.5.0, see [docs/obsidian/README.md](docs/obsidian/README.md))
@@ -125,7 +126,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (74)
+### CLI Commands (75)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -138,16 +139,16 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `vault create <path>` | Initialize a new vault and make it active (replaces `init`) |
 | `vault set <path>` | Set existing vault as active |
 | `vault list` | List recently used vaults; reads `~/.2ndbrain-vaults` |
-| `create` | Create document from template (`--type`, `--title`, `--path`, `--content`). `--path <subdir>` files the doc under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template |
-| `read` | Read full document or specific section (`--chunk`) |
+| `create` | Create document from template (`--type`, `--title`, `--path`, `--content`). `--path <subdir>` files the doc under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template. `--overwrite` replaces an existing same-title note in place (reusing its id, so the index stays consistent); `--append` appends the content to an existing same-title note (else creates). `--allow-duplicate` is the orthogonal content-hash guard. Default with neither flag keeps the collision-free `<slug>-1.md` dedupe |
+| `read` | Read full document or specific section (`--chunk`). Alias: `print` |
 | `append` | Append content to a document's body (`--text`, `--file`, or stdin). Explicit, opt-in body write; leaves frontmatter untouched |
 | `prepend` | Insert content at the start of a document's body, after the frontmatter (`--text`, `--file`, or stdin) |
 | `replace` | Replace a document's body, or just one heading's section content with `--section <heading>` (`--text`, `--file`, or stdin). First match wins on duplicate headings |
-| `daily` | Resolve today's daily note from Obsidian's core daily-notes plugin config (`.obsidian/daily-notes.json`: folder, format, optional template). Bare `daily` resolves, creates the note if missing, and prints the vault-relative path. `daily read` prints its body; `daily append`/`daily prepend` (`--text`, `--file`, or stdin) add to the body via the shared body-write path. Missing/disabled plugin falls back to Obsidian defaults (root folder, `YYYY-MM-DD`); never hard-errors. The date format honors Moment's `[literal]` bracket-escaping |
-| `meta` | View or update frontmatter with schema validation. `--set key=value` writes; `--get <key>` reads one field (ExitNotFound if absent); `--remove <key>` (repeatable) deletes a field in place, preserving comments/order, and refuses identity keys (id/path/title/type) and schema-required fields. Writes now re-index the whole file (chunks/tags/links via `IndexSingleFile`), so a frontmatter tag change is reflected in `list --tag` immediately; re-embedding stays gated on the body content hash, so a metadata-only edit does not re-embed |
+| `daily` | Resolve today's daily note from Obsidian's core daily-notes plugin config (`.obsidian/daily-notes.json`: folder, format, optional template). Bare `daily` resolves, creates the note if missing, and prints the vault-relative path. `daily path` is an explicit subcommand for the same resolve+print (for the obsidian `daily:path` form). `daily read` prints its body; `daily append`/`daily prepend` (`--text`, `--file`, or stdin) add to the body via the shared body-write path. Missing/disabled plugin falls back to Obsidian defaults (root folder, `YYYY-MM-DD`); never hard-errors. The date format honors Moment's `[literal]` bracket-escaping |
+| `meta` | View or update frontmatter with schema validation. Aliases: `frontmatter`, `fm`, `properties`. `--set key=value` writes; `--get <key>` reads one field (ExitNotFound if absent); `--remove <key>` (repeatable) deletes a field in place, preserving comments/order, and refuses identity keys (id/path/title/type) and schema-required fields. Writes now re-index the whole file (chunks/tags/links via `IndexSingleFile`), so a frontmatter tag change is reflected in `list --tag` immediately; re-embedding stays gated on the body content hash, so a metadata-only edit does not re-embed |
 | `index` | Rebuild index. `--doc <path>` for a single doc; `--force-reembed` invalidates every stored embedding |
 | `search` | Hybrid BM25 + semantic. Filters: `--type --status --tag --limit`. `--threshold` overrides cosine cutoff. `--bm25-only` |
-| `list` | List documents with filters (`--type --status --tag --limit --sort`) |
+| `list` | List documents with filters (`--type --status --tag --limit --sort`). Alias: `files`. `--total` prints only the count; `--format paths` prints one vault-relative path per line; `--format tree` prints an indented directory hierarchy |
 | `lint [glob]` | Validate schemas, check broken wikilinks |
 | `stale` | List documents not modified within N days (`--since`) |
 | `related` | Find related docs via link graph (`--depth`) |
@@ -155,11 +156,11 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `links <path>` | List outbound links from a document, including unresolved ones (each carries a `resolved` bool), so it doubles as a per-file broken-link view |
 | `orphans` | List documents with no resolved inbound link (nothing in the vault links to them) |
 | `deadends` | List documents with no resolved outbound link (they link to nothing real in the vault) |
-| `unresolved` | List every unresolved (broken) wikilink across the vault: each source doc path paired with the raw `[[target]]` that resolves to no note. Vault-wide complement to `links <path>` (which is per-file) |
+| `unresolved` | List every unresolved (broken) wikilink across the vault: each source doc path paired with the raw `[[target]]` that resolves to no note. Vault-wide complement to `links <path>` (which is per-file). `--total` prints only the count |
 | `graph` | Output link graph as JSON adjacency list |
 | `outline <path>` | Heading tree of a document (heading path, level, line span). Shares `document.BuildOutline` with the MCP `kb_structure` tool |
 | `wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `wc` |
-| `tasks` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault. Filters: `--done`, `--todo`, `--path <file\|dir>`. v1 = GFM open/done only (custom statuses like `[>]`/`[-]` ignored). `--json` |
+| `tasks` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault. Filters: `--done`, `--todo`, `--path <file\|dir>`. `--total` prints only the count. v1 = GFM open/done only (custom statuses like `[>]`/`[-]` ignored). `--json` |
 | `task <path> <line>` | Toggle a single GFM checkbox at a 1-based body line. `--done`/`--todo`/`--toggle` (default toggle); errors if the line is not a checkbox. Writes the body via the shared body-write path (frontmatter untouched) |
 | `folders` | List folders (directory prefixes of `documents.path`) with doc counts; root docs bucket under `(root)` |
 | `tags` | List all tags vault-wide with counts. Parent command (bare `tags` lists; `tags list` is the explicit subcommand) |
@@ -209,9 +210,9 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 
 **Shell completion** dispatches to the built binary so it stays fresh. Homebrew installs scripts via GoReleaser; non-brew users run `completion install`.
 
-**Global flags:** `--format` (json/csv/yaml/raw), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`. `--format raw` emits a value's `Serialize()` output (or the raw string/bytes) with no JSON wrapping, for piping a document body verbatim.
+**Global flags:** `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose` / `-v`, `--copy`. `--format raw` (and `md`) emits a value's `Serialize()` output (or the raw string/bytes) with no JSON wrapping, for piping a document body verbatim; `tsv` is tab-separated CSV; `text` is best-effort plain text. `--copy` also writes a command's rendered output to the clipboard (macOS `pbcopy`; a clear unsupported error elsewhere): `read`/`print` (body), `meta`/`property:read` (value), and `daily`/`daily path` (path) copy in their default output, and any command run with a machine format (`--json`/`--csv`/`--format …`, including `search`/`unresolved`/`list`) copies that rendered output.
 
-**Obsidian-CLI syntax compatibility:** an argv preprocessor (`preprocessArgs` in `root.go`) lets `2nb` accept `obsidian`-CLI-style invocations as a drop-in: `key=value` arguments (`file=`, `path=`, `to=`, `content=`, `name=`, `value=`, `query=`, `ref=`, `vault=`, `format=`) and colon-commands (`daily:read`/`daily:append`, `property:read`/`property:set`/`property:remove` → `meta`, `link:unresolved`/`link:orphans`/`link:deadends`, `search:context`). It only rewrites recognized command + parameter shapes; a free-text `search`/`ask`/`chat` query is never parsed as `key=value` (so a query containing `=` is preserved), and an unrecognized `key=value` on any command passes through verbatim rather than being dropped.
+**Obsidian-CLI syntax compatibility:** an argv preprocessor (`preprocessArgs` in `root.go`) lets `2nb` accept `obsidian`-CLI-style invocations as a drop-in (full mapping table plus accepted forms in [docs/obsidian-cli-mapping.md](docs/obsidian-cli-mapping.md)): `key=value` arguments (`file=`, `path=`, `to=`, `content=`, `name=`, `value=`, `query=`, `ref=`, `vault=`, `format=`, plus `template=` for create and `old=`/`new=` for tags:rename), boolean tokens (`total`, `append`, `overwrite`, `done`/`todo`/`toggle`, `verbose`), and colon-commands (`daily:read`/`daily:append`/`daily:prepend`/`daily:path`, `property:read`/`property:set`/`property:remove` → `meta`, `tags:rename` → `tags rename`, `link:unresolved`/`link:orphans`/`link:deadends`, `search:context`). Target resolution: `path=` is a strict exact vault-relative path; `file=` is the fuzzy resolver (exact → shortest-unique basename/suffix → title → alias, failing loudly with candidates on ambiguity); a bare positional is auto (exact-on-disk, else fuzzy). The resolver lives in `store.ResolveTarget` (shared with wikilink resolution via `buildLookupIndex`); CLI commands route through `resolveTargetArg` (a hidden `--resolve exact|fuzzy|auto` set by the shim). Compatibility command translations: `print` → `read`; `frontmatter`/`fm`/`properties` → `meta` (also cobra aliases); `files` → `list`; `search-content` → `search --bm25-only`; `list-vaults`/`set-default-vault`/`add-vault` → `vault list`/`set`/`create`. It only rewrites recognized command + parameter shapes; a free-text `search`/`ask`/`chat`/`search-content` query is never parsed as `key=value` (so a query containing `=` is preserved), and an unrecognized `key=value` on any command passes through verbatim rather than being dropped.
 
 **Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works (Cobra intercepts before `RunE`).
 

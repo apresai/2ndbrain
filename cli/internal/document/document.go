@@ -247,6 +247,18 @@ func (d *Document) WriteFile(dir string) (string, error) {
 	return path, nil
 }
 
+// SlugFilename returns the canonical "<slug>.md" filename a fresh create would
+// use for a title, or "" when the title produces no ASCII slug (e.g. all CJK or
+// emoji, which fall back to a UUID name that can't be located by title). Used
+// by `create --append`/`--overwrite` to find an existing note for a title.
+func SlugFilename(title string) string {
+	slug := slugify(title)
+	if slug == "" {
+		return ""
+	}
+	return slug + ".md"
+}
+
 // uniqueFilename returns an absolute, collision-free ".md" path in dir for a new
 // document. It prefers the title slug; if a file with that slug already exists
 // it appends "-1", "-2", ... until the name is free. An empty slug (a title that

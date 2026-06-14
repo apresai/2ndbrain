@@ -18,8 +18,9 @@ var (
 )
 
 var metaCmd = &cobra.Command{
-	Use:   "meta <path>",
-	Short: "View, read, set, or remove document frontmatter",
+	Use:     "meta <path>",
+	Aliases: []string{"frontmatter", "fm", "properties"},
+	Short:   "View, read, set, or remove document frontmatter",
 	Long: `View a document's frontmatter, or operate on a single field.
 
 With no flags, meta prints the full frontmatter. --get reads one field;
@@ -56,7 +57,10 @@ func runMeta(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	path := v.AbsPath(expandPath(args[0]))
+	path, _, err := resolveTargetArg(v, args[0])
+	if err != nil {
+		return err
+	}
 	doc, err := document.ParseFile(path)
 	if err != nil {
 		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))
@@ -91,7 +95,7 @@ func runMeta(cmd *cobra.Command, args []string) error {
 
 	// Otherwise, display frontmatter
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, doc.Frontmatter)
+	return writeOut(cmd, format, doc.Frontmatter)
 }
 
 // getMeta prints a single frontmatter value. With a machine-readable --format
@@ -104,18 +108,23 @@ func getMeta(cmd *cobra.Command, doc *document.Document) error {
 	}
 
 	if format := getFormat(cmd); format != "" {
-		return output.Write(os.Stdout, format, val)
+		return writeOut(cmd, format, val)
 	}
 
 	// Pretty (default) output: print the value plainly. Arrays print one item
 	// per line so the common `tags` case reads naturally in a terminal.
+	var sb strings.Builder
 	switch t := val.(type) {
 	case []any:
 		for _, item := range t {
-			fmt.Println(item)
+			fmt.Fprintln(&sb, item)
 		}
 	default:
-		fmt.Println(val)
+		fmt.Fprintln(&sb, val)
+	}
+	fmt.Print(sb.String())
+	if flagCopy {
+		return copyToClipboard(strings.TrimRight(sb.String(), "\n"))
 	}
 	return nil
 }

@@ -106,9 +106,10 @@ func TestPreprocessArgs(t *testing.T) {
 		want  []string
 	}{
 		{
+			// file= selects the fuzzy resolver, so the shim emits --resolve fuzzy.
 			"read command with key=value",
 			[]string{"2nb", "read", "file=My Note", "format=raw"},
-			[]string{"2nb", "read", "--format", "raw", "My Note"},
+			[]string{"2nb", "read", "--format", "raw", "--resolve", "fuzzy", "My Note"},
 		},
 		{
 			"daily read command",
@@ -123,17 +124,17 @@ func TestPreprocessArgs(t *testing.T) {
 		{
 			"property read",
 			[]string{"2nb", "property:read", "name=status", "file=projects/gimage.md"},
-			[]string{"2nb", "meta", "projects/gimage.md", "--get", "status"},
+			[]string{"2nb", "meta", "--resolve", "fuzzy", "projects/gimage.md", "--get", "status"},
 		},
 		{
 			"property set",
 			[]string{"2nb", "property:set", "name=status", "value=active", "file=projects/gimage.md"},
-			[]string{"2nb", "meta", "projects/gimage.md", "--set", "status=active"},
+			[]string{"2nb", "meta", "--resolve", "fuzzy", "projects/gimage.md", "--set", "status=active"},
 		},
 		{
 			"property remove",
 			[]string{"2nb", "property:remove", "name=status", "file=projects/gimage.md"},
-			[]string{"2nb", "meta", "projects/gimage.md", "--remove", "status"},
+			[]string{"2nb", "meta", "--resolve", "fuzzy", "projects/gimage.md", "--remove", "status"},
 		},
 		{
 			"unresolved links list",
@@ -158,12 +159,12 @@ func TestPreprocessArgs(t *testing.T) {
 		{
 			"move note",
 			[]string{"2nb", "move", "file=note.md", "to=archive/"},
-			[]string{"2nb", "move", "note.md", "archive/"},
+			[]string{"2nb", "move", "--resolve", "fuzzy", "note.md", "archive/"},
 		},
 		{
 			"rename note",
 			[]string{"2nb", "rename", "file=note.md", "name=new-note.md"},
-			[]string{"2nb", "rename", "note.md", "new-note.md"},
+			[]string{"2nb", "rename", "--resolve", "fuzzy", "note.md", "new-note.md"},
 		},
 		// Regression: a free-text query containing "=" must NOT be parsed as a
 		// key=value param and silently dropped. Before the fix, "a=b test" was
@@ -241,6 +242,87 @@ func TestPreprocessArgs(t *testing.T) {
 			"native config doctor subcommand + flag passes through",
 			[]string{"2nb", "config", "doctor", "--json"},
 			[]string{"2nb", "config", "doctor", "--json"},
+		},
+		// --- Obsidian-CLI compatibility (this PR) ---
+		{
+			"path= selects strict exact resolution",
+			[]string{"2nb", "read", "path=projects/alpha.md"},
+			[]string{"2nb", "read", "--resolve", "exact", "projects/alpha.md"},
+		},
+		{
+			"print alias maps to read",
+			[]string{"2nb", "print", "file=Alpha"},
+			[]string{"2nb", "read", "--resolve", "fuzzy", "Alpha"},
+		},
+		{
+			"fm alias maps to meta",
+			[]string{"2nb", "fm", "file=Alpha"},
+			[]string{"2nb", "meta", "--resolve", "fuzzy", "Alpha"},
+		},
+		{
+			"properties alias maps to meta",
+			[]string{"2nb", "properties", "file=Alpha"},
+			[]string{"2nb", "meta", "--resolve", "fuzzy", "Alpha"},
+		},
+		{
+			"files alias maps to list",
+			[]string{"2nb", "files"},
+			[]string{"2nb", "list"},
+		},
+		{
+			"files total maps to list --total",
+			[]string{"2nb", "files", "total"},
+			[]string{"2nb", "list", "--total"},
+		},
+		{
+			"tasks total maps to --total",
+			[]string{"2nb", "tasks", "total"},
+			[]string{"2nb", "tasks", "--total"},
+		},
+		{
+			"unresolved total maps to --total",
+			[]string{"2nb", "unresolved", "total"},
+			[]string{"2nb", "unresolved", "--total"},
+		},
+		{
+			"create content + template + overwrite tokens",
+			[]string{"2nb", "create", "My Note", "content=hello", "template=adr", "overwrite"},
+			[]string{"2nb", "create", "My Note", "--content", "hello", "--type", "adr", "--overwrite"},
+		},
+		{
+			"create append token",
+			[]string{"2nb", "create", "My Note", "content=more", "append"},
+			[]string{"2nb", "create", "My Note", "--content", "more", "--append"},
+		},
+		{
+			"tags:rename old/new maps to tags rename",
+			[]string{"2nb", "tags:rename", "old=foo", "new=bar"},
+			[]string{"2nb", "tags", "rename", "foo", "bar"},
+		},
+		{
+			"daily:path maps to daily path",
+			[]string{"2nb", "daily:path"},
+			[]string{"2nb", "daily", "path"},
+		},
+		{
+			"search-content forces bm25-only",
+			[]string{"2nb", "search-content", "hello world"},
+			[]string{"2nb", "search", "hello world", "--bm25-only"},
+		},
+		{
+			"list-vaults maps to vault list",
+			[]string{"2nb", "list-vaults"},
+			[]string{"2nb", "vault", "list"},
+		},
+		{
+			"add-vault drops --set-default and maps to vault create",
+			[]string{"2nb", "add-vault", "path=/tmp/v", "--set-default"},
+			[]string{"2nb", "vault", "create", "--resolve", "exact", "/tmp/v"},
+		},
+		{
+			"vault= in first position is honored",
+			[]string{"2nb", "vault=/tmp/v", "files", "total"},
+			[]string{"2nb", "list", "--vault", "/tmp/v", "--total"},
 		},
 	}
 

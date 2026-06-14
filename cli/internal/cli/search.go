@@ -185,14 +185,14 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		// mode + warnings alongside results, so the `--json` output is
 		// wrapped in an envelope. CSV/YAML stay flat — envelope only
 		// makes sense for JSON.
-		return output.Write(os.Stdout, format, SearchResponse{
+		return writeOut(cmd, format, SearchResponse{
 			Mode:     string(mode),
 			Warnings: warnings,
 			Results:  results,
 		})
 	}
 	if format != "" {
-		return output.Write(os.Stdout, format, results)
+		return writeOut(cmd, format, results)
 	}
 
 	// Pretty output

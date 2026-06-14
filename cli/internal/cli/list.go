@@ -6,7 +6,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -16,15 +15,19 @@ var (
 	listTag    string
 	listLimit  int
 	listSort   string
+	listTotal  bool
 )
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all documents in the vault with optional filters",
+	Use:     "list",
+	Aliases: []string{"files"},
+	Short:   "List all documents in the vault with optional filters",
 	Example: `  2nb list
   2nb list --type adr --status accepted
   2nb list --tag auth --sort modified --limit 10
-  2nb list --json                                   # machine-readable`,
+  2nb list --json                                   # machine-readable
+  2nb files --total                                 # count only
+  2nb files --format tree                           # directory tree`,
 	RunE: runList,
 }
 
@@ -34,6 +37,7 @@ func init() {
 	listCmd.Flags().StringVar(&listTag, "tag", "", "Filter by tag")
 	listCmd.Flags().IntVar(&listLimit, "limit", 100, "Maximum results")
 	listCmd.Flags().StringVar(&listSort, "sort", "modified", "Sort by: modified, created, title, path")
+	listCmd.Flags().BoolVar(&listTotal, "total", false, "Print only the count of matching documents")
 	_ = listCmd.RegisterFlagCompletionFunc("type", completeSchemaTypes)
 	_ = listCmd.RegisterFlagCompletionFunc("status", completeSchemaStatuses)
 	_ = listCmd.RegisterFlagCompletionFunc("sort", completeSortFields)
@@ -107,6 +111,12 @@ func runList(cmd *cobra.Command, args []string) error {
 		items = append(items, item)
 	}
 
+	// Obsidian-compat listing modes (--total / format=paths / format=tree)
+	// render before the empty-state hint so the output stays scriptable.
+	if handled, err := renderList(cmd, items, listTotal, func(it ListItem) string { return it.Path }); handled || err != nil {
+		return err
+	}
+
 	if len(items) == 0 {
 		if !flagPorcelain {
 			fmt.Fprintln(os.Stderr, "No documents yet. Create one with: 2nb create \"My Note\"")
@@ -118,7 +128,7 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, items)
+		return writeOut(cmd, format, items)
 	}
 
 	// Pretty table output by default

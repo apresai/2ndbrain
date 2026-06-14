@@ -106,14 +106,14 @@ Run `2nb --help` for the full list and `--help` on any command for flags. The co
 | Group | Commands |
 |-------|----------|
 | Getting Started | `vault` (subcommands: `status`, `create`, `set`, `list`, `show`), `init` (deprecated alias for `vault create`), `completion` |
-| Documents | `create` (`--path`/`--content`), `read`, `meta` (`--get`/`--set`/`--remove`), `delete`, `list`, `append`, `prepend`, `replace`, `move`, `rename` (both link-aware: rewrite `[[wikilinks]]` + `[text](path.md)`), `daily` (`read`/`append`/`prepend`), `tasks`, `task` |
+| Documents | `create` (`--path`/`--content`/`--overwrite`/`--append`), `read` (alias `print`), `meta` (`--get`/`--set`/`--remove`; aliases `frontmatter`/`fm`/`properties`), `delete`, `list` (alias `files`; `--total`, `--format paths\|tree`), `append`, `prepend`, `replace`, `move`, `rename` (both link-aware: rewrite `[[wikilinks]]` + `[text](path.md)`), `daily` (`path`/`read`/`append`/`prepend`), `tasks`, `task` |
 | Search & AI | `search`, `ask`, `chat`, `index`, `suggest-links`, `polish` (`--write`), `ai` (`status`/`setup`/`local`/`embed`), `models` (`list`/`test`/`add`/`remove`/`enable`/`disable`/`enable-state`/`cost-preview`/`wizard` (`--set-active`)/`bench`/`calibrate`) |
 | Quality & structure | `lint`, `stale`, `related`, `graph`, `backlinks`, `links`, `orphans`, `deadends`, `unresolved`, `outline`, `wordcount`, `folders`, `tags` (`list`/`rename`), `aliases` |
 | Integration | `mcp-server`, `mcp-setup`, `mcp` (`status`/`configured`), `plugin` (`status`/`install`), `git` (`activity`/`show`/`diff`/`status`, read-only), `export-context`, `skills` (`list`/`install`/`uninstall`/`show`) |
 | Import/Export | `import-obsidian`, `export-obsidian`, `migrate` |
 | Configuration | `config` (`show`/`get` (`--effective`)/`set`/`set-key`/`doctor`) |
 
-**Global flags:** `--format` (json/csv/yaml/raw), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`. Also accepts obsidian-CLI-style `key=value` args and colon-commands (see CLAUDE.md "Obsidian-CLI syntax compatibility").
+**Global flags:** `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`, `--copy`. Also accepts obsidian-CLI-style `key=value` args, boolean tokens (`total`/`append`/`overwrite`), and colon-commands; `file=` fuzzy-resolves by title/alias/suffix while `path=` is strict-exact. Full mapping in [docs/obsidian-cli-mapping.md](docs/obsidian-cli-mapping.md).
 
 **Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`.
 

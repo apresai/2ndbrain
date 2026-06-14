@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -68,10 +67,9 @@ func runPolish(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 	setupFileLogging(v)
 
-	relArg := args[0]
-	absPath := relArg
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(v.Root, relArg)
+	absPath, _, err := resolveTargetArg(v, args[0])
+	if err != nil {
+		return err
 	}
 	if _, err := os.Stat(absPath); err != nil {
 		return fmt.Errorf("resolve doc path: %w", err)
