@@ -436,7 +436,8 @@ func warnIfMultiple2nbOnPath(w io.Writer) {
 		}
 	}
 
-	// Fetch versions in parallel — each probe has a 1 s timeout.
+	// Fetch versions in parallel; each probe is bounded by getBinaryVersion's own
+	// deadline (and a one-shot timeout retry).
 	var mu sync.Mutex
 	versions := make(map[string]string, len(paths))
 	var wg sync.WaitGroup
@@ -478,21 +479,31 @@ func warnIfMultiple2nbOnPath(w io.Writer) {
 	}
 }
 
-// getBinaryVersion runs `path --version` with a 1 s timeout and returns the
-// last space-delimited token from the output (Cobra format: "2nb version 0.2.4").
-// Returns "unknown" if the probe fails or the output is empty.
+// getBinaryVersion runs `path --version` and returns the last space-delimited
+// token from the output (Cobra format: "2nb version 0.2.4"). Returns "unknown"
+// if the probe fails or the output is empty.
+//
+// The probe shells out to a freshly-built binary; under a loaded `-race` test
+// battery the first exec can be starved past a tight deadline, which is why the
+// old 1s budget made the completion tests load-flaky. It now retries once with a
+// longer deadline ONLY on a timeout: a clean non-zero exit (or empty output)
+// won't change on a retry, so the failure path stays fast (one exec).
 func getBinaryVersion(path string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
-	if err != nil || len(out) == 0 {
-		return "unknown"
+	for _, timeout := range []time.Duration{3 * time.Second, 6 * time.Second} {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		out, err := exec.CommandContext(ctx, path, "--version").Output()
+		timedOut := ctx.Err() == context.DeadlineExceeded
+		cancel()
+		if err == nil && len(out) > 0 {
+			if parts := strings.Fields(string(out)); len(parts) > 0 {
+				return parts[len(parts)-1]
+			}
+		}
+		if !timedOut {
+			break
+		}
 	}
-	parts := strings.Fields(string(out))
-	if len(parts) == 0 {
-		return "unknown"
-	}
-	return parts[len(parts)-1]
+	return "unknown"
 }
 
 func looksLikeHomebrewPath(p string) bool {
