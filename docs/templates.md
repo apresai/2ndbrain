@@ -101,7 +101,9 @@ archived -> (terminal)
 ## Goals
 ## Non-Goals
 ## User Stories
-## Functional Requirements (P0 / P1)
+## Functional Requirements
+### P0 — MVP
+### P1 — Enhancements
 ## Non-Functional Requirements
 ## Success Metrics
 ## Risks

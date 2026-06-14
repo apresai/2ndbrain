@@ -28,7 +28,12 @@ vault-root/
 ├── .2ndbrain/              # Derived sidecar directory (gitignored)
 │   ├── index.db            # SQLite database containing search index and metadata
 │   ├── config.yaml         # AI provider and local configuration profile
-│   ├── schemas.yaml        # Schema templates
+│   ├── schemas.yaml        # Schema templates (the one committable sidecar file)
+│   ├── bench.db            # Benchmark history + favorites (created on first bench)
+│   ├── models.yaml         # Per-vault model catalog overrides (created on first per-vault model add)
+│   ├── models/             # Reserved per-vault model directory (created at init)
+│   ├── mcp/                # <pid>.json status file per running mcp-server
+│   ├── recovery/           # Crash-recovery snapshots
 │   └── logs/               # Application log folder
 ├── note.md                 # User files
 └── subfolder/
@@ -48,7 +53,7 @@ The `.obsidian/` directory is used only as the vault marker; its configuration f
 
 ### 2ndbrain Writes
 * Only `.2ndbrain/` configuration files and databases.
-* In-place frontmatter modifications when explicitly triggered by CLI metadata write commands (e.g., `2nb meta set`). These operations utilize AST-based parsing to preserve comments and layout.
+* In-place frontmatter modifications when explicitly triggered by CLI metadata write commands (e.g., `2nb meta <path> --set key=value`). These operations utilize AST-based parsing to preserve comments and layout.
 * The root `.gitignore` file to add `.2ndbrain/` to the ignore list automatically.
 * The plugin's own bundle under `.obsidian/plugins/obsidian-2ndbrain/`, written only by the explicit `2nb plugin install` command (never notes, never Obsidian settings).
 

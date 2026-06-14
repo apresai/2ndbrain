@@ -184,7 +184,7 @@ Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bed
 
 Commands are organized into groups (`2nb --help` shows the full list).
 
-**Global flags:** `--json`, `--csv`, `--yaml`, `--format`, `--porcelain`, `--vault`, `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
+**Global flags:** `--json`, `--csv`, `--yaml`, `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--vault`, `--copy` (also copy output to the clipboard), `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
 
 ### Getting Started
 
@@ -202,12 +202,12 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | Command | Description |
 |---------|-------------|
 | `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>] [--content <body>] [--overwrite\|--append]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template. `--overwrite` replaces an existing same-title note in place (keeps its id); `--append` appends to it (else creates) |
-| `read <path> [--chunk <heading>]` | Read document or specific section |
+| `read <path> [--chunk <heading>]` | Read document or specific section. Alias: `print` |
 | `append <path> [--text \| --file \| stdin]` | Append content to a document's body. Explicit, opt-in body write; frontmatter is left untouched |
 | `prepend <path> [--text \| --file \| stdin]` | Insert content at the start of a document's body, after the frontmatter |
 | `replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section` (first match wins on duplicate headings) |
-| `daily` | Resolve today's daily note from Obsidian's daily-notes config (`.obsidian/daily-notes.json`), create it if missing, and print the path. `daily read` prints its body; `daily append`/`daily prepend` `[--text \| --file \| stdin]` add to it. Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled or unconfigured; the date format honors Moment `[literal]` escaping |
-| `meta <path> [--set key=value] [--get <key>] [--remove <key>]` | View frontmatter, or `--set` to write, `--get` to read one field (exit 1 if absent), `--remove` to delete a field in place (preserves comments/order; refuses identity and schema-required keys) |
+| `daily` | Resolve today's daily note from Obsidian's daily-notes config (`.obsidian/daily-notes.json`), create it if missing, and print the path (`daily path` is the explicit subcommand form). `daily read` prints its body; `daily append`/`daily prepend` `[--text \| --file \| stdin]` add to it. Falls back to Obsidian defaults (root folder, `YYYY-MM-DD`) when the plugin is disabled or unconfigured; the date format honors Moment `[literal]` escaping |
+| `meta <path> [--set key=value] [--get <key>] [--remove <key>]` | View frontmatter, or `--set` to write, `--get` to read one field (exit 1 if absent), `--remove` to delete a field in place (preserves comments/order; refuses identity and schema-required keys). Aliases: `frontmatter`, `fm`, `properties` |
 | `delete <path> [--force]` | Delete document from vault and index |
 | `move <src> <dst> [--dry-run] [--force]` | Move/rename a note to a new vault-relative path, rewriting every `[[wikilink]]` AND markdown-style `[text](path.md)` link across the vault that points at it (preserving heading/block/alias/embed suffixes on wikilinks, the label text + `#anchor`/`?query` suffix + `.md` extension on markdown links, and the bare-vs-path form; external-URL and anchor-only markdown links are skipped; links inside code are untouched). `--dry-run` previews the rename, per-note rewrites, and ambiguous skips without writing; without `--force` a bare-name-ambiguous move is refused. The target file moves LAST for crash safety |
 | `rename <src> <newname> [--dry-run] [--force]` | Rename a note in place (same folder, `.md` appended if omitted), delegating to `move` |
@@ -233,12 +233,14 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `models test <model-id> [--save] [--scope global\|vault]` | Smoke-test any model (embed or generate probe); `--save` adds the model to your catalog if it passes |
 | `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (per-vault by default, or global with `--scope global`) |
 | `models remove <id> --provider [--scope global\|vault]` | Remove a model from your user catalog |
-| `models enable <id> --provider [--scope global\|vault]` | Mark a model enabled so it appears in dropdowns |
-| `models disable <id> --provider [--scope global\|vault]` | Hide a model from dropdowns; still listed by bare `models list` |
+| `models enable [id] --provider [--vendor <name>] [--scope global\|vault]` | Mark a model enabled so it appears in dropdowns; `--vendor` toggles every model from that vendor (the GUI's bulk toggle) |
+| `models disable [id] --provider [--vendor <name>] [--scope global\|vault]` | Hide a model from dropdowns; still listed by bare `models list`; `--vendor` for the bulk toggle |
+| `models enable-state <id> --state default\|enabled\|disabled` | Tri-state enable pointer; `default` clears the override for tier defaults (used by the GUI Enable State menu) |
 | `models cost-preview [ids...] --probe <kind> [--provider] [--all]` | Estimate USD cost of running a probe (test / bench_embed / bench_gen / bench_rag / retrieval) across one or more models before committing |
+| `models calibrate [--samples] [--save] [--scope] [--seed]` | Sample the vault's baseline cosine distribution (p50/p90/p95/p99) and recommend a similarity threshold; `--save` persists it to the user catalog |
 | `models wizard [--scope] [--provider] [--skip-discover] [--cost-cap] [--json] [--set-active]` | Interactive discover → pick → cost preview → test → save flow; `--json` emits an event stream for GUI / automation; `--set-active` also writes the chosen embedding + generation models into the vault config (same write path as `config set`) |
 | `models bench` | Benchmark favorites with persistent history |
-| `models bench fav <model-id>` | Add model to benchmark favorites |
+| `models bench fav <model-id>` / `unfav <model-id>` / `favs` | Add / remove / list benchmark favorites |
 | `models bench compare` | Side-by-side latency leaderboard |
 | `models bench history` | View past benchmark runs |
 
@@ -470,7 +472,7 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 - **Git Integration** (Cmd+Shift+G): recent commits with a 1/3/7/30-day window; click a commit for per-file diffs
 - **Validation**: `2nb lint` findings rendered with file and line detail
 
-Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Rebuild Index, Validate Vault, Import/Export Obsidian) and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
+Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Rebuild Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
 
 Build and install from source:
 

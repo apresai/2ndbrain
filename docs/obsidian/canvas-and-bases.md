@@ -55,7 +55,7 @@ A `.canvas` file is a JSON document containing arrays of `nodes` and `edges`:
 The CLI flattens a canvas into a synthetic markdown body (a `# Canvas Nodes` section followed by a `# Canvas Edges` section) and indexes that body. The two parts behave differently:
 
 * **Nodes:** Text cards (type `text`) are parsed, chunked, and embedded for vector search. File-reference cards (type `file`) emit a `[[wikilink]]` to the referenced document, which then resolves through the normal link graph like any other wikilink. (`file` is a *node* type, not an edge type.)
-* **Edges:** Connections between nodes are rendered as descriptive prose in the synthetic body (`## Edge <id>` with `From:` / `To:` lines naming the connected nodes) so the relationships are searchable. Edges are **not** stored as rows in the `links` table and do **not** create graph edges; only the `[[wikilinks]]` emitted by file-type nodes appear in the link graph.
+* **Edges:** Connections between nodes are rendered as descriptive prose in the synthetic body (`## Edge <id>` with `From:` / `To:` lines naming the connected nodes) so the relationships are searchable. There is no separate "edge" row type, but when an endpoint is a file-type node its `[[wikilink]]` is emitted into that edge prose, so a file-to-file edge **does** surface in the `links` table and link graph (it resolves like any other wikilink). Edges between text/group nodes carry no wikilink and add no graph edge.
 
 ---
 
