@@ -6,7 +6,7 @@ This guide covers setting up, configuring, and using the 2ndbrain companion ecos
 
 The 2ndbrain ecosystem consists of three parts:
 * Go CLI: Command line tool and MCP server that indexes your vault and runs the AI (AWS Bedrock by default; Ollama/OpenRouter opt-in).
-* macOS App: Companion status and configuration dashboard (Vault Status, AI Settings, MCP Server, Git Integration, Validation). It is not an editor and never modifies your notes. Obsidian is the editor.
+* macOS App: Companion status and configuration dashboard (Home, plus Advanced: Vault Status, AI Settings, MCP Server, Git Integration, Validation). It is not an editor and never modifies your notes. Obsidian is the editor.
 * Obsidian Plugin: Thin community plugin that connects the Obsidian UI with the CLI.
 
 ---
@@ -54,7 +54,8 @@ open /Applications/SecondBrain.app
 
 ### Configuration and Status
 
-Once launched, use the sidebar to switch between panels:
+Once launched, use the sidebar to switch between panels. The sidebar leads with **Home** (the default) and groups the rest under an **Advanced** section:
+* Home: Consolidated common-case screen with a vault card (an Obsidian-match badge and a plugin install/update row), an AI card (Bedrock + Claude Haiku 4.5 + Nova-2 with a ready dot and Save-as-default/Test), a Claude Code card (skill + MCP-configured rows), and an index card (doc/embedding counts with Rebuild Index / Re-embed All).
 * Vault Status: Shows the loaded vault path, document count, and index updates.
 * AI Settings: Connects to your AI provider (AWS Bedrock by default: Claude Haiku 4.5 + Nova-2 embeddings; Ollama/OpenRouter are opt-in) and configures embedding and generation models.
 * MCP Server: Tracks connected clients (like Cursor or Claude Code) and lists tool execution logs.

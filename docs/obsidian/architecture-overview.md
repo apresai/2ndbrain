@@ -48,8 +48,8 @@ Unlike legacy versions, 2ndbrain 0.5.0 operates as a read-only sidecar companion
 
 Legacy versions required injecting unique UUID fields into the YAML frontmatter of markdown files to track documents across renames. The 0.5.0 architecture uses a path-based identity model:
 
-* Relative Path as Primary Key: Notes are uniquely identified by their relative file path from the vault root.
-* SQLite Database Schema: The database schema maps a unique relative path to an internal database ID.
+* Relative Path as Stable Identity: Notes are uniquely identified by their relative file path from the vault root, stored as a `UNIQUE NOT NULL` column.
+* SQLite Database Schema: The database maps that unique relative path to an internal database ID (a UUID surrogate that is the table's actual `PRIMARY KEY`, `documents.id`).
 * Renames and Embeddings: When a note is renamed, the CLI updates the path record. Because vector embeddings are tied to the internal ID, the system preserves existing vector embeddings without re-running the embedding models.
 * Title Fallbacks: If a note lacks a YAML frontmatter title, the system falls back to the file's basename.
 
@@ -64,7 +64,7 @@ Legacy versions required injecting unique UUID fields into the YAML frontmatter 
 
 ### macOS App (SecondBrain)
 * Architecture: Written in SwiftUI using Swift 6.0 concurrency. It uses GRDB to read the shared SQLite index.
-* Role: Repositioned as a configuration dashboard, not an editor — Obsidian remains the editing environment. Five tabs (Vault Status, AI Settings, MCP Server, Git Integration, Validation) let you monitor indexing status, configure AI providers (AWS Bedrock by default; Ollama/OpenRouter opt-in), inspect git history, and track MCP server invocations.
+* Role: Repositioned as a configuration dashboard, not an editor. Obsidian remains the editing environment. The sidebar leads with **Home** (the default consolidated screen) and groups five power-user tabs under an **Advanced** section (Vault Status, AI Settings, MCP Server, Git Integration, Validation) to monitor indexing status, configure AI providers (AWS Bedrock by default; Ollama/OpenRouter opt-in), inspect git history, and track MCP server invocations.
 
 ### Obsidian Community Plugin (obsidian-2ndbrain)
 * Integration: A thin TypeScript package built with esbuild.

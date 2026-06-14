@@ -13,6 +13,7 @@ Obsidian-native AI companion. **Obsidian stays your editor**; the Go CLI (`2nb`)
 
 ### Project docs (`docs/`)
 
+- [`quick-start.md`](docs/quick-start.md): end-to-end getting-started walkthrough (install, vault, AI, index, search, MCP)
 - [`agent-teaching.md`](docs/agent-teaching.md) — MCP vs CLI decision matrix + test battery design
 - [`obsidian-cli-mapping.md`](docs/obsidian-cli-mapping.md): Obsidian-CLI compatibility (command mapping table, accepted argument forms, intentional non-goals)
 - [`mcp-integration.md`](docs/mcp-integration.md) — MCP setup snippets for Claude Code, Cursor, and other clients
@@ -121,7 +122,8 @@ Key patterns:
 | `internal/mcp` | MCP server with 22 tools + sidecar status files |
 | `internal/git` | Read-only git wrappers (IsRepo, Activity, DiffFile, StatusFiles) |
 | `internal/skills` | Skill file generation and agent registry |
-| `internal/output` | JSON/CSV/YAML formatters |
+| `internal/output` | JSON/CSV/TSV/YAML/raw/md/text formatters |
+| `internal/bench` | Benchmark history DB (`bench.db`: favorites, runs) + probes |
 | `internal/testutil` | Test helpers (NewTestVault, CreateAndIndex) |
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
