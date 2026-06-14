@@ -1,4 +1,4 @@
-.PHONY: build install clean test test-e2e test-battery dev
+.PHONY: build install clean test test-e2e test-battery test-usage dev
 
 BINARY := 2nb
 VERSION := $(shell cat ../VERSION | tr -d '\n')
@@ -27,6 +27,13 @@ test-e2e:
 
 test-battery:
 	go test -tags fts5 -race -v -run TestBattery -timeout 180s .
+
+# Usage suite: MCP write->query index round-trips (internal/mcp) + the runnable
+# end-to-end usage battery (real binary + real mcp-server over stdio). The
+# -run TestUsage regex catches both TestUsageMCP_* and TestUsageBattery_*.
+# AI-gated steps skip without provider credentials.
+test-usage:
+	go test -tags fts5 -race -v -run TestUsage -timeout 300s ./...
 
 dev: build
 	./$(BUILD_DIR)/$(BINARY) --help

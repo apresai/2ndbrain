@@ -589,8 +589,14 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 		return mcplib.NewToolResultError(fmt.Sprintf("rename failed: %v", err)), nil
 	}
 
-	if err := h.vault.DB.UpsertDocument(doc); err != nil {
-		slog.Warn("kb_update_meta: failed to update index", "path", path, "err", err)
+	// Reindex the whole file (documents/chunks/tags/links + ResolveLinks), not
+	// just the documents row. A frontmatter tag change must reach the tags table
+	// or `kb_list {tag}` / `2nb list --tag` can't find it until a manual reindex.
+	// Matches the CLI `meta --set` path (cli/internal/cli/meta.go) and the other
+	// write tools (kb_create/kb_append). Re-embedding stays gated on the body
+	// content hash, so a metadata-only edit does not re-embed.
+	if err := vault.IndexSingleFile(h.vault, absPath); err != nil {
+		slog.Warn("kb_update_meta: failed to index document", "path", path, "err", err)
 	}
 
 	data, _ := json.MarshalIndent(doc.Frontmatter, "", "  ")
