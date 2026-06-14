@@ -58,8 +58,8 @@ jobs:
       # --- Obsidian plugin (BRAT-installable, no local npm build required) ---
       # Runs AFTER GoReleaser, which owns and creates the GitHub release in its
       # `release:` block. Steps within a job are sequential, so the release
-      # `v${VERSION}` already exists by the time we upload here — same proven
-      # pattern as the SecondBrain.zip step above. No race with GoReleaser.
+      # `v${VERSION}` already exists by the time we upload here, so there is no
+      # race with GoReleaser.
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
@@ -111,7 +111,7 @@ jobs:
 
       # Maintains only the `2nb` alias for the twonb formula. The formula itself
       # is pushed by GoReleaser above; the cask is updated out-of-band by
-      # `make release-app` (which has the notarized zip's sha256), so it is NOT
+      # `make release-app` (which has the notarized DMG's sha256), so it is NOT
       # touched here.
       - name: Update Homebrew tap (formula alias)
         env:

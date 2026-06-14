@@ -15,7 +15,9 @@ cli/bin/
 *.exe
 dist/
 # Packaged macOS app artifacts (built by package-app / notarize-app at repo root).
+# (.zip kept so leftover artifacts from pre-0.9.x releases stay ignored.)
 SecondBrain-*-arm64.zip
+SecondBrain-*-arm64.dmg
 *.dmg
 
 # Swift / Xcode

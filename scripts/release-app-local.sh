@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 #
-# Build, Developer ID-sign, notarize, and staple SecondBrain.app entirely on
-# this machine — no CI, no GitHub secrets. Produces a notarized
-# SecondBrain-<VERSION>-arm64.zip whose embedded .app launches with no
-# Gatekeeper prompt (verified with `spctl`).
+# Build, Developer ID-sign, notarize, and staple the SecondBrain macOS app and
+# its installer DMG entirely on this machine — no CI, no GitHub secrets. Produces
+# a notarized SecondBrain-<VERSION>-arm64.dmg: a branded drag-to-Applications
+# disk image whose enclosed .app launches with no Gatekeeper prompt.
+#
+# BOTH the app and the DMG are notarized and stapled (Apple distribution best
+# practice). The app's own ticket lets it launch offline even after being dragged
+# out of the image; the DMG's ticket lets the downloaded .dmg pass Gatekeeper
+# offline. That means two notary round-trips, so expect two waits on Apple.
 #
 # Signing config (identity + notary key) is read from scripts/sign.env, which is
-# gitignored. Code signing is asymmetric: the shipped app embeds only your
+# gitignored. Code signing is asymmetric: the shipped artifacts embed only your
 # PUBLIC certificate; the private key never leaves your keychain / cert store and
-# never enters the repo.
+# never enters the repo. The DMG window layout lives in scripts/make-dmg.sh.
 #
 # Usage:
-#   scripts/release-app-local.sh            build + sign + notarize + staple + zip
-#   scripts/release-app-local.sh --publish  also upload the zip to the existing
+#   scripts/release-app-local.sh            build + sign + notarize + staple (app + DMG)
+#   scripts/release-app-local.sh --publish  also upload the DMG to the existing
 #                                            GitHub release v<VERSION> and update
 #                                            the Homebrew cask (version + sha256)
 #
@@ -46,10 +51,16 @@ if [ ! -f "$ASC_KEY_PATH" ]; then
   echo "error: notary key not found at $ASC_KEY_PATH (set ASC_KEY_PATH in $CONFIG)" >&2
   exit 1
 fi
+# Fail fast on the DMG tool BEFORE the slow build+sign+notarize, not after.
+if ! command -v create-dmg >/dev/null 2>&1; then
+  echo "error: create-dmg not found (needed to build the installer DMG)." >&2
+  echo "       Install it with:  brew install create-dmg" >&2
+  exit 1
+fi
 
 VERSION="$(tr -d '\n' < VERSION)"
 BUNDLE="app/.build/arm64-apple-macosx/release/SecondBrain.app"
-ZIP="SecondBrain-${VERSION}-arm64.zip"
+DMG="SecondBrain-${VERSION}-arm64.dmg"
 
 # When publishing, verify the release exists up front — BEFORE the slow
 # build+sign+notarize — so running too early (CI/GoReleaser hasn't created
@@ -80,23 +91,38 @@ echo "==> Stapling the notarization ticket"
 xcrun stapler staple "$BUNDLE"
 xcrun stapler validate "$BUNDLE"
 
-echo "==> Packaging ${ZIP}"
-rm -f "$ZIP"
-ditto -c -k --keepParent "$BUNDLE" "$ZIP"
-SHA256="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
+echo "==> Building the branded installer DMG"
+bash scripts/make-dmg.sh "$BUNDLE" "$DMG"   # builds + Developer ID-signs the DMG
 
-# Gatekeeper assessment as a hard gate: fail loudly if the shipped artifact
-# wouldn't be accepted (codesign --verify and stapler validate above already
-# gate, but this is the end-to-end check users actually hit).
+echo "==> Notarizing the DMG (uploads to Apple's notary service and waits)"
+xcrun notarytool submit "$DMG" \
+  --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait
+
+echo "==> Stapling the DMG"
+xcrun stapler staple "$DMG"
+xcrun stapler validate "$DMG"
+
+SHA256="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+
+# Gatekeeper as a hard gate on BOTH artifacts (the end-to-end check users hit;
+# codesign --verify and stapler validate above already gate each step). Staple
+# AND notarize both: the app's own ticket lets it launch offline even after being
+# dragged out of the image; the DMG's ticket lets the downloaded .dmg pass
+# Gatekeeper offline. Neither alone covers the other.
 if ! spctl -a -t exec -vv "$BUNDLE" 2>&1 | grep -q "source=Notarized Developer ID"; then
-  echo "error: spctl did not accept the bundle as Notarized Developer ID" >&2
+  echo "error: spctl did not accept the app bundle as Notarized Developer ID" >&2
   spctl -a -t exec -vv "$BUNDLE" >&2 || true
+  exit 1
+fi
+if ! spctl -a -t open --context context:primary-signature -vv "$DMG" 2>&1 | grep -q "source=Notarized Developer ID"; then
+  echo "error: spctl did not accept the DMG as Notarized Developer ID" >&2
+  spctl -a -t open --context context:primary-signature -vv "$DMG" >&2 || true
   exit 1
 fi
 
 echo ""
-echo "Notarized and stapled — Gatekeeper accepted:"
-echo "  artifact : ${ZIP}"
+echo "Notarized and stapled (app + DMG) — Gatekeeper accepted:"
+echo "  artifact : ${DMG}"
 echo "  sha256   : ${SHA256}"
 
 if [ "${1:-}" != "--publish" ]; then
@@ -105,14 +131,14 @@ if [ "${1:-}" != "--publish" ]; then
   exit 0
 fi
 
-# --- publish: attach the notarized zip to the release, then point the cask at it.
+# --- publish: attach the notarized DMG to the release, then point the cask at it.
 # (Release existence was already verified up front, before the notarization.)
 echo ""
-echo "==> Uploading ${ZIP} to release v${VERSION}"
-gh release upload "v${VERSION}" "$ZIP" --clobber
+echo "==> Uploading ${DMG} to release v${VERSION}"
+gh release upload "v${VERSION}" "$DMG" --clobber
 
 # Update the cask AFTER the asset is in place, so the cask never points at a
-# sha whose zip isn't uploaded yet. (A brief window where the asset is new but
+# sha whose DMG isn't uploaded yet. (A brief window where the asset is new but
 # the cask sha is old is unavoidable without atomic publish; this step is
 # idempotent, so a re-run reconciles it.)
 echo "==> Updating the Homebrew cask (version ${VERSION}, sha ${SHA256:0:12})"

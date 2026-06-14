@@ -18,9 +18,9 @@ This installs both the `2nb` CLI and the SecondBrain macOS dashboard app. If you
 brew install apresai/tap/2nb
 ```
 
-Or download binaries from [GitHub Releases](https://github.com/apresai/2ndbrain/releases).
+Or download from [GitHub Releases](https://github.com/apresai/2ndbrain/releases): the CLI as a `tar.gz`, and the app as a branded **drag-to-Applications `.dmg`**.
 
-The app is Developer ID-signed and Apple-notarized, so it launches with no Gatekeeper prompt.
+The app and its `.dmg` are both Developer ID-signed, Apple-notarized, and stapled, so it launches with no Gatekeeper prompt — whether installed via the cask or by downloading the disk image directly.
 
 **New here? Follow the [Quick Start guide](docs/quick-start.md)** for the full walkthrough: app, Obsidian plugin, AI setup, and first search.
 
@@ -570,7 +570,7 @@ GitHub Actions on the tag push:
 3. Creates a [GitHub Release](https://github.com/apresai/2ndbrain/releases) with the CLI archives and plugin assets
 4. Pushes the Homebrew formula (`twonb`, plus the `2nb` alias) to [`apresai/homebrew-tap`](https://github.com/apresai/homebrew-tap)
 
-`make release-app` then runs on the maintainer's machine: it builds SecondBrain.app, signs it with a Developer ID certificate (hardened runtime), notarizes via Apple `notarytool`, staples the ticket, uploads the zip to the release, and updates the cask in the tap with the new version and sha256. Signing config is read from `scripts/sign.env` (gitignored; template at `scripts/sign.env.example`).
+`make release-app` then runs on the maintainer's machine: it builds SecondBrain.app, signs it with a Developer ID certificate (hardened runtime), notarizes via Apple `notarytool`, and staples the ticket; then builds a branded drag-to-Applications `SecondBrain-<version>-arm64.dmg` (`scripts/make-dmg.sh`, via `create-dmg`) and Developer ID-signs, notarizes, and staples the **DMG too** (stapling both means the app launches offline even after being dragged out of the image, and the downloaded `.dmg` itself passes Gatekeeper offline); finally it uploads the DMG to the release and updates the cask in the tap with the new version and sha256. Signing config is read from `scripts/sign.env` (gitignored; template at `scripts/sign.env.example`); building the DMG needs `create-dmg` (`brew install create-dmg`).
 
 Users install with:
 
@@ -583,7 +583,7 @@ To build locally without GitHub Actions:
 
 ```bash
 make release-local       # runs goreleaser locally (CLI only)
-make package-app         # builds + zips SecondBrain.app locally (ad-hoc signed, local use only)
+make package-app         # builds a branded SecondBrain .dmg locally (Developer ID-signed if sign.env present, else ad-hoc; local use only)
 ```
 
 ## Architecture

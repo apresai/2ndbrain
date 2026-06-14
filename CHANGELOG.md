@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Changed
+- The macOS app now ships as a branded, Developer ID-signed, Apple-notarized, stapled **`.dmg`** (a drag-to-Applications installer) instead of a `.zip`. Both the app and the disk image are notarized and stapled, so it launches with no Gatekeeper prompt whether installed via the Homebrew cask or by downloading the disk image directly. The Homebrew cask now points at the DMG. Building the app release requires `create-dmg` (`brew install create-dmg`).
 
 ## [0.9.8] - 2026-06-14
 
