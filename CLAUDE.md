@@ -77,6 +77,7 @@ open app/.build/arm64-apple-macosx/debug/SecondBrain.app
 ```bash
 make test               # Go unit tests
 make test-battery       # Golden-path E2E battery (cli/battery_test.go)
+make test-usage         # Usage suite: MCP write->query index round-trips (internal/mcp) + a runnable end-to-end battery (real binary + real mcp-server over stdio). Catches index-consistency regressions (a write tool that skips reindex). AI steps skip without creds.
 make test-swift         # Swift unit tests (JSON decoding, parsing, wizard logic)
 make test-gui           # GUI tests via AppleScript + screencapture
 make test-all           # Everything
@@ -306,7 +307,7 @@ Each `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json`
 | `kb_read` | Read document or chunk by heading path |
 | `kb_list` | List with filters |
 | `kb_create` | Create from template type; optional `path` files it under a vault-relative subdirectory |
-| `kb_update_meta` | Update frontmatter with validation |
+| `kb_update_meta` | Update frontmatter with schema validation, then re-index the whole file (chunks/tags/links via `IndexSingleFile`) so a tag/status change is reflected in `kb_list`/`2nb list --tag` immediately; re-embedding stays gated on the body content hash (a metadata-only edit does not re-embed). Matches the CLI `meta --set` path |
 | `kb_related` | Traverse link graph to depth N |
 | `kb_structure` | Document heading hierarchy (also covers the `outline` view via `BuildOutline`) |
 | `kb_backlinks` | Resolved inbound links to a document (store `Backlinks`) |

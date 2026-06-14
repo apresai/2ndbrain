@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean test test-battery test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog
+.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -102,6 +102,13 @@ test:
 test-battery:
 	$(MAKE) -C cli test-battery
 
+# Usage suite: validates how we actually use 2nb. MCP write->query index
+# round-trips plus a runnable end-to-end battery (real binary + real mcp-server
+# over stdio). Catches index-consistency regressions (e.g. a write tool that
+# skips reindex). AI-gated steps skip without provider credentials.
+test-usage:
+	$(MAKE) -C cli test-usage
+
 # 2NB_TEST makes the 2nb subprocesses the Swift tests spawn (vault create /
 # vault set) skip writing the real ~/.2ndbrain-active-vault and
 # ~/.2ndbrain-vaults, so the suite never clobbers the developer's active vault.
@@ -122,7 +129,7 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-vault-switch.sh
 	SKIP_BUILD=1 ./tests/gui-test-polish.sh
 
-test-all: test test-battery test-swift test-gui
+test-all: test test-battery test-usage test-swift test-gui
 
 bump-build:
 	@echo "$(MAJOR).$(MINOR).$(shell echo $$(($(BUILD)+1)))" > VERSION
