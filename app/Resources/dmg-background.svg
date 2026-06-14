@@ -3,42 +3,46 @@
   DMG installer window background for SecondBrain (660x400, matching the window
   size in scripts/make-dmg.sh). The app icon tile sits centered at (165,200) and
   the /Applications drop-link at (495,200); this art keeps those zones clear and
-  places the arrow in the gap between them. Edit here, then re-render the
+  places the arrow in the gap between them.
+
+  LIGHT theme on purpose: Finder draws the icon LABELS ("SecondBrain",
+  "Applications") itself and colors them by system appearance (black in light
+  mode). There is no supported way to recolor them, so the background must be
+  light enough for the black labels to read. Edit here, then re-render the
   committed PNG (run from the repo root):
     rsvg-convert -w 660 -h 400 app/Resources/dmg-background.svg -o app/Resources/dmg-background.png
-  Palette tracks the app icon (white head-with-brain on dark navy).
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#232c3e"/>
-      <stop offset="1" stop-color="#161d2b"/>
+      <stop offset="0" stop-color="#f6f8fc"/>
+      <stop offset="1" stop-color="#e6ecf4"/>
     </linearGradient>
     <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#5b6b86"/>
-      <stop offset="1" stop-color="#aab6cc"/>
+      <stop offset="0" stop-color="#9aa7bd"/>
+      <stop offset="1" stop-color="#4c5b75"/>
     </linearGradient>
   </defs>
 
   <rect width="660" height="400" fill="url(#bg)"/>
 
-  <!-- Wordmark, above the icon row (icons span y 136-264). -->
+  <!-- Wordmark, above the icon row (icons span y 136-264). Navy to match the app icon. -->
   <text x="330" y="64" text-anchor="middle"
         font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="30" font-weight="700" fill="#ffffff" letter-spacing="0.5">SecondBrain</text>
+        font-size="30" font-weight="700" fill="#1b2433" letter-spacing="0.5">SecondBrain</text>
   <text x="330" y="90" text-anchor="middle"
         font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="12" font-weight="600" fill="#ffffff" letter-spacing="3">AI COMPANION FOR OBSIDIAN</text>
+        font-size="12" font-weight="600" fill="#6b7a93" letter-spacing="3">AI COMPANION FOR OBSIDIAN</text>
 
   <!-- Arrow in the gap between the app tile (~x229) and Applications (~x431),
-       aligned with the icon centers at y=200. -->
+       aligned with the icon centers at y=200. Slate, dark enough to read on light. -->
   <g opacity="0.95">
     <rect x="266" y="193" width="114" height="14" rx="7" fill="url(#arrow)"/>
-    <path d="M 372 179 L 405 200 L 372 221 Z" fill="#aab6cc"/>
+    <path d="M 372 179 L 405 200 L 372 221 Z" fill="#4c5b75"/>
   </g>
 
-  <!-- Install hint, below the icon row. -->
-  <text x="330" y="348" text-anchor="middle"
+  <!-- Install hint, below the Finder labels (which render at ~y264-288). -->
+  <text x="330" y="360" text-anchor="middle"
         font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="14" font-weight="500" fill="#ffffff">Drag <tspan font-weight="700">SecondBrain</tspan> onto <tspan font-weight="700">Applications</tspan> to install</text>
+        font-size="14" font-weight="500" fill="#3e4a5e">Drag <tspan font-weight="700" fill="#1b2433">SecondBrain</tspan> onto <tspan font-weight="700" fill="#1b2433">Applications</tspan> to install</text>
 </svg>
