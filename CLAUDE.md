@@ -37,6 +37,8 @@ brew install apresai/tap/2nb                    # CLI only
 brew install --cask apresai/tap/secondbrain     # macOS dashboard app (depends on CLI)
 ```
 
+The machine-readable release contract lives in [`.release.yaml`](.release.yaml) at the repo root: the front-door command, every product, and each product's install + verify command. It is what the `oss-release` skill reads to release and verify this repo (the skill encodes the invariants; `.release.yaml` encodes this project's implementation), so a packaging change updates the Makefile (and `.release.yaml` only if a channel or command changes), never the skill. Keep it in sync with the pipeline below.
+
 ### Pipeline
 
 **`make release-all`** is the front door: one command (canonical clone only; needs gitignored `scripts/sign.env`) that runs the test gate, bumps (`BUMP=build|minor|major|none`), tags, **waits for CI**, then signs/notarizes/publishes the app + cask, and verifies every product shipped at one version (`scripts/release-all.sh`). The underlying two steps remain available individually:

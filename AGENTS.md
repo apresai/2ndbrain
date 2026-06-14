@@ -26,6 +26,8 @@ Format: `major.minor.build`. Single source of truth: `VERSION` file at repo root
 
 Bump targets (root `Makefile`): `make bump-build` (`0.8.0` → `0.8.1`), `make bump-minor`, `make bump-major`, `make set-version V=x.y.z`. Each regenerates `Version.swift` and syncs the plugin version files.
 
+The release contract (front-door command, products, per-product install + verify) is declared in [`.release.yaml`](.release.yaml) at the repo root: the machine-readable file the `oss-release` skill reads to release and verify this repo. A packaging change updates the Makefile (and `.release.yaml` only if a channel or command changes), never the skill.
+
 ## Build
 
 ```bash
