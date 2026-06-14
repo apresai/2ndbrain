@@ -15,6 +15,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/document"
 	gitpkg "github.com/apresai/2ndbrain/internal/git"
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
+	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -729,8 +730,6 @@ func (h *handlers) handleKBList(ctx context.Context, request mcplib.CallToolRequ
 	return mcplib.NewToolResultText(string(listData)), nil
 }
 
-const defaultPolishSystemPrompt = `You are a copy editor. Fix spelling, grammar, and punctuation errors in the markdown below. Improve clarity where wording is awkward, but preserve the author's voice, all wikilinks like [[foo]], all code blocks (fenced and inline), and the heading structure exactly. Do not add or remove sections. Do not reformat lists. Return ONLY the corrected markdown body with no explanation, no commentary, and no surrounding code fences.`
-
 func (h *handlers) handleKBGitActivity(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	days := 7
 	if v, ok := request.GetArguments()["since_days"].(float64); ok && v > 0 {
@@ -789,8 +788,9 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	}
 	systemPrompt, _ := request.GetArguments()["system"].(string)
 	if systemPrompt == "" {
-		systemPrompt = defaultPolishSystemPrompt
+		systemPrompt = polish.DefaultPolishSystem
 	}
+	links, _ := request.GetArguments()["links"].(bool)
 
 	absPath := h.vault.AbsPath(path)
 	if !h.vault.ContainsPath(absPath) {
@@ -811,16 +811,57 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 		return mcplib.NewToolResultError("generation provider not available"), nil
 	}
 
+	userMessage := parsed.Body
+	var candidates []polish.LinkCandidate
+	var warning string
+	if links {
+		embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+		var docIDs []string
+		var embeddings [][]float32
+		if embErr == nil && embedder != nil && embedder.Available(ctx) {
+			docIDs, embeddings, _ = h.getCachedEmbeddings()
+		} else {
+			embedder = nil
+		}
+		candidates, warning, _ = polish.GatherCandidates(ctx, h.vault, embedder, polish.CandidateInput{
+			Source:     parsed,
+			SourcePath: path,
+			DocIDs:     docIDs,
+			Embeddings: embeddings,
+			Threshold:  h.threshold(),
+		})
+		systemPrompt += polish.LinkInstructions
+		userMessage = polish.BuildPolishUserMessage(parsed.Body, candidates)
+	}
+
 	opts := ai.GenOpts{
 		Temperature:  ai.Ptr(0.2),
 		MaxTokens:    4096,
 		SystemPrompt: systemPrompt,
 	}
-	polished, err := generator.Generate(ctx, parsed.Body, opts)
+	polished, err := generator.Generate(ctx, userMessage, opts)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("polish generation failed: %v", err)), nil
 	}
 	polished = strings.TrimSpace(polished)
+
+	var linksAdded []string
+	if links {
+		allowed := polish.AllowedLinkSet(candidates, parsed.Body)
+		var removed []string
+		polished, removed = polish.StripInventedLinks(polished, allowed)
+		if len(removed) > 0 {
+			dropped := fmt.Sprintf("dropped %d link(s) to notes that don't exist", len(removed))
+			if warning == "" {
+				warning = dropped
+			} else {
+				warning += "; " + dropped
+			}
+		}
+		for _, l := range polish.NewLinks(parsed.Body, polished) {
+			linksAdded = append(linksAdded, l.Target)
+		}
+	}
 
 	result := map[string]any{
 		"path":     path,
@@ -828,6 +869,12 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 		"polished": polished,
 		"provider": cfg.Provider,
 		"model":    cfg.GenerationModel,
+	}
+	if links {
+		result["links_added"] = linksAdded
+		if warning != "" {
+			result["warning"] = warning
+		}
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil

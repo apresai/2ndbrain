@@ -438,16 +438,17 @@ Example prompts that should trigger this tool:
 func kbPolishTool() mcplib.Tool {
 	return mcplib.Tool{
 		Name: "kb_polish",
-		Description: `Run an AI copy-editor pass over a document and return both the original and polished body. The caller is expected to present a diff for user review. Fixes spelling, grammar, and awkward phrasing while preserving voice, wikilinks, and structure. Does NOT write the result back to disk.
+		Description: `Run an AI copy-editor pass over a document and return both the original and polished body. The caller is expected to present a diff for user review. Fixes spelling, grammar, and awkward phrasing while preserving voice, wikilinks, and structure. With links:true it also adds grounded [[wikilinks]] to existing notes (never invents a target). Does NOT write the result back to disk.
 
 Example prompts that should trigger this tool:
 - "Polish the JWT auth ADR for spelling and grammar"
-- "Clean up the writing in stripe-integration.md"`,
+- "Clean up the writing in stripe-integration.md and link related notes"`,
 		InputSchema: mcplib.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]any{
 				"path":   map[string]any{"type": "string", "description": "Vault-relative path to the document to polish"},
 				"system": map[string]any{"type": "string", "description": "Optional system prompt override (default: copy-editor)"},
+				"links":  map[string]any{"type": "boolean", "description": "Also propose grounded [[wikilinks]] to existing notes (never invents targets); default false"},
 			},
 			Required: []string{"path"},
 		},
