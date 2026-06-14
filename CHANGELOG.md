@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.9.8] - 2026-06-14
+
+### Added
+- `polish --links` weaves grounded `[[wikilinks]]` to existing vault notes, gathering semantic + substring candidates, dropping ambiguous titles, and running a deterministic `StripInventedLinks` pass so no link points at a nonexistent note (`kb_polish` gains a matching `links` option).
+- `polish --undo` restores the pre-polish snapshot (reindex + re-embed), refusing to clobber post-polish edits without `--force`; `polish --write` now records a snapshot under `.2ndbrain/recovery/polish/` before applying.
+- One-click Polish in the Obsidian plugin on every surface (command/hotkey, sparkle ribbon icon, note-header toolbar action, right-click editor menu), running apply-then-review with a Keep/Undo diff modal serialized by a single-flight lock.
+
+### Changed
+- `polish --write` keeps emitting original + polished for audit while applying in place, and pairs with the new snapshot so the edit is reversible.
+- Documented `polish --links`/`--undo` and the Obsidian Polish button in the README and project docs.
+
+
 ## [0.9.7] - 2026-06-14
 
 Based on the diffs, here's the changelog entry:
