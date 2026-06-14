@@ -26,7 +26,8 @@ translates the Obsidian forms into native flags before cobra parses them):
 
 Recognized `key=value` keys: `file=`, `path=`, `to=`, `content=`, `name=`,
 `value=`, `query=`, `ref=`, `line=`, `vault=`, `format=`, `template=` (create),
-`old=` / `new=` (tags:rename). `vault=` is honored even in first position. A
+`old=` / `new=` (tags:rename), `tag=` (tag:add/tag:remove). `vault=` is honored
+even in first position. A
 free-text `search` / `ask` / `chat` / `search-content` query is never parsed as
 `key=value` (so a query containing `=` is preserved), and an unrecognized
 `key=value` on any command passes through verbatim rather than being dropped.
@@ -78,7 +79,7 @@ For other commands (`search`/`search-content`, `unresolved`, `list`/`files`),
 | replace a note / section | `2nb replace file=… content=… [--section H]` | |
 | read/list properties | `2nb meta file=…` (aliases `frontmatter`, `fm`, `properties`) | |
 | `property:read` | `2nb property:read name=K file=…` → `2nb meta --get K` | |
-| `property:set` | `2nb property:set name=K value=V file=…` → `2nb meta --set K=V` | Schema-validated. |
+| `property:set` | `2nb property:set name=K value=V file=…` → `2nb meta --set K=V` | Schema-validated. Array fields (`tags`, `aliases`, schema `list`/`tags` fields) are coerced to a YAML list, comma-split, replace semantics (`--set tags=a,b`); use `tag add`/`tag remove` for incremental tag edits. |
 | `property:remove` | `2nb property:remove name=K file=…` → `2nb meta --remove K` | |
 | list notes | `2nb list` / `2nb files` | `--type --status --tag --sort --limit`; `total`, `format=paths|tree`. |
 | `daily:path` | `2nb daily` / `2nb daily path` | Resolves + creates today's note, prints the path. |
@@ -88,6 +89,8 @@ For other commands (`search`/`search-content`, `unresolved`, `list`/`files`),
 | semantic / hybrid search | `2nb search "query"` | Needs an embedding provider for the vector channel. |
 | `search:context` | `2nb search "query"` | Colon form of `search` (no GUI `search:open`; that is out of scope). |
 | `tags:rename` | `2nb tags:rename old=A new=B` → `2nb tags rename A B` | Frontmatter tags (v1); `--dry-run` to preview. |
+| add a tag to a note | `2nb tag:add file=N tag=a,b` → `2nb tag add N a,b` | Per-note frontmatter tags; merges + dedupes + reindexes. |
+| remove a tag from a note | `2nb tag:remove file=N tag=a` → `2nb tag remove N a` | No-op if the tag is absent. |
 | list tags | `2nb tags` | With per-tag counts. |
 | tasks | `2nb tasks [done|todo] [total]` ; toggle: `2nb task ref=note.md:12 done` | GFM checkboxes. |
 | broken links | `2nb unresolved [total]` (or `link:unresolved`) | Vault-wide. |

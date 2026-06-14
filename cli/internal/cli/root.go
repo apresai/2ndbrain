@@ -369,7 +369,7 @@ func preprocessArgs(args []string) []string {
 		"read": true, "create": true, "append": true, "prepend": true, "delete": true,
 		"move": true, "rename": true, "daily": true, "unresolved": true, "orphans": true,
 		"deadends": true, "outline": true, "aliases": true, "search": true, "task": true,
-		"tasks": true, "tags": true, "links": true, "backlinks": true, "folders": true,
+		"tasks": true, "tags": true, "tag": true, "links": true, "backlinks": true, "folders": true,
 		"version": true, "help": true, "property": true, "properties": true, "link": true,
 		"vault": true, "init": true, "index": true, "ai": true, "models": true, "polish": true,
 		"suggest-links": true, "graph": true, "related": true, "stale": true, "wordcount": true,
@@ -444,6 +444,7 @@ func preprocessArgs(args []string) []string {
 	var templateVal string
 	var oldVal string
 	var newVal string
+	var tagVal string
 	var resolveModeVal string // "exact" (path=) or "fuzzy" (file=); "" = auto
 
 	var processed []string
@@ -511,6 +512,8 @@ func preprocessArgs(args []string) []string {
 				oldVal = v
 			case k == "new" && cmdName == "tags":
 				newVal = v
+			case k == "tag" && cmdName == "tag":
+				tagVal = v
 			default:
 				// Unknown key=value for a structured command: preserve it verbatim
 				// rather than dropping it, so e.g. `config set ai.x a=b` survives.
@@ -569,6 +572,11 @@ func preprocessArgs(args []string) []string {
 				finalCmd = append(finalCmd, "tags")
 				if subCmdName == "rename" {
 					finalCmd = append(finalCmd, "rename")
+				}
+			case "tag":
+				finalCmd = append(finalCmd, "tag")
+				if subCmdName == "add" || subCmdName == "remove" {
+					finalCmd = append(finalCmd, subCmdName)
 				}
 			case "property":
 				finalCmd = append(finalCmd, "meta")
@@ -774,6 +782,15 @@ func preprocessArgs(args []string) []string {
 			if newVal != "" {
 				newArgs = append(newArgs, newVal)
 			}
+		}
+	case "tag":
+		// tag:add/tag:remove file=… tag=a,b -> tag add|remove <note> a,b
+		// (the command comma-splits the tag argument).
+		if targetPath != "" {
+			newArgs = append(newArgs, targetPath)
+		}
+		if tagVal != "" {
+			newArgs = append(newArgs, tagVal)
 		}
 	case "vault":
 		// add-vault/set-default-vault path=… (or a bare positional) -> the vault
