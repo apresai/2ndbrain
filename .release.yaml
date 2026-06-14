@@ -1,0 +1,62 @@
+# Release contract for 2ndbrain. Read by the `oss-release` skill.
+#
+# This is the machine-readable source of truth for HOW this repo ships: the
+# front-door command, the products, and each product's install + verify command.
+# The skill encodes release INVARIANTS (all products at one version, tests gate,
+# docs current, signed artifacts Gatekeeper-clean, install then verify); this file
+# encodes the project-specific IMPLEMENTATION. Changing how a product is packaged
+# (e.g. the macOS app's disk-image format) does NOT touch this file. Only the
+# Makefile/scripts behind `front_door` do. Keep this in sync with the Makefile.
+#
+# Schema: see ~/.claude/skills/oss-release/ (resources/detect-release.sh --audit
+# flags drift between this file and the repo).
+
+version: 1
+front_door: make release-all
+version_source: { type: file, path: VERSION }
+tests: { gate: front-door }            # the test gate runs inside `make release-all`
+
+products:
+  - name: cli
+    channels:
+      # The canonical formula is `twonb`; `2nb` is only an alias (an alias may not
+      # receive `brew upgrade`), so install/verify pin the formula, run the binary.
+      - kind: homebrew-formula
+        install: "brew update && (brew upgrade apresai/tap/twonb || brew install apresai/tap/twonb)"
+        verify:  "2nb --version"
+        expect_version: stdout
+
+  - name: macos-app
+    channels:
+      - kind: homebrew-cask
+        install: "brew upgrade --cask apresai/tap/secondbrain || brew install --cask apresai/tap/secondbrain"
+        verify:  "defaults read /Applications/SecondBrain.app/Contents/Info.plist CFBundleShortVersionString"
+        expect_version: stdout
+        # The shipped app must be notarized + Gatekeeper-accepted, not just present.
+        gatekeeper: "spctl -a -vvv /Applications/SecondBrain.app"
+
+  - name: obsidian-plugin
+    channels:
+      - kind: obsidian-plugin
+        # Plugin installs INTO the open Obsidian vault, so never assume cwd.
+        install: "2nb plugin install --vault {vault}"
+        verify:  "2nb plugin status --json --vault {vault}"
+        expect_version: "json:.installed_version"
+
+placeholders:
+  # No default: this file is committed to a public repo, so the vault path resolves
+  # from the 2NB_VAULT env var, else the skill prompts for it.
+  vault: { env: 2NB_VAULT, prompt: "Obsidian vault path?" }
+
+# No iOS / AWS products in this repo, so nothing to hand off.
+delegate: []
+
+# Doc-currency: before releasing, if these paths changed since the last tag, the
+# matching docs must have been updated too.
+docs:
+  - { when: "cli/**",     check: [README.md, CLAUDE.md] }
+  - { when: "app/**",     check: [README.md, CLAUDE.md] }
+  - { when: "plugins/**", check: [README.md, CLAUDE.md] }
+
+# Dynamic release-asset existence check (no hardcoded artifact filenames).
+artifact_check: "gh release view v{version} --json assets"
