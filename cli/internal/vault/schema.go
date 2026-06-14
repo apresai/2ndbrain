@@ -148,6 +148,23 @@ func (s *SchemaSet) Save(dotDir string) error {
 	return os.WriteFile(filepath.Join(dotDir, "schemas.yaml"), data, 0o644)
 }
 
+// IsListField reports whether a frontmatter field holds a YAML list rather than
+// a scalar. True for the universal array fields "tags" and "aliases" (every doc
+// type treats these as lists, even when not declared in its schema), and for any
+// field the type schema marks as "list" or "tags". Callers use this to coerce a
+// CLI "key=value" set into an array instead of writing a stray scalar.
+func (s *SchemaSet) IsListField(docType, field string) bool {
+	if field == "tags" || field == "aliases" {
+		return true
+	}
+	if schema, ok := s.Types[docType]; ok {
+		if def, ok := schema.Fields[field]; ok {
+			return def.Type == "list" || def.Type == "tags"
+		}
+	}
+	return false
+}
+
 func (s *SchemaSet) ValidateField(docType, field string, value any) error {
 	schema, ok := s.Types[docType]
 	if !ok {

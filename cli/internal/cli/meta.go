@@ -143,6 +143,26 @@ func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 		}
 		key, value := parts[0], parts[1]
 
+		// Array-typed fields (tags, aliases, or any schema "list"/"tags" field)
+		// must be stored as a YAML list, not a scalar. Without this, a multi-value
+		// `--set tags=a,b` became the single literal tag "a,b" (so `list --tag a`
+		// found nothing), and even a single value wrote a non-idiomatic scalar.
+		// Comma-split with replace semantics (`--set tags=a,b` -> [a, b];
+		// `--set tags=` clears). Validate each element so enum-constrained list
+		// fields still validate.
+		if v.Schemas.IsListField(doc.Type, key) {
+			parts := splitCSV(value)
+			elems := make([]any, len(parts))
+			for i, p := range parts {
+				if err := v.Schemas.ValidateField(doc.Type, key, p); err != nil {
+					return exitWithError(ExitValidation, fmt.Sprintf("validation error: %v", err))
+				}
+				elems[i] = p
+			}
+			doc.SetMeta(key, elems)
+			continue
+		}
+
 		// Validate against schema
 		if err := v.Schemas.ValidateField(doc.Type, key, value); err != nil {
 			return exitWithError(ExitValidation, fmt.Sprintf("validation error: %v", err))

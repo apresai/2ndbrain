@@ -300,6 +300,16 @@ func TestPreprocessArgs(t *testing.T) {
 			[]string{"2nb", "tags", "rename", "foo", "bar"},
 		},
 		{
+			"tag:add maps to tag add with note + tags",
+			[]string{"2nb", "tag:add", "file=My Note", "tag=a,b"},
+			[]string{"2nb", "tag", "add", "--resolve", "fuzzy", "My Note", "a,b"},
+		},
+		{
+			"tag:remove maps to tag remove",
+			[]string{"2nb", "tag:remove", "file=My Note", "tag=old"},
+			[]string{"2nb", "tag", "remove", "--resolve", "fuzzy", "My Note", "old"},
+		},
+		{
 			"daily:path maps to daily path",
 			[]string{"2nb", "daily:path"},
 			[]string{"2nb", "daily", "path"},

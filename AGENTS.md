@@ -99,14 +99,14 @@ Test scripts live in `tests/`: `gui-helpers.sh` (shared), `gui-test-crud.sh`, `g
 - `search.Engine` — BM25 search over FTS5 index
 - `graph.Graph` — Nodes + edges from link traversal
 
-### CLI Commands (49 top-level)
+### CLI Commands (50 top-level)
 
 Run `2nb --help` for the full list and `--help` on any command for flags. The complete annotated catalog lives in [CLAUDE.md](CLAUDE.md). Top-level commands by group:
 
 | Group | Commands |
 |-------|----------|
 | Getting Started | `vault` (subcommands: `status`, `create`, `set`, `list`, `show`), `init` (deprecated alias for `vault create`), `completion` |
-| Documents | `create` (`--path`/`--content`/`--overwrite`/`--append`), `read` (alias `print`), `meta` (`--get`/`--set`/`--remove`; aliases `frontmatter`/`fm`/`properties`), `delete`, `list` (alias `files`; `--total`, `--format paths\|tree`), `append`, `prepend`, `replace`, `move`, `rename` (both link-aware: rewrite `[[wikilinks]]` + `[text](path.md)`), `daily` (`path`/`read`/`append`/`prepend`), `tasks`, `task` |
+| Documents | `create` (`--path`/`--content`/`--overwrite`/`--append`), `read` (alias `print`), `meta` (`--get`/`--set` [array fields like tags/aliases coerced to a list]/`--remove`; aliases `frontmatter`/`fm`/`properties`), `delete`, `list` (alias `files`; `--total`, `--format paths\|tree`), `append`, `prepend`, `replace`, `move`, `rename` (both link-aware: rewrite `[[wikilinks]]` + `[text](path.md)`), `daily` (`path`/`read`/`append`/`prepend`), `tasks`, `task`, `tag` (`add`/`remove`, per-note frontmatter tags) |
 | Search & AI | `search`, `ask`, `chat`, `index`, `suggest-links`, `polish` (`--write`), `ai` (`status`/`setup`/`local`/`embed`), `models` (`list`/`test`/`add`/`remove`/`enable`/`disable`/`enable-state`/`cost-preview`/`wizard` (`--set-active`)/`bench`/`calibrate`) |
 | Quality & structure | `lint`, `stale`, `related`, `graph`, `backlinks`, `links`, `orphans`, `deadends`, `unresolved`, `outline`, `wordcount`, `folders`, `tags` (`list`/`rename`), `aliases` |
 | Integration | `mcp-server`, `mcp-setup`, `mcp` (`status`/`configured`), `plugin` (`status`/`install`), `git` (`activity`/`show`/`diff`/`status`, read-only), `export-context`, `skills` (`list`/`install`/`uninstall`/`show`) |
