@@ -85,6 +85,10 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	benchHistoryLimit = 20
 	createType, createTitle, createAllowDuplicate = "note", "", false
 	createPath = ""
+	createOverwrite, createAppend = false, false
+	// Obsidian-compat globals + listing flags (this PR).
+	flagResolveMode, flagCopy = "", false
+	listTotal, unresolvedTotal, tasksTotal = false, false, false
 	readChunk = ""
 	metaSet = nil
 	metaGet = ""
@@ -116,6 +120,14 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 			if f := c.Flags().Lookup(name); f != nil {
 				f.Changed = false
 			}
+		}
+	}
+	// create's --overwrite/--append are mutually exclusive (MarkFlagsMutuallyExclusive
+	// checks the Changed bit, not the var), so reset both bits between invocations.
+	for _, name := range []string{"overwrite", "append"} {
+		if f := createCmd.Flags().Lookup(name); f != nil {
+			_ = createCmd.Flags().Set(name, "false")
+			f.Changed = false
 		}
 	}
 	// Phase 8 (tasks/task) package-level flag state + per-flag Changed bits.

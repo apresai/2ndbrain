@@ -37,6 +37,8 @@ var (
 	createPath           string
 	createAllowDuplicate bool
 	createContent        string
+	createOverwrite      bool
+	createAppend         bool
 )
 
 var createCmd = &cobra.Command{
@@ -58,6 +60,9 @@ func init() {
 	createCmd.Flags().StringVar(&createPath, "path", "", "Vault-relative subdirectory to create the document in (created if missing)")
 	createCmd.Flags().BoolVar(&createAllowDuplicate, "allow-duplicate", false, "Allow creating a document with duplicate content")
 	createCmd.Flags().StringVar(&createContent, "content", "", "Initial content for the document")
+	createCmd.Flags().BoolVar(&createOverwrite, "overwrite", false, "If a note with this title already exists, replace its contents instead of creating a new file")
+	createCmd.Flags().BoolVar(&createAppend, "append", false, "If a note with this title already exists, append the content to it instead of creating a new file")
+	createCmd.MarkFlagsMutuallyExclusive("overwrite", "append")
 	_ = createCmd.RegisterFlagCompletionFunc("type", completeSchemaTypes)
 	createCmd.GroupID = "docs"
 	rootCmd.AddCommand(createCmd)
@@ -101,22 +106,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		body = createContent
 	}
 
-	doc := document.NewDocument(createTitle, createType, body)
-	doc.SetMeta("status", initialStatus)
-	doc.ComputeContentHash()
-
-	// Check for duplicate content
-	if !createAllowDuplicate {
-		dupPath, err := v.DB.FindByContentHash(doc.ContentHash, "")
-		if err != nil {
-			return fmt.Errorf("check duplicates: %w", err)
-		}
-		if dupPath != "" {
-			return fmt.Errorf("duplicate content: matches existing document %q\nUse --allow-duplicate to create anyway", dupPath)
-		}
-	}
-
-	// Resolve the target directory. --path places the document in a
+	// Resolve the target directory first, since it's needed to locate an existing
+	// note for --append/--overwrite. --path places the document in a
 	// vault-relative subdirectory (created on write by WriteFile). It's
 	// user-supplied, so reject absolute paths and guard against ".." escapes
 	// with the same ContainsPath check the MCP handlers use.
@@ -128,6 +119,32 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		writeDir = v.AbsPath(createPath)
 		if !v.ContainsPath(writeDir) {
 			return fmt.Errorf("--path escapes the vault: %q", createPath)
+		}
+	}
+
+	// --append / --overwrite: when a note with this title already exists, edit
+	// THAT note in place via the shared body-write path (which preserves the
+	// note's frontmatter and identity, reindexes, and re-embeds) instead of
+	// minting a second note. --append adds to the body; --overwrite replaces the
+	// body. Absent the note, both fall through to a normal create.
+	if createAppend || createOverwrite {
+		if existingAbs, ok := existingTitleNote(writeDir, createTitle); ok {
+			return editExistingNote(cmd, v, existingAbs, body, createOverwrite)
+		}
+	}
+
+	doc := document.NewDocument(createTitle, createType, body)
+	doc.SetMeta("status", initialStatus)
+	doc.ComputeContentHash()
+
+	// Duplicate-content guard (skipped when --allow-duplicate is set).
+	if !createAllowDuplicate {
+		dupPath, err := v.DB.FindByContentHash(doc.ContentHash, "")
+		if err != nil {
+			return fmt.Errorf("check duplicates: %w", err)
+		}
+		if dupPath != "" {
+			return fmt.Errorf("duplicate content: matches existing document %q\nUse --allow-duplicate to create anyway", dupPath)
 		}
 	}
 
@@ -167,6 +184,46 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  Read: 2nb read %s\n", doc.Path)
 	}
 	return nil
+}
+
+// existingTitleNote returns the absolute path of an existing note whose filename
+// matches the canonical slug for title in dir, and whether it exists. Returns
+// false for titles that produce no ASCII slug (those are stored under a UUID
+// name and can't be located by title) and for directories.
+func existingTitleNote(dir, title string) (string, bool) {
+	name := document.SlugFilename(title)
+	if name == "" {
+		return "", false
+	}
+	abs := filepath.Join(dir, name)
+	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+		return abs, true
+	}
+	return "", false
+}
+
+// editExistingNote edits an existing note's body in place via the shared
+// body-write path, which preserves the note's frontmatter (id, created, tags,
+// status, aliases, custom fields) and only changes the body. When overwrite is
+// true the body is replaced; otherwise the content is appended. Used by
+// `create --overwrite`/`--append` when the target note already exists.
+func editExistingNote(cmd *cobra.Command, v *vault.Vault, absPath, content string, overwrite bool) error {
+	doc, err := document.ParseFile(absPath)
+	if err != nil {
+		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))
+	}
+	doc.Path = v.RelPath(absPath)
+	op := "append"
+	if overwrite {
+		doc.Body = content
+		op = "overwrite"
+	} else {
+		doc.Body = document.AppendToBody(doc.Body, content)
+	}
+	if err := writeBody(v, doc, absPath); err != nil {
+		return err
+	}
+	return reportBodyWrite(cmd, doc, op)
 }
 
 // embedNewDocument tries to embed a single document inline using its in-memory body.

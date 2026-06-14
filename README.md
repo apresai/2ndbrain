@@ -201,7 +201,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>] [--content <body>]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template |
+| `create <title> [--type adr\|runbook\|prd\|prfaq\|postmortem\|note] [--path <subdir>] [--content <body>] [--overwrite\|--append]` | Create document from template. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template. `--overwrite` replaces an existing same-title note in place (keeps its id); `--append` appends to it (else creates) |
 | `read <path> [--chunk <heading>]` | Read document or specific section |
 | `append <path> [--text \| --file \| stdin]` | Append content to a document's body. Explicit, opt-in body write; frontmatter is left untouched |
 | `prepend <path> [--text \| --file \| stdin]` | Insert content at the start of a document's body, after the frontmatter |
@@ -304,9 +304,9 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `config set-key <provider>` | Store API key in macOS Keychain |
 | `config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves) with one-line fix hints. Config defects fail (exit 2); an unreachable provider is a non-failing warning, so it stays usable offline/in CI |
 
-All commands support `--json`, `--yaml`, `--csv` for machine-readable output, plus `--format raw` to emit a document body (or any `Serialize()`-able value) verbatim with no JSON wrapping.
+All commands support `--json`, `--yaml`, `--csv`, `--tsv` for machine-readable output, plus `--format raw`/`md` to emit a document body (or any `Serialize()`-able value) verbatim, `--format text` for plain text, and (on listings) `--format paths`/`tree` and `--total`. `--copy` also writes a command's rendered output to the clipboard (macOS `pbcopy`): `read`/`print`, `meta --get`, and `daily` copy in their default output; any command run with a machine format copies that output.
 
-**Obsidian-CLI syntax compatibility.** `2nb` also accepts `obsidian`-CLI-style invocations as a drop-in: `key=value` arguments (`file=`, `path=`, `content=`, `query=`, `vault=`, etc.) and colon-commands (`daily:append`, `property:set` → `meta`, `link:unresolved`). A free-text `search`/`ask` query that contains `=` is preserved (never parsed as a parameter), and an unrecognized `key=value` passes through unchanged.
+**Obsidian-CLI syntax compatibility.** `2nb` accepts `obsidian`-CLI-style invocations as a drop-in scripting replacement for the headless file/markdown layer. The full mapping table, accepted argument forms, and intentional non-goals live in [docs/obsidian-cli-mapping.md](docs/obsidian-cli-mapping.md). It understands `key=value` arguments (`file=`, `path=`, `content=`, `template=`, `query=`, `vault=`, `old=`/`new=`, etc.), boolean tokens (`total`, `append`, `overwrite`, `done`/`todo`), colon-commands (`daily:path`/`daily:append`, `property:set` → `meta`, `tags:rename` → `tags rename`, `link:unresolved`), and command aliases (`print` → `read`; `fm`/`frontmatter`/`properties` → `meta`; `files` → `list`; `search-content` → keyword search; `list-vaults`/`set-default-vault`/`add-vault` → the `vault` subcommands). `file=` resolves a target by exact path, then basename/title/alias/shortest-unique suffix (failing loudly on ambiguity); `path=` is a strict exact path. A free-text `search`/`ask` query that contains `=` is preserved (never parsed as a parameter), and an unrecognized `key=value` passes through unchanged.
 
 ### Defaults and search scoring
 

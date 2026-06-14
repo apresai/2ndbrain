@@ -44,7 +44,10 @@ func runAppend(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	absPath := v.AbsPath(expandPath(args[0]))
+	absPath, _, err := resolveTargetArg(v, args[0])
+	if err != nil {
+		return err
+	}
 	doc, err := document.ParseFile(absPath)
 	if err != nil {
 		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))

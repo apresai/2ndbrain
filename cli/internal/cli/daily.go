@@ -47,6 +47,14 @@ never hard-errors on a missing config.`,
 	RunE: runDailyResolve,
 }
 
+var dailyPathCmd = &cobra.Command{
+	Use:   "path",
+	Short: "Resolve + create today's daily note and print its path",
+	Long:  `Identical to bare "2nb daily": resolves today's daily note (creating it if missing) and prints the vault-relative path. Provided as an explicit subcommand for the obsidian-CLI "daily:path" form.`,
+	Args:  cobra.NoArgs,
+	RunE:  runDailyResolve,
+}
+
 var dailyReadCmd = &cobra.Command{
 	Use:   "read",
 	Short: "Print today's daily note body",
@@ -90,6 +98,7 @@ func init() {
 	dailyAppendCmd.Flags().StringVar(&dailyAppendFile, "file", "", "Read content to append from this file")
 	dailyPrependCmd.Flags().StringVar(&dailyPrependText, "text", "", "Content to prepend (inline string)")
 	dailyPrependCmd.Flags().StringVar(&dailyPrependFile, "file", "", "Read content to prepend from this file")
+	dailyCmd.AddCommand(dailyPathCmd)
 	dailyCmd.AddCommand(dailyReadCmd)
 	dailyCmd.AddCommand(dailyAppendCmd)
 	dailyCmd.AddCommand(dailyPrependCmd)
@@ -113,10 +122,15 @@ func runDailyResolve(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, map[string]any{
+		return writeOut(cmd, format, map[string]any{
 			"path":    relPath,
 			"created": created,
 		})
+	}
+	if flagCopy {
+		if err := copyToClipboard(relPath); err != nil {
+			return err
+		}
 	}
 
 	fmt.Println(relPath)
@@ -150,7 +164,10 @@ func runDailyRead(cmd *cobra.Command, args []string) error {
 	doc.Path = relPath
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, doc)
+	if format == "" && flagCopy {
+		format = output.FormatRaw // copying daily read means copying the body
+	}
+	return writeOut(cmd, format, doc)
 }
 
 // runDailyAppend resolves today's daily note (creating it if missing) and

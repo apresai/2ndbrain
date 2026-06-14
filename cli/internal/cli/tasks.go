@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	tasksDone bool
-	tasksTodo bool
-	tasksPath string
+	tasksDone  bool
+	tasksTodo  bool
+	tasksPath  string
+	tasksTotal bool
 
 	taskState string
 )
@@ -76,6 +77,7 @@ func init() {
 	tasksCmd.Flags().BoolVar(&tasksDone, "done", false, "Only completed tasks")
 	tasksCmd.Flags().BoolVar(&tasksTodo, "todo", false, "Only open tasks")
 	tasksCmd.Flags().StringVar(&tasksPath, "path", "", "Limit to tasks under a vault-relative file or directory")
+	tasksCmd.Flags().BoolVar(&tasksTotal, "total", false, "Print only the count of matching tasks")
 	tasksCmd.GroupID = "docs"
 	rootCmd.AddCommand(tasksCmd)
 
@@ -141,6 +143,11 @@ func runTasks(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Obsidian-compat listing modes (--total / format=paths / format=tree).
+	if handled, err := renderList(cmd, rows, tasksTotal, func(r TaskRow) string { return r.Path }); handled || err != nil {
+		return err
+	}
+
 	if format := getFormat(cmd); format != "" {
 		return output.Write(os.Stdout, format, rows)
 	}
@@ -200,7 +207,10 @@ func runTask(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	absPath := v.AbsPath(expandPath(args[0]))
+	absPath, _, err := resolveTargetArg(v, args[0])
+	if err != nil {
+		return err
+	}
 	doc, err := document.ParseFile(absPath)
 	if err != nil {
 		return exitWithError(ExitNotFound, fmt.Sprintf("error: %v", err))

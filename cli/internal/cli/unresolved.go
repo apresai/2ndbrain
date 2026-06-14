@@ -2,11 +2,11 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
+
+var unresolvedTotal bool
 
 var unresolvedCmd = &cobra.Command{
 	Use:   "unresolved",
@@ -17,6 +17,7 @@ var unresolvedCmd = &cobra.Command{
 }
 
 func init() {
+	unresolvedCmd.Flags().BoolVar(&unresolvedTotal, "total", false, "Print only the count of unresolved links")
 	unresolvedCmd.GroupID = "quality"
 	rootCmd.AddCommand(unresolvedCmd)
 }
@@ -60,9 +61,15 @@ func runUnresolved(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Obsidian-compat listing modes (--total / format=paths / format=tree).
+	// paths/tree key off the source document path.
+	if handled, err := renderList(cmd, list, unresolvedTotal, func(u UnresolvedLink) string { return u.SourcePath }); handled || err != nil {
+		return err
+	}
+
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, list)
+		return writeOut(cmd, format, list)
 	}
 
 	if len(list) == 0 {

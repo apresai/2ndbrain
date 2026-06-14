@@ -33,7 +33,18 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 	setupFileLogging(v)
 
-	relPath := expandPath(args[0])
+	// Destructive command: a BARE positional stays strict-exact (the pre-compat
+	// behavior) so a stale/typo'd path errors instead of fuzzy-resolving to a
+	// different note that --force would then delete without a prompt. An explicit
+	// file=/path= still honors the shim mode (fuzzy delete-by-title opt-in).
+	delMode := flagResolveMode
+	if delMode == "" {
+		delMode = resolveExact
+	}
+	_, relPath, err := resolveTargetArgMode(v, args[0], delMode)
+	if err != nil {
+		return err
+	}
 	absPath := v.AbsPath(relPath)
 
 	doc, err := v.DB.GetDocumentByPath(relPath)

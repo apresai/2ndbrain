@@ -66,7 +66,9 @@ Every command group has a useful default action when called without a subcommand
 
 ## CLI Commands
 
-All commands support `--json`, `--yaml`, `--csv`, `--format`, `--porcelain`, `--vault <path>`, and `--verbose`. Prefer `--json` in scripts and agent pipelines. Run `2nb <command> --help` for the authoritative flag list, and `2nb --help` for the full command set grouped by category.
+All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`md`/`text`; listings add `paths`/`tree` and `--total`), `--porcelain`, `--vault <path>`, `--copy`, and `--verbose`. Prefer `--json` in scripts and agent pipelines. Run `2nb <command> --help` for the authoritative flag list, and `2nb --help` for the full command set grouped by category.
+
+**Obsidian-CLI compatibility.** `2nb` accepts `obsidian`-CLI-style invocations as a drop-in: `key=value` args (`file=`, `path=`, `content=`, `template=`, `query=`, `vault=`, `old=`/`new=`), boolean tokens (`total`, `append`, `overwrite`, `done`/`todo`), colon-commands (`daily:path`/`daily:append`, `property:set` → `meta`, `tags:rename`, `link:unresolved`), and aliases (`print` → `read`; `fm`/`frontmatter`/`properties` → `meta`; `files` → `list`; `search-content` → keyword search; `list-vaults`/`set-default-vault`/`add-vault` → the `vault` subcommands). `file=` resolves a note by exact path → basename/title/alias/shortest-unique suffix (fails loudly on ambiguity); `path=` is strict-exact. Out of scope (needs the running app): GUI panes, themes, plugins, Sync/Publish, workspace, dev-tools.
 
 ### Read & query
 

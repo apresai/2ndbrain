@@ -154,88 +154,19 @@ func (db *DB) GetDocumentByPath(path string) (*document.Document, error) {
 // ResolveLinks matches unresolved wikilinks to existing documents by path,
 // title, or alias, using a shortest-unique-path disambiguation algorithm.
 func (db *DB) ResolveLinks() error {
-	// 1. Fetch all documents
-	rows, err := db.conn.Query("SELECT id, path, title FROM documents")
+	// 1-3. Fetch documents + aliases and build the shared lookup index
+	// (exact paths, shortest-unique-suffix nameIndex, titles, aliases). This is
+	// the same index ResolveTarget uses, so wikilink resolution and CLI target
+	// resolution can never drift apart. O(links + paths) overall.
+	docs, err := db.fetchDocInfos()
 	if err != nil {
-		return fmt.Errorf("resolve links query docs: %w", err)
+		return fmt.Errorf("resolve links: %w", err)
 	}
-	defer rows.Close()
-
-	var docs []docInfo
-	for rows.Next() {
-		var d docInfo
-		if err := rows.Scan(&d.id, &d.path, &d.title); err != nil {
-			return err
-		}
-		docs = append(docs, d)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	// 2. Fetch all aliases
-	aliasRows, err := db.conn.Query("SELECT doc_id, alias FROM aliases")
+	aliases, err := db.fetchAliases()
 	if err != nil {
-		return fmt.Errorf("resolve links query aliases: %w", err)
+		return fmt.Errorf("resolve links: %w", err)
 	}
-	defer aliasRows.Close()
-
-	aliases := make(map[string][]string) // alias -> docIDs
-	for aliasRows.Next() {
-		var docID, alias string
-		if err := aliasRows.Scan(&docID, &alias); err != nil {
-			return err
-		}
-		aliases[alias] = append(aliases[alias], docID)
-	}
-	if err := aliasRows.Err(); err != nil {
-		return fmt.Errorf("resolve links iterate aliases: %w", err)
-	}
-
-	// 3. Build in-memory lookup indexes once.
-	//    - exactPaths: full vault-relative path -> docID (path is UNIQUE).
-	//    - nameIndex:  every resolvable name (full path, basename, and each
-	//      "/"-delimited path suffix, with and without the .md extension) ->
-	//      set of docIDs. This replaces the old per-link O(docs) suffix scan
-	//      with O(1) lookups, making ResolveLinks O(links + paths) rather than
-	//      O(links × docs), and subsumes the old separate basename branch.
-	exactPaths := make(map[string]string)
-	nameIndex := make(map[string]map[string]struct{})
-	titles := make(map[string][]string)
-
-	addName := func(name, id string) {
-		if name == "" {
-			return
-		}
-		set := nameIndex[name]
-		if set == nil {
-			set = make(map[string]struct{})
-			nameIndex[name] = set
-		}
-		set[id] = struct{}{}
-	}
-
-	for _, d := range docs {
-		exactPaths[d.path] = d.id
-
-		// Full path and the path with its .md extension stripped.
-		addName(d.path, d.id)
-		addName(strings.TrimSuffix(d.path, ".md"), d.id)
-
-		// Every "/"-delimited suffix (the basename is the shortest), with and
-		// without the .md extension — covers shortest-unique-path resolution.
-		for i := 0; i < len(d.path); i++ {
-			if d.path[i] == '/' {
-				suffix := d.path[i+1:]
-				addName(suffix, d.id)
-				addName(strings.TrimSuffix(suffix, ".md"), d.id)
-			}
-		}
-
-		if d.title != "" {
-			titles[d.title] = append(titles[d.title], d.id)
-		}
-	}
+	idx := buildLookupIndex(docs, aliases)
 
 	// 4. Fetch all links
 	linkRows, err := db.conn.Query("SELECT id, target_raw FROM links")
@@ -282,19 +213,6 @@ func (db *DB) ResolveLinks() error {
 	}
 	defer clearStmt.Close()
 
-	// uniqueDocID returns the single docID indexed under name, or false if the
-	// name is absent or ambiguous (maps to multiple docs).
-	uniqueDocID := func(name string) (string, bool) {
-		set := nameIndex[name]
-		if len(set) != 1 {
-			return "", false
-		}
-		for id := range set {
-			return id, true
-		}
-		return "", false
-	}
-
 	for _, l := range links {
 		// Normalize path slashes and strip any leading slash. The heading/block
 		// anchor was already split off by document.ExtractWikiLinks.
@@ -304,31 +222,31 @@ func (db *DB) ResolveLinks() error {
 		var resolvedID string
 
 		// A. Exact full-path match (path is unique).
-		if id, ok := exactPaths[target]; ok {
+		if id, ok := idx.exactPaths[target]; ok {
 			resolvedID = id
-		} else if id, ok := exactPaths[target+".md"]; ok {
+		} else if id, ok := idx.exactPaths[target+".md"]; ok {
 			resolvedID = id
 		}
 
 		// B. Shortest-unique-name match (path suffix or basename).
 		if resolvedID == "" {
-			if id, ok := uniqueDocID(target); ok {
+			if id, ok := idx.uniqueDocID(target); ok {
 				resolvedID = id
-			} else if id, ok := uniqueDocID(target + ".md"); ok {
+			} else if id, ok := idx.uniqueDocID(target + ".md"); ok {
 				resolvedID = id
 			}
 		}
 
 		// C. Title match.
 		if resolvedID == "" {
-			if ids, ok := titles[target]; ok && len(ids) == 1 {
+			if ids, ok := idx.titles[target]; ok && len(ids) == 1 {
 				resolvedID = ids[0]
 			}
 		}
 
 		// D. Alias match.
 		if resolvedID == "" {
-			if ids, ok := aliases[target]; ok && len(ids) == 1 {
+			if ids, ok := idx.aliases[target]; ok && len(ids) == 1 {
 				resolvedID = ids[0]
 			}
 		}
