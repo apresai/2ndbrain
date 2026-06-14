@@ -85,20 +85,30 @@ release:
   header: |
     ## 2nb {{ .Version }}
 
-    AI-native markdown knowledge base with semantic search and RAG.
+    AI-native markdown knowledge base with semantic search and RAG, plus the **SecondBrain** macOS companion app and the Obsidian plugin.
 
     ### Installation
 
-    **macOS (Homebrew):**
+    **macOS app + CLI (Homebrew cask):**
+    ```bash
+    brew install --cask apresai/tap/secondbrain   # installs SecondBrain.app and the 2nb CLI
+    ```
+
+    **CLI only (Homebrew):**
     ```bash
     brew install apresai/tap/2nb
     ```
 
-    **macOS (Direct Download):**
+    **macOS app (direct download):**
+    Download `SecondBrain-{{ .Version }}-arm64.dmg` below, open it, and drag **SecondBrain** onto **Applications**. The app and its disk image are both Developer ID-signed, Apple-notarized, and stapled, so it launches with no Gatekeeper prompt.
+
+    **CLI (direct download):**
     ```bash
     tar -xzf 2nb_{{ .Version }}_Darwin_arm64.tar.gz
     sudo mv 2nb /usr/local/bin/
     ```
+
+    **Obsidian plugin:** install via [BRAT](https://github.com/TfTHacker/obsidian42-brat) (add `apresai/2ndbrain`), or copy `manifest.json`, `main.js`, and `styles.css` from the assets below into `<vault>/.obsidian/plugins/obsidian-2ndbrain/`.
 
   footer: |
     ### Getting Started
