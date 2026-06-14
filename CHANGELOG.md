@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.9.7] - 2026-06-14
+
+Based on the diffs, here's the changelog entry:
+
+```markdown
+### Fixed
+- **Security:** `ContainsPath` now symlink-resolves both the vault root and target path before its containment check, so an in-vault symlink (e.g. `<root>/escape` -> `/etc`) can no longer redirect an untrusted MCP write outside the vault. Resolving both sides also avoids falsely rejecting legitimate in-vault paths on macOS, where the vault root often lives under `/var` -> `/private/var`.
+- `meta --set` no longer applies array-coercion to `status`: a schema that (pathologically) declares `status` as a list can no longer skip the status-transition validation.
+- `tag remove` now dedupes the kept tags, so a note that already carried duplicate tags comes out clean after a removal (symmetric with `tag add`).
+- `--copy` on an unsupported platform now returns its clear error via an extracted, unit-testable helper.
+- `ai status`, `vault status`, and the root health report now log a warning when the embedding-counts query fails instead of silently discarding the error.
+
+### Changed
+- Hardened the shell-completion `2nb`-on-PATH version probe against load-induced flakiness: the per-binary `--version` probe now uses a 3s deadline and retries once (6s) only on timeout, keeping clean failures fast (single exec).
+```
+
+
 ## [0.9.6] - 2026-06-14
 
 ### Added
