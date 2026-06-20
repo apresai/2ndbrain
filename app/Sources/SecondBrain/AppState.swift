@@ -1278,7 +1278,7 @@ final class AppState {
     /// (`CLIPath.resolve()`) and stores the parsed version on `cliVersion`.
     /// In a shipped release that binary is the one bundled inside the app
     /// (Contents/Resources/2nb), so `cliVersion` equals `appVersion` and the
-    /// Home drift banner stays silent — the app can no longer run against a
+    /// Home drift banner stays silent, so the app can no longer run against a
     /// stale Homebrew CLI. The banner still fires for non-bundled dev builds
     /// (`swift run`), where `resolve()` falls back to the Homebrew/PATH copy.
     /// Needs no vault (cobra resolves `--version` before vault lookup) and is

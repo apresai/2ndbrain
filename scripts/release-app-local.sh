@@ -83,7 +83,11 @@ if [ ! -x "$BUNDLED_CLI" ]; then
   echo "error: bundled CLI missing at $BUNDLED_CLI (build-app-release should copy cli/bin/2nb)." >&2
   exit 1
 fi
-BUNDLED_CLI_VERSION="$("$BUNDLED_CLI" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+# `|| true` so a binary that runs but prints no parseable version (e.g. a dyld
+# failure to the swallowed stderr) leaves BUNDLED_CLI_VERSION empty and falls
+# into the explicit mismatch branch below with its actionable message, rather
+# than tripping `set -euo pipefail` on grep's no-match exit before we get there.
+BUNDLED_CLI_VERSION="$("$BUNDLED_CLI" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 if [ "$BUNDLED_CLI_VERSION" != "$VERSION" ]; then
   echo "error: bundled CLI version ($BUNDLED_CLI_VERSION) != app version ($VERSION)." >&2
   echo "       Run 'make build-cli' so cli/bin/2nb is current, then re-run." >&2

@@ -4,7 +4,7 @@ public enum CLIPath {
     /// The 2nb binary bundled inside the app at Contents/Resources/2nb, if the
     /// app is running from a bundle that contains it. This is the version-matched
     /// CLI shipped alongside the app (see the Makefile build-app* targets), so it
-    /// can never drift behind the app the way a Homebrew-installed `2nb` can — a
+    /// can never drift behind the app the way a Homebrew-installed `2nb` can: a
     /// cask upgrade bumps the app but not the `twonb` formula (the "0.5.8
     /// re-embed bug"). Returns nil for non-bundled runs (e.g. `swift run`, tests).
     public static var bundledPath: String? {

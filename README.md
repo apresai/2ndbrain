@@ -464,7 +464,7 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 - **AI card**: provider and models (AWS Bedrock with Claude Haiku 4.5 + Amazon Nova-2 by default) with a readiness dot, Save-as-default, and Test buttons
 - **Claude Code card**: whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
 - **Index card**: document and embedding counts with Rebuild Index and Re-embed All
-- An orange banner warns when the installed `2nb` CLI is older than the app (a cask upgrade does not bump the CLI formula); when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` for you
+- The app bundles its own version-matched `2nb` CLI and prefers it, so its AI/indexing calls never run a stale Homebrew copy. An orange banner only appears on dev builds that fall back to an older PATH `2nb`; when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` to refresh the terminal/plugin's copy
 
 **Advanced** tabs for the power-user depth:
 

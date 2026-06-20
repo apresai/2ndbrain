@@ -66,7 +66,7 @@ struct HomeView: View {
 
     /// A warning when the `2nb` the app resolves is older than this app, else
     /// nil. Since the app now bundles a version-matched CLI (Contents/Resources/2nb,
-    /// preferred by `CLIPath.resolve()`), this is silent in a normal release —
+    /// preferred by `CLIPath.resolve()`), this is silent in a normal release:
     /// the stale-CLI failure mode behind the 0.5.8 re-embed bug can't happen for
     /// the app's own calls anymore. It still surfaces on dev builds that fall
     /// back to a stale Homebrew copy, and the Update CLI button below remains
