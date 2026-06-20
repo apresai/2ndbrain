@@ -12,13 +12,12 @@ cask "secondbrain" do
   app "SecondBrain.app"
 
   caveats <<~EOS
-    SecondBrain shells out to the `2nb` CLI, installed automatically as a
-    dependency. `brew upgrade --cask secondbrain` does NOT bump the CLI, so
-    after upgrading the app run:
+    SecondBrain bundles its own version-matched `2nb` CLI and uses it for all
+    AI/indexing/lint work, so the app always runs a matching CLI. The `2nb`
+    formula is still installed as a dependency so you have `2nb` on your PATH
+    for the terminal and the Obsidian plugin. `brew upgrade --cask secondbrain`
+    does NOT bump that formula, so to refresh the command-line `2nb` run:
 
       brew upgrade apresai/tap/twonb
-
-    to keep the two in step. The app warns on its Home screen when the CLI is
-    behind.
   EOS
 end
