@@ -8,6 +8,8 @@ struct LintResultsView: View {
 
     /// The finding currently being fixed via the "Set value…" sheet.
     @State private var activeSetValue: ActiveSetValue?
+    /// The broken-link finding currently being repaired via the preview sheet.
+    @State private var activeRepair: ActiveRepair?
     /// Inline result banner after a fix (green) or failure (red).
     @State private var actionMessage: String?
     @State private var actionIsError = false
@@ -75,7 +77,8 @@ struct LintResultsView: View {
                         IssueRow(
                             issue: issue,
                             onOpenInObsidian: { openInObsidian(issue) },
-                            onSetValue: { setValue in activeSetValue = setValue }
+                            onSetValue: { setValue in activeSetValue = setValue },
+                            onRepair: { repair in activeRepair = repair }
                         )
                     }
                     .listStyle(.inset)
@@ -127,6 +130,15 @@ struct LintResultsView: View {
             }
             .environment(appState)
         }
+        .sheet(item: $activeRepair) { repair in
+            RepairPreviewSheet(repair: repair) {
+                activeRepair = nil
+                actionIsError = false
+                actionMessage = "Repaired [[\(repair.target)]]. Re-checking…"
+                Task { await appState.runLint() }
+            }
+            .environment(appState)
+        }
     }
 
     /// Open the note in Obsidian (not Finder), falling back to the file's
@@ -150,6 +162,7 @@ private struct IssueRow: View {
     let issue: LintIssue
     let onOpenInObsidian: () -> Void
     let onSetValue: (ActiveSetValue) -> Void
+    let onRepair: (ActiveRepair) -> Void
 
     private var finding: LintFinding { LintFinding.classify(message: issue.message) }
 
@@ -191,7 +204,12 @@ private struct IssueRow: View {
                             onSetValue(ActiveSetValue(path: issue.path, field: field, allowed: allowed, currentValue: value))
                         }
                         .controlSize(.small)
-                    case .brokenLink, .parseError, .other:
+                    case let .brokenLink(target):
+                        Button("Repair link") {
+                            onRepair(ActiveRepair(path: issue.path, target: target))
+                        }
+                        .controlSize(.small)
+                    case .parseError, .other:
                         EmptyView()
                     }
                 }
@@ -200,6 +218,13 @@ private struct IssueRow: View {
         }
         .padding(.vertical, 4)
     }
+}
+
+/// The broken-link finding being repaired in the preview sheet.
+struct ActiveRepair: Identifiable {
+    let id = UUID()
+    let path: String
+    let target: String
 }
 
 /// The finding being edited in the Set-value sheet. `allowed` non-empty means an
@@ -299,6 +324,119 @@ private struct SetValueSheet: View {
                 onSaved(item.field, value)
             } catch {
                 saving = false
+                errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+}
+
+/// Previews a deterministic link repair (a `2nb repair-links` dry run), shows the
+/// before/after diff, and applies it on confirm. When the target can't be
+/// confidently resolved (no match / ambiguous), there's nothing to apply — it
+/// explains why and points the user to Obsidian.
+private struct RepairPreviewSheet: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+    let repair: ActiveRepair
+    /// Called after a successful apply so the parent can dismiss, re-lint, and
+    /// show a banner.
+    let onApplied: () -> Void
+
+    @State private var loading = true
+    @State private var preview: PolishResult?
+    @State private var errorText: String?
+    @State private var applying = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Repair link")
+                .font(.headline)
+            Text("[[\(repair.target)]] in \(repair.path)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            if loading {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking…").foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 80)
+            } else if let errorText {
+                Text(errorText)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let preview {
+                previewContent(preview)
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(applying)
+                if canApply {
+                    Button(applying ? "Applying…" : "Apply") { apply() }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(applying)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 460)
+        .task { await loadPreview() }
+    }
+
+    private var canApply: Bool {
+        preview?.linksRepaired?.isEmpty == false
+    }
+
+    @ViewBuilder
+    private func previewContent(_ p: PolishResult) -> some View {
+        if let repaired = p.linksRepaired, !repaired.isEmpty {
+            ForEach(repaired) { r in
+                Text("[[\(r.raw)]] → [[\(r.newTarget ?? "")]]")
+                    .font(.callout)
+            }
+            DiffView(original: p.original, modified: p.polished)
+                .frame(maxHeight: 220)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+        } else {
+            let ambiguous = p.linksSkipped?.contains { $0.reason == "ambiguous" } ?? false
+            Text(ambiguous
+                ? "Couldn't auto-fix — [[\(repair.target)]] matches more than one note."
+                : "Couldn't auto-fix — no note matches [[\(repair.target)]].")
+                .font(.callout)
+            Text("Open the note in Obsidian to fix this link by hand.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func loadPreview() async {
+        loading = true
+        errorText = nil
+        do {
+            preview = try await appState.repairLinks(path: repair.path, target: repair.target, preview: true)
+        } catch {
+            errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+        }
+        loading = false
+    }
+
+    private func apply() {
+        applying = true
+        errorText = nil
+        Task {
+            do {
+                _ = try await appState.repairLinks(path: repair.path, target: repair.target, preview: false)
+                applying = false
+                onApplied()
+            } catch {
+                applying = false
                 errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
             }
         }
