@@ -36,6 +36,7 @@ var polishSystemFlag string
 var polishMaxTokens int
 var polishWrite bool
 var polishLinks bool
+var polishRepairLinks bool
 var polishUndo bool
 var polishForce bool
 
@@ -45,6 +46,7 @@ func init() {
 	polishCmd.Flags().IntVar(&polishMaxTokens, "max-tokens", 4096, "Maximum tokens for the generated response")
 	polishCmd.Flags().BoolVar(&polishWrite, "write", false, "Apply the polished body to the document in place (opt-in; default prints a diff preview only)")
 	polishCmd.Flags().BoolVar(&polishLinks, "links", false, "Also add grounded [[wikilinks]] to existing vault notes (never invents targets)")
+	polishCmd.Flags().BoolVar(&polishRepairLinks, "repair-links", false, "Repair broken [[wikilinks]] to existing notes (case/whitespace/alias drift; never guesses an ambiguous target)")
 	polishCmd.Flags().BoolVar(&polishUndo, "undo", false, "Restore the pre-polish version of <path> from the latest polish snapshot")
 	polishCmd.Flags().BoolVar(&polishForce, "force", false, "With --undo: restore even if the file changed since it was polished")
 	rootCmd.AddCommand(polishCmd)
@@ -52,14 +54,16 @@ func init() {
 
 // PolishResult is the JSON payload returned by `2nb polish`.
 type PolishResult struct {
-	Path       string   `json:"path"`
-	Original   string   `json:"original"`
-	Polished   string   `json:"polished"`
-	Provider   string   `json:"provider"`
-	Model      string   `json:"model"`
-	DurationMs int64    `json:"duration_ms"`
-	LinksAdded []string `json:"links_added,omitempty"`
-	Warning    string   `json:"warning,omitempty"`
+	Path          string              `json:"path"`
+	Original      string              `json:"original"`
+	Polished      string              `json:"polished"`
+	Provider      string              `json:"provider"`
+	Model         string              `json:"model"`
+	DurationMs    int64               `json:"duration_ms"`
+	LinksAdded    []string            `json:"links_added,omitempty"`
+	LinksRepaired []polish.LinkRepair `json:"links_repaired,omitempty"`
+	LinksSkipped  []polish.LinkRepair `json:"links_skipped,omitempty"`
+	Warning       string              `json:"warning,omitempty"`
 }
 
 // PolishUndoResult is the JSON payload returned by `2nb polish <path> --undo`.
@@ -70,8 +74,8 @@ type PolishUndoResult struct {
 
 func runPolish(cmd *cobra.Command, args []string) error {
 	if polishUndo {
-		if polishWrite || polishLinks || polishSystemFlag != "" {
-			return exitWithError(ExitValidation, "error: --undo cannot be combined with --write, --links, or --system")
+		if polishWrite || polishLinks || polishRepairLinks || polishSystemFlag != "" {
+			return exitWithError(ExitValidation, "error: --undo cannot be combined with --write, --links, --repair-links, or --system")
 		}
 		return runPolishUndo(cmd, args)
 	}
@@ -113,6 +117,9 @@ func runPolish(cmd *cobra.Command, args []string) error {
 		return exitWithError(ExitValidation, fmt.Sprintf("error: cannot apply --write to a read-only %s file (%s); .canvas/.base files are indexed read-only", parsed.Type, rel))
 	}
 
+	var warnings []string
+	var repaired, skippedRepairs []polish.LinkRepair
+
 	initAIProviders(v)
 	ctx := context.Background()
 	cfg := v.Config.AI
@@ -130,7 +137,6 @@ func runPolish(cmd *cobra.Command, args []string) error {
 		systemPrompt = polish.DefaultPolishSystem
 	}
 
-	var warnings []string
 	userMessage := originalBody
 	var candidates []polish.LinkCandidate
 	if polishLinks {
@@ -165,15 +171,38 @@ func runPolish(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Repair broken [[wikilinks]] as the deterministic LAST step, on the
+	// copy-edited body. Running it after generation (rather than before)
+	// guarantees the fixes actually land regardless of how the model reproduced
+	// the text, and makes the reported repairs reflect the body that gets written.
+	// Repair only ever rewrites genuinely-broken bare links to existing notes, so
+	// it won't touch the grounded links --links just added (those resolve).
+	if polishRepairLinks {
+		rr, rerr := polish.RepairBrokenLinks(v, polished)
+		if rerr != nil {
+			warnings = append(warnings, fmt.Sprintf("link repair skipped: %v", rerr))
+		} else {
+			polished = rr.Body
+			repaired = rr.Repaired
+			skippedRepairs = rr.Skipped
+		}
+	}
+
+	if len(skippedRepairs) > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d broken link(s) left unrepaired (no confident target)", len(skippedRepairs)))
+	}
+
 	result := PolishResult{
-		Path:       rel,
-		Original:   originalBody,
-		Polished:   polished,
-		Provider:   cfg.Provider,
-		Model:      cfg.GenerationModel,
-		DurationMs: time.Since(start).Milliseconds(),
-		LinksAdded: linksAdded,
-		Warning:    strings.Join(warnings, "; "),
+		Path:          rel,
+		Original:      originalBody,
+		Polished:      polished,
+		Provider:      cfg.Provider,
+		Model:         cfg.GenerationModel,
+		DurationMs:    time.Since(start).Milliseconds(),
+		LinksAdded:    linksAdded,
+		LinksRepaired: repaired,
+		LinksSkipped:  skippedRepairs,
+		Warning:       strings.Join(warnings, "; "),
 	}
 
 	// --write applies the polished text to the document body in place via the
@@ -234,6 +263,9 @@ func runPolish(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Polished %s in %dms using %s / %s\n", result.Path, result.DurationMs, result.Provider, result.Model)
 	if len(linksAdded) > 0 {
 		fmt.Printf("Added links: %s\n", strings.Join(linksAdded, ", "))
+	}
+	for _, r := range repaired {
+		fmt.Printf("Repaired link: [[%s]] -> [[%s]]\n", r.Raw, r.NewTarget)
 	}
 	fmt.Println()
 	fmt.Println(result.Polished)
