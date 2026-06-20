@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.9.10] - 2026-06-20
+
+### Added
+- `polish --repair-links` deterministically repairs broken `[[wikilinks]]` to existing notes (case-drift and whitespace normalization), leaving ambiguous or unmatched targets untouched. The Obsidian plugin's Polish action now repairs links in place alongside the copy-edit.
+- The macOS app auto-indexes notes edited in Obsidian: an FSEvents watcher incrementally re-indexes and re-embeds changed notes, and a startup sync catches up notes added or removed while the app was closed.
+
+### Changed
+- `SecondBrain.app` now bundles its own version-matched `2nb` CLI at `Contents/Resources/2nb` (signed and notarized with the app), and `CLIPath.resolve()` prefers it, so the app's AI, indexing, and lint calls always run a CLI matching the app.
+- Renamed the app's "Rebuild" index action to "Sync" (incremental, hash-gated re-embed that reconciles deletions).
+- Rewrote the Claude Code skill to teach the `2nb` CLI by example instead of deferring to `--help`.
+- Lightened the DMG installer background for readable Finder labels and completed the release notes.
+
+
 ## [0.9.9] - 2026-06-14
 
 ### Added
