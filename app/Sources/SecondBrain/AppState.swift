@@ -1597,22 +1597,36 @@ final class AppState {
     /// `2nb index` rather than spawning one subprocess per file.
     private func drainExternalReindex() async {
         guard !externalReindexInFlight, let vault else { return }
+        // A full index (manual Sync or the startup catch-up) is already running
+        // and will pick up every current file, so don't start a second, racing
+        // `2nb index` on the same SQLite DB. Drop the queued paths — the running
+        // full scan covers them; anything written after it passes is re-caught by
+        // the watcher once isIndexing clears.
+        guard !isIndexing else { pendingExternalPaths.removeAll(); return }
         externalReindexInFlight = true
         defer { externalReindexInFlight = false }
 
         while !pendingExternalPaths.isEmpty {
             let paths = pendingExternalPaths
             pendingExternalPaths.removeAll()
+
+            if paths.count > bulkExternalReindexThreshold {
+                // Bulk change (Obsidian sync, git pull, folder paste): hand off
+                // to one full, serialized `2nb index` via startIndex() — it sets
+                // isIndexing (so a manual Sync can't run a second, racing index),
+                // throttles embeds in a single process, and refreshes status. It
+                // covers the whole burst, so stop draining; the watcher re-catches
+                // anything written after the full scan passes it.
+                startIndex()
+                break
+            }
+
             do {
-                if paths.count > bulkExternalReindexThreshold {
-                    _ = try await runCLI(["index", "--porcelain"], cwd: vault.rootURL)
-                } else {
-                    // Sequential: never two `index --doc` writing the DB at once.
-                    for path in paths.sorted() {
-                        guard FileManager.default.fileExists(atPath: path) else { continue }
-                        let rel = vault.relativePath(for: URL(fileURLWithPath: path))
-                        _ = try await runCLI(["index", "--doc", rel, "--json", "--porcelain"], cwd: vault.rootURL)
-                    }
+                // Sequential: never two `index --doc` writing the DB at once.
+                for path in paths.sorted() {
+                    guard FileManager.default.fileExists(atPath: path) else { continue }
+                    let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+                    _ = try await runCLI(["index", "--doc", rel, "--json", "--porcelain"], cwd: vault.rootURL)
                 }
                 // Reflect the new/updated embeddings in the Index card's count.
                 // Inside the loop so a path queued during this pass is still
