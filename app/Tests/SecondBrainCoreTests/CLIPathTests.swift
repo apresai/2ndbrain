@@ -25,12 +25,23 @@ func argsHandlesEmpty() {
 
 @Test("resolve returns an existing path or the fallback")
 func resolveReturnsKnownCandidate() {
-    // resolve() iterates the known binary paths; the returned string must
-    // be one of the three candidates regardless of whether 2nb is installed.
+    // resolve() prefers the bundled binary, then iterates the known Homebrew
+    // paths. The test runner is not the SecondBrain.app bundle, so bundledPath
+    // is nil and the returned string must be one of the Homebrew candidates
+    // regardless of whether 2nb is installed.
     let got = CLIPath.resolve()
     let validCandidates = [
         "/opt/homebrew/bin/2nb",
         "/usr/local/bin/2nb",
     ]
     #expect(validCandidates.contains(got))
+}
+
+@Test("bundledPath is nil outside an app bundle, so resolve() falls back to PATH")
+func bundledPathNilInTests() {
+    // The xctest runner has no Contents/Resources/2nb, so bundledPath is nil.
+    // This guards the precedence in resolve(): a non-bundled run (dev/tests)
+    // must never claim a bundled binary and must fall through to Homebrew.
+    #expect(CLIPath.bundledPath == nil)
+    #expect(CLIPath.resolve() != Bundle.main.bundlePath + "/Contents/Resources/2nb")
 }

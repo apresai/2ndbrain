@@ -64,9 +64,13 @@ struct HomeView: View {
 
     // MARK: - CLI version drift
 
-    /// A warning when the installed `2nb` is older than this app, else nil.
-    /// A stale CLI is what made the 0.5.8 re-embed fail silently, so surface it
-    /// before the user hits an action that depends on a newer CLI.
+    /// A warning when the `2nb` the app resolves is older than this app, else
+    /// nil. Since the app now bundles a version-matched CLI (Contents/Resources/2nb,
+    /// preferred by `CLIPath.resolve()`), this is silent in a normal release —
+    /// the stale-CLI failure mode behind the 0.5.8 re-embed bug can't happen for
+    /// the app's own calls anymore. It still surfaces on dev builds that fall
+    /// back to a stale Homebrew copy, and the Update CLI button below remains
+    /// useful for refreshing the terminal/plugin's Homebrew `2nb`.
     private var cliVersionWarning: String? {
         guard CLIVersion.isOlder(cli: appState.cliVersion, thanApp: appVersion) else { return nil }
         return "Your 2nb CLI (\(appState.cliVersion ?? "unknown")) is older than this app (\(appVersion)). Some actions may fail until you update it."

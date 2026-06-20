@@ -1274,7 +1274,13 @@ final class AppState {
         }
     }
 
-    /// Reads `2nb --version` and stores the parsed version on `cliVersion`.
+    /// Reads `2nb --version` from the binary the app actually uses
+    /// (`CLIPath.resolve()`) and stores the parsed version on `cliVersion`.
+    /// In a shipped release that binary is the one bundled inside the app
+    /// (Contents/Resources/2nb), so `cliVersion` equals `appVersion` and the
+    /// Home drift banner stays silent — the app can no longer run against a
+    /// stale Homebrew CLI. The banner still fires for non-bundled dev builds
+    /// (`swift run`), where `resolve()` falls back to the Homebrew/PATH copy.
     /// Needs no vault (cobra resolves `--version` before vault lookup) and is
     /// best-effort: a launch failure leaves `cliVersion` nil and is logged, not
     /// surfaced. Kept off `runCLI` because that always injects `--vault`.

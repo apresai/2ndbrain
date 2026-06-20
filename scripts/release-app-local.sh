@@ -75,7 +75,27 @@ fi
 echo "==> Building release app (v${VERSION})"
 make build-app-release >/dev/null
 
+# Fail fast if the bundled CLI drifted from the app version. The point of
+# bundling 2nb (Makefile build-app-release) is that the app and CLI ship at a
+# single version; a mismatch here means the build copied a stale cli/bin/2nb.
+BUNDLED_CLI="$BUNDLE/Contents/Resources/2nb"
+if [ ! -x "$BUNDLED_CLI" ]; then
+  echo "error: bundled CLI missing at $BUNDLED_CLI (build-app-release should copy cli/bin/2nb)." >&2
+  exit 1
+fi
+BUNDLED_CLI_VERSION="$("$BUNDLED_CLI" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+if [ "$BUNDLED_CLI_VERSION" != "$VERSION" ]; then
+  echo "error: bundled CLI version ($BUNDLED_CLI_VERSION) != app version ($VERSION)." >&2
+  echo "       Run 'make build-cli' so cli/bin/2nb is current, then re-run." >&2
+  exit 1
+fi
+echo "==> Bundled CLI verified at v${BUNDLED_CLI_VERSION}"
+
 echo "==> Signing with Developer ID + hardened runtime"
+# Sign nested code inside-out: the bundled 2nb binary FIRST, then the outer
+# bundle. The outer codesign is intentionally not --deep, so it would leave the
+# nested executable unsigned — and an unsigned nested binary fails notarization.
+codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.cli --sign "$SIGN_IDENTITY" "$BUNDLED_CLI"
 codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BUNDLE"
 codesign --verify --strict --verbose=2 "$BUNDLE"
 
