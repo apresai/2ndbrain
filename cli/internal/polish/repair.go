@@ -27,13 +27,15 @@ type RepairResult struct {
 }
 
 // RepairBrokenLinks deterministically repairs broken [[wikilinks]] in a
-// document body. It NEVER guesses: a broken target is rewritten only when its
-// normalized (lower-cased, whitespace-collapsed) form maps to exactly ONE
-// existing note via that note's basename, title, or alias, and that note has an
-// unambiguous bare resolvable name to point at. Every other broken link (no
-// match, or a name that matches more than one note) is left exactly as written
-// and reported in Skipped, so the pass can only ever turn a broken link into a
-// working one, never silently retarget it to the wrong note.
+// markdown body, returning the rewritten body plus what it repaired/skipped. It
+// NEVER guesses: a broken target is rewritten only when it is a BARE name (no
+// path separator) whose normalized (lower-cased, whitespace-collapsed) form maps
+// to exactly ONE existing note via that note's basename, title, or alias, and
+// that note has an unambiguous bare resolvable name to point at. Every other
+// broken link (a path-qualified target, no match, or a name that matches more
+// than one note) is left exactly as written and reported in Skipped, so the pass
+// can only ever turn a broken link into a working one, never silently retarget it
+// to the wrong note.
 //
 // This is the half of "polish fixes links" that complements --links: --links
 // ADDS grounded links to related notes; this REPAIRS the ones already in the
@@ -45,15 +47,16 @@ type RepairResult struct {
 // Asset embeds (![[image.png]] and any target with a non-.md extension) and
 // links inside code are never touched. #heading / #^block anchors and |alias
 // suffixes on a repaired link are preserved verbatim by document.RewriteWikiLinks.
-func RepairBrokenLinks(v *vault.Vault, doc *document.Document) (RepairResult, error) {
-	res := RepairResult{Body: doc.Body}
+// It takes the body directly (not a *Document) so callers can repair an
+// in-memory, post-copy-edit body that isn't on disk yet.
+func RepairBrokenLinks(v *vault.Vault, body string) (RepairResult, error) {
+	res := RepairResult{Body: body}
 
 	idx, err := buildRepairIndex(v.DB)
 	if err != nil {
 		return res, err
 	}
 
-	body := doc.Body
 	handled := make(map[string]bool) // dedupe by authored target so one distinct link is rewritten once
 	for _, link := range document.ExtractWikiLinks(body) {
 		target := strings.TrimSpace(link.Target)
@@ -99,23 +102,20 @@ type repairIndex struct {
 	byNorm map[string]map[string]struct{}
 }
 
-// lookup returns the sorted distinct resolvable targets for a broken link's
-// authored target, trying both the whole normalized name and its basename (so a
-// link with a stale folder prefix like [[old/note]] still matches note's name).
+// lookup returns the sorted distinct resolvable targets a broken BARE name maps
+// to. A path-qualified authored target (containing "/") returns nothing: it must
+// be fixed by hand, because matching it by its leaf could retarget the link to an
+// unrelated note that merely shares the basename, and Obsidian does not resolve
+// path-qualified links by leaf either. For a bare name this is just the
+// normalized-name lookup into the basename/title/alias index.
 func (r *repairIndex) lookup(authored string) []string {
 	authored = strings.TrimSuffix(strings.ReplaceAll(authored, "\\", "/"), ".md")
-	keys := map[string]struct{}{
-		normalizeName(authored):                {},
-		normalizeName(basenameNoExt(authored)): {},
+	if strings.Contains(authored, "/") {
+		return nil
 	}
-	out := make(map[string]struct{})
-	for key := range keys {
-		for t := range r.byNorm[key] {
-			out[t] = struct{}{}
-		}
-	}
-	targets := make([]string, 0, len(out))
-	for t := range out {
+	set := r.byNorm[normalizeName(authored)]
+	targets := make([]string, 0, len(set))
+	for t := range set {
 		targets = append(targets, t)
 	}
 	sort.Strings(targets)

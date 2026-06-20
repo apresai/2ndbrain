@@ -119,22 +119,6 @@ func runPolish(cmd *cobra.Command, args []string) error {
 
 	var warnings []string
 	var repaired, skippedRepairs []polish.LinkRepair
-	// workingBody is what the copy-edit (and link weaving) operate on. With
-	// --repair-links we first repair broken [[wikilinks]] deterministically, so
-	// the AI sees the corrected links (its hard constraint to reproduce every
-	// wikilink exactly then keeps them) and the diff/snapshot still uses the true
-	// original. Repair reads only the DB (works in preview too).
-	workingBody := originalBody
-	if polishRepairLinks {
-		rr, rerr := polish.RepairBrokenLinks(v, parsed)
-		if rerr != nil {
-			warnings = append(warnings, fmt.Sprintf("link repair skipped: %v", rerr))
-		} else {
-			workingBody = rr.Body
-			repaired = rr.Repaired
-			skippedRepairs = rr.Skipped
-		}
-	}
 
 	initAIProviders(v)
 	ctx := context.Background()
@@ -153,10 +137,10 @@ func runPolish(cmd *cobra.Command, args []string) error {
 		systemPrompt = polish.DefaultPolishSystem
 	}
 
-	userMessage := workingBody
+	userMessage := originalBody
 	var candidates []polish.LinkCandidate
 	if polishLinks {
-		candidates, systemPrompt, userMessage, warnings = preparePolishLinks(ctx, v, parsed, rel, systemPrompt, workingBody, warnings)
+		candidates, systemPrompt, userMessage, warnings = preparePolishLinks(ctx, v, parsed, rel, systemPrompt, originalBody, warnings)
 	}
 
 	opts := ai.GenOpts{
@@ -176,16 +160,31 @@ func runPolish(cmd *cobra.Command, args []string) error {
 	if polishLinks {
 		// Deterministic backstop: drop any link the model produced to a target
 		// that is not a real, offered candidate (or an already-present link).
-		// Use workingBody (post-repair) as the "already present" baseline so a
-		// link we just repaired isn't mistaken for an invented one and stripped.
-		allowed := polish.AllowedLinkSet(candidates, workingBody)
+		allowed := polish.AllowedLinkSet(candidates, originalBody)
 		var removed []string
 		polished, removed = polish.StripInventedLinks(polished, allowed)
 		if len(removed) > 0 {
 			warnings = append(warnings, fmt.Sprintf("dropped %d link(s) to notes that don't exist", len(removed)))
 		}
-		for _, l := range polish.NewLinks(workingBody, polished) {
+		for _, l := range polish.NewLinks(originalBody, polished) {
 			linksAdded = append(linksAdded, l.Target)
+		}
+	}
+
+	// Repair broken [[wikilinks]] as the deterministic LAST step, on the
+	// copy-edited body. Running it after generation (rather than before)
+	// guarantees the fixes actually land regardless of how the model reproduced
+	// the text, and makes the reported repairs reflect the body that gets written.
+	// Repair only ever rewrites genuinely-broken bare links to existing notes, so
+	// it won't touch the grounded links --links just added (those resolve).
+	if polishRepairLinks {
+		rr, rerr := polish.RepairBrokenLinks(v, polished)
+		if rerr != nil {
+			warnings = append(warnings, fmt.Sprintf("link repair skipped: %v", rerr))
+		} else {
+			polished = rr.Body
+			repaired = rr.Repaired
+			skippedRepairs = rr.Skipped
 		}
 	}
 
