@@ -200,6 +200,20 @@ func (s *SchemaSet) ValidateStatusTransition(docType, from, to string) error {
 
 	allowed, ok := schema.Status.Transitions[from]
 	if !ok {
+		// `from` is not a node in the machine — the document's current status is
+		// invalid/corrupt (e.g. a hand-edited value the schema never allowed, the
+		// exact case `2nb lint` flags). A transition graph can't bind a document
+		// that isn't on the graph, so permit moving to any VALID status as a
+		// repair rather than trapping the doc in its broken state forever. `to`
+		// is still checked against the status enum so the repair can't substitute
+		// one invalid value for another.
+		if statusField, has := schema.Fields["status"]; has {
+			for _, e := range statusField.Enum {
+				if e == to {
+					return nil
+				}
+			}
+		}
 		return fmt.Errorf("unknown status %q for type %q", from, docType)
 	}
 

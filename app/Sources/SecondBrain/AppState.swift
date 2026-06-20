@@ -1523,6 +1523,15 @@ final class AppState {
         _ = try await runCLI(["skills", "install", "claude-code", "--user"], cwd: vault.rootURL)
     }
 
+    /// Set a single frontmatter field on a note via `2nb meta <path> --set key=value`.
+    /// Used by the Validation tab to fix a missing required field or an invalid
+    /// enum value in place. The CLI schema-validates the write, so an out-of-range
+    /// value surfaces as a `CLIError.nonZeroExit` the caller can show.
+    func setMeta(path: String, key: String, value: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await runCLI(["meta", path, "--set", "\(key)=\(value)"], cwd: vault.rootURL)
+    }
+
     func askAI(question: String) async throws -> AIAskResult {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)
