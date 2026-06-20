@@ -201,6 +201,14 @@ export function parseSearchResponse(json: string): SearchResponse {
 // PolishResult mirrors the CLI's `2nb polish --json` payload (cli/internal/cli
 // PolishResult). original/polished are the document BODY only (frontmatter is
 // excluded), so the diff is naturally frontmatter-free.
+// LinkRepair mirrors the CLI's polish.LinkRepair: a broken [[wikilink]] that was
+// rewritten to an existing note (new_target set) or left alone (reason set).
+export interface LinkRepair {
+	raw: string;
+	new_target?: string;
+	reason?: string;
+}
+
 export interface PolishResult {
 	path: string;
 	original: string;
@@ -208,6 +216,8 @@ export interface PolishResult {
 	provider: string;
 	model: string;
 	links_added?: string[];
+	links_repaired?: LinkRepair[];
+	links_skipped?: LinkRepair[];
 	warning?: string;
 }
 
@@ -222,6 +232,8 @@ export function parsePolishResponse(json: string): PolishResult {
 		provider: raw.provider ?? '',
 		model: raw.model ?? '',
 		links_added: Array.isArray(raw.links_added) ? raw.links_added : [],
+		links_repaired: Array.isArray(raw.links_repaired) ? raw.links_repaired : [],
+		links_skipped: Array.isArray(raw.links_skipped) ? raw.links_skipped : [],
 		warning: raw.warning ?? '',
 	};
 }
@@ -551,10 +563,11 @@ export default class BrainPlugin extends Plugin {
 		}
 	}
 
-	// polishNote runs `2nb polish <path> --write --json --links`: it copy-edits
-	// the note and weaves in grounded links in place (snapshotting the original),
-	// then shows a diff with Keep/Undo. Single-flight via this.polishing so the
-	// four trigger surfaces can't race.
+	// polishNote runs `2nb polish <path> --write --json --links --repair-links`: it
+	// copy-edits the note, repairs broken [[wikilinks]] to existing notes, and
+	// weaves in grounded new links in place (snapshotting the original), then shows
+	// a diff with Keep/Undo. Single-flight via this.polishing so the four trigger
+	// surfaces can't race.
 	async polishNote(file: TFile) {
 		if (this.polishing) return;
 		if (file.extension !== 'md') {
@@ -567,14 +580,14 @@ export default class BrainPlugin extends Plugin {
 		modal.open();
 		try {
 			await this.flushEditor(file);
-			const stdout = await this.runCommand(['polish', file.path, '--write', '--json', '--links']);
+			const stdout = await this.runCommand(['polish', file.path, '--write', '--json', '--links', '--repair-links']);
 			modal.showResult(parsePolishResponse(stdout));
 			this.statusBarEl.setText('2ndbrain: Polished');
 		} catch (err) {
 			modal.close();
 			const msg = (err as Error).message;
 			if (/unknown flag/.test(msg)) {
-				new Notice('Installed 2nb is too old for Polish (needs polish --links/--undo). Upgrade: brew upgrade apresai/tap/twonb');
+				new Notice('Installed 2nb is too old for Polish (needs polish --links/--repair-links). Upgrade: brew upgrade apresai/tap/twonb');
 			} else {
 				new Notice(`Polish failed: ${msg}`);
 			}
@@ -1002,6 +1015,18 @@ class PolishResultModal extends Modal {
 		c.createDiv({ cls: 'brain-loader-text', text: `${result.provider} / ${result.model}` });
 		if (result.links_added && result.links_added.length > 0) {
 			c.createDiv({ cls: 'brain-loader-text', text: `Added links: ${result.links_added.join(', ')}` });
+		}
+		if (result.links_repaired && result.links_repaired.length > 0) {
+			const repaired = result.links_repaired
+				.map((r) => `[[${r.raw}]] → [[${r.new_target}]]`)
+				.join(', ');
+			c.createDiv({ cls: 'brain-loader-text', text: `Repaired links: ${repaired}` });
+		}
+		if (result.links_skipped && result.links_skipped.length > 0) {
+			c.createDiv({
+				cls: 'brain-loader-text',
+				text: `${result.links_skipped.length} broken link(s) left for you to fix: ${result.links_skipped.map((r) => `[[${r.raw}]]`).join(', ')}`,
+			});
 		}
 		if (result.warning) {
 			c.createDiv({ cls: 'brain-warning', text: result.warning });

@@ -388,6 +388,8 @@ describe('parsePolishResponse', () => {
 			provider: 'bedrock',
 			model: 'haiku',
 			links_added: ['Auth Flow'],
+			links_repaired: [{ raw: 'auth flow', new_target: 'Auth Flow' }],
+			links_skipped: [{ raw: 'Nonexistent', reason: 'no_match' }],
 			warning: '',
 			duration_ms: 1234, // extra field must be ignored, not rejected
 		});
@@ -398,6 +400,8 @@ describe('parsePolishResponse', () => {
 		expect(r.provider).toBe('bedrock');
 		expect(r.model).toBe('haiku');
 		expect(r.links_added).toEqual(['Auth Flow']);
+		expect(r.links_repaired).toEqual([{ raw: 'auth flow', new_target: 'Auth Flow' }]);
+		expect(r.links_skipped).toEqual([{ raw: 'Nonexistent', reason: 'no_match' }]);
 	});
 
 	it('defaults missing fields rather than throwing', () => {
@@ -406,6 +410,8 @@ describe('parsePolishResponse', () => {
 		expect(r.polished).toBe('');
 		expect(r.provider).toBe('');
 		expect(r.links_added).toEqual([]);
+		expect(r.links_repaired).toEqual([]);
+		expect(r.links_skipped).toEqual([]);
 		expect(r.warning).toBe('');
 	});
 });
