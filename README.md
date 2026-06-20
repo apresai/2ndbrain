@@ -64,7 +64,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 - **MCP server** — 22 tools for Claude Code, Cursor, and any MCP client, with live status sidecar files and an observability panel
 - **Suggest Links** — AI finds semantically related documents in your vault and proposes wikilinks to insert
 - **Polish** — AI copy-editor that fixes spelling, grammar, and clarity and adds grounded `[[wikilinks]]` to existing notes (never inventing a target). Returns the original and polished text together so any client can show a diff; the Obsidian plugin applies it in one click from the note toolbar, ribbon, command, or right-click menu, with an Undo button
-- **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Rebuild Index and Re-embed All
+- **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Sync and Re-embed All. Notes edited in Obsidian are re-indexed and re-embedded automatically (a debounced incremental index), so search and AI stay current without a manual rebuild
 - **Built-in installer**: the dashboard updates the CLI (`brew upgrade` behind an Update CLI button) and installs or updates the Obsidian plugin into the bound vault (`2nb plugin install` behind an Install/Update button)
 - **Claude Code integration card**: shows whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
 - **AI connection testing** — one-click probe of your configured embedding and generation models with live latency
@@ -463,7 +463,7 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 - **Vault card**: active vault name and path, a badge confirming it matches the vault Obsidian has open, and an Obsidian plugin row showing the installed plugin version with an Install/Update button (runs `2nb plugin install`)
 - **AI card**: provider and models (AWS Bedrock with Claude Haiku 4.5 + Amazon Nova-2 by default) with a readiness dot, Save-as-default, and Test buttons
 - **Claude Code card**: whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
-- **Index card**: document and embedding counts with Rebuild Index and Re-embed All
+- **Index card**: document and embedding counts, a "N notes awaiting embedding" hint, and Sync (incremental, embeds only what changed) and Re-embed All buttons. Notes edited in Obsidian sync automatically
 - The app bundles its own version-matched `2nb` CLI and prefers it, so its AI/indexing calls never run a stale Homebrew copy. An orange banner only appears on dev builds that fall back to an older PATH `2nb`; when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` to refresh the terminal/plugin's copy
 
 **Advanced** tabs for the power-user depth:
@@ -474,7 +474,7 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 - **Git Integration** (Cmd+Shift+G): recent commits with a 1/3/7/30-day window; click a commit for per-file diffs
 - **Validation**: `2nb lint` findings rendered with file and line detail
 
-Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Rebuild Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
+Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Sync Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
 
 Build and install from source:
 

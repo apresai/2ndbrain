@@ -4,6 +4,20 @@ import os
 
 private let log = Logger(subsystem: "dev.apresai.2ndbrain", category: "app")
 
+/// Pure gating logic for the startup catch-up index, extracted so it's
+/// unit-testable without a real vault or CLI subprocess.
+enum StartupSync {
+    /// Whether to run a catch-up `2nb index` when a vault binds: only when the
+    /// on-disk note count differs from what the index already knows (notes were
+    /// added or removed in Obsidian while the app was closed) and no index is
+    /// already running. Matching counts skip the work, so a stable vault pays
+    /// nothing on launch.
+    static func shouldSync(onDiskCount: Int, indexedCount: Int, isIndexing: Bool) -> Bool {
+        guard !isIndexing else { return false }
+        return onDiskCount != indexedCount
+    }
+}
+
 @Observable @MainActor
 final class AppState {
     var vault: VaultManager?
@@ -54,6 +68,13 @@ final class AppState {
     // second save for the same file queues behind the first instead of
     // racing the database.
     private var reindexTasks: [String: Task<Void, Never>] = [:]
+
+    // Debounce timers for externally-changed notes (edited in Obsidian, not by
+    // this app), keyed by absolute path. Obsidian emits a burst of FS events
+    // per save; we coalesce them into one incremental index ~1.5s after the
+    // file settles. A new event for the same path cancels the pending timer.
+    private var pendingReindex: [String: Task<Void, Never>] = [:]
+    private let externalReindexDebounce: Duration = .seconds(1.5)
 
     // Current document metrics (chunk count is refreshed on open/switch/reindex;
     // token estimate is computed live from content.count / 4)
@@ -250,8 +271,13 @@ final class AppState {
         refreshFiles()
         log.info("Vault loaded: \(self.files.count) files")
 
-        // Refresh AI status
-        Task { await refreshAIStatus() }
+        // Refresh AI status, then catch up the index if notes were added or
+        // removed in Obsidian while the app was closed (the file watcher only
+        // sees changes from now on).
+        Task {
+            await refreshAIStatus()
+            syncOnBindIfStale()
+        }
 
         // Start autosave timer for this vault
         startAutosaveTimer()
@@ -282,6 +308,11 @@ final class AppState {
                     self?.refreshFiles()
                     for path in mdPaths {
                         self?.reloadIfOpen(path: path)
+                        // Index + embed notes changed outside the app (e.g. saved
+                        // in Obsidian) so search/AI see them without a manual
+                        // Rebuild. The app's own saves already reindexed, and are
+                        // skipped inside scheduleExternalReindex.
+                        self?.scheduleExternalReindex(path: path)
                     }
                 }
                 if catalogChanged || configChanged {
@@ -793,6 +824,25 @@ final class AppState {
         showIndexProgress = true
     }
 
+    /// On vault bind, run ONE quiet incremental index if the on-disk note count
+    /// differs from the indexed count, i.e. notes were added or removed in
+    /// Obsidian while the app was closed (the file watcher only sees changes
+    /// from now on). Uses `startIndex()` directly (no progress sheet), which is
+    /// hash-gated so it re-embeds only what changed, and serializes with manual
+    /// rebuilds via the `isIndexing` guard. Skipped when the counts match, so a
+    /// stable vault pays nothing on launch. A modified-while-closed note (same
+    /// count, changed body) is picked up by the watcher on its next edit or by a
+    /// manual Sync. For very large vaults a future `index --scan-changed`
+    /// (mtime-based) would beat re-reading every file here.
+    func syncOnBindIfStale() {
+        guard let vault else { return }
+        let onDisk = vault.listMarkdownFiles().count
+        let indexed = aiStatus?.documentCount ?? 0
+        guard StartupSync.shouldSync(onDiskCount: onDisk, indexedCount: indexed, isIndexing: isIndexing) else { return }
+        log.info("Startup sync: \(onDisk) notes on disk vs \(indexed) indexed; running incremental index")
+        startIndex()
+    }
+
     /// True once the current index run has reached a terminal phase. Late
     /// stderr-progress updates check this so they can't flip a finished run back
     /// to `.embedding` and re-wedge the progress sheet on "Running…".
@@ -1091,6 +1141,18 @@ final class AppState {
 
     private func markSelfWrite(path: String) {
         recentSelfWrites[path] = Date().addingTimeInterval(selfWriteSuppressionInterval)
+    }
+
+    /// True when `path` was written by the app itself within the suppression
+    /// window. The app's own saves already reindex (saveDocument ->
+    /// triggerIncrementalReindex), so the file watcher must not reindex them a
+    /// second time. Unlike `shouldSuppressSelfWrite` this is non-mutating: the
+    /// watcher can fire several times for one save and every one should be
+    /// suppressed until the mark expires on its own.
+    private func isRecentSelfWrite(path: String) -> Bool {
+        let now = Date()
+        recentSelfWrites = recentSelfWrites.filter { $0.value > now }
+        return (recentSelfWrites[path] ?? .distantPast) > now
     }
 
     private func shouldSuppressSelfWrite(path: String, diskContent: String, tab: DocumentTab) -> Bool {
@@ -1467,6 +1529,38 @@ final class AppState {
     }
 
     // MARK: - Incremental Re-Embed
+
+    /// Debounced incremental index for a note changed OUTSIDE the app (saved in
+    /// Obsidian, synced, etc.). Coalesces the burst of FS events Obsidian emits
+    /// per save into one `2nb index --doc` after the file settles, skips the
+    /// app's own writes, and skips deletes (a removed file can't be incrementally
+    /// indexed; the next Sync's purgeStale reconciles it). This is what makes
+    /// externally-edited notes searchable/embedded without a manual Rebuild.
+    private func scheduleExternalReindex(path: String) {
+        guard let vault else { return }
+        if isRecentSelfWrite(path: path) { return }
+        // A delete or rename-away leaves no file; `index --doc` stats the path
+        // and would just error. Leave it for the next full Sync to purge.
+        guard FileManager.default.fileExists(atPath: path) else { return }
+
+        pendingReindex[path]?.cancel()
+        let url = URL(fileURLWithPath: path)
+        let relPath = vault.relativePath(for: url)
+        pendingReindex[path] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: self?.externalReindexDebounce ?? .seconds(1.5))
+            guard let self, !Task.isCancelled else { return }
+            self.pendingReindex.removeValue(forKey: path)
+            // Delegate to triggerIncrementalReindex, which serializes per path
+            // via reindexTasks so we never run two `index --doc` for the same
+            // file at once (SQLite write race). Then await that task and refresh
+            // the embedded-count readout once the reindex lands.
+            self.triggerIncrementalReindex(for: url)
+            if let task = self.reindexTasks[relPath] {
+                _ = await task.value
+                await self.refreshAIStatus()
+            }
+        }
+    }
 
     private func triggerIncrementalReindex(for url: URL) {
         guard let vault else { return }

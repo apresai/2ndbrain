@@ -151,12 +151,12 @@ struct VaultStatusView: View {
             }
 
             HStack {
-                Button("Rebuild Index") {
+                Button("Sync") {
                     appState.rebuildIndex()
                     isPresented = false
                 }
                 .disabled(appState.vault == nil || appState.isIndexing)
-                .help("Full re-index of all documents")
+                .help("Index new and changed notes and embed only what changed (reconciles notes added, edited, or deleted in Obsidian). Notes edited while the app is open sync automatically.")
                 Spacer()
             }
         }

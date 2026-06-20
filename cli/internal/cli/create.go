@@ -227,23 +227,31 @@ func editExistingNote(cmd *cobra.Command, v *vault.Vault, absPath, content strin
 }
 
 // embedNewDocument tries to embed a single document inline using its in-memory body.
-// Silently skips if no AI provider is configured or available.
+// Skips (without failing the write) if no AI provider is configured or available,
+// or if embedding errors. Such a skip is not lost: the document's content_hash
+// no longer matches its (absent) embedding_hash, so the next `2nb index` (including
+// the macOS app's startup/auto sync) backfills it via DocumentsNeedingEmbedding.
+// The skips are logged at debug level so a missing embedding is traceable in
+// .2ndbrain/logs/cli.log instead of vanishing silently.
 func embedNewDocument(v *vault.Vault, doc *document.Document) {
 	cfg := v.Config.AI
 	initAIProviders(v)
 
 	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if err != nil {
+		slog.Debug("inline embed skipped: no embedder", "path", doc.Path, "provider", cfg.Provider, "err", err)
 		return
 	}
 
 	ctx := context.Background()
 	if !embedder.Available(ctx) {
+		slog.Debug("inline embed skipped: provider unavailable; will backfill on next index", "path", doc.Path, "provider", cfg.Provider)
 		return
 	}
 
 	vecs, err := embedder.Embed(ctx, []string{doc.IndexableBody()})
 	if err != nil {
+		slog.Debug("inline embed skipped: embed error; will backfill on next index", "path", doc.Path, "provider", cfg.Provider, "err", err)
 		return
 	}
 
