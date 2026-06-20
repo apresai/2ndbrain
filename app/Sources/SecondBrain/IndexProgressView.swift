@@ -11,7 +11,7 @@ struct IndexProgressView: View {
                 Image(systemName: phaseIcon)
                     .font(.title2)
                     .foregroundStyle(phaseColor)
-                Text(isReembed ? "Re-embed All" : "Rebuild Index")
+                Text(isReembed ? "Re-embed All" : "Sync Index")
                     .font(.headline)
                 Spacer()
             }
@@ -94,7 +94,7 @@ struct IndexProgressView: View {
                 Spacer()
                 switch phase {
                 case .ready:
-                    Button(isReembed ? "Re-embed All" : "Rebuild Index") {
+                    Button(isReembed ? "Re-embed All" : "Sync Index") {
                         appState.startIndex()
                     }
                     .buttonStyle(.borderedProminent)
@@ -154,7 +154,7 @@ struct IndexProgressView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(isReembed
                  ? "Re-embed every document in this vault from scratch."
-                 : "Rebuild the search index for this vault.")
+                 : "Index new and changed notes in this vault.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 

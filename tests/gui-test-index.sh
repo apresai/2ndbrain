@@ -1,10 +1,10 @@
 #!/bin/bash
-# GUI Test Suite: Rebuild Index Dialog
+# GUI Test Suite: Sync Index Dialog
 set -e
 cd "$(dirname "$0")/.."
 source tests/gui-helpers.sh
 
-echo "=== GUI Test: Rebuild Index ==="
+echo "=== GUI Test: Sync Index ==="
 echo ""
 
 launch_app
@@ -28,7 +28,7 @@ end tell
 
 # --- Helper: check if the index dialog is visible ---
 # SwiftUI sheets render as part of the window, not a separate one.
-# Detect by looking for the "Rebuild Index" static text in the UI tree.
+# Detect by looking for the "Sync Index" static text in the UI tree.
 dialog_visible() {
     osascript -e '
 tell application "System Events"
@@ -46,7 +46,7 @@ tell application "System Events"
             set uiDesc to entire contents of window 1
             repeat with elem in uiDesc
                 try
-                    if value of elem is "Rebuild the search index for this vault." then return "yes"
+                    if value of elem is "Index new and changed notes in this vault." then return "yes"
                 end try
             end repeat
         end try
@@ -56,9 +56,9 @@ end tell
 ' 2>/dev/null || echo "no"
 }
 
-# --- Test 1: Vault menu contains Rebuild Index (IDX-EV-001) ---
+# --- Test 1: Vault menu contains Sync Index (IDX-EV-001) ---
 echo ""
-echo "--- IDX-EV-001: Vault menu has Rebuild Index ---"
+echo "--- IDX-EV-001: Vault menu has Sync Index ---"
 HAS_REBUILD=$(osascript -e '
 tell application "System Events"
     tell process "SecondBrain"
@@ -68,7 +68,7 @@ tell application "System Events"
             delay 0.5
             set menuItems to name of every menu item of menu 1 of menu bar item "Vault" of menu bar 1
             key code 53
-            if menuItems contains "Rebuild Index" then
+            if menuItems contains "Sync Index" then
                 return "yes"
             end if
         on error
@@ -79,15 +79,15 @@ tell application "System Events"
 end tell
 ' 2>/dev/null || echo "no")
 if [ "$HAS_REBUILD" = "yes" ]; then
-    pass "IDX-EV-001: Vault menu contains Rebuild Index"
+    pass "IDX-EV-001: Vault menu contains Sync Index"
 else
-    fail "IDX-EV-001: Vault menu missing Rebuild Index" "not found"
+    fail "IDX-EV-001: Vault menu missing Sync Index" "not found"
 fi
 
-# --- Test 2: Clicking Rebuild Index opens confirmation dialog (IDX-EV-002) ---
+# --- Test 2: Clicking Sync Index opens confirmation dialog (IDX-EV-002) ---
 echo ""
-echo "--- IDX-EV-002: Rebuild Index opens confirmation dialog ---"
-click_menu_item "Vault" "Rebuild Index"
+echo "--- IDX-EV-002: Sync Index opens confirmation dialog ---"
+click_menu_item "Vault" "Sync Index"
 sleep 1
 screenshot "idx-02-dialog"
 
@@ -115,11 +115,11 @@ fi
 # --- Test 4: Reopen dialog and run index with Return (IDX-EV-004) ---
 echo ""
 echo "--- IDX-EV-004: Return starts index rebuild ---"
-click_menu_item "Vault" "Rebuild Index"
+click_menu_item "Vault" "Sync Index"
 sleep 1
 screenshot "idx-04a-ready"
 
-# Press Return to confirm (Rebuild Index has .defaultAction)
+# Press Return to confirm (Sync Index has .defaultAction)
 press_return
 sleep 1
 screenshot "idx-04b-running"
@@ -200,16 +200,16 @@ else
     fail "IDX-EV-007: CLI log not found" "$LOG_FILE"
 fi
 
-# --- Test 8: Command Palette has Rebuild Index (IDX-EV-008) ---
+# --- Test 8: Command Palette has Sync Index (IDX-EV-008) ---
 echo ""
-echo "--- IDX-EV-008: Command Palette has Rebuild Index ---"
+echo "--- IDX-EV-008: Command Palette has Sync Index ---"
 open_command_palette
-type_text "rebuild"
+type_text "sync"
 sleep 0.5
 screenshot "idx-08-palette"
 press_escape
 sleep 0.5
-pass "IDX-EV-008: Command Palette shows Rebuild Index"
+pass "IDX-EV-008: Command Palette shows Sync Index"
 
 # --- Cleanup ---
 kill_app

@@ -332,13 +332,21 @@ struct HomeView: View {
         // Embeddable docs (excludes empty notes) as the denominator, so a blank
         // Untitled.md doesn't read as a permanent "X / Y" gap.
         let embeddable = status?.embeddableDenominator ?? docs
+        let pending = max(0, embeddable - embedded)
         return VStack(alignment: .leading, spacing: 8) {
             SheetSectionHeader(title: "Index", systemImage: "square.stack.3d.up")
             LabeledContent("Documents", value: "\(docs)")
             LabeledContent("Embedded", value: "\(embedded) / \(embeddable)")
+            if pending > 0 {
+                Text("\(pending) note\(pending == 1 ? "" : "s") awaiting embedding. Sync to catch up.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             HStack {
-                Button("Rebuild Index") { actionMessage = nil; appState.rebuildIndex() }
+                Button("Sync") { actionMessage = nil; appState.rebuildIndex() }
+                    .help("Index new and changed notes and embed only what changed (reconciles notes added, edited, or deleted in Obsidian). Notes edited while the app is open sync automatically.")
                 Button("Re-embed All…") { actionMessage = nil; appState.rebuildIndex(forceReembed: true) }
+                    .help("Regenerate every embedding from scratch (use after switching embedding models).")
             }
             .disabled(appState.vault == nil || appState.isIndexing)
             .padding(.top, 4)

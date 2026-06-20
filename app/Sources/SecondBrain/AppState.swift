@@ -4,6 +4,51 @@ import os
 
 private let log = Logger(subsystem: "dev.apresai.2ndbrain", category: "app")
 
+/// Gating logic for the startup catch-up index.
+enum StartupSync {
+    /// Whether to run a catch-up `2nb index` when a vault binds: only when no
+    /// index is already running AND the vault has on-disk changes the index
+    /// hasn't seen.
+    static func shouldSync(vaultChanged: Bool, isIndexing: Bool) -> Bool {
+        !isIndexing && vaultChanged
+    }
+
+    /// True if any indexable file (.md/.canvas/.base) under `vaultRoot` is newer
+    /// than the index db, or the db doesn't exist yet (never indexed). Stat-only
+    /// (no content read), so it stays cheap even for a large vault. Catches notes
+    /// added OR modified while the app was closed. Unlike a doc-count compare it
+    /// doesn't drift when the index also counts .canvas/.base or skips ignored
+    /// files. A pure delete with no other change isn't caught here (the file is
+    /// gone, so there's no newer mtime); that reconciles on the next manual Sync.
+    static func vaultChangedSinceIndex(vaultRoot: URL) -> Bool {
+        let fm = FileManager.default
+        let dbPath = vaultRoot.appendingPathComponent(".2ndbrain/index.db").path
+        guard let dbMod = (try? fm.attributesOfItem(atPath: dbPath))?[.modificationDate] as? Date else {
+            return true // never indexed
+        }
+        // .skipsHiddenFiles excludes .2ndbrain (the db itself) and .obsidian.
+        guard let enumerator = fm.enumerator(
+            at: vaultRoot,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return true
+        }
+        for case let url as URL in enumerator {
+            switch url.pathExtension.lowercased() {
+            case "md", "canvas", "base":
+                if let mod = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                   mod > dbMod {
+                    return true
+                }
+            default:
+                continue
+            }
+        }
+        return false
+    }
+}
+
 @Observable @MainActor
 final class AppState {
     var vault: VaultManager?
@@ -54,6 +99,18 @@ final class AppState {
     // second save for the same file queues behind the first instead of
     // racing the database.
     private var reindexTasks: [String: Task<Void, Never>] = [:]
+
+    // Coalesced incremental index for notes changed OUTSIDE the app (edited in
+    // Obsidian, synced, git-pulled). Every path that changes within a debounce
+    // window is collected here and drained through ONE serial pass, so we never
+    // run two `2nb index --doc` at once (they would contend on the single
+    // SQLite writer and spawn a parallel embed storm). A bulk change collapses
+    // to a single full `2nb index`.
+    private var pendingExternalPaths: Set<String> = []
+    private var externalReindexTask: Task<Void, Never>?
+    private var externalReindexInFlight = false
+    private let externalReindexDebounce: Duration = .seconds(1.5)
+    private let bulkExternalReindexThreshold = 8
 
     // Current document metrics (chunk count is refreshed on open/switch/reindex;
     // token estimate is computed live from content.count / 4)
@@ -250,8 +307,13 @@ final class AppState {
         refreshFiles()
         log.info("Vault loaded: \(self.files.count) files")
 
-        // Refresh AI status
-        Task { await refreshAIStatus() }
+        // Refresh AI status, then catch up the index if notes were added or
+        // removed in Obsidian while the app was closed (the file watcher only
+        // sees changes from now on).
+        Task {
+            await refreshAIStatus()
+            syncOnBindIfStale()
+        }
 
         // Start autosave timer for this vault
         startAutosaveTimer()
@@ -282,6 +344,11 @@ final class AppState {
                     self?.refreshFiles()
                     for path in mdPaths {
                         self?.reloadIfOpen(path: path)
+                        // Index + embed notes changed outside the app (e.g. saved
+                        // in Obsidian) so search/AI see them without a manual
+                        // Rebuild. The app's own saves already reindexed, and are
+                        // skipped inside scheduleExternalReindex.
+                        self?.scheduleExternalReindex(path: path)
                     }
                 }
                 if catalogChanged || configChanged {
@@ -793,6 +860,25 @@ final class AppState {
         showIndexProgress = true
     }
 
+    /// On vault bind, run ONE quiet incremental index if any note changed on
+    /// disk since the last index, i.e. notes were added or edited in Obsidian
+    /// while the app was closed (the file watcher only sees changes from now
+    /// on). Uses `startIndex()` directly (no progress sheet), which is hash-gated
+    /// so it re-embeds only what changed and reconciles deletions via purgeStale,
+    /// and serializes with manual rebuilds via the `isIndexing` guard. The
+    /// mtime scan runs off the main actor and is skipped entirely when the vault
+    /// is unchanged, so a stable vault pays nothing on launch.
+    func syncOnBindIfStale() {
+        guard let vault, !isIndexing else { return }
+        let root = vault.rootURL
+        Task { @MainActor [weak self] in
+            let changed = await Task.detached { StartupSync.vaultChangedSinceIndex(vaultRoot: root) }.value
+            guard let self, StartupSync.shouldSync(vaultChanged: changed, isIndexing: self.isIndexing) else { return }
+            log.info("Startup sync: vault changed since last index; running incremental index")
+            self.startIndex()
+        }
+    }
+
     /// True once the current index run has reached a terminal phase. Late
     /// stderr-progress updates check this so they can't flip a finished run back
     /// to `.embedding` and re-wedge the progress sheet on "Running…".
@@ -1091,6 +1177,18 @@ final class AppState {
 
     private func markSelfWrite(path: String) {
         recentSelfWrites[path] = Date().addingTimeInterval(selfWriteSuppressionInterval)
+    }
+
+    /// True when `path` was written by the app itself within the suppression
+    /// window. The app's own saves already reindex (saveDocument ->
+    /// triggerIncrementalReindex), so the file watcher must not reindex them a
+    /// second time. Unlike `shouldSuppressSelfWrite` this is non-mutating: the
+    /// watcher can fire several times for one save and every one should be
+    /// suppressed until the mark expires on its own.
+    private func isRecentSelfWrite(path: String) -> Bool {
+        let now = Date()
+        recentSelfWrites = recentSelfWrites.filter { $0.value > now }
+        return (recentSelfWrites[path] ?? .distantPast) > now
     }
 
     private func shouldSuppressSelfWrite(path: String, diskContent: String, tab: DocumentTab) -> Bool {
@@ -1467,6 +1565,78 @@ final class AppState {
     }
 
     // MARK: - Incremental Re-Embed
+
+    /// Queue a note changed OUTSIDE the app (saved in Obsidian, synced, git) for
+    /// incremental indexing. Collects the path and (re)arms a single debounce
+    /// timer; when it fires, `drainExternalReindex` processes every queued path
+    /// in one serial pass. Skips the app's own writes (already reindexed at save)
+    /// and deletes (a removed file can't be incrementally indexed; the next full
+    /// Sync's purgeStale reconciles it). This is what makes externally-edited
+    /// notes searchable/embedded without a manual Sync.
+    private func scheduleExternalReindex(path: String) {
+        guard vault != nil else { return }
+        if isRecentSelfWrite(path: path) { return }
+        // A delete or rename-away leaves no file; `index --doc` would just error
+        // on the missing path. Leave it for the next full Sync to purge.
+        guard FileManager.default.fileExists(atPath: path) else { return }
+
+        pendingExternalPaths.insert(path)
+        externalReindexTask?.cancel()
+        externalReindexTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: self?.externalReindexDebounce ?? .seconds(1.5))
+            guard let self, !Task.isCancelled else { return }
+            await self.drainExternalReindex()
+        }
+    }
+
+    /// Drain every queued external change in ONE serial pass. Single-flighted
+    /// (`externalReindexInFlight`) so a debounce that fires mid-drain doesn't
+    /// start a second, concurrent drain — its newly-queued paths are picked up
+    /// by this loop instead. A burst above `bulkExternalReindexThreshold`
+    /// (Obsidian sync, git pull, folder paste) collapses to a single throttled
+    /// `2nb index` rather than spawning one subprocess per file.
+    private func drainExternalReindex() async {
+        guard !externalReindexInFlight, let vault else { return }
+        // A full index (manual Sync or the startup catch-up) is already running
+        // and will pick up every current file, so don't start a second, racing
+        // `2nb index` on the same SQLite DB. Drop the queued paths — the running
+        // full scan covers them; anything written after it passes is re-caught by
+        // the watcher once isIndexing clears.
+        guard !isIndexing else { pendingExternalPaths.removeAll(); return }
+        externalReindexInFlight = true
+        defer { externalReindexInFlight = false }
+
+        while !pendingExternalPaths.isEmpty {
+            let paths = pendingExternalPaths
+            pendingExternalPaths.removeAll()
+
+            if paths.count > bulkExternalReindexThreshold {
+                // Bulk change (Obsidian sync, git pull, folder paste): hand off
+                // to one full, serialized `2nb index` via startIndex() — it sets
+                // isIndexing (so a manual Sync can't run a second, racing index),
+                // throttles embeds in a single process, and refreshes status. It
+                // covers the whole burst, so stop draining; the watcher re-catches
+                // anything written after the full scan passes it.
+                startIndex()
+                break
+            }
+
+            do {
+                // Sequential: never two `index --doc` writing the DB at once.
+                for path in paths.sorted() {
+                    guard FileManager.default.fileExists(atPath: path) else { continue }
+                    let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+                    _ = try await runCLI(["index", "--doc", rel, "--json", "--porcelain"], cwd: vault.rootURL)
+                }
+                // Reflect the new/updated embeddings in the Index card's count.
+                // Inside the loop so a path queued during this pass is still
+                // drained before we clear the in-flight flag.
+                await refreshAIStatus()
+            } catch {
+                log.debug("external reindex failed: \(error.localizedDescription)")
+            }
+        }
+    }
 
     private func triggerIncrementalReindex(for url: URL) {
         guard let vault else { return }

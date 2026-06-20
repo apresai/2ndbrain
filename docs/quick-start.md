@@ -98,7 +98,7 @@ Check status any time:
 2nb index
 ```
 
-The first run creates the gitignored `.2ndbrain/` sidecar, parses every Markdown, Canvas, and Base file, and generates embeddings. Safe to run repeatedly: re-runs only re-embed documents whose content changed. The dashboard's Index card shows document and embedding counts with Rebuild Index and Re-embed All buttons.
+The first run creates the gitignored `.2ndbrain/` sidecar, parses every Markdown, Canvas, and Base file, and generates embeddings. Safe to run repeatedly: re-runs only re-embed documents whose content changed. The dashboard's Index card shows document and embedding counts with Sync and Re-embed All buttons, and notes you edit in Obsidian re-index automatically.
 
 ## 6. Search and ask
 

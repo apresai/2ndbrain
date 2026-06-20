@@ -67,7 +67,7 @@ struct SecondBrainApp: App {
 
                 Divider()
 
-                Button("Rebuild Index") {
+                Button("Sync Index") {
                     appState.rebuildIndex()
                 }
                 .disabled(appState.vault == nil || appState.isIndexing)
