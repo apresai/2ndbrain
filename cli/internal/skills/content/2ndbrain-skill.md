@@ -49,6 +49,121 @@ Three intents cover almost every request. Pick the path; do not improvise a one-
 
 **Watch for degraded search.** If `mode` comes back `keyword` when you expected semantic ranking, the vector channel is off (provider down, dimension mismatch, or an unindexed vault). Check `mode` on every `--json` result and read `warnings` when it is present. Never report "no matches" without first confirming `mode` was `hybrid` (see "Search scoring" and the recovery playbook below).
 
+## Copy-paste recipes
+
+Exact invocations for the common tasks. Substitute real titles/paths; add `--json` for machine output. **Build your command from these, don't probe `--help`.** Each line says what it does.
+
+**Create & write** (the only commands that change a note's body are `create`, `append`, `prepend`, `replace`, `polish --write`, and `move`/`rename`)
+```bash
+2nb create --type note --title "JWT Auth" --path architecture          # new note at architecture/jwt-auth.md (UUID + frontmatter)
+2nb create --type adr --title "Use JWT" --content "$(cat draft.md)"      # create with a body in one shot (instead of the type template)
+2nb create --type note --title "Daily Log" --append --content "- did X"  # append to an existing same-title note, else create it
+2nb create --type note --title "Spec" --overwrite --content "$(cat spec.md)"  # replace an existing same-title note in place (keeps its id)
+2nb create --type note --title "Meeting" --allow-duplicate              # skip the content-hash dedupe guard and create anyway
+2nb append daily-log.md --text "- another line"                         # append to a doc body (frontmatter untouched)
+2nb prepend inbox.md --file snippet.md                                  # insert at the top of the body, after the frontmatter
+2nb replace notes.md --section "## Status" --text "Shipped."            # replace one heading's section (first match wins)
+echo "from stdin" | 2nb append notes.md                                # --text / --file / stdin are the three input sources
+```
+
+**Read & query** (rank search by `vector_score`, raw cosine, not `score`, the RRF rank-fusion)
+```bash
+2nb search "jwt expiry" --json --limit 10                  # hybrid BM25 + vector
+2nb search "jwt expiry" --threshold 0.15 --bm25-only       # widen a too-narrow search / skip the vector channel
+2nb ask "when do tokens expire?" --json                    # RAG answer + sources; read each source before repeating a claim
+2nb outline jwt-auth.md --json                             # heading tree, so you can then pull ONE section:
+2nb read jwt-auth.md --chunk "Implementation"              # just that heading's section (cheaper than the whole doc)
+2nb list --type adr --status accepted --json               # filtered listing
+2nb list --tag security --format paths                     # one vault-relative path per line
+```
+
+**Metadata, tags, tasks**
+```bash
+2nb meta jwt-auth.md --get status                          # read one frontmatter field
+2nb meta jwt-auth.md --set status=accepted                 # write (schema + status-transition validated); reindexes the file
+2nb meta jwt-auth.md --set tags=security,auth              # array fields: comma-split, REPLACE semantics
+2nb tag add jwt-auth.md security auth                      # incremental tag add (merge/dedupe); use this, not --set, to add
+2nb tag remove jwt-auth.md draft
+2nb tasks --todo --path projects/                          # open GFM checkboxes under a dir
+2nb task projects/plan.md 12 --done                        # toggle the checkbox on 1-based body line 12
+```
+
+**Links & graph**
+```bash
+2nb links jwt-auth.md          # outbound links incl. broken ones (each has resolved:bool); per-file broken-link view
+2nb backlinks jwt-auth.md      # who links TO this note (check before delete/rename)
+2nb unresolved                 # every broken wikilink across the whole vault
+2nb suggest-links jwt-auth.md  # notes you SHOULD link but don't yet (semantic; excludes already-linked)
+2nb related jwt-auth.md --depth 2   # graph neighbors via [[wikilinks]]
+```
+
+**Move / rename: rewrites every `[[link]]` to the note across the vault. ALWAYS dry-run first.**
+```bash
+2nb move old.md archive/old.md --dry-run    # preview: the rename, per-note link rewrites, and ambiguous links it would skip
+2nb move old.md archive/old.md              # apply (refused if a bare [[name]] is ambiguous, unless --force)
+2nb rename old.md new-name                  # same folder; .md appended if omitted; delegates to move
+```
+
+**Polish (copy-edit + fix links, in place)**
+```bash
+2nb polish notes.md --json                                   # preview only: original + polished body for a diff (no write)
+2nb polish notes.md --write --links --repair-links --json    # apply: copy-edit, repair broken links, add grounded links, re-embed; snapshot kept
+2nb polish notes.md --undo                                   # restore the pre-polish snapshot (refuses if changed since, unless --force)
+```
+
+**Index & AI** (after a DIRECT file write, not via a 2nb write command, reindex so search/embeddings see it)
+```bash
+2nb index --doc jwt-auth.md     # re-index + re-embed ONE file (cheap, hash-gated)
+2nb index                       # whole vault; only re-embeds changed docs and purges deleted ones
+2nb ai status --json            # provider, models, embedding coverage, threshold + source, portability_status
+```
+
+**Complete example, author a design note and wire it into the graph:**
+```bash
+2nb search "rate limiting" --json          # 1. search FIRST (avoid duplicates); a 0.6+ cosine hit means edit, don't create
+2nb create --type adr --title "Token Bucket Rate Limiting" --path architecture   # 2. create if genuinely new
+2nb meta architecture/token-bucket-rate-limiting.md --set status=accepted        # 3. set status (validated)
+2nb append architecture/token-bucket-rate-limiting.md --file decision.md         # 4. add the body
+2nb suggest-links architecture/token-bucket-rate-limiting.md                     # 5. find notes to [[link]], then append those links
+```
+
+**Obsidian-CLI forms (drop-in)**, if you're used to the `obsidian` CLI, map onto the same commands. Note the colon-commands take `key=value` args (`name=`/`value=`/`file=`/`content=`/`old=`/`new=`), not positionals:
+```bash
+2nb print file=jwt-auth                                   # == 2nb read jwt-auth.md  (file= is FUZZY: basename/title/alias/suffix)
+2nb read path=architecture/jwt-auth.md                    # path= is a STRICT exact vault-relative path
+2nb property:read name=status file=jwt-auth               # == meta --get status
+2nb property:set name=status value=accepted file=jwt-auth # == meta --set status=accepted
+2nb daily:append content="- a note"                       # == daily append --text "- a note"
+2nb tags:rename old=wip new=in-progress                   # == tags rename wip in-progress
+2nb files                                                 # == list  (filters are CLI flags: 2nb list --type adr)
+```
+`file=` fails loudly with candidates on ambiguity; a free-text `search`/`ask`/`chat` query is never parsed as `key=value` (so a query containing `=` is preserved).
+
+## Flags by command
+
+Build the command from this table instead of probing `--help`. **Global flags on every command:** `--json` `--yaml` `--csv` `--format <fmt>` `--porcelain` `--vault <path>` `--copy` `--verbose`. Per-command flags worth knowing:
+
+| Command | Flags |
+|---|---|
+| `create` | `--type` `--title` `--path <subdir>` `--content` `--overwrite` `--append` `--allow-duplicate` |
+| `search` | `--type` `--status` `--tag` `--limit` `--threshold` `--bm25-only` |
+| `list` | `--type` `--status` `--tag` `--sort` `--limit` `--total` `--format paths\|tree` |
+| `read` | `--chunk "<heading>"` |
+| `ask` | `--history <path\|->` |
+| `meta` | `--get <key>` `--set key=value` `--remove <key>` |
+| `tag add` / `tag remove` | `<note> <tag>...` (space- or comma-separated) |
+| `tags rename` | `<old> <new>` `--dry-run` |
+| `append` / `prepend` | `--text` `--file` (or stdin) |
+| `replace` | `--text` `--file` (or stdin) `--section "<heading>"` |
+| `task` | `<path> <line>` `--done` `--todo` `--toggle` |
+| `tasks` | `--done` `--todo` `--path <file\|dir>` `--total` |
+| `move` / `rename` | `--dry-run` `--force` |
+| `polish` | `--write` `--links` `--repair-links` `--undo` `--force` `--system` `--max-tokens` |
+| `index` | `--doc <path>` `--force-reembed` |
+| `stale` | `--since <days>` (an integer number of days, e.g. `--since 7`; NOT a duration string) |
+| `related` | `--depth N` |
+| `git activity` | `--since <duration>` (a duration string, e.g. `--since 7d`) |
+
 ## Parent-command defaults
 
 Every command group has a useful default action when called without a subcommand. `--help` still works everywhere because Cobra intercepts it before the default runs.
@@ -66,7 +181,7 @@ Every command group has a useful default action when called without a subcommand
 
 ## CLI Commands
 
-All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`md`/`text`; listings add `paths`/`tree` and `--total`), `--porcelain`, `--vault <path>`, `--copy`, and `--verbose`. Prefer `--json` in scripts and agent pipelines. Run `2nb <command> --help` for the authoritative flag list, and `2nb --help` for the full command set grouped by category.
+All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`md`/`text`; listings add `paths`/`tree` and `--total`), `--porcelain`, `--vault <path>`, `--copy`, and `--verbose`. Prefer `--json` in scripts and agent pipelines. **You should not need to shell out to `--help` to use these commands.** The "[Copy-paste recipes](#copy-paste-recipes)" section gives the exact invocation for every common task, "[Flags by command](#flags-by-command)" lists the flags each command takes, and "[Worked JSON examples](#worked-json-examples)" show the output shapes. (`2nb <command> --help` and `2nb --help` still exist to confirm a detail, but build the command from the recipes first rather than invoking it, reading the help, and retrying.)
 
 **Obsidian-CLI compatibility.** `2nb` accepts `obsidian`-CLI-style invocations as a drop-in: `key=value` args (`file=`, `path=`, `content=`, `template=`, `query=`, `vault=`, `old=`/`new=`), boolean tokens (`total`, `append`, `overwrite`, `done`/`todo`), colon-commands (`daily:path`/`daily:append`, `property:set` → `meta`, `tags:rename`, `link:unresolved`), and aliases (`print` → `read`; `fm`/`frontmatter`/`properties` → `meta`; `files` → `list`; `search-content` → keyword search; `list-vaults`/`set-default-vault`/`add-vault` → the `vault` subcommands). `file=` resolves a note by exact path → basename/title/alias/shortest-unique suffix (fails loudly on ambiguity); `path=` is strict-exact. Out of scope (needs the running app): GUI panes, themes, plugins, Sync/Publish, workspace, dev-tools.
 
@@ -88,7 +203,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 | `2nb unresolved` | List every broken wikilink across the whole vault (source doc + the raw `[[target]]` that resolves to no note). Vault-wide complement to the per-file view in `2nb links` |
 | `2nb graph` | Output the full link graph as JSON adjacency list |
 | `2nb suggest-links <path>` | Rank semantically related documents that would make good wikilink targets (excludes docs already linked) |
-| `2nb stale --since 7d` | Docs not modified within N days |
+| `2nb stale --since 7` | Docs not modified within N days (`--since` is an integer day count) |
 | `2nb outline <path>` | Heading tree of a document (heading path, level, line span). Same chunking as `read`; shared with the MCP `kb_structure` tool |
 | `2nb wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `2nb wc` |
 | `2nb folders` | List folders (directory prefixes of doc paths) with counts; root docs bucket under `(root)` |
@@ -102,7 +217,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 
 | Command | Purpose |
 |---------|---------|
-| `2nb create --type <type> --title "Title" [--path <subdir>]` | Create document from template. Generates UUID, timestamps, and type-appropriate frontmatter. `--path` files it under a vault-relative subdirectory (created if missing); default is the vault root. |
+| `2nb create --type <type> --title "Title" [--path <subdir>] [--content <body>]` | Create document from template. Generates UUID, timestamps, and type-appropriate frontmatter. `--path` files it under a vault-relative subdirectory (created if missing; default vault root). `--content "$(cat file.md)"` sets the body in one shot instead of the template. On a same-title collision: default makes a `<slug>-1.md`; `--overwrite` replaces in place (reuses the id); `--append` appends to the existing note; `--allow-duplicate` skips the content-hash dedupe guard. |
 | `2nb append <path> [--text \| --file \| stdin]` | Append content to the end of a document's body. Frontmatter is left untouched. Explicit, opt-in body write. |
 | `2nb prepend <path> [--text \| --file \| stdin]` | Insert content at the start of the body, after the frontmatter. Explicit, opt-in body write. |
 | `2nb replace <path> [--section <heading>] [--text \| --file \| stdin]` | Replace the whole body, or just one heading's section content with `--section`. First match wins on duplicate headings. Explicit, opt-in body write. |
@@ -115,7 +230,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 | `2nb delete <path> [--force]` | Delete from disk and index |
 | `2nb move <src> <dst> [--dry-run] [--force]` | Move/rename a note to a new vault-relative path AND rewrite every `[[wikilink]]` AND markdown-style `[text](path.md)` link across the vault that points at it (wikilinks keep `#heading`/`#^block`/`\|alias`/`!`-embed suffixes; markdown links keep the `[label]` text, any `#anchor`/`?query` suffix, and the `.md` extension; both keep the bare-vs-path form. External-URL and anchor-only markdown links are skipped; links inside code are never touched). The strongest write surface: it edits OTHER notes. **Always `--dry-run` first** to preview the rename, per-note rewrites, and the ambiguous links it would skip. Without `--force`, a move is refused when a bare `[[name]]` link is ambiguous (the name matches more than one note); `--force` then rewrites only the unambiguous path-qualified links. The target file is moved LAST (after referencing notes), so a crash leaves links pointing at the still-present old name. JSON: `{moved, rewritten, skipped_ambiguous, failed}`. |
 | `2nb rename <src> <newname> [--dry-run] [--force]` | Rename a note in place (same folder; `.md` appended if omitted), delegating to `move` with all its behavior. |
-| `2nb polish <path> [--write]` | AI copy-edit — returns JSON with `original` and `polished` body for diff review. Default is preview only (**does not write to disk**). `--write` applies the polished body in place (opt-in), still returning `original` + `polished` for audit. |
+| `2nb polish <path> [--write] [--links] [--repair-links] [--undo]` | AI copy-edit (spelling/grammar/clarity) — returns JSON with `original` and `polished` body for diff review. Default is preview only (**does not write to disk**). `--write` applies the polished body in place (opt-in) and snapshots the original. `--links` adds grounded `[[wikilinks]]` to existing notes (never invents a target). `--repair-links` repairs broken `[[wikilinks]]` to existing notes (bare-name case/whitespace/alias drift; ambiguous or path-qualified targets reported, never guessed). `--undo` restores the pre-polish snapshot. |
 
 ### Index & housekeeping
 
