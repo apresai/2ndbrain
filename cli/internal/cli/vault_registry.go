@@ -89,3 +89,23 @@ func readRecentVaultsFile(path string) []string {
 	}
 	return out
 }
+
+// canonicalVaultPath normalizes a vault path for storage and comparison:
+// absolute, symlinks resolved. macOS paths arrive in multiple spellings for the
+// same folder (/private/var vs /var, a symlinked home, the GUI's url.path vs a
+// terminal's cwd), and the recents list is compared as strings — so every write
+// and compare goes through this helper. EvalSymlinks fails on a path that no
+// longer exists; fall back to the absolute form so stale entries round-trip.
+func canonicalVaultPath(p string) string {
+	if p == "" {
+		return "" // Abs("") would resolve to the cwd, inventing a path
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
+}

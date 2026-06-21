@@ -135,8 +135,8 @@ func configuredFromFile(configPath, vaultPath string) ConfiguredStatus {
 //  2. Does it serve THIS vault? An entry pinned to a specific vault, via a
 //     "--vault <path>" arg (preferred, mirroring 2nb's own resolution order) or
 //     a "cwd", counts only when that pin matches this vault. An entry with no
-//     pin is vault-agnostic: the client resolves the vault at launch (the
-//     active-vault file or cwd), so it counts for any vault.
+//     pin is vault-agnostic: the client resolves the vault at launch (the open
+//     Obsidian vault or cwd), so it counts for any vault.
 //
 // Stage 2 is the fix for the false positive where `2nb mcp-server --vault
 // /other` (or `cwd: /other`) used to report "configured for THIS vault" purely
@@ -165,7 +165,7 @@ func isSecondBrainServer(key string, entry mcpServerEntry) bool {
 
 // pinnedVault returns the vault path an mcpServers entry is bound to, if any. A
 // "--vault <path>" (or "--vault=<path>") arg wins over cwd, mirroring 2nb's own
-// resolution order (--vault > 2NB_VAULT > active-vault file > cwd). An entry
+// resolution order (--vault > 2NB_VAULT > open Obsidian vault > cwd). An entry
 // with neither is vault-agnostic and pinned is false.
 func pinnedVault(entry mcpServerEntry) (path string, pinned bool) {
 	if v, ok := vaultFlagValue(entry.Args); ok {

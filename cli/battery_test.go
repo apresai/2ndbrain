@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,8 +16,8 @@ import (
 // gets its own HOME so side effects (active-vault file, recents,
 // ~/.claude/skills/...) stay out of the user's home.
 
-// isolatedHome returns a temp HOME for the test. Used so setActiveVault,
-// addRecentVault, and skills install --user do NOT touch the real user home.
+// isolatedHome returns a temp HOME for the test. Used so addRecentVault, the
+// Obsidian-registry read, and skills install --user do NOT touch the real user home.
 // The path is symlink-resolved because the CLI stores and reports vault
 // paths canonically (macOS t.TempDir returns /var/... which is a symlink to
 // /private/var/...), so test expectations must use the canonical spelling.
@@ -45,8 +46,8 @@ outer:
 }
 
 // runWithHome runs the binary with HOME overridden and 2NB_TEST explicitly
-// unset so the real side effects (writing ~/.2ndbrain-active-vault, recents,
-// skills files) happen but stay inside the temp HOME. Returns combined
+// unset so the real side effects (writing recents, skills files) happen but
+// stay inside the temp HOME. Returns combined
 // stdout+stderr so t.Fatalf messages contain the full subprocess diagnostic
 // (including slog warnings and Cobra usage errors that would otherwise
 // disappear into the test-runner's shared stderr).
@@ -79,12 +80,28 @@ func runWithHome(t *testing.T, home string, args ...string) (string, int) {
 	return out, code
 }
 
+// setObsidianOpenVault writes a minimal Obsidian registry under home marking
+// vaultPath as the open vault, so a bare `2nb` (no --vault) resolves it via the
+// authoritative Obsidian rung — the model where the active vault is whatever
+// Obsidian has open. macOS path (CI runs on macos-latest).
+func setObsidianOpenVault(t *testing.T, home, vaultPath string) {
+	t.Helper()
+	dir := filepath.Join(home, "Library", "Application Support", "obsidian")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir obsidian dir: %v", err)
+	}
+	body := fmt.Sprintf(`{"vaults":{"x":{"path":%q,"ts":1,"open":true}}}`, vaultPath)
+	if err := os.WriteFile(filepath.Join(dir, "obsidian.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write obsidian registry: %v", err)
+	}
+}
+
 func TestBattery_VaultLifecycle(t *testing.T) {
 	home := isolatedHome(t)
 	vaultA := filepath.Join(home, "vault-a")
 	vaultB := filepath.Join(home, "vault-b")
 
-	// Create vault A → becomes active.
+	// Create vault A.
 	if out, code := runWithHome(t, home, "vault", "create", vaultA); code != 0 {
 		t.Fatalf("vault create A: exit %d: %s", code, out)
 	}
@@ -92,10 +109,11 @@ func TestBattery_VaultLifecycle(t *testing.T) {
 		t.Fatalf("config.yaml missing in vault A: %v", err)
 	}
 
-	// Create vault B → becomes active.
+	// Create vault B, then make B the vault Obsidian has open → B is active.
 	if out, code := runWithHome(t, home, "vault", "create", vaultB); code != 0 {
 		t.Fatalf("vault create B: exit %d: %s", code, out)
 	}
+	setObsidianOpenVault(t, home, vaultB)
 
 	// vault list should show both, B active.
 	out, code := runWithHome(t, home, "vault", "list", "--json")
@@ -126,10 +144,12 @@ func TestBattery_VaultLifecycle(t *testing.T) {
 		t.Errorf("expected vault B active, got: %s", out)
 	}
 
-	// Switch back to A.
+	// Switch back to A: `vault set` registers it in recents (the active vault
+	// follows Obsidian), and opening A in Obsidian is what makes it active.
 	if out, code := runWithHome(t, home, "vault", "set", vaultA); code != 0 {
 		t.Fatalf("vault set A: exit %d: %s", code, out)
 	}
+	setObsidianOpenVault(t, home, vaultA)
 
 	// vault status should see vault A.
 	out, code = runWithHome(t, home, "vault", "status", "--json")
@@ -168,6 +188,8 @@ func TestBattery_DocumentCRUD(t *testing.T) {
 	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
 		t.Fatalf("vault create: exit %d: %s", code, out)
 	}
+	// Make the new vault the one Obsidian has open so bare `2nb` resolves it.
+	setObsidianOpenVault(t, home, vaultDir)
 
 	// Create a note via CLI.
 	out, code := runWithHome(t, home, "create", "Battery CRUD Doc", "--type", "note", "--json")
@@ -246,6 +268,8 @@ func TestBattery_IndexRebuild(t *testing.T) {
 	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
 		t.Fatalf("vault create: exit %d: %s", code, out)
 	}
+	// Make the new vault the one Obsidian has open so bare `2nb` resolves it.
+	setObsidianOpenVault(t, home, vaultDir)
 
 	// Seed two documents so index has something to rebuild.
 	for _, title := range []string{"Alpha Note", "Beta Note"} {
@@ -288,6 +312,8 @@ func TestBattery_SearchThreshold(t *testing.T) {
 	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
 		t.Fatalf("vault create: exit %d: %s", code, out)
 	}
+	// Make the new vault the one Obsidian has open so bare `2nb` resolves it.
+	setObsidianOpenVault(t, home, vaultDir)
 
 	// Seed three docs so BM25 and vector search have material.
 	for _, title := range []string{"Authentication and JWT", "Database Migrations", "Frontend Styling"} {
@@ -357,6 +383,8 @@ func TestBattery_MCPLifecycle(t *testing.T) {
 	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
 		t.Fatalf("vault create: exit %d: %s", code, out)
 	}
+	// Make the new vault the one Obsidian has open so bare `2nb` resolves it.
+	setObsidianOpenVault(t, home, vaultDir)
 
 	// Spawn the MCP server as a subprocess. It speaks stdio — we just need
 	// it alive long enough to write its sidecar file, then kill it.
@@ -479,6 +507,8 @@ func TestBattery_HybridDegradation(t *testing.T) {
 	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
 		t.Fatalf("vault create: exit %d: %s", code, out)
 	}
+	// Make the new vault the one Obsidian has open so bare `2nb` resolves it.
+	setObsidianOpenVault(t, home, vaultDir)
 	if out, code := runWithHome(t, home, "create", "Seed Doc", "--type", "note"); code != 0 {
 		t.Fatalf("create: exit %d: %s", code, out)
 	}

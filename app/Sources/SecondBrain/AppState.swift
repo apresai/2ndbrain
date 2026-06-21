@@ -278,11 +278,9 @@ final class AppState {
                 log.error("Failed to open index: \(error.localizedDescription)")
                 errorLogger?.log("Failed to open index", error: error)
             }
-            // Point the CLI's shared active-vault pointer at this vault so a
-            // bare `2nb ask`/`search` in the terminal resolves to the same vault
-            // the dashboard is bound to. The app pins --vault on its own calls
-            // and otherwise never writes the pointer, so the two could diverge.
-            syncCLIActiveVault(to: url.path)
+            // No CLI sync needed: 2nb reads Obsidian's own registry to resolve
+            // the active vault, the same source this app binds to, so a bare
+            // terminal `2nb` already follows the open Obsidian vault.
         } else {
             log.notice("Vault not initialized (no .2ndbrain dir): \(url.path)")
         }
@@ -372,28 +370,6 @@ final class AppState {
         // Second watcher for the user's global models catalog. Separate
         // watcher because ~/.config/2nb is outside the vault tree.
         startGlobalCatalogWatcher()
-    }
-
-    /// Best-effort: sync the CLI's shared active-vault pointer
-    /// (`~/.2ndbrain-active-vault`) to the vault the dashboard just bound, so a
-    /// terminal `2nb ask`/`search` with no `--vault` resolves to the same vault
-    /// the GUI shows. Runs `2nb vault set`, which validates the path and also
-    /// refreshes the recent-vaults list. Fire-and-forget on a background queue;
-    /// failures (e.g. a vault the CLI can't open) are intentionally ignored.
-    private func syncCLIActiveVault(to path: String) {
-        let cliPath = CLIPath.resolve()
-        DispatchQueue.global(qos: .utility).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: cliPath)
-            process.arguments = ["vault", "set", path]
-            // Discard output to /dev/null rather than a Pipe — nothing reads it,
-            // and an undrained pipe could (in theory) deadlock waitUntilExit on
-            // large output. `vault set` prints one short line, but null is safe.
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try? process.run()
-            process.waitUntilExit()
-        }
     }
 
     /// Watches ~/.config/2nb (or $XDG_CONFIG_HOME/2nb) for models.yaml

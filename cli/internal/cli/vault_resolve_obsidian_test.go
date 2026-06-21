@@ -9,7 +9,8 @@ import (
 )
 
 // writeObsidianRegistryForTest writes an obsidian.json (under the temp HOME)
-// whose single vault, flagged open, is openVaultPath.
+// whose single vault, flagged open, is openVaultPath. macOS path — the suite
+// runs on macOS (CI is macos-latest), where the Obsidian-native feature is used.
 func writeObsidianRegistryForTest(t *testing.T, openVaultPath string) {
 	t.Helper()
 	home, err := os.UserHomeDir()
@@ -26,66 +27,84 @@ func writeObsidianRegistryForTest(t *testing.T, openVaultPath string) {
 	}
 }
 
-func TestResolveVaultDir_FallsBackToObsidianOpenVault(t *testing.T) {
+func TestResolveVaultDir_ResolvesObsidianOpenVault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("2NB_TEST", "") // the registry rung is gated off under 2NB_TEST
+	t.Setenv("2NB_TEST", "") // activate the Obsidian rung
 	setVaultFlag(t, "")
 	t.Setenv("2NB_VAULT", "")
-	// cwd is a plain dir, not inside any vault, so the cwd rung doesn't fire.
-	t.Chdir(t.TempDir())
+	t.Chdir(t.TempDir()) // cwd is not a vault
 
 	obsVault := newResolveTestVault(t)
 	writeObsidianRegistryForTest(t, obsVault)
 
 	dir, source := resolveVaultDir()
 	if dir != obsVault || source != sourceObsidian {
-		t.Errorf("obsidian fallback: got (%q, %q), want (%q, %q)", dir, source, obsVault, sourceObsidian)
+		t.Errorf("got (%q, %q), want (%q, %q)", dir, source, obsVault, sourceObsidian)
 	}
 }
 
-func TestOpenVaultAndSetActive_ObsidianResolutionSetsActive(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("2NB_TEST", "") // rung active AND setActiveVault/addRecentVault write
-	setVaultFlag(t, "")
-	t.Setenv("2NB_VAULT", "")
-	t.Chdir(t.TempDir()) // non-vault cwd, so resolution reaches the registry rung
-
-	obsVault := newResolveTestVault(t)
-	writeObsidianRegistryForTest(t, obsVault)
-
-	v, err := openVaultAndSetActive()
-	if err != nil {
-		t.Fatalf("openVaultAndSetActive: %v", err)
-	}
-	v.Close()
-
-	// A write command resolved via Obsidian's registry self-heals the shared
-	// pointer + recents, so the next bare command resolves without re-reading it.
-	want := canonicalVaultPath(obsVault)
-	if got := getActiveVault(); got != want {
-		t.Errorf("active pointer after obsidian-resolved write = %q, want %q", got, want)
-	}
-	recents := listRecentVaults()
-	if len(recents) != 1 || canonicalVaultPath(recents[0]) != want {
-		t.Errorf("recents = %v, want exactly [%q]", recents, want)
-	}
-}
-
-func TestResolveVaultDir_CwdVaultBeatsObsidian(t *testing.T) {
+func TestResolveVaultDir_ObsidianBeatsCwd(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("2NB_TEST", "")
 	setVaultFlag(t, "")
 	t.Setenv("2NB_VAULT", "")
 
+	// Standing INSIDE one vault, with Obsidian reporting a DIFFERENT open vault:
+	// Obsidian wins. This is the headline behavior of making Obsidian's registry
+	// the authoritative source of the active vault.
+	cwdVault := newResolveTestVault(t)
+	t.Chdir(cwdVault)
+	obsVault := newResolveTestVault(t)
+	writeObsidianRegistryForTest(t, obsVault)
+
+	dir, source := resolveVaultDir()
+	if dir != obsVault || source != sourceObsidian {
+		t.Errorf("obsidian must beat cwd: got (%q, %q), want (%q, %q)", dir, source, obsVault, sourceObsidian)
+	}
+}
+
+func TestResolveVaultDir_FlagBeatsObsidian(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("2NB_TEST", "")
+	t.Setenv("2NB_VAULT", "")
+	t.Chdir(t.TempDir())
+
+	writeObsidianRegistryForTest(t, newResolveTestVault(t))
+	setVaultFlag(t, "/flag/vault")
+
+	if dir, source := resolveVaultDir(); dir != "/flag/vault" || source != sourceFlag {
+		t.Errorf("--vault must beat obsidian: got (%q, %q), want (/flag/vault, %q)", dir, source, sourceFlag)
+	}
+}
+
+func TestResolveVaultDir_EnvBeatsObsidian(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("2NB_TEST", "")
+	setVaultFlag(t, "")
+	t.Chdir(t.TempDir())
+
+	writeObsidianRegistryForTest(t, newResolveTestVault(t))
+	t.Setenv("2NB_VAULT", "/env/vault")
+
+	if dir, source := resolveVaultDir(); dir != "/env/vault" || source != sourceEnv {
+		t.Errorf("2NB_VAULT must beat obsidian: got (%q, %q), want (/env/vault, %q)", dir, source, sourceEnv)
+	}
+}
+
+func TestResolveVaultDir_ObsidianInvalidPathFallsToCwd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("2NB_TEST", "")
+	setVaultFlag(t, "")
+	t.Setenv("2NB_VAULT", "")
+
+	// Obsidian reports an open vault that is NOT a vault root (stale/moved):
+	// IsVaultRoot rejects it and resolution falls to the cwd vault.
+	writeObsidianRegistryForTest(t, filepath.Join(t.TempDir(), "not-a-vault"))
 	cwdVault := newResolveTestVault(t)
 	t.Chdir(cwdVault)
 
-	// Obsidian reports a DIFFERENT open vault; standing inside a vault must win.
-	writeObsidianRegistryForTest(t, newResolveTestVault(t))
-
-	dir, source := resolveVaultDir()
-	if dir != "." || source != sourceCwd {
-		t.Errorf("cwd vault must beat obsidian: got (%q, %q), want (., %q)", dir, source, sourceCwd)
+	if dir, source := resolveVaultDir(); dir != "." || source != sourceCwd {
+		t.Errorf("invalid obsidian path: got (%q, %q), want (., %q)", dir, source, sourceCwd)
 	}
 }
 
@@ -99,34 +118,35 @@ func TestResolveVaultDir_ObsidianRungInertUnder2NBTest(t *testing.T) {
 	writeObsidianRegistryForTest(t, newResolveTestVault(t))
 
 	// Under the harness guard the registry is ignored: resolution falls through
-	// to the (erroring) cwd, exactly as before this rung existed.
+	// to the (erroring) cwd — the isolation that keeps a binary test under the
+	// developer's real HOME from binding the live Obsidian vault.
 	dir, source := resolveVaultDir()
 	if dir != "." || source != sourceCwd {
 		t.Errorf("under 2NB_TEST: got (%q, %q), want (., %q)", dir, source, sourceCwd)
 	}
 }
 
-func TestVaultNotFoundError_NamesStalePointer(t *testing.T) {
+func TestOpenVaultAndSetActive_ObsidianResolutionRecordsRecent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	dead := filepath.Join(t.TempDir(), "gone")
-	writeActivePointer(t, dead)
+	t.Setenv("2NB_TEST", "")
+	setVaultFlag(t, "")
+	t.Setenv("2NB_VAULT", "")
+	t.Chdir(t.TempDir())
 
-	msg := vaultNotFoundError("/nowhere", sourceCwd).Error()
-	for _, want := range []string{activeVaultFile, dead, "no longer a vault", "2nb vault set"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("stale-pointer error missing %q:\n%s", want, msg)
-		}
+	obsVault := newResolveTestVault(t)
+	writeObsidianRegistryForTest(t, obsVault)
+
+	v, err := openVaultAndSetActive()
+	if err != nil {
+		t.Fatalf("openVaultAndSetActive: %v", err)
 	}
-}
+	v.Close()
 
-func TestVaultNotFoundError_StaleDiagnosticSuppressedForFlagSource(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	writeActivePointer(t, filepath.Join(t.TempDir(), "gone"))
-
-	// A bad explicit --vault is the user's own path; don't blame the pointer.
-	msg := vaultNotFoundError("/explicit", sourceFlag).Error()
-	if strings.Contains(msg, "active vault pointer") {
-		t.Errorf("stale-pointer diagnostic should be suppressed for --vault source:\n%s", msg)
+	// A write command resolved via Obsidian records the vault in recents.
+	want := canonicalVaultPath(obsVault)
+	recents := listRecentVaults()
+	if len(recents) != 1 || canonicalVaultPath(recents[0]) != want {
+		t.Errorf("recents = %v, want exactly [%q]", recents, want)
 	}
 }
 
@@ -146,16 +166,20 @@ func TestVaultNotFoundError_ListsRecents(t *testing.T) {
 	}
 }
 
-func TestVaultNotFoundError_GenericWhenNothingSet(t *testing.T) {
+func TestVaultNotFoundError_LeadsWithObsidianHint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	msg := vaultNotFoundError("/nowhere", sourceCwd).Error()
-	if strings.Contains(msg, "Recent vaults") || strings.Contains(msg, "active vault pointer") {
-		t.Errorf("expected no diagnostics when nothing is set:\n%s", msg)
+	if !strings.Contains(msg, "Open a vault in Obsidian") {
+		t.Errorf("error should lead with an Obsidian hint:\n%s", msg)
 	}
 	for _, want := range []string{"To fix:", "--vault /path/to/vault", "2NB_VAULT="} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("generic guidance missing %q:\n%s", want, msg)
 		}
+	}
+	// The removed pointer must no longer be referenced.
+	if strings.Contains(msg, "active vault pointer") || strings.Contains(msg, "2ndbrain-active-vault") {
+		t.Errorf("error should not mention the removed pointer:\n%s", msg)
 	}
 }

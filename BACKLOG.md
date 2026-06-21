@@ -116,10 +116,9 @@ Fixed in-PR: the missed write-boundary doc (`docs/obsidian/vault-coexistence.md`
 - **LOW — install progress/diagnostics print to stderr and bypass the `slog` file logger it sets up**, so `.2ndbrain/logs/cli.log` records nothing about an install. Mirror key steps through `slog`.
 - **LOW — no SIGINT/context cancellation** (`context.Background()` + 30s client timeout), consistent with sibling commands; a repo-wide `cmd.Context()` adoption pass would cover this.
 
-## Vault resolution — active-vault precedes cwd (from PR review, 2026-06-08)
+## Vault resolution — active-vault precedes cwd (from PR review, 2026-06-08) — RESOLVED
 
-- **MEDIUM — a bare `2nb` run *inside* vault B's directory resolves to the active vault A, not B.** The resolution order is `--vault` > `2NB_VAULT` > `~/.2ndbrain-active-vault` > cwd (`root.go:218-242`), so the active-vault pointer wins over the current directory. With the new GUI→CLI sync (`AppState.openVault` writes the pointer on every bind), the active pointer is set more often, making this cross-vault surprise likelier for multi-vault users. It's pre-existing, documented precedence and only prints the resolved source on error. Options if it bites: (a) move cwd ahead of the active-vault file when the cwd is itself a vault, or (b) print the resolved vault + source on every run, not just on error. Single-vault users (the common case) are unaffected.
-- **LOW — GUI tests (`make test-gui`) run the production app, which now writes `~/.2ndbrain-active-vault` on bind (fix #2).** A GUI test that opens a throwaway vault would set the developer's real active pointer to it (the same class of leak the unit-test isolation fixes, but via the real app, not a test subprocess). GUI tests are manual/rare and out of this PR's scope; if automated, point them at a vault that's meant to be active, or run the app under an isolated HOME.
+- **RESOLVED — Obsidian's registry is now the authoritative active vault, and the `~/.2ndbrain-active-vault` pointer was removed entirely.** `resolveVaultDir` resolves `--vault` → `2NB_VAULT` → the open Obsidian vault → cwd-vault; there is no 2nb-managed pointer to drift or be polluted, and the GUI no longer writes one. This dissolves both the "bare `2nb` inside vault B resolves to active vault A" surprise (Obsidian's open vault is authoritative) and the GUI-test pointer-leak concern (no pointer is written). See the "Obsidian's registry as the single source of truth" change.
 
 ## Embeddings status — empty-note handling (from PR review, 2026-06-07)
 
