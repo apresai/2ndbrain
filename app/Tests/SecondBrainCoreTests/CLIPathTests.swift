@@ -45,3 +45,23 @@ func bundledPathNilInTests() {
     #expect(CLIPath.bundledPath == nil)
     #expect(CLIPath.resolve() != Bundle.main.bundlePath + "/Contents/Resources/2nb")
 }
+
+@Test("augmentedPATH prepends the Homebrew/Go bin dirs that launchd omits")
+func augmentedPATHPrependsMissing() {
+    let got = CLIPath.augmentedPATH(current: "/usr/bin:/bin", home: "/Users/x")
+    #expect(got == "/opt/homebrew/bin:/usr/local/bin:/Users/x/go/bin:/usr/bin:/bin")
+}
+
+@Test("augmentedPATH never duplicates a dir already on PATH, keeping its place")
+func augmentedPATHDedupes() {
+    let got = CLIPath.augmentedPATH(current: "/opt/homebrew/bin:/usr/bin", home: "/Users/x")
+    // /opt/homebrew/bin is already present, so it keeps its position and only
+    // the genuinely-missing dirs are prepended.
+    #expect(got == "/usr/local/bin:/Users/x/go/bin:/opt/homebrew/bin:/usr/bin")
+}
+
+@Test("augmentedPATH builds a PATH from scratch when the inherited one is empty")
+func augmentedPATHEmpty() {
+    let got = CLIPath.augmentedPATH(current: "", home: "/Users/x")
+    #expect(got == "/opt/homebrew/bin:/usr/local/bin:/Users/x/go/bin")
+}
