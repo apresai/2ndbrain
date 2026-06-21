@@ -42,7 +42,10 @@ type claudeConfig struct {
 type mcpServerEntry struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
-	Cwd     string   `json:"cwd"`
+	// omitempty so `mcp install` doesn't write a meaningless empty "cwd" into the
+	// user's config for a user-scope (vault-pinned) entry. Only affects
+	// marshaling (install); the detector only unmarshals this struct.
+	Cwd string `json:"cwd,omitempty"`
 }
 
 // Configured reports whether the 2ndbrain MCP server is configured for the

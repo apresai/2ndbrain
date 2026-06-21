@@ -168,6 +168,10 @@ final class AppState {
     // vault switch; empty/nil when the CLI is unreachable or too old.
     var skillStatuses: [SkillStatusInfo] = []
     var mcpConfigured: MCPConfiguredInfo?
+
+    // Claude Code "Verify" health panel state.
+    var verifying = false
+    var healthChecks: [HealthCheck] = []
     var spotlightIndexer: SpotlightIndexer?
     var crashJournal: CrashJournal?
     var errorLogger: ErrorLogger?
@@ -1521,6 +1525,96 @@ final class AppState {
     func installClaudeCodeSkill() async throws {
         guard let vault else { throw CLIError.noVault }
         _ = try await runCLI(["skills", "install", "claude-code", "--user"], cwd: vault.rootURL)
+    }
+
+    // MARK: - Claude Code health (Verify) + one-click MCP setup
+
+    /// Run the real end-to-end self-test: fan out the doctors + a real model test
+    /// concurrently and assemble the checklist. User-initiated only (the model
+    /// tests make real provider calls) — never call this on a passive refresh.
+    func verifyClaudeCode() async {
+        guard vault != nil else { return }
+        verifying = true
+        defer { verifying = false }
+        healthChecks = []
+
+        async let skill = skillsDoctorReport()
+        async let mcp = mcpDoctorReport()
+        async let cfg = configDoctorReport()
+        async let embed = probeActiveModel(type: "embedding")
+        async let gen = probeActiveModel(type: "generation")
+        let (s, m, c, e, g) = await (skill, mcp, cfg, embed, gen)
+
+        var checks: [HealthCheck] = []
+        checks += ClaudeCodeHealth.checks(group: "Skill", from: s?.checks)
+        checks += ClaudeCodeHealth.checks(group: "MCP engine", from: m?.checks)
+        checks += ClaudeCodeHealth.checks(group: "AI", from: c?.checks)
+        checks.append(ClaudeCodeHealth.modelCheck(e, label: "Embedding"))
+        checks.append(ClaudeCodeHealth.modelCheck(g, label: "Generation"))
+        healthChecks = checks
+    }
+
+    func mcpDoctorReport() async -> MCPDoctorInfo? {
+        await decodeDoctor(["mcp", "doctor", "--json"])
+    }
+
+    func skillsDoctorReport() async -> SkillDoctorInfo? {
+        await decodeDoctor(["skills", "doctor", "claude-code", "--json"])
+    }
+
+    func configDoctorReport() async -> ConfigDoctorInfo? {
+        await decodeDoctor(["config", "doctor", "--json"])
+    }
+
+    /// Test the active embedding/generation model with a real provider call.
+    func probeActiveModel(type: String) async -> AIProbeResult? {
+        guard let vault, let status = aiStatus else { return nil }
+        let modelID = type == "embedding" ? status.embeddingModel : status.genModel
+        guard !modelID.isEmpty else { return nil }
+        do {
+            let data = try await runCLI(["models", "test", modelID, "--type", type, "--json", "--porcelain"], cwd: vault.rootURL)
+            return try JSONDecoder().decode(AIProbeResult.self, from: data)
+        } catch {
+            log.warning("models test \(modelID) failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Write the 2ndbrain MCP server entry into ~/.claude.json (`mcp install`).
+    func installMCP(scope: String = "user") async throws -> MCPInstallInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["mcp", "install", "--scope", scope, "--json"], cwd: vault.rootURL)
+        return try JSONDecoder().decode(MCPInstallInfo.self, from: data)
+    }
+
+    /// Collapse the index WAL (`vault checkpoint`).
+    func checkpointWAL() async throws -> VaultCheckpointResult {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["vault", "checkpoint", "--json"], cwd: vault.rootURL)
+        return try JSONDecoder().decode(VaultCheckpointResult.self, from: data)
+    }
+
+    /// Reap stale mcp-server processes (`mcp reap`). `dryRun` previews.
+    func reapServers(dryRun: Bool) async throws -> MCPReapResult {
+        guard let vault else { throw CLIError.noVault }
+        var args = ["mcp", "reap", "--json"]
+        if dryRun { args.append("--dry-run") }
+        let data = try await runCLI(args, cwd: vault.rootURL)
+        return try JSONDecoder().decode(MCPReapResult.self, from: data)
+    }
+
+    /// Decode a `* doctor --json` report, tolerating the exit-2 a doctor returns
+    /// when it finds problems (the JSON is still emitted).
+    private func decodeDoctor<T: Decodable>(_ args: [String]) async -> T? {
+        guard let vault else { return nil }
+        do {
+            let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
+            if data.isEmpty { return nil }
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            log.warning("doctor \(args.joined(separator: " ")) unavailable: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Set a single frontmatter field on a note via `2nb meta <path> --set key=value`.

@@ -1,5 +1,8 @@
 import SwiftUI
 import SecondBrainCore
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// The default dashboard surface. Answers the three questions that matter for
 /// the common case — is this the right vault, is AI set up and working, and is
@@ -14,6 +17,7 @@ struct HomeView: View {
     @State private var updatingCLI = false
     @State private var installingPlugin = false
     @State private var installingSkill = false
+    @State private var configuringMCP = false
     @State private var actionMessage: String?
     @State private var actionIsError = false
     // The vault Obsidian has open, loaded once in `.task` instead of read from
@@ -270,7 +274,22 @@ struct HomeView: View {
             SheetSectionHeader(title: "Claude Code", systemImage: "terminal")
             skillRow
             mcpConfiguredRow
+            if let dep = crossDepMessage {
+                Label(dep, systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            ClaudeCodeHealthView()
         }
+    }
+
+    /// Claude Code needs BOTH the skill and the MCP server; warn when only one
+    /// is set up.
+    private var crossDepMessage: String? {
+        let skill = appState.skillStatuses.first { $0.slug == "claude-code" }
+        let skillInstalled = (skill?.userInstalled ?? false) || (skill?.projectInstalled ?? false)
+        let mcpConfigured = appState.mcpConfigured?.configured ?? false
+        return ClaudeCodeHealth.crossDependency(skillInstalled: skillInstalled, mcpConfigured: mcpConfigured)
     }
 
     @ViewBuilder
@@ -295,8 +314,13 @@ struct HomeView: View {
         let state = HomeMCPConfigured.rowState(appState.mcpConfigured)
         HStack(spacing: 8) {
             Text("MCP server: \(state.label)")
-            if let buttonTitle = state.button {
-                Button(buttonTitle) {
+            if state.button != nil {
+                Button(configuringMCP ? "Configuring…" : "Configure automatically") {
+                    Task { await configureMCP() }
+                }
+                .controlSize(.small)
+                .disabled(configuringMCP || appState.vault == nil)
+                Button("Show setup") {
                     Task {
                         await appState.loadMCPSetup()
                         appState.showMCPSetup = true
@@ -306,6 +330,36 @@ struct HomeView: View {
             }
         }
         .font(.callout)
+    }
+
+    /// Write the MCP server entry into ~/.claude.json behind a confirm (it edits
+    /// an external config; a backup is saved), then re-check.
+    private func configureMCP() async {
+        #if canImport(AppKit)
+        let alert = NSAlert()
+        alert.messageText = "Configure the 2ndbrain MCP server?"
+        alert.informativeText = "This adds an entry to ~/.claude.json so Claude Code launches 2ndbrain for this vault. A backup is saved first and all your other settings are preserved."
+        alert.addButton(withTitle: "Configure")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        #endif
+        configuringMCP = true
+        actionMessage = nil
+        defer { configuringMCP = false }
+        do {
+            let res = try await appState.installMCP()
+            await appState.refreshMCPConfigured()
+            actionIsError = false
+            if res.changed {
+                actionMessage = "Configured the MCP server (\(res.scope) scope)."
+                    + (res.backupPath.isEmpty ? "" : " Backup: \(res.backupPath)")
+            } else {
+                actionMessage = "Already configured (\(res.scope) scope)."
+            }
+        } catch {
+            actionIsError = true
+            actionMessage = "Configure failed: \(error.localizedDescription)"
+        }
     }
 
     private func installSkill() async {
