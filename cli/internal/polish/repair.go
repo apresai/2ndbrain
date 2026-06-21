@@ -211,10 +211,26 @@ func buildRepairIndex(db *store.DB) (*repairIndex, error) {
 	return idx, nil
 }
 
-// normalizeName lower-cases and collapses internal whitespace so a link whose
-// only drift from an existing note is case or spacing matches it. (2nb's
-// resolver is case-sensitive; Obsidian's is not, so this is the common drift.)
+// normalizeName lower-cases, folds '-'/'_' to spaces, and collapses internal
+// whitespace, so a link whose only drift from an existing note is case, spacing,
+// or hyphen-vs-space matches it. 2nb's resolver is case- and separator-sensitive
+// (it treats "claude-code" and "claude code" as distinct); Obsidian's is not, so
+// case and separator drift are the common breakage. The same fold runs on both
+// the index side (basenames/titles/aliases in buildRepairIndex) and the lookup
+// side (the authored target), so a kebab basename
+// "claude-code-skills-reference-and-index" and a spaced target
+// "Claude Code Skills Reference and Index" both become
+// "claude code skills reference and index". Folding can only MERGE a drifted
+// target onto its single note, or — if it newly collides two distinct notes —
+// fall to the ambiguity guard (lookup returns >1, repair skips), so it never
+// silently retargets.
 func normalizeName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' {
+			return ' '
+		}
+		return r
+	}, s)
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
 }
 
