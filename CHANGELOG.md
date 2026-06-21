@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.3] - 2026-06-21
+
+### Changed
+- The active vault is now resolved solely from Obsidian's open-vault registry (`~/Library/Application Support/obsidian/obsidian.json`). A bare `2nb` command targets whatever vault Obsidian currently has open, keeping the CLI, GUI, and Obsidian plugin in sync with no pointer file to drift.
+- `vault set` and `vault create` register a vault in `vault list` recents but no longer switch the active vault; open the folder in Obsidian (or pass `--vault`) to make it active.
+
+### Removed
+- The 2nb-managed active-vault pointer file (`~/.2ndbrain-active-vault`) and its `active_vault.go` resolution path. `~/.2ndbrain-vaults` recents remains as display-only data for `vault list`, never a resolution source.
+
+
 ## [0.10.2] - 2026-06-21
 
 ### Added
