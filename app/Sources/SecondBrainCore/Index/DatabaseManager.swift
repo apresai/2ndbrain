@@ -7,6 +7,12 @@ public final class DatabaseManager: Sendable {
     public init(path: String) throws {
         var config = Configuration()
         config.foreignKeysEnabled = true
+        // Wait up to 5s on a locked DB instead of failing immediately. The Go
+        // CLI and every MCP server open the same index with busy_timeout=5000;
+        // matching it here means a concurrent write from the CLI doesn't surface
+        // as a hard "database is locked" error in the app, and the GUI's reads
+        // don't starve a `2nb vault checkpoint` running alongside.
+        config.busyMode = .timeout(5)
         config.prepareDatabase { db in
             // Enable persistent WAL for multi-process access with Go CLI
             try db.execute(sql: "PRAGMA journal_mode = WAL")

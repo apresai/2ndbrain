@@ -133,7 +133,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (78)
+### CLI Commands (79)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -146,6 +146,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `vault create <path>` | Initialize a new vault and make it active (replaces `init`) |
 | `vault set <path>` | Set existing vault as active |
 | `vault list` | List recently used vaults; reads `~/.2ndbrain-vaults` |
+| `vault checkpoint` | Collapse + truncate the index WAL (`PRAGMA wal_checkpoint` PASSIVE then TRUNCATE via `store.DB.Checkpoint`). SQLite's auto-checkpoint flushes but never truncates the `-wal` file, so a busy vault's `index.db-wal` can park at its high-water mark; this shrinks it. GUI-safe: an active reader makes TRUNCATE report `busy` rather than forcing it. `--json` → `{wal_bytes_before, wal_bytes_after, db_bytes, pages_total, pages_checkpointed, busy}` |
 | `create` | Create document from template (`--type`, `--title`, `--path`, `--content`). `--path <subdir>` files the doc under a vault-relative subdirectory (created if missing); default is the vault root. `--content` sets the initial body instead of the type template. `--overwrite` replaces an existing same-title note in place (reusing its id, so the index stays consistent); `--append` appends the content to an existing same-title note (else creates). `--allow-duplicate` is the orthogonal content-hash guard. Default with neither flag keeps the collision-free `<slug>-1.md` dedupe |
 | `read` | Read full document or specific section (`--chunk`). Alias: `print` |
 | `append` | Append content to a document's body (`--text`, `--file`, or stdin). Explicit, opt-in body write; leaves frontmatter untouched |

@@ -2,6 +2,12 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Session 2026-06-20: GUI config work (Milestone C — WAL hygiene + `vault checkpoint`)
+
+Chad-review GO (a LOW "-1 of -1 WAL frames" display on a busy TRUNCATE was clamped to 0 in-PR; a debug log on busy was added). Residual LOWs, both hard to test deterministically:
+- **LOW (coverage) — the busy=true checkpoint path is untested.** `store.DB.Checkpoint` reporting `busy` requires a live concurrent reader holding the WAL read-mark; the behavior is SQLite-native and the clamp/note are simple. `internal/store/db.go` `Checkpoint`.
+- **LOW (coverage) — `store.RetryBusy` invoked from `indexFile` isn't directly asserted** (only the pure `RetryBusy`/`IsBusyErr` unit tests are). The wrapper is a pass-through exercised by every existing index test; a dedicated test would need to force a real SQLITE_BUSY (a second writer holding the lock past `busy_timeout`). `internal/vault/indexer.go`.
+
 ## Session 2026-06-20: GUI config work (Milestone B — `repair-links` + GUI Repair button)
 
 Chad-review GO. The HIGH (`--target` comma-split via `StringSliceVar` → switched to `StringArrayVar`, with a guard test) was fixed in-PR. Residual LOWs:
