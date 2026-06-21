@@ -1,5 +1,6 @@
 import AppKit
 import os
+import SecondBrainCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -7,6 +8,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuTrackingObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // launchd starts the app with a minimal PATH (no /opt/homebrew/bin),
+        // which every child process inherits. Repair it before the first CLI
+        // call so the bundled 2nb's exec.LookPath("2nb") — e.g. `skills doctor`'s
+        // on-PATH check — reflects the user's real shell PATH instead of falsely
+        // reporting "2nb is NOT on your shell PATH". Runs before onAppear's
+        // `2nb vault set` and any later status/doctor probe.
+        let toolPATH = CLIPath.ensureToolPATH()
+        log.debug("augmented child-process PATH: \(toolPATH, privacy: .public)")
+
         renameFileMenuToNotes()
 
         // SwiftUI rebuilds the menu when scene state changes and may reset
