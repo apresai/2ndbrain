@@ -9,9 +9,13 @@ Obsidian app (panes, themes, plugins, Sync/Publish, workspace, dev-tools).
 This page maps common Obsidian-CLI invocations to their `2nb` equivalents and
 documents the accepted argument forms. Every `2nb` command also takes
 `--vault <path>` (or `vault=<path>`); when omitted, the active vault is resolved
-from `2NB_VAULT`, then `~/.2ndbrain-active-vault`, then the current directory.
-`2nb` never silently falls back to a different vault, and never writes to a
-guessed file (an ambiguous target fails loudly with the candidate paths).
+from `2NB_VAULT`, then `~/.2ndbrain-active-vault`, then the current directory (when
+it is inside a vault), then the vault Obsidian currently has open (read from its
+own registry, `~/Library/Application Support/obsidian/obsidian.json`, on macOS) —
+so a bare `2nb` from outside any vault targets the same vault the dashboard binds
+to. `2nb` still never silently falls back to a different vault for an ambiguous
+*target*, and never writes to a guessed file (an ambiguous target fails loudly
+with the candidate paths).
 
 ## Accepted argument forms
 
