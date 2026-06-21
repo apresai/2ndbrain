@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.2] - 2026-06-21
+
+### Added
+- `2nb update` command that checks whether a newer release is available, comparing the installed version against the latest published GitHub release (cached 24h) and printing the upgrade commands when behind; `--json` emits `{current, latest, update_available, checked, detail}`.
+- Updates tab in the macOS dashboard showing the app, CLI, and Obsidian-plugin versions against the latest release, with one-click **Update CLI** and **Update plugin** actions and a copyable `brew upgrade --cask` for the app itself.
+- CLI fallback that resolves the vault Obsidian currently has open (read from Obsidian's own registry) when no `--vault`, `2NB_VAULT`, active-vault pointer, or cwd-vault applies, so a bare `2nb` from a non-vault directory still targets the open vault.
+
+### Changed
+- The no-vault error is now actionable, telling the user how to set or open a vault instead of failing opaquely.
+
+### Fixed
+- Repaired launchd PATH resolution so the dashboard's Verify panel stops reporting false `2nb` CLI failures when the app is launched without a shell environment.
+
+
 ## [0.10.1] - 2026-06-21
 
 ### Added
