@@ -66,6 +66,6 @@ The `.obsidian/` directory is used only as the vault marker; its configuration f
 
 The indexer applies a fixed set of built-in ignore rules. It does not currently read native Obsidian or git ignore patterns:
 
-1. **System Defaults:** The indexer skips hidden directories (any directory whose name starts with `.`, including `.obsidian`) and `node_modules`, and excludes files with security-sensitive basenames (`.env` / `.env.*`, `credentials*`, or any name containing `secret`).
+1. **System Defaults:** The indexer skips hidden directories (any directory whose name starts with `.`, including `.obsidian`) and `node_modules`, then walks only authored note files (`.md` / `.canvas` / `.base`). Exclusion is by **type**, not by name: hidden/dot files (`.env`, `.env.*`, a stray `.secrets.yaml`) and any non-note file (`secrets.yaml`, `credentials.json`) are skipped, while every note is indexed — including one whose title merely mentions secrets (e.g. a `git-secrets-…` note). A name-substring rule could only ever hide legitimate notes, since real credential/data files are already excluded by their non-note extension.
 2. **Obsidian Ignored Files (not currently honored):** Exclusion lists defined in `.obsidian/app.json` under `userIgnoreFilters` are not read by the indexer; matching paths are still indexed.
 3. **Gitignore Rules (not currently honored):** The indexer does not parse `.gitignore` when walking the vault. Separately, 2ndbrain appends `.2ndbrain/` to the vault-root `.gitignore` so the derived sidecar stays out of version control.

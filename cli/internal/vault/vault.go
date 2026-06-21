@@ -302,25 +302,33 @@ func FindVaultRoot(dir string) string {
 }
 
 // IsIgnored returns true if the path should be excluded from indexing.
+//
+// The indexer only feeds authored note files (.md/.canvas/.base) here — the
+// walk filters by extension first (see indexer.go) — so this gates which
+// *notes* to index, not which credential files to keep out. We therefore
+// exclude by TYPE, not by name: every note is indexed, and real sensitive
+// files (.env, secrets.yaml, credentials.json) are excluded because they are
+// not note types. A name-substring rule like Contains(lower, "secret") could
+// only ever hide a legitimate note whose title mentions the word — e.g.
+// "git-secrets-word-split-and-bsd-grep-pitfalls.md" — never an actual secrets
+// dump, so it was pure false positives.
 func IsIgnored(path string) bool {
-	base := filepath.Base(path)
-	lower := strings.ToLower(base)
+	lower := strings.ToLower(filepath.Base(path))
 
-	// Dot directories
-	if strings.HasPrefix(base, ".") {
-		return true
-	}
-
-	// Security: exclude sensitive files
-	if lower == ".env" || strings.HasPrefix(lower, ".env.") {
-		return true
-	}
-	if strings.HasPrefix(lower, "credentials") {
-		return true
-	}
-	if strings.Contains(lower, "secret") {
+	// Hidden/dot files and directories (covers .env, .env.local, .obsidian/,
+	// .2ndbrain/, a hidden .secrets.yaml, etc.).
+	if strings.HasPrefix(lower, ".") {
 		return true
 	}
 
-	return false
+	// Authored note formats are always indexed; anything else is excluded by
+	// type. Keep this list in sync with the extension filter in indexer.go.
+	switch {
+	case strings.HasSuffix(lower, ".md"),
+		strings.HasSuffix(lower, ".canvas"),
+		strings.HasSuffix(lower, ".base"):
+		return false
+	default:
+		return true
+	}
 }

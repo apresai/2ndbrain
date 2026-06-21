@@ -80,14 +80,25 @@ func TestIsIgnored(t *testing.T) {
 		path string
 		want bool
 	}{
+		// Hidden/dot files and dirs are always excluded.
 		{".git", true},
 		{".env", true},
 		{".env.local", true},
+		{".hidden", true},
+		// Non-note files (credential/data) are excluded by TYPE.
 		{"credentials.json", true},
-		{"my-secret-file.md", true},
+		{"secrets.yaml", true},
+		{"data.json", true},
+		// Authored notes are always indexed — including ones whose title merely
+		// mentions "secret"/"credentials". Excluding those by name only ever hid
+		// legitimate notes (the regression this guards against).
+		{"my-secret-file.md", false},
+		{"resources/git-secrets-word-split-and-bsd-grep-pitfalls.md", false},
+		{"secrets.md", false},
+		{"vault.canvas", false},
+		{"projects.base", false},
 		{"README.md", false},
 		{"notes/doc.md", false},
-		{".hidden", true},
 	}
 	for _, tc := range tests {
 		got := IsIgnored(tc.path)
