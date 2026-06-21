@@ -2,6 +2,14 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Session 2026-06-20: GUI config work (Milestone E — Claude Code health & setup)
+
+Chad-review GO. A LOW (install wrote a meaningless `"cwd":""` into `~/.claude.json` because `mcpServerEntry.Cwd` lacked `omitempty`) was fixed in-PR. Residual LOWs:
+- **LOW — symlinked `~/.claude.json`: the `.bak` lands beside the symlink, not the resolved target.** `writeConfigTree` resolves the symlink for the temp+rename (correct — doesn't clobber the link) but writes `backupPath = configPath + ".bak"` at the unresolved path. No data loss (the original is preserved), just a discoverability nit. `cli/internal/mcp/install.go` `writeConfigTree`.
+- **LOW (coverage) — `AppState.verifyClaudeCode()` fan-out aggregation is untested.** The pure component mappers (`ClaudeCodeHealth.*`) and every decoder are tested; the async-let assembly that calls them is not (it shells real subprocesses, integration-shaped). `app/Sources/SecondBrain/AppState.swift`.
+- **LOW — `decodeDoctor` collapses two failure causes** (an old CLI without the command vs. a genuine doctor crash) into one identical `.fail` health row ("update the 2nb"). The nudge is right either way. `app/Sources/SecondBrain/AppState.swift`.
+- **LOW (docs, optional) — `docs/mcp-integration.md` doesn't mention `mcp install` / `mcp doctor`.** A one-line "Configure automatically with `2nb mcp install`" near the existing `mcp configured` snippet would close the loop. CLAUDE.md + `--help` cover it.
+
 ## Session 2026-06-20: GUI config work (Milestone D — mcp-server idle self-exit + `mcp reap`)
 
 Chad-review GO. The HIGH (reap could SIGTERM a process whose PID was reused by an UNRELATED process — the StartedAt guard only catches reuse by another 2nb server) was fixed in-PR: `StaleServers` now confirms the live PID is actually a 2nb mcp-server via `looksLikeMCPServer` (a `ps` command-line check, biased toward false-negatives), with a real-process guard test (`TestReap_SkipsForeignPIDReuse`) and a StartedAt-mismatch test. Residual LOWs:
