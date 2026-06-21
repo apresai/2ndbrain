@@ -1639,6 +1639,50 @@ final class AppState {
         return try JSONDecoder().decode(PolishResult.self, from: data)
     }
 
+    /// Ranked "did you mean?" existing-note candidates for one broken wikilink
+    /// `target`, via `2nb suggest-target` (drift / semantic / keyword tiers).
+    /// Read-only. Returns [] rather than throwing on a CLI miss so the
+    /// resolution sheet still offers Create/Unlink — no dead end.
+    func suggestTarget(target: String) async throws -> [SuggestTargetResult] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLIAllowingNonZero(
+            ["suggest-target", target, "--limit", "6", "--json", "--porcelain"], cwd: vault.rootURL)
+        return (try? JSONDecoder().decode([SuggestTargetResult].self, from: data)) ?? []
+    }
+
+    /// Repoint the broken wikilink `from` in `path` to the chosen existing note
+    /// `to` via `2nb relink`. `preview: false` writes + snapshots, reversible
+    /// with `polish --undo`.
+    func relink(path: String, from: String, to: String, preview: Bool = true) async throws -> PolishResult {
+        guard let vault else { throw CLIError.noVault }
+        var args = ["relink", path, "--from", from, "--to", to, "--json", "--porcelain"]
+        if !preview { args.append("--write") }
+        let data = try await runCLI(args, cwd: vault.rootURL)
+        return try JSONDecoder().decode(PolishResult.self, from: data)
+    }
+
+    /// Remove the broken wikilink `target` in `path`, keeping its visible text,
+    /// via `2nb unlink`. `preview: false` writes + snapshots, reversible with
+    /// `polish --undo`.
+    func unlink(path: String, target: String, preview: Bool = true) async throws -> PolishResult {
+        guard let vault else { throw CLIError.noVault }
+        var args = ["unlink", path, "--target", target, "--json", "--porcelain"]
+        if !preview { args.append("--write") }
+        let data = try await runCLI(args, cwd: vault.rootURL)
+        return try JSONDecoder().decode(PolishResult.self, from: data)
+    }
+
+    /// Create a stub note titled `title` (so a broken `[[title]]` link resolves)
+    /// via `2nb create`; `subdir` files it under a vault-relative folder.
+    @discardableResult
+    func createStub(title: String, subdir: String? = nil) async throws -> CreateResult {
+        guard let vault else { throw CLIError.noVault }
+        var args = ["create", "--title", title, "--type", "note", "--json", "--porcelain"]
+        if let subdir, !subdir.isEmpty { args.append(contentsOf: ["--path", subdir]) }
+        let data = try await runCLI(args, cwd: vault.rootURL)
+        return try JSONDecoder().decode(CreateResult.self, from: data)
+    }
+
     func askAI(question: String) async throws -> AIAskResult {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)
@@ -2719,6 +2763,31 @@ struct RepairLinkRepair: Codable, Identifiable {
         case newTarget = "new_target"
         case reason
     }
+}
+
+/// One ranked "did you mean?" candidate from `2nb suggest-target`. Mirrors the
+/// Go `cli.SuggestLinkResult`.
+struct SuggestTargetResult: Codable, Identifiable {
+    var id: String { path }
+    let path: String
+    let title: String
+    let score: Double
+    let snippet: String
+
+    /// Display name: the frontmatter title if set, else the basename (a note
+    /// can lack a title, in which case the Go side sends "").
+    var displayTitle: String {
+        if !title.isEmpty { return title }
+        return (path as NSString).lastPathComponent
+    }
+}
+
+/// The note created by `2nb create --json` (`{id, path, title, type}`).
+struct CreateResult: Codable {
+    let id: String
+    let path: String
+    let title: String
+    let type: String
 }
 
 // MARK: - AI Setup Wizard Types

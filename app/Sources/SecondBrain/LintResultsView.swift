@@ -131,10 +131,10 @@ struct LintResultsView: View {
             .environment(appState)
         }
         .sheet(item: $activeRepair) { repair in
-            RepairPreviewSheet(repair: repair) {
+            LinkResolutionSheet(fix: repair, onOpenInObsidian: { openInObsidian(forPath: repair.path) }) { message in
                 activeRepair = nil
                 actionIsError = false
-                actionMessage = "Repaired [[\(repair.target)]]. Re-checking…"
+                actionMessage = "\(message) Re-checking…"
                 Task { await appState.runLint() }
             }
             .environment(appState)
@@ -145,13 +145,17 @@ struct LintResultsView: View {
     /// default handler if Obsidian isn't installed. Unlike the old behavior, the
     /// panel stays open so the user can keep working through findings.
     private func openInObsidian(_ issue: LintIssue) {
+        openInObsidian(forPath: issue.path)
+    }
+
+    private func openInObsidian(forPath path: String) {
         guard let vault = appState.vault else { return }
-        let absURL = vault.rootURL.appendingPathComponent(issue.path)
+        let absURL = vault.rootURL.appendingPathComponent(path)
         // Prefer the name Obsidian itself registers for this folder (handles a
         // vault renamed inside Obsidian); fall back to the folder basename.
         let vaultName = ObsidianRegistry.load()?.vault(at: vault.rootURL)?.name
             ?? vault.rootURL.lastPathComponent
-        ObsidianURL.open(vaultName: vaultName, relativePath: issue.path, absoluteFileURL: absURL)
+        ObsidianURL.open(vaultName: vaultName, relativePath: path, absoluteFileURL: absURL)
     }
 }
 
@@ -205,7 +209,7 @@ private struct IssueRow: View {
                         }
                         .controlSize(.small)
                     case let .brokenLink(target):
-                        Button("Repair link") {
+                        Button("Fix link…") {
                             onRepair(ActiveRepair(path: issue.path, target: target))
                         }
                         .controlSize(.small)
@@ -330,28 +334,40 @@ private struct SetValueSheet: View {
     }
 }
 
-/// Previews a deterministic link repair (a `2nb repair-links` dry run), shows the
-/// before/after diff, and applies it on confirm. When the target can't be
-/// confidently resolved (no match / ambiguous), there's nothing to apply — it
-/// explains why and points the user to Obsidian.
-private struct RepairPreviewSheet: View {
+/// Resolves a broken `[[wikilink]]` with no dead ends. On open it concurrently
+/// loads a deterministic repair preview (`2nb repair-links` dry run) and ranked
+/// "did you mean?" candidates (`2nb suggest-target`), then presents, in priority
+/// order: Repair drift (when a confident target exists, with a diff), Did-you-mean
+/// suggestions (relink to a chosen note), Create the note, and Unlink (keep the
+/// text). Create and Unlink are ALWAYS offered, so every finding has a real fix.
+/// Every mutating action is reversible with `polish --undo`.
+private struct LinkResolutionSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
-    let repair: ActiveRepair
-    /// Called after a successful apply so the parent can dismiss, re-lint, and
-    /// show a banner.
-    let onApplied: () -> Void
+    let fix: ActiveRepair
+    /// Open the note in Obsidian (delegated to the parent, which knows the vault).
+    let onOpenInObsidian: () -> Void
+    /// Called with a past-tense banner message after a successful resolution so
+    /// the parent can dismiss, re-lint, and show the green banner.
+    let onResolved: (String) -> Void
 
     @State private var loading = true
-    @State private var preview: PolishResult?
+    @State private var repairPreview: PolishResult?
+    @State private var suggestions: [SuggestTargetResult] = []
     @State private var errorText: String?
-    @State private var applying = false
+    @State private var busy = false
+
+    /// The single confident repair, if `repair-links` found one (case/separator
+    /// drift to exactly one existing note).
+    private var confidentRepair: RepairLinkRepair? {
+        repairPreview?.linksRepaired?.first
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Repair link")
+            Text("Fix link")
                 .font(.headline)
-            Text("[[\(repair.target)]] in \(repair.path)")
+            Text("[[\(fix.target)]] in \(fix.path)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -359,86 +375,191 @@ private struct RepairPreviewSheet: View {
             if loading {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("Checking…").foregroundStyle(.secondary)
+                    Text("Finding fixes…").foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 80)
-            } else if let errorText {
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let r = confidentRepair, let p = repairPreview {
+                            repairSection(r, preview: p)
+                        }
+                        if !filteredSuggestions.isEmpty {
+                            suggestSection
+                        }
+                        createSection
+                        unlinkSection
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(maxHeight: 300)
+            }
+
+            if let errorText {
                 Text(errorText)
                     .font(.caption)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if let preview {
-                previewContent(preview)
             }
 
             Divider()
             HStack {
+                Button("Open in Obsidian") { onOpenInObsidian() }
+                    .controlSize(.small)
+                    .disabled(busy)
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                    .disabled(applying)
-                if canApply {
-                    Button(applying ? "Applying…" : "Apply") { apply() }
-                        .keyboardShortcut(.defaultAction)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(applying)
-                }
+                    .disabled(busy)
             }
         }
         .padding(16)
-        .frame(width: 460)
-        .task { await loadPreview() }
+        .frame(width: 480)
+        .task { await load() }
     }
 
-    private var canApply: Bool {
-        preview?.linksRepaired?.isEmpty == false
+    // MARK: Sections
+
+    @ViewBuilder
+    private func repairSection(_ r: RepairLinkRepair, preview p: PolishResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Repair drift (recommended)", systemImage: "wand.and.stars")
+                .font(.subheadline).fontWeight(.medium)
+            Text("[[\(r.raw)]] → [[\(r.newTarget ?? "")]]")
+                .font(.callout)
+            DiffView(original: p.original, modified: p.polished)
+                .frame(maxHeight: 140)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+            Button(busy ? "Repairing…" : "Repair") {
+                run("Repaired [[\(fix.target)]].") {
+                    let res = try await appState.repairLinks(path: fix.path, target: fix.target, preview: false)
+                    return noopProblem(res, verb: "repair")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(busy)
+        }
     }
 
     @ViewBuilder
-    private func previewContent(_ p: PolishResult) -> some View {
-        if let repaired = p.linksRepaired, !repaired.isEmpty {
-            ForEach(repaired) { r in
-                Text("[[\(r.raw)]] → [[\(r.newTarget ?? "")]]")
-                    .font(.callout)
+    private var suggestSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Did you mean?", systemImage: "sparkle.magnifyingglass")
+                .font(.subheadline).fontWeight(.medium)
+            ForEach(filteredSuggestions) { cand in
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(cand.displayTitle).font(.callout)
+                        Text(cand.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button("Link") {
+                        let to = (cand.path as NSString).deletingPathExtension
+                        run("Linked [[\(fix.target)]] → [[\(cand.displayTitle)]].") {
+                            let res = try await appState.relink(path: fix.path, from: fix.target, to: to, preview: false)
+                            return noopProblem(res, verb: "repoint")
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(busy)
+                }
             }
-            DiffView(original: p.original, modified: p.polished)
-                .frame(maxHeight: 220)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-        } else {
-            let ambiguous = p.linksSkipped?.contains { $0.reason == "ambiguous" } ?? false
-            Text(ambiguous
-                ? "Couldn't auto-fix — [[\(repair.target)]] matches more than one note."
-                : "Couldn't auto-fix — no note matches [[\(repair.target)]].")
-                .font(.callout)
-            Text("Open the note in Obsidian to fix this link by hand.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
-    private func loadPreview() async {
+    @ViewBuilder
+    private var createSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Create the note", systemImage: "doc.badge.plus")
+                .font(.subheadline).fontWeight(.medium)
+            Text("Make a new note titled “\(fix.target)” so the link resolves.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Create note") {
+                run("Created note for [[\(fix.target)]].") {
+                    _ = try await appState.createStub(title: fix.target)
+                    return nil
+                }
+            }
+            .controlSize(.small)
+            .disabled(busy)
+        }
+    }
+
+    @ViewBuilder
+    private var unlinkSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Unlink", systemImage: "link.badge.plus")
+                .font(.subheadline).fontWeight(.medium)
+            Text("Remove the link, keep the text “\(fix.target)”.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Unlink") {
+                run("Unlinked [[\(fix.target)]].") {
+                    let res = try await appState.unlink(path: fix.path, target: fix.target, preview: false)
+                    return noopProblem(res, verb: "unlink")
+                }
+            }
+            .controlSize(.small)
+            .disabled(busy)
+        }
+    }
+
+    // MARK: Logic
+
+    /// Drop a suggestion that duplicates the confident repair target (compared by
+    /// the note's bare name) so it isn't offered twice.
+    private var filteredSuggestions: [SuggestTargetResult] {
+        guard let n = confidentRepair?.newTarget, !n.isEmpty else { return suggestions }
+        let repairName = (n as NSString).lastPathComponent.lowercased()
+        return suggestions.filter {
+            (($0.path as NSString).deletingPathExtension as NSString).lastPathComponent.lowercased() != repairName
+        }
+    }
+
+    private func load() async {
         loading = true
         errorText = nil
-        do {
-            preview = try await appState.repairLinks(path: repair.path, target: repair.target, preview: true)
-        } catch {
-            errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
-        }
+        // Repair preview and suggestions are independent — fetch concurrently.
+        // repair-links can error (e.g. read-only file); suggestions never do.
+        async let repairResult: PolishResult? = try? await appState.repairLinks(path: fix.path, target: fix.target, preview: true)
+        async let suggestResult: [SuggestTargetResult] = (try? await appState.suggestTarget(target: fix.target)) ?? []
+        repairPreview = await repairResult
+        suggestions = await suggestResult
         loading = false
     }
 
-    private func apply() {
-        applying = true
+    /// Run a mutating resolution. `work` returns nil on success, or a
+    /// user-facing problem string (e.g. a CLI no-op) to show in-sheet INSTEAD of
+    /// the green success banner — so a stale finding whose link no longer exists
+    /// doesn't falsely report success. On real success the parent dismisses +
+    /// re-lints.
+    private func run(_ successMessage: String, _ work: @escaping () async throws -> String?) {
+        busy = true
         errorText = nil
         Task {
             do {
-                _ = try await appState.repairLinks(path: repair.path, target: repair.target, preview: false)
-                applying = false
-                onApplied()
+                let problem = try await work()
+                busy = false
+                if let problem {
+                    errorText = problem
+                } else {
+                    onResolved(successMessage)
+                }
             } catch {
-                applying = false
+                busy = false
                 errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+
+    /// nil when the edit actually changed a link; a user-facing message when the
+    /// CLI reported a no-op (no matching link — usually a stale finding). A
+    /// non-empty `warning` on a real edit is non-blocking: the edit happened, and
+    /// the subsequent re-lint reflects whether the finding persists.
+    private func noopProblem(_ r: PolishResult, verb: String) -> String? {
+        if r.linksRepaired?.isEmpty ?? true {
+            return "No [[\(fix.target)]] link found to \(verb) — it may have already changed. Re-check to refresh."
+        }
+        return nil
     }
 }
