@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.0] - 2026-06-20
+
+### Added
+- `2nb repair-links <path>` — deterministic, offline repair of broken `[[wikilinks]]` (canonicalizes a target only when it maps to exactly one note; ambiguous targets reported, never guessed). `--target` scopes the fix; `--write` applies and snapshots for `polish --undo`.
+- `2nb mcp install` / `mcp uninstall` — idempotent, backup-first write/remove of the 2ndbrain server entry in `~/.claude.json`, preserving all unrelated keys.
+- `2nb mcp doctor` — in-process end-to-end self-test of the MCP engine (tool count, real `kb_info`/`kb_list`/`kb_search` round-trips, AI/wiring/reliability signals).
+- `2nb mcp reap` — terminate stale/orphaned `mcp-server` processes for the vault (SIGTERM, PID-reuse-safe, `--dry-run`).
+- `2nb skills doctor [slug]` — verify an agent's skill is installed and the `2nb` it shells to resolves on PATH.
+- `2nb vault checkpoint` — collapse and truncate the index WAL to shrink a parked `-wal` file (GUI-safe; reports `busy` instead of forcing).
+- MCP server self-announcement via a one-line `instructions` string in the initialize response, so a connected-but-idle server isn't misread as absent.
+- macOS app: Claude Code card on Home (skill-install, MCP-configured with one-click **Configure automatically**, a **Verify** self-test panel fanning out `skills doctor`/`mcp doctor`/`config doctor`/`models test`), plus a Reliability row with **Checkpoint WAL** / **Reap stale servers** buttons.
+- macOS app: actionable lint findings — **Open in Obsidian** (`obsidian://` deep link) on every finding and **Set value…** / **Repair link** buttons for schema and broken-link findings.
+
+### Changed
+- `mcp-server` now self-exits after 30 min idle (override via `--idle-timeout` / `$2NB_MCP_IDLE_TIMEOUT`) so closed AI sessions don't leave orphans holding the index open; the client respawns on demand.
+- Index DB hardening: named SQLite driver with WAL hygiene and busy-retry, so concurrent CLI/app access no longer fails on transient `SQLITE_BUSY`.
+
+
 ## [0.9.10] - 2026-06-20
 
 ### Added

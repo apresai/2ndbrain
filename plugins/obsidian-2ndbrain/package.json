@@ -1,6 +1,6 @@
 {
   "name": "obsidian-2ndbrain",
-  "version": "0.9.10",
+  "version": "0.10.0",
   "description": "Obsidian-native AI companion for semantic search and RAG Q&A using 2nb.",
   "main": "main.js",
   "scripts": {
