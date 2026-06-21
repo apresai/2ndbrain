@@ -69,11 +69,19 @@ func mcpToolRegistrations(h *handlers) []toolRegistration {
 	}
 }
 
-func Start(v *vault.Vault, version string) error {
+// newMCPServer builds a fully-configured MCP server for the vault: the
+// instructions string, tool-capability flag, and all kb_* tools registered
+// through the same status-writer + per-tool-timeout wrappers the live server
+// uses. It is the single source of truth for server construction so the stdio
+// server (Start), a future in-process self-test (mcp doctor), and tests all
+// exercise the identical registration. The returned StatusWriter may be nil (its setup
+// is best-effort and must not block the server) and is owned by the caller.
+func newMCPServer(v *vault.Vault, version string) (*server.MCPServer, *StatusWriter) {
 	s := server.NewMCPServer(
 		"2ndbrain",
 		version,
 		server.WithToolCapabilities(true),
+		server.WithInstructions(ServerInstructions),
 	)
 
 	h := &handlers{vault: v}
@@ -98,6 +106,12 @@ func Start(v *vault.Vault, version string) error {
 	for _, reg := range mcpToolRegistrations(h) {
 		addTool(reg.tool, withTimeout(reg.timeout, reg.handler))
 	}
+
+	return s, statusWriter
+}
+
+func Start(v *vault.Vault, version string) error {
+	s, statusWriter := newMCPServer(v, version)
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)

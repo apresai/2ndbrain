@@ -305,6 +305,8 @@ tar czf vault.tar.gz \
 
 Each `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` (PID, start time, parent PID, last 50 invocations: tool, timestamp, duration, ok/error). The dashboard polls `2nb mcp status --json` every 5s. mark3labs/mcp-go has no client-connected hook, so sidecar files are the only enumeration mechanism.
 
+The server self-announces via a one-line `instructions` string in the initialize response (`mcp.ServerInstructions`, wired through `newMCPServer` — the single source of truth for server construction shared by `Start`, tests, and future in-process self-tests). Clients fold it into their session-start "MCP Server Instructions" summary, so a connected-but-idle server is not misread as absent.
+
 | Tool | Purpose |
 |------|---------|
 | `kb_info` | Vault overview: name, doc types, schemas, counts, AI status |
@@ -356,7 +358,7 @@ Advanced section:
 | AI Settings | AIHubView.swift | AI Hub (see below) — providers, active models, full catalog |
 | MCP Server | MCPStatusView.swift | A durable "Configured in ~/.claude.json" banner (from `2nb mcp configured --json`, via `HomeMCPConfigured`) above live MCP server processes + recent tool invocations; polls `2nb mcp status --json` every 5s. The banner answers "is it set up?" even when no server is running (the client launches it on demand), and the empty state distinguishes configured-but-idle from not-configured |
 | Git Integration | GitActivityView.swift | Recent commits (1/3/7/30-day window); click a row → `CommitDetailView` split pane (file list + per-file diff) |
-| Validation | LintResultsView.swift | Shells out to `2nb lint --json` and renders findings |
+| Validation | LintResultsView.swift | Shells out to `2nb lint --json` and renders findings; each finding is actionable — **Open in Obsidian** (via an `obsidian://open` deep link built by `SecondBrainCore/Vault/ObsidianURL`, with a default-app fallback) and, for schema findings (missing required field / invalid enum classified by `LintFinding`), **Set value…** (a sheet that runs `2nb meta --set` and re-lints) |
 
 Supporting views: `MCPSetupView` (MCP config snippets for AI tools), `ModelCatalogPickerView` (per-model detail / test / benchmark, opened from the AI Hub), `IndexProgressView` (rebuild confirmation → progress → stats), `MergeConflictView` / `DiffView` (reusable Myers LCS unified diff), `PreferencesView` (Cmd+,). `AppDelegate.swift` renames the default File menu to "Notes".
 

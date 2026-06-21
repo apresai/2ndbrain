@@ -58,6 +58,22 @@ func TestValidateStatusTransition_TerminalState(t *testing.T) {
 	}
 }
 
+// A document whose current status is invalid/corrupt (not a node in the
+// machine — the case `2nb lint` flags) can be REPAIRED to any valid enum
+// status. Without this, the GUI "Set value…" / `meta --set status=` flow could
+// never fix an invalid status on a machine-backed type.
+func TestValidateStatusTransition_RepairFromInvalidStatus(t *testing.T) {
+	schemas := DefaultSchemas()
+	// from "pending" (not a real adr status) -> "accepted" (valid enum): allowed.
+	if err := schemas.ValidateStatusTransition("adr", "pending", "accepted"); err != nil {
+		t.Errorf("repair from invalid status should be allowed: %v", err)
+	}
+	// Repairing to ANOTHER invalid value is still rejected (enum still enforced).
+	if err := schemas.ValidateStatusTransition("adr", "pending", "banana"); err == nil {
+		t.Error("repair to a non-enum status should still be rejected")
+	}
+}
+
 func TestSaveAndLoadSchemas(t *testing.T) {
 	dir := t.TempDir()
 	original := DefaultSchemas()
