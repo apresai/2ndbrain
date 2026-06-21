@@ -61,7 +61,7 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 			onProgress(relPath)
 		}
 
-		if err := indexFile(v.DB, path, relPath); err != nil {
+		if err := store.RetryBusy(func() error { return indexFile(v.DB, path, relPath) }); err != nil {
 			stats.Errors++
 			slog.Warn("index file failed", "path", relPath, "err", err)
 			fmt.Fprintf(os.Stderr, "warning: index %s: %v\n", relPath, err)
@@ -101,7 +101,7 @@ func IndexSingleFile(v *Vault, absPath string) error {
 	if IsIgnored(relPath) {
 		return fmt.Errorf("path is ignored: %s", relPath)
 	}
-	if err := indexFile(v.DB, absPath, relPath); err != nil {
+	if err := store.RetryBusy(func() error { return indexFile(v.DB, absPath, relPath) }); err != nil {
 		return fmt.Errorf("index file: %w", err)
 	}
 	// Re-resolve wikilinks so any new [[targets]] in this doc get linked

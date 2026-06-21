@@ -88,14 +88,74 @@ var vaultListCmd = &cobra.Command{
 	RunE: runVaultList,
 }
 
+var vaultCheckpointCmd = &cobra.Command{
+	Use:   "checkpoint",
+	Short: "Collapse and truncate the index write-ahead log (WAL)",
+	Long: `Runs a SQLite WAL checkpoint (PASSIVE then TRUNCATE) on the vault index:
+writes the .2ndbrain/index.db-wal contents back into index.db and truncates the
+-wal file.
+
+Use this when index.db-wal has grown large. SQLite's auto-checkpoint flushes
+WAL frames but never truncates the file, so a busy vault's -wal can park at its
+high-water mark (we've seen 4MB against a 372KB database). This is safe to run
+while the macOS app or an MCP server is connected: if a reader is active the
+truncate is skipped (reported as busy) rather than forced, so it never blocks
+or corrupts. Reports the WAL size before and after.`,
+	Example: `  2nb vault checkpoint
+  2nb vault checkpoint --json`,
+	RunE: runVaultCheckpoint,
+}
+
 func init() {
 	vaultCmd.AddCommand(vaultStatusCmd)
 	vaultCmd.AddCommand(vaultShowCmd)
 	vaultCmd.AddCommand(vaultCreateCmd)
 	vaultCmd.AddCommand(vaultSetCmd)
 	vaultCmd.AddCommand(vaultListCmd)
+	vaultCmd.AddCommand(vaultCheckpointCmd)
 	vaultCmd.GroupID = "start"
 	rootCmd.AddCommand(vaultCmd)
+}
+
+func runVaultCheckpoint(cmd *cobra.Command, _ []string) error {
+	v, err := openVault()
+	if err != nil {
+		return err
+	}
+	defer v.Close()
+
+	res, err := v.DB.Checkpoint()
+	if err != nil {
+		return fmt.Errorf("checkpoint: %w", err)
+	}
+
+	if format := getFormat(cmd); format != "" {
+		return output.Write(os.Stdout, format, res)
+	}
+
+	fmt.Printf("WAL %s → %s", humanBytes(res.WALBytesBefore), humanBytes(res.WALBytesAfter))
+	if reclaimed := res.WALBytesBefore - res.WALBytesAfter; reclaimed > 0 {
+		fmt.Printf(" (reclaimed %s)", humanBytes(reclaimed))
+	}
+	fmt.Println()
+	fmt.Printf("Checkpointed %d of %d WAL frames into a %s database.\n",
+		res.PagesCheckpointed, res.PagesTotal, humanBytes(res.DBBytes))
+	if res.Busy {
+		fmt.Println("Note: a reader was active, so the WAL could not be fully truncated. Re-run when the app / MCP server is idle.")
+	}
+	return nil
+}
+
+// humanBytes formats a byte count as B/KB/MB with one decimal place.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/float64(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1fKB", float64(n)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
 }
 
 type VaultInfo struct {
