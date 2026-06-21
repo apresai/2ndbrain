@@ -233,10 +233,11 @@ func nextStepHint(docCount, embeddedCount, embeddableCount int, provider string)
 type vaultSource string
 
 const (
-	sourceFlag   vaultSource = "--vault flag"
-	sourceEnv    vaultSource = "2NB_VAULT environment variable"
-	sourceActive vaultSource = "~/.2ndbrain-active-vault"
-	sourceCwd    vaultSource = "current directory"
+	sourceFlag     vaultSource = "--vault flag"
+	sourceEnv      vaultSource = "2NB_VAULT environment variable"
+	sourceActive   vaultSource = "~/.2ndbrain-active-vault"
+	sourceObsidian vaultSource = "open Obsidian vault"
+	sourceCwd      vaultSource = "current directory"
 )
 
 // resolveVaultDir is the single implementation of the vault-resolution
@@ -245,14 +246,19 @@ const (
 //  1. --vault flag
 //  2. 2NB_VAULT env var
 //  3. ~/.2ndbrain-active-vault (shared with the GUI and a bare terminal)
-//  4. Current directory
+//  4. Current directory, when it is inside a vault
+//  5. The vault Obsidian currently has open (its own registry)
 //
 // The active pointer is validated with vault.IsVaultRoot — the stored path
-// must itself be a vault root (.obsidian or .2ndbrain child). A stale
-// pointer (vault deleted or moved) falls through to the current directory,
-// so every command agrees on which vault a given machine state resolves to.
-// Deliberately no walk-up here: walking up from a dead path could land on a
-// parent vault and silently change the target.
+// must itself be a vault root (.obsidian or .2ndbrain child). The current
+// directory wins over the Obsidian registry so standing inside a vault always
+// targets that vault; the upward walk for the cwd case still happens in
+// openResolvedVault via vault.Open, so this never silently retargets a parent.
+//
+// Rung 5 is what lets a bare `2nb` from a non-vault directory (e.g. this source
+// repo) resolve the same vault the macOS dashboard binds to, instead of erroring
+// — the CLI now looks where the GUI looks. When nothing resolves, the final
+// "." → sourceCwd produces the actionable error in openResolvedVault.
 func resolveVaultDir() (string, vaultSource) {
 	if dir := expandPath(flagVault); dir != "" {
 		return dir, sourceFlag
@@ -263,6 +269,24 @@ func resolveVaultDir() (string, vaultSource) {
 	if dir := getActiveVault(); dir != "" && vault.IsVaultRoot(dir) {
 		return dir, sourceActive
 	}
+	// The current directory wins when it (or an ancestor) is a vault — the
+	// long-standing cwd behavior. Returning "." keeps the upward walk in
+	// openResolvedVault's vault.Open, unchanged.
+	if cwd, err := os.Getwd(); err == nil && vault.FindVaultRoot(cwd) != "" {
+		return ".", sourceCwd
+	}
+	// Nothing local resolved: fall back to the vault Obsidian has open. Inert
+	// under 2NB_TEST so the binary harness (e2e tests run with the developer's
+	// real HOME) never resolves the live Obsidian vault into a test — the same
+	// isolation guard setActiveVault/addRecentVault use.
+	if os.Getenv("2NB_TEST") == "" {
+		if dir := vault.ObsidianOpenVault(); dir != "" && vault.IsVaultRoot(dir) {
+			// Rung 5 is the surprising one ("how did it find this vault?"); leave
+			// a --verbose trace for support.
+			slog.Debug("resolved vault from Obsidian open vault", "path", dir)
+			return dir, sourceObsidian
+		}
+	}
 	return ".", sourceCwd
 }
 
@@ -272,9 +296,44 @@ func openResolvedVault(dir string, source vaultSource) (*vault.Vault, error) {
 	absDir, _ := filepath.Abs(dir)
 	v, err := vault.Open(dir)
 	if err != nil {
-		return nil, fmt.Errorf("no vault found at %s (resolved from %s)\n\nTo fix:\n  • Run from inside your vault directory\n  • Use --vault /path/to/vault\n  • Set 2NB_VAULT=/path/to/vault\n  • Create a new vault with `2nb init /path/to/vault`", absDir, source)
+		return nil, vaultNotFoundError(absDir, source)
 	}
 	return v, nil
+}
+
+// vaultNotFoundError builds the actionable error shown when no vault could be
+// resolved. Beyond the generic guidance it diagnoses the two states that leave
+// a user stuck: a stale ~/.2ndbrain-active-vault pointer (named explicitly), and
+// a recents list the caller can re-target with a paste-ready --vault flag.
+func vaultNotFoundError(absDir string, source vaultSource) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "no vault found at %s (resolved from %s)", absDir, source)
+
+	// A stale active pointer is the subtlest failure: the file exists and names
+	// a path, but that path is no longer a vault, so resolution silently fell
+	// through to the current directory. Name it so the fix is obvious.
+	if source == sourceCwd {
+		if raw := getActiveVault(); raw != "" && !vault.IsVaultRoot(raw) {
+			fmt.Fprintf(&b, "\n\nThe active vault pointer (~/%s) points at %s,\n"+
+				"which is no longer a vault (missing %s / .obsidian). Re-point it:\n"+
+				"  2nb vault set /path/to/vault", activeVaultFile, raw, vault.DotDirName)
+		}
+	}
+
+	// Live recents give a paste-ready fix without the user hunting for the path.
+	if recents := listRecentVaults(); len(recents) > 0 {
+		b.WriteString("\n\nRecent vaults — re-run with one of:")
+		for _, p := range recents {
+			fmt.Fprintf(&b, "\n  --vault %q", p)
+		}
+	}
+
+	b.WriteString("\n\nTo fix:\n" +
+		"  • Run from inside your vault directory\n" +
+		"  • Use --vault /path/to/vault\n" +
+		"  • Set 2NB_VAULT=/path/to/vault\n" +
+		"  • Create a new vault with `2nb init /path/to/vault`")
+	return errors.New(b.String())
 }
 
 // openVault resolves the vault via resolveVaultDir and opens it.
@@ -283,9 +342,11 @@ func openVault() (*vault.Vault, error) {
 	return openResolvedVault(dir, source)
 }
 
-// openVaultAndSetActive opens the vault and, when the vault was resolved
-// from the active pointer or the current directory, records it as the
-// active vault and in the recents list. An explicit --vault flag or
+// openVaultAndSetActive opens the vault and, when the vault was resolved from
+// the active pointer, the current directory, or the open Obsidian vault, records
+// it as the active vault and in the recents list (so the first write command
+// resolved via Obsidian's registry self-heals the pointer for later bare
+// commands). An explicit --vault flag or
 // 2NB_VAULT env var is a one-shot override: it must NOT repoint the shared
 // ~/.2ndbrain-active-vault that the GUI, the Obsidian plugin's pinned
 // calls, and a bare terminal all coordinate on.
@@ -296,7 +357,7 @@ func openVaultAndSetActive() (*vault.Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	if source == sourceActive || source == sourceCwd {
+	if source == sourceActive || source == sourceCwd || source == sourceObsidian {
 		canonical := canonicalVaultPath(v.Root)
 		if err := setActiveVault(canonical); err != nil {
 			// Best-effort: the command itself proceeds, but a failed pointer

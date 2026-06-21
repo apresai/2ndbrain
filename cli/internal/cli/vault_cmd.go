@@ -212,9 +212,9 @@ func runVaultDefault(cmd *cobra.Command, args []string) error {
 func runVaultShow(cmd *cobra.Command, _ []string) error {
 	dir, source := resolveVaultDir()
 
-	v, err := vault.Open(dir)
+	v, err := openResolvedVault(dir, source)
 	if err != nil {
-		return fmt.Errorf("no active vault: %w\n\nCreate one with: 2nb vault create <path>\nSet an existing:   2nb vault set <path>", err)
+		return err
 	}
 	defer v.Close()
 
@@ -243,9 +243,9 @@ func runVaultShow(cmd *cobra.Command, _ []string) error {
 func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	dir, source := resolveVaultDir()
 
-	v, err := vault.Open(dir)
+	v, err := openResolvedVault(dir, source)
 	if err != nil {
-		return fmt.Errorf("no active vault: %w\n\nCreate one with: 2nb vault create <path>", err)
+		return err
 	}
 	defer v.Close()
 
