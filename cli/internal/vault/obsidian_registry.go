@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 )
 
@@ -18,16 +19,38 @@ type obsidianRegistryEntry struct {
 	Open bool   `json:"open"` // currently-open flag (false if absent)
 }
 
-// obsidianRegistryPath returns the macOS location of Obsidian's vault registry,
-// ~/Library/Application Support/obsidian/obsidian.json. On other platforms the
-// path simply won't exist, so ObsidianOpenVault returns "" there. (Obsidian on
-// Linux/Windows uses a different location; supporting those is future work.)
+// obsidianRegistryPath returns the per-OS location of Obsidian's vault registry
+// (obsidian.json). 2nb follows Obsidian's open vault, so this must resolve on
+// every platform the CLI runs on, not just macOS:
+//   - macOS:   ~/Library/Application Support/obsidian/obsidian.json
+//   - Linux:   $XDG_CONFIG_HOME/obsidian/obsidian.json (or ~/.config/obsidian/…)
+//   - Windows: %APPDATA%/obsidian/obsidian.json
+//
+// Returns "" when the home/config dir can't be determined; an absent file is
+// handled by the caller (ObsidianOpenVault returns "").
 func obsidianRegistryPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	switch runtime.GOOS {
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(home, "Library", "Application Support", "obsidian", "obsidian.json")
+	case "windows":
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "obsidian", "obsidian.json")
+		}
 		return ""
+	default: // linux and other unixes
+		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+			return filepath.Join(xdg, "obsidian", "obsidian.json")
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(home, ".config", "obsidian", "obsidian.json")
 	}
-	return filepath.Join(home, "Library", "Application Support", "obsidian", "obsidian.json")
 }
 
 // ObsidianOpenVault returns the absolute path of the vault Obsidian currently

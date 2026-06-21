@@ -9,11 +9,11 @@ import SecondBrainCore
 
 // Set 2NB_TEST exactly once before any test shells out to `2nb`. The
 // `vault create` subprocess in VaultManager.initializeVault inherits this and
-// skips writing the real ~/.2ndbrain-active-vault / ~/.2ndbrain-vaults —
-// otherwise running this target's tests clobbers the developer's active vault.
-// A run-once global is thread-safe; a per-call setenv would race under
-// swift-testing's parallel execution. (`make test-swift` also exports 2NB_TEST
-// for the whole process as the primary, cross-target guard.)
+// skips writing the real ~/.2ndbrain-vaults recents (and skips reading the
+// developer's Obsidian registry) — otherwise running this target's tests would
+// pollute recents. A run-once global is thread-safe; a per-call setenv would
+// race under swift-testing's parallel execution. (`make test-swift` also exports
+// 2NB_TEST for the whole process as the primary, cross-target guard.)
 private let isolate2nbHomeWrites: Void = {
     setenv("2NB_TEST", "1", 1)
 }()

@@ -271,8 +271,8 @@ func resolveSymlinksLenient(path string) string {
 // containing either an .obsidian/ child (an Obsidian vault — Open will
 // recreate the .2ndbrain sidecar) or a .2ndbrain/ child. Unlike
 // FindVaultRoot it never walks up, so it's the right check for validating
-// a stored vault path (e.g. ~/.2ndbrain-active-vault), where resolving a
-// dead path to a parent vault would silently change which vault is used.
+// a path from an external source (e.g. the Obsidian registry), where resolving
+// a dead path to a parent vault would silently change which vault is used.
 func IsVaultRoot(dir string) bool {
 	if _, err := os.Stat(filepath.Join(dir, ".obsidian")); err == nil {
 		return true

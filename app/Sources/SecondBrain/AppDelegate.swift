@@ -12,8 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // which every child process inherits. Repair it before the first CLI
         // call so the bundled 2nb's exec.LookPath("2nb") — e.g. `skills doctor`'s
         // on-PATH check — reflects the user's real shell PATH instead of falsely
-        // reporting "2nb is NOT on your shell PATH". Runs before onAppear's
-        // `2nb vault set` and any later status/doctor probe.
+        // reporting "2nb is NOT on your shell PATH". Runs before any later
+        // status/doctor probe the app spawns.
         let toolPATH = CLIPath.ensureToolPATH()
         log.debug("augmented child-process PATH: \(toolPATH, privacy: .public)")
 

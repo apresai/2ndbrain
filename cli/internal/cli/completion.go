@@ -583,15 +583,15 @@ func loadSchemasForCompletion() *vault.SchemaSet {
 	return schemas
 }
 
-// resolveVaultRootForCompletion resolves the active vault root without
-// opening the DB. Same priority order as openVault (--vault flag,
-// 2NB_VAULT env, active-vault file, cwd), but stops at the directory
-// check — no config/schema parse, no SQLite open.
+// resolveVaultRootForCompletion resolves a vault root for shell completion
+// without opening the DB: --vault flag, 2NB_VAULT env, then cwd. It deliberately
+// does NOT read Obsidian's registry (unlike openVault) — completion fires on
+// every Tab press and must stay fast and non-blocking, so it skips the registry
+// file read and falls back to cwd; worst case completions use DefaultSchemas().
 func resolveVaultRootForCompletion() string {
 	candidates := []string{
 		expandPath(flagVault),
 		expandPath(os.Getenv("2NB_VAULT")),
-		getActiveVault(),
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, cwd)

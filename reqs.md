@@ -304,7 +304,7 @@
 
 **CLI-EV-019**: When the user runs `2nb config set-key <provider>`, the editor shall prompt for an API key and store it securely in the macOS Keychain.
 
-**CLI-UB-004**: All CLI commands shall resolve the active vault from `--vault` flag, `2NB_VAULT` environment variable, `~/.2ndbrain-active-vault` file, or current directory — in that priority order.
+**CLI-UB-004**: All CLI commands shall resolve the active vault from `--vault` flag, `2NB_VAULT` environment variable, the vault Obsidian currently has open (read from Obsidian's own registry, e.g. `~/Library/Application Support/obsidian/obsidian.json`), or the current directory when it is inside a vault — in that priority order. There is no 2nb-managed active-vault pointer file; the active vault is the vault you have open in Obsidian, so the CLI and the GUI follow the same source of truth.
 
 **CLI-UB-005**: All CLI commands shall default to human-readable output and only produce JSON when `--json` is explicitly passed.
 

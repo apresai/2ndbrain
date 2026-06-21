@@ -192,8 +192,8 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | Command | Description |
 |---------|-------------|
 | `vault` | Health report for the active vault (same as `vault status`) |
-| `vault create <path>` | Initialize a new vault and make it active |
-| `vault set <path>` | Set an existing vault as active |
+| `vault create <path>` | Initialize a new vault (open it in Obsidian to use it; 2nb follows your open Obsidian vault) |
+| `vault set <path>` | Register an existing vault in recents (the active vault follows Obsidian) |
 | `vault list` | List recently used vaults |
 | `vault show` | Terse summary: path, source, name, doc count |
 | `init [path]` | Deprecated alias for `vault create` |

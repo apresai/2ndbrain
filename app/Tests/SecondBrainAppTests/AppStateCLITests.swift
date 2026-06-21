@@ -4,13 +4,13 @@ import Testing
 @testable import SecondBrain
 
 // Set 2NB_TEST exactly once, before any test spawns a `2nb` subprocess. Those
-// subprocesses (`vault create` via VaultManager.initializeVault, `vault set` via
-// AppState.openVault) inherit this process's environment, and 2NB_TEST makes
-// them skip writing the real ~/.2ndbrain-active-vault and ~/.2ndbrain-vaults —
-// otherwise running the suite clobbers the developer's active vault. A global
-// `let` initializer runs once with thread-safe semantics; a per-call setenv
-// would race under swift-testing's parallel execution (POSIX setenv is not
-// thread-safe and can reallocate `environ`).
+// subprocesses (e.g. `vault create` via VaultManager.initializeVault) inherit
+// this process's environment, and 2NB_TEST makes them skip writing the real
+// ~/.2ndbrain-vaults recents and skip reading the developer's Obsidian registry
+// — otherwise running the suite would pollute recents / bind the dev's live
+// vault. A global `let` initializer runs once with thread-safe semantics; a
+// per-call setenv would race under swift-testing's parallel execution (POSIX
+// setenv is not thread-safe and can reallocate `environ`).
 private let isolate2nbHomeWrites: Void = {
     setenv("2NB_TEST", "1", 1)
 }()

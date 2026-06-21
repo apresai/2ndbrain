@@ -19,7 +19,7 @@ This project uses **2ndbrain** (`2nb`), an AI companion for Obsidian-native mark
 2nb skills show claude-code   # Self-referential: what am I supposed to know?
 ```
 
-If `vault_root` (from `config show`) isn't the directory you expected, either `cd` into the right vault or pass `--vault <path>` on every command. The "active vault" is separate from your current working directory — it's stored in `~/.2ndbrain-active-vault` and survives across sessions. Running `2nb create` from inside `~/dev/obsidian` will still write to whatever vault is active, not to `~/dev/obsidian`, unless you pass `--vault ~/dev/obsidian`.
+If `vault_root` (from `config show`) isn't the directory you expected, pass `--vault <path>` on every command. The "active vault" is the vault you have open in Obsidian — 2nb reads Obsidian's own registry — independent of your current working directory. So `2nb create` run from inside `~/dev/sophie` writes to whatever vault Obsidian has open, not to `~/dev/sophie`, unless you pass `--vault`.
 
 **If the current directory isn't a 2nb vault**, you have two choices:
 1. Initialize it: `2nb vault create .` (adds a `.2ndbrain/` directory so 2nb can index it). The legacy `2nb init` still works but is deprecated.
@@ -45,7 +45,7 @@ Three intents cover almost every request. Pick the path; do not improvise a one-
 - `kb_ask` / `2nb ask "..."` searches and synthesizes an answer with a source list. `ask` is STRICTER than `search`: it weighs only the top 5 hits against the same threshold, so a borderline match at rank 8 appears in `search` but not `ask`. If `ask` returns "no relevant documents," drop to `kb_search` with broader terms.
 - RAG can hallucinate a specific detail out of a real chunk. `kb_read` each cited source before repeating an exact claim, number, or name.
 
-**Confirm the vault before writing.** The top failure mode is operating on the wrong vault. `kb_info` or `2nb vault show --json` answers "which vault?". The active vault lives in `~/.2ndbrain-active-vault`, independent of your shell's cwd, so `2nb create` run from some other folder still writes to the active vault unless you pass `--vault <path>` (or set `2NB_VAULT`).
+**Confirm the vault before writing.** The top failure mode is operating on the wrong vault. `kb_info` or `2nb vault show --json` answers "which vault?". The active vault is the vault you have open in Obsidian (2nb reads Obsidian's own registry), independent of your shell's cwd, so `2nb create` run from some other folder still writes to the open Obsidian vault unless you pass `--vault <path>` (or set `2NB_VAULT`).
 
 **Watch for degraded search.** If `mode` comes back `keyword` when you expected semantic ranking, the vector channel is off (provider down, dimension mismatch, or an unindexed vault). Check `mode` on every `--json` result and read `warnings` when it is present. Never report "no matches" without first confirming `mode` was `hybrid` (see "Search scoring" and the recovery playbook below).
 
@@ -253,8 +253,8 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 
 | Command | Purpose |
 |---------|---------|
-| `2nb vault create <path>` | Initialize a new vault at `<path>` and make it active. Writes `.2ndbrain/` + `.gitignore`. Replaces the deprecated `2nb init`. |
-| `2nb vault set <path>` | Set an existing vault as active (no re-init) |
+| `2nb vault create <path>` | Initialize a new vault at `<path>` (writes `.2ndbrain/` + `.gitignore`, records it in recents). Open it in Obsidian or pass `--vault` to use it — 2nb follows your open Obsidian vault. Replaces the deprecated `2nb init`. |
+| `2nb vault set <path>` | Register an existing vault in recents (the active vault follows Obsidian's open vault) |
 | `2nb vault list` | Recently used vaults (`*` marks active); reads `~/.2ndbrain-vaults` |
 | `2nb vault status` | Health report: docs, embedding coverage, portability state, AI reachability, stale count |
 | `2nb vault show` | Terse summary (path, source, name, doc count) — pipe `--json` to scripts |

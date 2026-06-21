@@ -122,8 +122,8 @@ export function resolveCliPath(
 // pinVaultArgs prefixes a 2nb invocation with `--vault <path>` — the CLI's
 // highest-priority vault source (root.go). The plugin ALWAYS pins commands to
 // the open Obsidian vault's path so 2nb can never resolve a different vault from
-// a stale ~/.2ndbrain-active-vault file or the process cwd. The Obsidian vault
-// and the 2nb vault stay joined at the hip.
+// the Obsidian registry or the process cwd. The Obsidian vault and the 2nb vault
+// stay joined at the hip.
 export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
 	return ['--vault', vaultPath, ...args];
 }
@@ -802,7 +802,7 @@ export default class BrainPlugin extends Plugin {
 			}
 			// The open Obsidian vault is the only vault 2nb may touch. Pin every
 			// command to its path via --vault (pinVaultArgs) so the CLI can never
-			// resolve a different vault from ~/.2ndbrain-active-vault or the cwd.
+			// resolve a different vault from the Obsidian registry or the cwd.
 			const vaultPath = adapter.getBasePath();
 
 			// maxBuffer: the 1 MB default truncates large search/ask output and

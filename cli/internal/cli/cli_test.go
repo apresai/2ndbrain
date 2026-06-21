@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -67,36 +66,6 @@ func TestValidateTitle(t *testing.T) {
 			t.Errorf("validateTitle(%q) should fail (%s)", tt.title, tt.desc)
 		}
 	}
-}
-
-func TestActiveVault(t *testing.T) {
-	// Use a temp file to avoid mutating the real ~/.2ndbrain-active-vault (H4 fix)
-	tmpFile := filepath.Join(t.TempDir(), "active-vault-test")
-
-	// Test write and read round-trip using the file directly
-	testPath := filepath.Join(t.TempDir(), "test-vault")
-	os.MkdirAll(testPath, 0o755)
-
-	// Write
-	if err := os.WriteFile(tmpFile, []byte(testPath+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Read
-	data, err := os.ReadFile(tmpFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := strings.TrimSpace(string(data))
-	if got != testPath {
-		t.Errorf("round-trip = %q, want %q", got, testPath)
-	}
-}
-
-func TestActiveVaultHelpers(t *testing.T) {
-	// Verify getActiveVault doesn't panic when file doesn't exist
-	// This reads the real file but doesn't write
-	_ = getActiveVault()
 }
 
 func TestPreprocessArgs(t *testing.T) {

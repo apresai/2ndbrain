@@ -23,12 +23,13 @@ var vaultCmd = &cobra.Command{
 	Long: `Manage your 2ndbrain vaults.
 
 With no subcommand, shows a health report for the active vault (same as
-` + "`" + `vault status` + "`" + `). With a path argument (legacy form), sets that path as
-the active vault.`,
+` + "`" + `vault status` + "`" + `). The active vault is whichever vault you have open in
+Obsidian — 2nb follows Obsidian's open vault. With a path argument (legacy
+form), registers that path in recents.`,
 	Example: `  2nb vault                        Health report for the active vault
   2nb vault show                   Terse one-line-per-field summary
-  2nb vault create ~/my-vault      Create a new vault and make it active
-  2nb vault set ~/my-vault         Switch the active vault
+  2nb vault create ~/my-vault      Create a new vault
+  2nb vault set ~/my-vault         Register a vault in recents
   2nb vault list                   List recently used vaults`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runVaultDefault,
@@ -52,10 +53,12 @@ var vaultShowCmd = &cobra.Command{
 
 var vaultCreateCmd = &cobra.Command{
 	Use:   "create <path>",
-	Short: "Initialize a new vault and make it active",
+	Short: "Initialize a new vault",
 	Long: `Create a new 2ndbrain vault at the given path. Initializes the
-.2ndbrain/ directory with schemas and index, writes a .gitignore
-covering personal/local state, and sets the new vault as active.`,
+.2ndbrain/ directory with schemas and index, writes a .gitignore covering
+personal/local state, and records the vault in recents. To use it, open the
+folder as a vault in Obsidian (2nb follows your open Obsidian vault) or pass
+--vault.`,
 	Example: `  2nb vault create ~/my-vault      Create ~/my-vault
   2nb vault create .               Initialize the current directory`,
 	Args: cobra.ExactArgs(1),
@@ -70,10 +73,13 @@ covering personal/local state, and sets the new vault as active.`,
 
 var vaultSetCmd = &cobra.Command{
 	Use:   "set <path>",
-	Short: "Set an existing vault as the active vault",
-	Long:  "Marks an existing vault as active. Fails if the path is not a 2ndbrain vault.",
-	Example: `  2nb vault set ~/work-notes       Switch to ~/work-notes
-  2nb vault set .                  Use the current directory`,
+	Short: "Register an existing vault in recents",
+	Long: `Records an existing vault in the recents list (for ` + "`" + `vault list` + "`" + `). 2nb's
+active vault follows the vault you have open in Obsidian, so this does not
+"switch" the active vault — open the vault in Obsidian, or pass --vault, to use
+it. Fails if the path is not a 2ndbrain vault.`,
+	Example: `  2nb vault set ~/work-notes       Register ~/work-notes in recents
+  2nb vault set .                  Register the current directory`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeVaultPaths,
 	RunE:              runVaultSet,
@@ -413,20 +419,25 @@ func runVaultSet(cmd *cobra.Command, args []string) error {
 	}
 	v.Close()
 
-	if err := setActiveVault(absPath); err != nil {
-		return fmt.Errorf("set active vault: %w", err)
-	}
 	addRecentVault(absPath)
 
 	if !flagPorcelain {
-		fmt.Printf("Active vault set to %s\n", absPath)
+		fmt.Printf("Registered %s in recent vaults.\n\n", absPath)
+		fmt.Printf("2nb follows the vault you have open in Obsidian. To make this the\n")
+		fmt.Printf("active vault, open it in Obsidian; or run commands with --vault %s\n", absPath)
 	}
 	return nil
 }
 
 func runVaultList(cmd *cobra.Command, _ []string) error {
 	paths := listRecentVaults()
-	active := canonicalVaultPath(getActiveVault())
+	// The active vault is whatever resolveVaultDir picks — the vault Obsidian
+	// has open (or the cwd vault) — NOT a stored pointer. FindVaultRoot walks up
+	// so running from a subdirectory of a vault still marks that vault's row,
+	// matching how every other command resolves via vault.Open's walk-up.
+	activeDir, _ := resolveVaultDir()
+	absActive, _ := filepath.Abs(activeDir)
+	active := canonicalVaultPath(vault.FindVaultRoot(absActive))
 
 	// The active vault can be missing from recents (e.g. the recents file
 	// was trimmed or written by an older version). Synthesize a row for it
@@ -478,21 +489,22 @@ func runVaultList(cmd *cobra.Command, _ []string) error {
 		fmt.Printf("%s %-30s %4d docs  %s\n", marker, name, e.Documents, e.Path)
 	}
 	if !flagPorcelain {
-		fmt.Println("\n* = active vault  •  switch with: 2nb vault set <path>")
+		fmt.Println("\n* = active vault (the vault Obsidian has open)  •  switch by opening another vault in Obsidian")
 	}
 	return nil
 }
 
-// createVaultAt is the shared implementation used by `vault create` and
-// the deprecated `init` alias. Initializes a vault at path, writes the
-// vault-root .gitignore, sets the vault as active, records it in
-// recents, and prints next-step hints.
+// createVaultAt is the shared implementation used by `vault create` and the
+// deprecated `init` alias. Initializes a vault at path, writes the vault-root
+// .gitignore, records it in recents, and prints next-step hints. It does NOT
+// make the vault "active" — 2nb follows the vault Obsidian has open, so the
+// user opens the new folder as a vault in Obsidian (or passes --vault) to use it.
 func createVaultAt(cmd *cobra.Command, path string) error {
 	expanded := expandPath(path)
 	v, err := vault.Init(expanded)
 	if err != nil {
 		if errors.Is(err, vault.ErrAlreadyInit) {
-			return fmt.Errorf("vault already initialized at %s\n\nSet it active with: 2nb vault set %s", expanded, path)
+			return fmt.Errorf("vault already initialized at %s", expanded)
 		}
 		return fmt.Errorf("init vault: %w", err)
 	}
@@ -501,7 +513,6 @@ func createVaultAt(cmd *cobra.Command, path string) error {
 
 	absPath, _ := filepath.Abs(v.Root)
 	if absPath != "" {
-		_ = setActiveVault(absPath)
 		addRecentVault(absPath)
 	}
 
@@ -511,8 +522,10 @@ func createVaultAt(cmd *cobra.Command, path string) error {
 
 	fmt.Fprintf(cmd.ErrOrStderr(), "Initialized 2ndbrain vault at %s\n", v.Root)
 	if !flagPorcelain {
+		fmt.Fprintln(cmd.ErrOrStderr(), "\nTo use this vault, open it in Obsidian (Open folder as vault) — 2nb")
+		fmt.Fprintf(cmd.ErrOrStderr(), "follows your open Obsidian vault — or run commands with --vault %s\n", v.Root)
 		fmt.Fprintln(cmd.ErrOrStderr(), "\nNext steps:")
-		fmt.Fprintln(cmd.ErrOrStderr(), "  2nb create \"My First Note\"    Create a document")
+		fmt.Fprintf(cmd.ErrOrStderr(), "  2nb create \"My First Note\" --vault %s\n", v.Root)
 		fmt.Fprintln(cmd.ErrOrStderr(), "  2nb ai setup                  Configure AI for semantic search & ask")
 		fmt.Fprintln(cmd.ErrOrStderr(), "  2nb skills install --all      Teach AI agents (Claude Code, Cursor, …) about your vault")
 	}

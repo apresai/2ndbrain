@@ -69,21 +69,17 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 	case os.Getenv("2NB_VAULT") != "":
 		targetRoot, err = filepath.Abs(expandPath(os.Getenv("2NB_VAULT")))
 	default:
+		// import resolves an explicit target then the cwd vault; it deliberately
+		// does NOT auto-pick the open Obsidian vault, so an import never silently
+		// lands in a surprise vault.
 		resolved := ""
-		if active := getActiveVault(); active != "" {
-			if _, statErr := os.Stat(filepath.Join(active, vault.DotDirName)); statErr == nil {
-				resolved = active
+		if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+			if root := vault.FindVaultRoot(cwd); root != "" {
+				resolved = root
 			}
 		}
 		if resolved == "" {
-			if cwd, cwdErr := os.Getwd(); cwdErr == nil {
-				if root := vault.FindVaultRoot(cwd); root != "" {
-					resolved = root
-				}
-			}
-		}
-		if resolved == "" {
-			return fmt.Errorf("no target vault: use --target <path> for a new vault, --vault <path> for an existing one, or set an active vault with `2nb vault set <path>`")
+			return fmt.Errorf("no target vault: use --target <path> for a new vault, --vault <path> for an existing one, or run from inside the vault directory")
 		}
 		targetRoot, err = filepath.Abs(resolved)
 	}

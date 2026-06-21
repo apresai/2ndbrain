@@ -59,9 +59,9 @@ public enum CLIPath {
     }
 
     /// Pin the CLI's vault resolution to `vault` by prepending `--vault <path>`,
-    /// the highest-priority vault source (overrides ~/.2ndbrain-active-vault,
-    /// 2NB_VAULT env, and cwd). Use this for every CLI call from the app so
-    /// drift in the global active-vault file can't redirect commands.
+    /// the highest-priority vault source (overrides 2NB_VAULT env, the open
+    /// Obsidian vault registry, and cwd). Use this for every CLI call from the
+    /// app so the command always operates on the vault the dashboard is bound to.
     public static func args(_ args: [String], vault: URL) -> [String] {
         ["--vault", vault.path] + args
     }

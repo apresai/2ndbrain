@@ -119,8 +119,9 @@ test-usage:
 	$(MAKE) -C cli test-usage
 
 # 2NB_TEST makes the 2nb subprocesses the Swift tests spawn (vault create /
-# vault set) skip writing the real ~/.2ndbrain-active-vault and
-# ~/.2ndbrain-vaults, so the suite never clobbers the developer's active vault.
+# vault set) skip writing the real ~/.2ndbrain-vaults recents and skip reading
+# the developer's Obsidian registry, so the suite never pollutes recents or binds
+# the developer's live vault.
 # Exported for the whole swift-test process so it covers every target regardless
 # of run order; the per-target run-once setenv is the bare-swift-test fallback.
 test-swift: export 2NB_TEST := 1
