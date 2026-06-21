@@ -51,6 +51,95 @@ func RewriteWikiLinksPathOnly(body, oldTarget, newTarget string) (string, int) {
 	return rewriteWikiLinks(body, oldTarget, newTarget, true)
 }
 
+// UnlinkWikiLink returns a copy of body in which every [[wikilink]] whose target
+// matches the authored target has its brackets removed while the visible text is
+// kept, and the number of links unlinked. It is the "remove the link, keep the
+// words" resolution for a broken wikilink that names no real note:
+// [[083477d]] -> 083477d, [[note#Setup]] -> note, [[page|the page]] -> the page.
+//
+// Matching mirrors RewriteWikiLinks (and store.ResolveLinks): a link matches
+// when its slash-normalized, extension-insensitive target equals the authored
+// target's full path, basename, or a path suffix. Matching is case- and
+// separator-SENSITIVE (unlike repair's fuzzy normalizeName) because unlink acts
+// on the EXACT broken link the caller named, never a near-miss.
+//
+// The same safety invariants as rewriteWikiLinks hold: links inside fenced or
+// inline code are never touched (we scan a code-masked copy and splice the real
+// body at the same offsets), and embed/transclusion forms (![[...]]) are skipped
+// so asset embeds stay intact. Only the [[ ]] wikilink form is handled; markdown
+// [text](path) links are left alone (broken-link findings are always the [[ ]]
+// form, and assets are excluded upstream by lint).
+//
+// The kept visible text is the alias when the link has one ([[X|alias]] ->
+// alias), else the bare target text with any #heading / #^block suffix dropped
+// (the target no longer resolves, so its anchor is meaningless).
+func UnlinkWikiLink(body, target string) (string, int) {
+	forms := targetForms(target)
+	if len(forms) == 0 {
+		return body, 0
+	}
+	scan := maskCodeRegions(body)
+
+	type edit struct {
+		start, end int
+		newText    string
+	}
+	var edits []edit
+
+	for _, m := range wikilinkRe.FindAllStringSubmatchIndex(scan, -1) {
+		// Skip embeds/transclusions (![[...]]): never a broken note link, and
+		// asset embeds must stay intact.
+		if m[0] > 0 && scan[m[0]-1] == '!' {
+			continue
+		}
+		inner := scan[m[2]:m[3]]
+
+		// Split off |alias and #anchor; the target is what we match on, the alias
+		// (if any) is the text we keep. Mirrors ExtractWikiLinks' order.
+		linkTarget := inner
+		alias := ""
+		if idx := indexOf(linkTarget, '|'); idx >= 0 {
+			alias = linkTarget[idx+1:]
+			linkTarget = linkTarget[:idx]
+		}
+		if idx := indexOf(linkTarget, '#'); idx >= 0 {
+			linkTarget = linkTarget[:idx]
+		}
+
+		if _, ok := matchForm(linkTarget, forms); !ok {
+			continue
+		}
+
+		visible := alias
+		if visible == "" {
+			visible = linkTarget
+		}
+		// Replace the whole [[...]] span (m[0]..m[1]) with the visible text.
+		edits = append(edits, edit{start: m[0], end: m[1], newText: visible})
+	}
+
+	if len(edits) == 0 {
+		return body, 0
+	}
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
+
+	var out strings.Builder
+	out.Grow(len(body))
+	count := 0
+	last := 0
+	for _, e := range edits {
+		if e.start < last {
+			continue // overlaps a prior edit, skip (defensive)
+		}
+		out.WriteString(body[last:e.start])
+		out.WriteString(e.newText)
+		last = e.end
+		count++
+	}
+	out.WriteString(body[last:])
+	return out.String(), count
+}
+
 // rewriteWikiLinks is the shared engine for the two exported variants. When
 // pathOnly is true, bare-basename matches are skipped. It rewrites both
 // [[wikilink]] and markdown [label](target) forms that resolve to oldTarget.

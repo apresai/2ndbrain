@@ -131,3 +131,70 @@ func TestRepairBrokenLinks_AmbiguousNameIsSkipped(t *testing.T) {
 		t.Fatalf("expected one ambiguous skip, got %+v", res.Skipped)
 	}
 }
+
+// Reproduces the real-world dead-end: a note whose only resolvable form is its
+// hyphenated basename (no frontmatter title), linked with the spaced display
+// form. 2nb's resolver is case- AND separator-sensitive, so the link is broken;
+// before the normalizeName hyphen/underscore fold the spaced target never
+// matched the kebab basename, so repair reported no_match and the GUI
+// dead-ended. After the fold it repairs to the basename.
+func TestRepairBrokenLinks_RepairsHyphenSpaceDriftToKebabBasename(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	// Create the note (its slug gives the kebab basename), then strip the title
+	// from the index so ONLY the hyphenated basename remains as a resolvable
+	// form — testutil.CreateAndIndex always sets a title, which would otherwise
+	// bridge the spaced target and mask the hyphen-vs-space drift.
+	tgt := testutil.CreateAndIndex(t, v, "Claude Code Skills Reference and Index", "note",
+		note("Claude Code Skills Reference and Index", "Reference and index."))
+	tgt.Title = ""
+	delete(tgt.Frontmatter, "title")
+	if err := v.DB.UpsertDocument(tgt); err != nil {
+		t.Fatalf("re-upsert title-less target: %v", err)
+	}
+
+	src := testutil.CreateAndIndex(t, v, "Src", "note",
+		note("Src", "Run the MCP server inside [[Claude Code Skills Reference and Index]] or Cursor.\n"))
+
+	res, err := RepairBrokenLinks(v, src.Body)
+	if err != nil {
+		t.Fatalf("RepairBrokenLinks: %v", err)
+	}
+	if len(res.Repaired) != 1 || res.Repaired[0].Raw != "Claude Code Skills Reference and Index" ||
+		res.Repaired[0].NewTarget != "claude-code-skills-reference-and-index" {
+		t.Fatalf("expected spaced->kebab repair to the basename, got repaired=%+v skipped=%+v", res.Repaired, res.Skipped)
+	}
+	if !strings.Contains(res.Body, "[[claude-code-skills-reference-and-index]]") {
+		t.Fatalf("body not rewritten to the kebab basename: %q", res.Body)
+	}
+}
+
+// normalizeName is the symmetric chokepoint that makes case, hyphen/underscore,
+// and whitespace drift collide on one key. Distinct names must stay distinct so
+// the fold never widens a match into a wrong rewrite.
+func TestNormalizeName_FoldsSeparatorsCaseAndWhitespace(t *testing.T) {
+	// Each group's members must normalize to the SAME key.
+	same := [][]string{
+		{"claude-code-skills-reference-and-index", "Claude Code Skills Reference and Index", "claude_code_skills_reference_and_index"},
+		{"go-modules", "go modules", "Go_Modules", "  go   modules  "},
+		{"auth-flow", "Auth Flow", "AUTH FLOW"},
+	}
+	for _, group := range same {
+		want := normalizeName(group[0])
+		for _, s := range group[1:] {
+			if got := normalizeName(s); got != want {
+				t.Errorf("normalizeName(%q)=%q, want %q (same group as %q)", s, got, want, group[0])
+			}
+		}
+	}
+	// Genuinely different names must NOT collapse together.
+	diff := [][2]string{
+		{"go-modules", "go-mod-why"},
+		{"claude-code", "claude code review"},
+		{"auth-flow", "auth flows"},
+	}
+	for _, pair := range diff {
+		if normalizeName(pair[0]) == normalizeName(pair[1]) {
+			t.Errorf("normalizeName collapsed distinct names %q and %q to %q", pair[0], pair[1], normalizeName(pair[0]))
+		}
+	}
+}
