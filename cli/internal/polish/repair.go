@@ -211,6 +211,21 @@ func buildRepairIndex(db *store.DB) (*repairIndex, error) {
 	return idx, nil
 }
 
+// SuggestRepairTargets returns the distinct existing-note targets a broken bare
+// name fuzzily maps to via the SAME normalized-name index repair uses (case,
+// hyphen/underscore, and whitespace folded). Unlike RepairBrokenLinks it does
+// NOT require a unique match: it returns 0, 1, or many candidates, so a "did you
+// mean?" picker can surface the ambiguous matches repair itself refuses to guess.
+// Each returned value is a canonical bare target (a unique title or basename)
+// that the caller resolves to a path with store.ResolveTarget.
+func SuggestRepairTargets(db *store.DB, target string) ([]string, error) {
+	idx, err := buildRepairIndex(db)
+	if err != nil {
+		return nil, err
+	}
+	return idx.lookup(target), nil
+}
+
 // normalizeName lower-cases, folds '-'/'_' to spaces, and collapses internal
 // whitespace, so a link whose only drift from an existing note is case, spacing,
 // or hyphen-vs-space matches it. 2nb's resolver is case- and separator-sensitive

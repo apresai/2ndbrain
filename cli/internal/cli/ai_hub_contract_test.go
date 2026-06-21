@@ -109,7 +109,10 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	replaceSection, replaceText, replaceFile = "", "", ""
 	polishWrite, polishLinks, polishUndo, polishForce = false, false, false, false
 	polishSystemFlag, polishMaxTokens = "", 4096
-		repairLinksWrite, repairLinksTargets = false, nil
+	repairLinksWrite, repairLinksTargets = false, nil
+	relinkFrom, relinkTo, relinkWrite = "", "", false
+	unlinkTarget, unlinkWrite = "", false
+	suggestTargetLimit = 6
 	tagsRenameDryRun = false
 	dailyAppendText, dailyAppendFile = "", ""
 	moveDryRun, moveForce = false, false

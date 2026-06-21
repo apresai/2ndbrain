@@ -334,3 +334,91 @@ func TestRewriteWikiLinks_PreservesSurroundingText(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestUnlinkWikiLink covers the "remove the link, keep the words" resolution:
+// brackets are stripped, the visible text (alias or target) is preserved, and
+// code/embeds are never touched. Matching is exact (case/separator-sensitive).
+func TestUnlinkWikiLink(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		target    string
+		wantBody  string
+		wantCount int
+	}{
+		{
+			name:      "bare junk id -> plain text",
+			body:      "See [[083477d]] for the run.",
+			target:    "083477d",
+			wantBody:  "See 083477d for the run.",
+			wantCount: 1,
+		},
+		{
+			name:      "alias kept",
+			body:      "Read [[aagent|the GTM kit]] now.",
+			target:    "aagent",
+			wantBody:  "Read the GTM kit now.",
+			wantCount: 1,
+		},
+		{
+			name:      "heading suffix dropped (no alias)",
+			body:      "Jump to [[ccbr#Setup]] here.",
+			target:    "ccbr",
+			wantBody:  "Jump to ccbr here.",
+			wantCount: 1,
+		},
+		{
+			name:      "block ref dropped",
+			body:      "Quote [[warp#^abc123]].",
+			target:    "warp",
+			wantBody:  "Quote warp.",
+			wantCount: 1,
+		},
+		{
+			name:      "multiple occurrences both unlinked",
+			body:      "[[warp]] and again [[warp]].",
+			target:    "warp",
+			wantBody:  "warp and again warp.",
+			wantCount: 2,
+		},
+		{
+			name:      "non-matching target untouched",
+			body:      "Keep [[other-note]] linked.",
+			target:    "warp",
+			wantBody:  "Keep [[other-note]] linked.",
+			wantCount: 0,
+		},
+		{
+			name:      "embed/transclusion never unlinked",
+			body:      "Image ![[warp]] stays.",
+			target:    "warp",
+			wantBody:  "Image ![[warp]] stays.",
+			wantCount: 0,
+		},
+		{
+			name:      "link inside inline code untouched",
+			body:      "Use `[[warp]]` syntax but [[warp]] here.",
+			target:    "warp",
+			wantBody:  "Use `[[warp]]` syntax but warp here.",
+			wantCount: 1,
+		},
+		{
+			name:      "case/separator mismatch does NOT unlink (exact match only)",
+			body:      "Keep [[Warp]] and [[war-p]] linked.",
+			target:    "warp",
+			wantBody:  "Keep [[Warp]] and [[war-p]] linked.",
+			wantCount: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, n := UnlinkWikiLink(tc.body, tc.target)
+			if n != tc.wantCount {
+				t.Errorf("count = %d, want %d", n, tc.wantCount)
+			}
+			if got != tc.wantBody {
+				t.Errorf("body = %q, want %q", got, tc.wantBody)
+			}
+		})
+	}
+}
