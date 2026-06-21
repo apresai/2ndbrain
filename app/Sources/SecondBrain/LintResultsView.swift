@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import SecondBrainCore
 
 struct LintResultsView: View {
@@ -13,6 +14,8 @@ struct LintResultsView: View {
     /// Inline result banner after a fix (green) or failure (red).
     @State private var actionMessage: String?
     @State private var actionIsError = false
+    /// True while the bulk "Repair drift links" pass is running.
+    @State private var bulkBusy = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,6 +76,31 @@ struct LintResultsView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    let brokenPaths = distinctBrokenLinkPaths(report)
+                    let brokenCount = brokenLinkFindingCount(report)
+                    if brokenCount > 1 {
+                        // Bulk: one click repairs every confident case/separator
+                        // drift link across all affected files. Safe — repair-links
+                        // only rewrites unambiguous matches and skips the rest, so
+                        // this can't mis-target; ambiguous/missing links stay for
+                        // the per-finding sheet.
+                        HStack(spacing: 6) {
+                            Image(systemName: "wand.and.stars")
+                                .foregroundStyle(.secondary)
+                            Text("\(brokenCount) broken links across \(brokenPaths.count) file\(brokenPaths.count == 1 ? "" : "s")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button(bulkBusy ? "Repairing…" : "Repair drift links") {
+                                confirmAndRepairAllDrift(brokenPaths)
+                            }
+                            .controlSize(.small)
+                            .disabled(bulkBusy || appState.isLinting)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        Divider()
+                    }
                     List(report.issues) { issue in
                         IssueRow(
                             issue: issue,
@@ -82,6 +110,10 @@ struct LintResultsView: View {
                         )
                     }
                     .listStyle(.inset)
+                    // Don't let a per-finding fix race the bulk pass on the same
+                    // file (both write atomically, but overlapping snapshots could
+                    // clobber an undo). The bulk pass is brief.
+                    .disabled(bulkBusy)
                 }
             } else {
                 VStack(spacing: 12) {
@@ -156,6 +188,64 @@ struct LintResultsView: View {
         let vaultName = ObsidianRegistry.load()?.vault(at: vault.rootURL)?.name
             ?? vault.rootURL.lastPathComponent
         ObsidianURL.open(vaultName: vaultName, relativePath: path, absoluteFileURL: absURL)
+    }
+
+    /// Distinct note paths that have at least one broken-wikilink finding, in
+    /// report order. Drives the bulk "Repair drift links" affordance.
+    private func distinctBrokenLinkPaths(_ report: LintReport) -> [String] {
+        var seen = Set<String>()
+        var paths = [String]()
+        for issue in report.issues {
+            if case .brokenLink = LintFinding.classify(message: issue.message) {
+                if seen.insert(issue.path).inserted { paths.append(issue.path) }
+            }
+        }
+        return paths
+    }
+
+    /// Total broken-wikilink findings across the report (one note can have
+    /// several). The bulk bar shows once there is more than one, since a single
+    /// finding is served just as well by its per-finding sheet.
+    private func brokenLinkFindingCount(_ report: LintReport) -> Int {
+        report.issues.reduce(into: 0) { count, issue in
+            if case .brokenLink = LintFinding.classify(message: issue.message) { count += 1 }
+        }
+    }
+
+    /// Confirm (the pass touches multiple files), then repair every confident
+    /// drift link across `paths`, re-lint, and report how many were fixed. Each
+    /// file is reversible with `2nb polish <path> --undo`.
+    private func confirmAndRepairAllDrift(_ paths: [String]) {
+        let alert = NSAlert()
+        alert.messageText = "Repair drift links across \(paths.count) files?"
+        alert.informativeText = "Fixes every link whose only drift from an existing note is case, spacing, or hyphens. Ambiguous or genuinely missing links are left untouched for a per-finding fix. Each file is reversible (polish --undo)."
+        alert.addButton(withTitle: "Repair")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        bulkBusy = true
+        actionMessage = nil
+        Task {
+            do {
+                let (repaired, failed) = try await appState.repairAllDrift(paths: paths)
+                bulkBusy = false
+                // Error tint only when nothing succeeded; a partial success stays
+                // informational.
+                actionIsError = failed > 0 && repaired == 0
+                var msg = repaired > 0
+                    ? "Repaired \(repaired) drift link\(repaired == 1 ? "" : "s")."
+                    : "No confident drift links to repair — the rest need a per-finding fix."
+                if failed > 0 {
+                    msg += " \(failed) file\(failed == 1 ? "" : "s") couldn’t be processed."
+                }
+                actionMessage = msg + " Re-checking…"
+                await appState.runLint()
+            } catch {
+                bulkBusy = false
+                actionIsError = true
+                actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 }
 

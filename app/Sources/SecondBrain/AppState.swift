@@ -1639,6 +1639,35 @@ final class AppState {
         return try JSONDecoder().decode(PolishResult.self, from: data)
     }
 
+    /// Repair every confident drift link (case / separator / whitespace) across
+    /// the given note `paths` in one pass — `2nb repair-links <path> --write`
+    /// with NO `--target`, so each file's confidently-resolvable links are all
+    /// fixed while ambiguous/unmatched ones are left for a manual fix. Each file
+    /// is snapshotted, reversible with `polish <path> --undo`. Powers the
+    /// Validation tab's bulk "Repair drift links" button.
+    ///
+    /// Resilient: a per-file failure (e.g. a note deleted out from under us mid
+    /// pass) is logged and counted, not fatal — the remaining files still get
+    /// repaired. Returns `(repaired:` total links fixed, `failed:` files skipped`)`
+    /// so the caller can report partial success instead of losing it.
+    func repairAllDrift(paths: [String]) async throws -> (repaired: Int, failed: Int) {
+        guard let vault else { throw CLIError.noVault }
+        var repaired = 0
+        var failed = 0
+        for path in paths {
+            do {
+                let data = try await runCLI(
+                    ["repair-links", path, "--write", "--json", "--porcelain"], cwd: vault.rootURL)
+                let res = try JSONDecoder().decode(PolishResult.self, from: data)
+                repaired += res.linksRepaired?.count ?? 0
+            } catch {
+                failed += 1
+                log.error("bulk repair-links failed for \(path): \(error.localizedDescription)")
+            }
+        }
+        return (repaired, failed)
+    }
+
     /// Ranked "did you mean?" existing-note candidates for one broken wikilink
     /// `target`, via `2nb suggest-target` (drift / semantic / keyword tiers).
     /// Read-only. Returns [] rather than throwing on a CLI miss so the

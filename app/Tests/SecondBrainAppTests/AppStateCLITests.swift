@@ -108,6 +108,35 @@ func appStateSetModelSimilarityThreshold() async throws {
     }
 }
 
+@Test("AppState.repairAllDrift aggregates across files and survives a bad path")
+@MainActor
+func appStateRepairAllDrift() async throws {
+    try await withOpenAppStateVault { state, root in
+        func writeNote(_ name: String, _ id: String, _ title: String, _ body: String) throws {
+            let fm = "---\nid: \(id)\ntitle: \(title)\ntype: note\nstatus: draft\ntags: []\n---\n\n"
+            try (fm + body + "\n").write(to: root.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        // Two target notes + two sources each with a case/spacing-drift link
+        // (broken in 2nb's case-sensitive resolver, repairable to the title).
+        try writeNote("auth-flow.md", "t-auth", "Auth Flow", "# Auth Flow")
+        try writeNote("jwt-tokens.md", "t-jwt", "JWT Tokens", "# JWT Tokens")
+        try writeNote("a.md", "t-a", "A", "See [[auth flow]] here.")
+        try writeNote("b.md", "t-b", "B", "See [[jwt tokens]] here.")
+        _ = try await state.runCLI(["index"], cwd: root)
+
+        // A nonexistent path is counted as failed, not fatal: the real files
+        // still get repaired and partial success is preserved.
+        let (repaired, failed) = try await state.repairAllDrift(paths: ["a.md", "ghost.md", "b.md"])
+        #expect(repaired == 2)
+        #expect(failed == 1)
+
+        let aFixed = try String(contentsOf: root.appendingPathComponent("a.md"), encoding: .utf8)
+        let bFixed = try String(contentsOf: root.appendingPathComponent("b.md"), encoding: .utf8)
+        #expect(aFixed.contains("[[Auth Flow]]") && !aFixed.contains("[[auth flow]]"))
+        #expect(bFixed.contains("[[JWT Tokens]]") && !bFixed.contains("[[jwt tokens]]"))
+    }
+}
+
 @Test("AppState provider-dependent methods fail without vault")
 @MainActor
 func appStateNoVaultErrors() async {
