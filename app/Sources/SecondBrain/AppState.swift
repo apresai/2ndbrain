@@ -1475,6 +1475,23 @@ final class AppState {
         _ = try await runCLI(["plugin", "install"], cwd: vault.rootURL)
     }
 
+    /// Checks for a newer 2ndbrain release via `2nb update --json` (the latest
+    /// release tag is cached by the CLI for 24h). Best-effort: an unreachable
+    /// network, an older CLI without the `update` command, or empty/unparseable
+    /// output returns nil so the Updates tab shows "couldn't check". The pinned
+    /// `--vault` is ignored by `update`, which is vault-agnostic.
+    func checkForUpdates() async -> UpdateInfo? {
+        guard let vault else { return nil }
+        do {
+            let data = try await runCLI(["update", "--json"], cwd: vault.rootURL)
+            if data.isEmpty { return nil }
+            return try JSONDecoder().decode(UpdateInfo.self, from: data)
+        } catch {
+            log.warning("update check unavailable: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     /// Refreshes the Claude Code skill install status via `2nb skills list
     /// --json`. Best-effort: an unreachable or pre-0.8.1 CLI (no `skills list`)
     /// leaves `skillStatuses` empty and is logged, not surfaced (the Home row

@@ -478,6 +478,7 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 - **MCP Server** (Cmd+Shift+M): live MCP server processes and recent tool invocations
 - **Git Integration** (Cmd+Shift+G): recent commits with a 1/3/7/30-day window; click a commit for per-file diffs
 - **Validation**: `2nb lint` findings rendered with file and line detail
+- **Updates**: app, CLI, and Obsidian-plugin versions against the latest release (`2nb update`), with one-click upgrades for the CLI and plugin
 
 Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Sync Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
 

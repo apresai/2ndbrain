@@ -9,13 +9,14 @@ enum DashboardTab: String, CaseIterable, Identifiable {
     case mcpServer = "MCP Server"
     case gitIntegration = "Git Integration"
     case validation = "Validation"
+    case updates = "Updates"
 
     var id: String { self.rawValue }
 
     /// The power-user tabs, demoted under an "Advanced" sidebar section. Home
     /// surfaces the common-case essentials (vault, AI, index); everything else
     /// lives here.
-    static var advanced: [DashboardTab] { [.status, .aiSettings, .mcpServer, .gitIntegration, .validation] }
+    static var advanced: [DashboardTab] { [.status, .aiSettings, .mcpServer, .gitIntegration, .validation, .updates] }
 
     var systemImage: String {
         switch self {
@@ -25,6 +26,7 @@ enum DashboardTab: String, CaseIterable, Identifiable {
         case .mcpServer: return "server.rack"
         case .gitIntegration: return "sourcecontrol"
         case .validation: return "checkmark.seal"
+        case .updates: return "arrow.down.circle"
         }
     }
 }
@@ -138,6 +140,8 @@ struct ContentView: View {
                         GitActivityView(isPresented: .constant(true), isInline: true)
                     case .validation:
                         LintResultsView(isPresented: .constant(true), isInline: true)
+                    case .updates:
+                        UpdatesView()
                     }
                 }
                 .navigationTitle(selection.rawValue)
