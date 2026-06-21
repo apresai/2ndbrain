@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.1] - 2026-06-21
+
+### Added
+- New CLI link-resolution commands for broken wikilinks: `relink` (repoint a broken link to an existing note), `unlink` (remove a link but keep its visible text), and `suggest-target` ("did you mean?" ranked candidates for a broken target).
+- Deterministic link repair now folds hyphen/underscore/separator drift, so a spaced `[[Some Note Title]]` link matches a kebab-case `some-note-title.md` basename.
+- macOS app: no-dead-end `LinkResolutionSheet` for broken-wikilink validation findings, offering Repair drift, Did you mean? (relink), Create the note, and Unlink so every finding has a real fix.
+- macOS app: bulk "Repair drift links" button on the Validation tab to fix all separator-drift links at once.
+
+### Fixed
+- Index notes that merely mention "secret" in their body; notes are now excluded from indexing by type, not by name.
+
+### Changed
+- README documents the link-resolution commands and separator-drift repair workflow.
+
+
 ## [0.10.0] - 2026-06-20
 
 ### Added
