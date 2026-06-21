@@ -69,6 +69,19 @@ func mcpToolRegistrations(h *handlers) []toolRegistration {
 	}
 }
 
+// serverConfig holds optional wrappers applied during server construction.
+type serverConfig struct {
+	idle *idleWatchdog
+}
+
+type serverOption func(*serverConfig)
+
+// withIdleWatchdog registers an idle watchdog whose wrap() is applied to every
+// tool handler so the server tracks activity and can self-exit when idle.
+func withIdleWatchdog(w *idleWatchdog) serverOption {
+	return func(c *serverConfig) { c.idle = w }
+}
+
 // newMCPServer builds a fully-configured MCP server for the vault: the
 // instructions string, tool-capability flag, and all kb_* tools registered
 // through the same status-writer + per-tool-timeout wrappers the live server
@@ -76,7 +89,12 @@ func mcpToolRegistrations(h *handlers) []toolRegistration {
 // server (Start), a future in-process self-test (mcp doctor), and tests all
 // exercise the identical registration. The returned StatusWriter may be nil (its setup
 // is best-effort and must not block the server) and is owned by the caller.
-func newMCPServer(v *vault.Vault, version string) (*server.MCPServer, *StatusWriter) {
+func newMCPServer(v *vault.Vault, version string, opts ...serverOption) (*server.MCPServer, *StatusWriter) {
+	cfg := &serverConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
 	s := server.NewMCPServer(
 		"2ndbrain",
 		version,
@@ -100,6 +118,11 @@ func newMCPServer(v *vault.Vault, version string) (*server.MCPServer, *StatusWri
 		if statusWriter != nil {
 			handler = statusWriter.Wrap(tool.Name, handler)
 		}
+		// The idle wrap goes OUTERMOST so inFlight is decremented only after the
+		// status flush (inside statusWriter.Wrap) has completed.
+		if cfg.idle != nil {
+			handler = cfg.idle.wrap(handler)
+		}
 		s.AddTool(tool, handler)
 	}
 
@@ -110,8 +133,28 @@ func newMCPServer(v *vault.Vault, version string) (*server.MCPServer, *StatusWri
 	return s, statusWriter
 }
 
-func Start(v *vault.Vault, version string) error {
-	s, statusWriter := newMCPServer(v, version)
+// Start runs the stdio MCP server until its client disconnects, a signal
+// arrives, or — when idleTimeout > 0 — the server has been idle that long (it
+// then exits cleanly so a closed session doesn't leave an orphan). idleTimeout
+// <= 0 disables the idle self-exit.
+func Start(v *vault.Vault, version string, idleTimeout time.Duration) error {
+	var statusWriter *StatusWriter
+
+	var sOpts []serverOption
+	var watchdog *idleWatchdog
+	if idleTimeout > 0 {
+		watchdog = newIdleWatchdog(idleTimeout, func() {
+			if statusWriter != nil {
+				statusWriter.Remove()
+			}
+			slog.Info("mcp server exiting after idle timeout", "timeout", idleTimeout.String())
+			os.Exit(0)
+		})
+		sOpts = append(sOpts, withIdleWatchdog(watchdog))
+	}
+
+	var s *server.MCPServer
+	s, statusWriter = newMCPServer(v, version, sOpts...)
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)
@@ -121,6 +164,12 @@ func Start(v *vault.Vault, version string) error {
 			statusWriter.Remove()
 			os.Exit(0)
 		}()
+	}
+
+	// Launch the idle watchdog after statusWriter is assigned so its onExpire
+	// closure observes the writer. No-op when idleTimeout <= 0.
+	if watchdog != nil {
+		go watchdog.run()
 	}
 
 	err := server.ServeStdio(s)

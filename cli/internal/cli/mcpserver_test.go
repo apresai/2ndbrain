@@ -3,10 +3,35 @@ package cli
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
+
+func TestResolveIdleTimeout(t *testing.T) {
+	cases := []struct {
+		name        string
+		flagChanged bool
+		flagVal     time.Duration
+		env         string
+		want        time.Duration
+	}{
+		{"default when unset", false, 0, "", defaultMCPIdleTimeout},
+		{"explicit flag wins", true, time.Hour, "5m", time.Hour},
+		{"explicit flag zero = never", true, 0, "30m", 0},
+		{"env used when no flag", false, 0, "15m", 15 * time.Minute},
+		{"env zero = never", false, 0, "0s", 0},
+		{"invalid env falls back to default", false, 0, "not-a-duration", defaultMCPIdleTimeout},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := resolveIdleTimeout(c.flagChanged, c.flagVal, c.env); got != c.want {
+				t.Errorf("resolveIdleTimeout(%v, %v, %q) = %v, want %v", c.flagChanged, c.flagVal, c.env, got, c.want)
+			}
+		})
+	}
+}
 
 // TestMCPServer_InitsAIProviders is the regression guard for the fix where the
 // MCP server never called initAIProviders, so kb_create / kb_append /

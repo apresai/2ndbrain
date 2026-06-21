@@ -133,7 +133,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (79)
+### CLI Commands (80)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -184,9 +184,10 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `import-obsidian` | Import Obsidian vault (adds UUIDs, normalizes tags, builds index) |
 | `export-obsidian` | Export to Obsidian format (`--strip-ids`) |
 | `migrate` | Migrate a legacy 2ndbrain vault to the Obsidian-native format (schema v3); `--dry-run` previews without modifying. Non-mutating: source markdown is never changed. |
-| `mcp-server` | Start MCP server on stdio transport |
+| `mcp-server` | Start MCP server on stdio transport. **Self-exits after 30 min idle** (no tool activity) so a closed AI session doesn't leave an orphan holding the index open (the client respawns it on demand). Override with `--idle-timeout <dur>` or `$2NB_MCP_IDLE_TIMEOUT` (e.g. `1h`); `0` = never. The idle watchdog (`internal/mcp/idle.go`) is lock-free (atomic activity clock + in-flight counter) and wraps each tool handler |
 | `mcp-setup` | Show MCP setup instructions for all AI tools |
 | `mcp status` | List live MCP server processes and recent tool invocations (`--json`) |
+| `mcp reap` | Terminate stale/orphaned `mcp-server` processes for this vault (SIGTERM only; the server handles it cleanly). Reaps those whose last activity is older than `--older-than` (default 6h); never the current process, never an active server, and re-verifies the sidecar's start time before signaling to dodge PID reuse. `--dry-run` previews. With idle self-exit on `mcp-server`, this is a rarely-needed backstop. JSON: `{reaped[], skipped[], threshold, dry_run}` |
 | `mcp configured` | Report whether the 2ndbrain MCP server is configured in the AI client config (`~/.claude.json`) for this vault (`--json`). Durable "is it set up?" check, unlike `mcp status` which reports "is it running right now?" |
 | `plugin status` | Installed Obsidian plugin version vs this CLI (`--json`) |
 | `plugin install` | Install or update the Obsidian plugin: downloads `manifest.json`/`main.js`/`styles.css` from the latest GitHub release into `<vault>/.obsidian/plugins/obsidian-2ndbrain/` (manifest written last so a partial install never looks complete). Alias: `plugin update`. Enabling in Obsidian stays manual (no API for it) |
