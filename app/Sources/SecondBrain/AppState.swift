@@ -1532,6 +1532,19 @@ final class AppState {
         _ = try await runCLI(["meta", path, "--set", "\(key)=\(value)"], cwd: vault.rootURL)
     }
 
+    /// Deterministically repair the broken wikilink `target` in `path` via
+    /// `2nb repair-links`. `preview: true` (default) computes the proposed change
+    /// without writing; `preview: false` applies it (`--write`) and snapshots the
+    /// original so it's reversible with `polish --undo`. Scoped to `target` so a
+    /// single finding's button fixes only the link the user clicked.
+    func repairLinks(path: String, target: String, preview: Bool = true) async throws -> PolishResult {
+        guard let vault else { throw CLIError.noVault }
+        var args = ["repair-links", path, "--target", target, "--json", "--porcelain"]
+        if !preview { args.append("--write") }
+        let data = try await runCLI(args, cwd: vault.rootURL)
+        return try JSONDecoder().decode(PolishResult.self, from: data)
+    }
+
     func askAI(question: String) async throws -> AIAskResult {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)
@@ -2572,6 +2585,45 @@ struct LintReport: Codable {
     enum CodingKeys: String, CodingKey {
         case issues, errors, warnings
         case filesChecked = "files_checked"
+    }
+}
+
+/// Decodes the JSON emitted by `2nb repair-links` (and `2nb polish`), which
+/// share the Go `cli.PolishResult` wire type. `original`/`polished` drive the
+/// diff preview; `linksRepaired`/`linksSkipped` summarize what happened.
+struct PolishResult: Codable {
+    let path: String
+    let original: String
+    let polished: String
+    let provider: String
+    let model: String
+    let durationMs: Int
+    let linksAdded: [String]?
+    let linksRepaired: [RepairLinkRepair]?
+    let linksSkipped: [RepairLinkRepair]?
+    let warning: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, original, polished, provider, model, warning
+        case durationMs = "duration_ms"
+        case linksAdded = "links_added"
+        case linksRepaired = "links_repaired"
+        case linksSkipped = "links_skipped"
+    }
+}
+
+/// One broken `[[wikilink]]` the repair acted on (`newTarget` set) or left alone
+/// (`reason` = "no_match" | "ambiguous"). Mirrors Go `polish.LinkRepair`.
+struct RepairLinkRepair: Codable, Identifiable {
+    var id: String { "\(raw)|\(newTarget ?? "")|\(reason ?? "")" }
+    let raw: String
+    let newTarget: String?
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case raw
+        case newTarget = "new_target"
+        case reason
     }
 }
 

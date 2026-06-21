@@ -2,6 +2,14 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Session 2026-06-20: GUI config work (Milestone B — `repair-links` + GUI Repair button)
+
+Chad-review GO. The HIGH (`--target` comma-split via `StringSliceVar` → switched to `StringArrayVar`, with a guard test) was fixed in-PR. Residual LOWs:
+- **LOW — `RepairPreviewSheet.apply()` trusts the stale preview.** It calls `onApplied()` (banner "Repaired [[X]]") on any non-error return from the `--write` run, even if the second run repaired nothing (vault changed between preview and apply). Self-correcting (the immediate re-lint still shows the link if it wasn't fixed) and the deterministic CLI can't corrupt, so cosmetic. `app/Sources/SecondBrain/LintResultsView.swift` `RepairPreviewSheet.apply`.
+- **LOW — apply-time `PolishResult.warning` is dropped by the GUI.** A non-fatal warning on the `--write` run (e.g. "failed to write undo snapshot") is never surfaced in the sheet/banner (still in CLI logs/stderr). Surface `result.warning` after apply if it becomes a real concern. Same file.
+- **LOW (coverage) — the ambiguous-skip and multi-repair command-level paths aren't asserted** in `repair_links_test.go` (only `no_match` skip + single repair are). Covered at the pure `repair_test.go` layer; net risk low.
+- **LOW (docs, optional) — `docs/obsidian-cli-mapping.md` could gain a `repair-links` row** for parity (it's CLI-only, no MCP twin).
+
 ## Session 2026-06-14: shipped this session + audit reconciliation
 
 This session shipped four releases (v0.9.4–v0.9.6) plus an in-flight backlog batch, and reconciled the entries below that this file still listed as deferred. Recorded here so the file is trustworthy.

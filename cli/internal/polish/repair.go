@@ -50,6 +50,17 @@ type RepairResult struct {
 // It takes the body directly (not a *Document) so callers can repair an
 // in-memory, post-copy-edit body that isn't on disk yet.
 func RepairBrokenLinks(v *vault.Vault, body string) (RepairResult, error) {
+	return RepairBrokenLinksFiltered(v, body, nil)
+}
+
+// RepairBrokenLinksFiltered is RepairBrokenLinks scoped to a set of authored
+// targets: only broken links whose authored target (after TrimSpace) appears in
+// `only` are considered; every other link is left untouched and not reported.
+// `only == nil` (or empty) repairs every confidently-repairable broken link,
+// reproducing RepairBrokenLinks exactly. This lets a per-finding GUI "Repair
+// link" button fix exactly the clicked broken target (the TARGET from lint's
+// `broken wikilink: [[TARGET]]`) without sweeping the whole document.
+func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (RepairResult, error) {
 	res := RepairResult{Body: body}
 
 	idx, err := buildRepairIndex(v.DB)
@@ -57,11 +68,22 @@ func RepairBrokenLinks(v *vault.Vault, body string) (RepairResult, error) {
 		return res, err
 	}
 
+	var filter map[string]bool
+	if len(only) > 0 {
+		filter = make(map[string]bool, len(only))
+		for _, t := range only {
+			filter[strings.TrimSpace(t)] = true
+		}
+	}
+
 	handled := make(map[string]bool) // dedupe by authored target so one distinct link is rewritten once
 	for _, link := range document.ExtractWikiLinks(body) {
 		target := strings.TrimSpace(link.Target)
 		if target == "" || handled[target] {
 			continue
+		}
+		if filter != nil && !filter[target] {
+			continue // not one of the targets the caller asked to repair
 		}
 		if isLikelyAsset(target) {
 			continue // ![[image.png]] and friends are not note links

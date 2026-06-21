@@ -133,7 +133,7 @@ Key patterns:
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (77)
+### CLI Commands (78)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -164,6 +164,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `orphans` | List documents with no resolved inbound link (nothing in the vault links to them) |
 | `deadends` | List documents with no resolved outbound link (they link to nothing real in the vault) |
 | `unresolved` | List every unresolved (broken) wikilink across the vault: each source doc path paired with the raw `[[target]]` that resolves to no note. Vault-wide complement to `links <path>` (which is per-file). `--total` prints only the count |
+| `repair-links <path>` | Deterministically repair broken `[[wikilinks]]` in a note — the AI-free sibling of `polish --repair-links` (runs `polish.RepairBrokenLinksFiltered`, no generation provider, works offline, never touches prose). A broken target is canonicalized only when its normalized form maps to exactly one note (basename/title/alias; the common case is case drift); ambiguous/unmatched targets are reported, never guessed. `--target <raw>` (repeatable) scopes the repair to specific authored targets (the `T` from `broken wikilink: [[T]]`), so a per-finding GUI button fixes exactly the clicked link. Previews by default; `--write` applies in place and snapshots the original so `polish <path> --undo` reverts it (shared snapshot slot). Emits the `PolishResult` shape (`provider: "repair-links"`); rejects read-only `.canvas`/`.base` |
 | `graph` | Output link graph as JSON adjacency list |
 | `outline <path>` | Heading tree of a document (heading path, level, line span). Shares `document.BuildOutline` with the MCP `kb_structure` tool |
 | `wordcount <path>` | Word, character, and heading counts over the indexable body (comments stripped). Alias: `wc` |
