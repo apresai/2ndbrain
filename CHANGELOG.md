@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.5] - 2026-06-22
+
+### Added
+- `2nb doctor` (alias `verify`) command that checks all three products (CLI, macOS app, Obsidian plugin) are installed and in sync with the latest release, reporting the exact fix command for any gap.
+- A **Components** section in the Obsidian plugin settings showing each product's installed version, sync status against the latest release, and fix commands, sourced from `2nb doctor --json`.
+
+### Changed
+- The macOS app's Updates tab now sources CLI and plugin version parity from the `2nb update` doctor payload, so the dashboard's freshness checks can't disagree with the terminal; the app row stays authoritative from the running bundle.
+
+
 ## [0.10.4] - 2026-06-22
 
 ### Fixed
