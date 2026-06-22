@@ -80,6 +80,30 @@ interface ConfiguredStatus {
 	vault_path: string;
 }
 
+// ProductState mirrors one component of `2nb doctor --json` (the Go
+// ProductState struct): a single product's install + version-parity state.
+// status is one of: ok | outdated | missing | unknown | n/a.
+interface ProductState {
+	name: string;
+	status: string;
+	installed: boolean;
+	version?: string;
+	update_available: boolean;
+	fix?: string;
+}
+
+// SuiteStatus mirrors `2nb doctor --json` (the Go SuiteStatus struct): the CLI,
+// macOS app, and Obsidian plugin against the latest published release.
+interface SuiteStatus {
+	latest?: string;
+	checked: boolean;
+	detail?: string;
+	in_sync: boolean;
+	cli: ProductState;
+	app: ProductState;
+	plugin: ProductState;
+}
+
 // resolveCliPath resolves the 2nb binary path. Pure free function: it takes
 // its filesystem probe (existsFn) and environment (env) as parameters so it
 // can be unit-tested without touching the real disk. GUI apps don't always
@@ -136,6 +160,26 @@ export function formatIndexState(documentCount: number, embeddingCount: number):
 	if (embeddingCount <= 0) return `not indexed yet (${documentCount} documents) — run "Rebuild AI Index"`;
 	if (embeddingCount < documentCount) return `partially embedded (${embeddingCount} / ${documentCount} documents)`;
 	return `embedded (${embeddingCount} / ${documentCount} documents)`;
+}
+
+// describeComponent renders one component's settings-row description from its
+// `2nb doctor` ProductState, using the same status vocabulary the CLI prints.
+export function describeComponent(p: ProductState, latest?: string): string {
+	const suffix = latest ? ` (latest ${latest})` : '';
+	switch (p.status) {
+		case 'ok':
+			return `v${p.version} — up to date${suffix}`;
+		case 'outdated':
+			return `v${p.version} — update available${suffix}. Fix: ${p.fix}`;
+		case 'missing':
+			return `not installed. Fix: ${p.fix}`;
+		case 'n/a':
+			return 'macOS app only';
+		case 'unknown':
+			return p.version ? `v${p.version} — version not comparable` : (p.fix || 'unknown');
+		default:
+			return p.status;
+	}
 }
 
 // filepathBase returns the final path segment of a vault-relative path.
@@ -697,6 +741,17 @@ export default class BrainPlugin extends Plugin {
 			const arr = JSON.parse(await this.runCommand(['mcp', 'configured', '--json'])) as ConfiguredStatus[];
 			const cc = arr.find(s => s.client === 'claude-code');
 			return cc ? cc.configured : false;
+		} catch {
+			return null;
+		}
+	}
+
+	// suiteStatus reports the CLI, macOS app, and Obsidian plugin against the
+	// latest release (`2nb doctor --json`). Returns null if the CLI isn't
+	// reachable / lacks the `doctor` subcommand (pre-0.10.x CLI).
+	async suiteStatus(): Promise<SuiteStatus | null> {
+		try {
+			return JSON.parse(await this.runCommand(['doctor', '--json'])) as SuiteStatus;
 		} catch {
 			return null;
 		}
@@ -1358,6 +1413,44 @@ class BrainSettingTab extends PluginSettingTab {
 			} else {
 				mcpSetting.setDesc('Not configured. Click Copy setup snippet to wire Claude Code to this vault.');
 			}
+		});
+
+		// Components: are the CLI, macOS app, and Obsidian plugin all installed
+		// and in sync with the latest release? `2nb doctor --json` is the single
+		// source (the same check is `2nb doctor` in a terminal). The three
+		// products bump together but a release can publish one without another, so
+		// this surfaces drift and the command to fix each gap.
+		containerEl.createEl('h3', { text: 'Components' });
+		const cliRow = new Setting(containerEl).setName('CLI (2nb)').setDesc('Checking…');
+		const appRow = new Setting(containerEl).setName('macOS app').setDesc('Checking…');
+		const pluginRow = new Setting(containerEl)
+			.setName('Obsidian plugin')
+			.setDesc('Checking…')
+			.addButton(btn => btn
+				.setButtonText('Update plugin')
+				.onClick(async () => {
+					btn.setDisabled(true).setButtonText('Updating…');
+					try {
+						await this.plugin.runCommand(['plugin', 'install']);
+						new Notice('Obsidian plugin updated. Reload Obsidian (Cmd+R) to apply.');
+					} catch (e) {
+						new Notice(`Plugin update failed: ${(e as Error).message}`);
+					} finally {
+						btn.setDisabled(false).setButtonText('Update plugin');
+						this.display();
+					}
+				}));
+		this.plugin.suiteStatus().then(suite => {
+			if (!suite) {
+				const msg = 'Status unavailable (2nb CLI not reachable, or too old for `doctor`).';
+				cliRow.setDesc(msg);
+				appRow.setDesc(msg);
+				pluginRow.setDesc(msg);
+				return;
+			}
+			cliRow.setDesc(describeComponent(suite.cli, suite.latest));
+			appRow.setDesc(describeComponent(suite.app, suite.latest));
+			pluginRow.setDesc(describeComponent(suite.plugin, suite.latest));
 		});
 	}
 }
