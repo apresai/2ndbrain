@@ -116,6 +116,7 @@ import {
 	computeLineDiff,
 	pinVaultArgs,
 	formatIndexState,
+	describeComponent,
 	trimChatHistory,
 	type ChatTurn,
 	type DiffRow,
@@ -289,6 +290,45 @@ describe('formatIndexState', () => {
 
 	it('reports an empty vault when there are no documents', () => {
 		expect(formatIndexState(0, 0)).toContain('empty vault');
+	});
+});
+
+describe('describeComponent', () => {
+	it('renders up-to-date with the version and latest', () => {
+		const desc = describeComponent(
+			{ name: 'cli', status: 'ok', installed: true, version: '0.10.4', update_available: false },
+			'v0.10.4',
+		);
+		expect(desc).toContain('v0.10.4');
+		expect(desc).toContain('up to date');
+	});
+
+	it('renders outdated with the fix command', () => {
+		const desc = describeComponent(
+			{ name: 'app', status: 'outdated', installed: true, version: '0.10.3', update_available: true, fix: 'brew upgrade --cask apresai/tap/secondbrain' },
+			'v0.10.4',
+		);
+		expect(desc).toContain('update available');
+		expect(desc).toContain('brew upgrade --cask apresai/tap/secondbrain');
+	});
+
+	it('renders missing with the install fix', () => {
+		const desc = describeComponent(
+			{ name: 'app', status: 'missing', installed: false, update_available: false, fix: 'brew install --cask apresai/tap/secondbrain' },
+			'v0.10.4',
+		);
+		expect(desc).toContain('not installed');
+		expect(desc).toContain('brew install --cask apresai/tap/secondbrain');
+	});
+
+	it('renders n/a as macOS-only', () => {
+		expect(describeComponent({ name: 'app', status: 'n/a', installed: false, update_available: false }, 'v0.10.4'))
+			.toContain('macOS app only');
+	});
+
+	it('renders unknown with the hint when no version', () => {
+		expect(describeComponent({ name: 'plugin', status: 'unknown', installed: false, update_available: false, fix: 'open a vault' }, undefined))
+			.toContain('open a vault');
 	});
 });
 
