@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.4] - 2026-06-22
+
+### Fixed
+- Wikilinks that target a note by its title or alias (rather than filename) are now resolved correctly during `lint`, so valid links are no longer reported as broken.
+- Same-document anchor links (e.g. `[[#heading]]` pointing within the current note) are now excluded from the link table, preventing them from being counted as inbound/outbound links.
+
+
 ## [0.10.3] - 2026-06-21
 
 ### Changed
