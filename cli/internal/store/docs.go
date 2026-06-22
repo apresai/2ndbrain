@@ -122,6 +122,15 @@ func (db *DB) UpsertLinks(docID string, links []document.WikiLink) error {
 	defer stmt.Close()
 
 	for _, link := range links {
+		// Skip same-document anchors ([[#heading]] / [[#^block]]): they have an
+		// empty page target and are intra-doc navigation, not cross-doc links.
+		// Storing them created phantom "unresolved" rows (target_id NULL) that
+		// `2nb unresolved`, `2nb links`, the link graph, and the kb_links MCP
+		// tool surfaced as broken. lint already excludes them via
+		// isAssetOrAnchorTarget; this keeps the link table consistent with it.
+		if link.Target == "" {
+			continue
+		}
 		if _, err := stmt.Exec(docID, link.Target, link.Heading, link.Alias, nullIfEmpty(link.Block)); err != nil {
 			return fmt.Errorf("insert link to %s: %w", link.Target, err)
 		}
@@ -405,6 +414,11 @@ func (db *DB) UpsertLinksTx(tx *sql.Tx, docID string, links []document.WikiLink)
 	defer stmt.Close()
 
 	for _, link := range links {
+		// Skip same-document anchors ([[#heading]] / [[#^block]]) — empty page
+		// target, intra-doc nav, not cross-doc links (see UpsertLinks).
+		if link.Target == "" {
+			continue
+		}
 		if _, err := stmt.Exec(docID, link.Target, link.Heading, link.Alias, nullIfEmpty(link.Block)); err != nil {
 			return fmt.Errorf("insert link to %s: %w", link.Target, err)
 		}

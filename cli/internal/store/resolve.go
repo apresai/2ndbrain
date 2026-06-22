@@ -157,20 +157,50 @@ func (idx *lookupIndex) pathsForIDs(ids []string) []string {
 	return paths
 }
 
-// ResolveTarget resolves a user-supplied name to a single document's
-// vault-relative path using the same tiered matching as wikilink resolution:
+// DocInfo is the exported, storage-agnostic input to NewResolver: one document's
+// surrogate id, vault-relative path, and frontmatter title. Filesystem callers
+// (e.g. lint) pass the path as the id since paths are unique.
+type DocInfo struct {
+	ID    string
+	Path  string
+	Title string
+}
+
+// Resolver resolves wikilink/target names against a prebuilt lookup index using
+// the same tiered matching as ResolveTarget. Build it once (O(docs)) and call
+// Resolve many times (O(1) each), so a caller resolving a whole vault's links
+// doesn't rebuild the index per name.
+type Resolver struct{ idx *lookupIndex }
+
+// newResolver builds a Resolver from DB-sourced docInfos, for internal callers
+// that already hold []docInfo.
+func newResolver(docs []docInfo, aliases map[string][]string) *Resolver {
+	return &Resolver{idx: buildLookupIndex(docs, aliases)}
+}
+
+// NewResolver builds a Resolver from storage-agnostic DocInfos. It lets callers
+// that source documents from the filesystem (lint) resolve links through the
+// exact same index the DB-backed path uses, so the two can never drift.
+func NewResolver(docs []DocInfo, aliases map[string][]string) *Resolver {
+	internal := make([]docInfo, len(docs))
+	for i, d := range docs {
+		internal[i] = docInfo{id: d.ID, path: d.Path, title: d.Title}
+	}
+	return newResolver(internal, aliases)
+}
+
+// Resolve matches name to a single document's vault-relative path using the same
+// tiers and normalization as ResolveTarget:
 //
 //	A. exact vault-relative path (with and without .md)
 //	B. shortest-unique path suffix / basename
 //	C. title
 //	D. alias
 //
-// Unlike ResolveLinks (which silently leaves an ambiguous wikilink unresolved),
-// ResolveTarget FAILS LOUDLY on ambiguity, returning *AmbiguousTargetError with
-// the candidate paths so a caller never writes to a guessed file. A leading
-// slash, backslashes, and any #heading / #^block anchor are stripped before
-// matching. Returns ErrTargetNotFound when nothing matches.
-func (db *DB) ResolveTarget(name string) (string, error) {
+// A leading slash, backslashes, and any trailing #heading / #^block anchor are
+// stripped before matching. Returns ErrTargetNotFound when nothing matches, or
+// *AmbiguousTargetError (with candidate paths) when a tier matches >1 document.
+func (r *Resolver) Resolve(name string) (string, error) {
 	name = strings.ReplaceAll(name, "\\", "/")
 	name = strings.TrimPrefix(name, "/")
 	// Strip a trailing #heading or #^block anchor (resolution is by note).
@@ -182,15 +212,7 @@ func (db *DB) ResolveTarget(name string) (string, error) {
 		return "", ErrTargetNotFound
 	}
 
-	docs, err := db.fetchDocInfos()
-	if err != nil {
-		return "", err
-	}
-	aliases, err := db.fetchAliases()
-	if err != nil {
-		return "", err
-	}
-	idx := buildLookupIndex(docs, aliases)
+	idx := r.idx
 
 	// A. Exact full-path match (path is unique).
 	if id, ok := idx.exactPaths[name]; ok {
@@ -231,4 +253,29 @@ func (db *DB) ResolveTarget(name string) (string, error) {
 	}
 
 	return "", ErrTargetNotFound
+}
+
+// ResolveTarget resolves a user-supplied name to a single document's
+// vault-relative path using the same tiered matching as wikilink resolution:
+//
+//	A. exact vault-relative path (with and without .md)
+//	B. shortest-unique path suffix / basename
+//	C. title
+//	D. alias
+//
+// Unlike ResolveLinks (which silently leaves an ambiguous wikilink unresolved),
+// ResolveTarget FAILS LOUDLY on ambiguity, returning *AmbiguousTargetError with
+// the candidate paths so a caller never writes to a guessed file. A leading
+// slash, backslashes, and any #heading / #^block anchor are stripped before
+// matching. Returns ErrTargetNotFound when nothing matches.
+func (db *DB) ResolveTarget(name string) (string, error) {
+	docs, err := db.fetchDocInfos()
+	if err != nil {
+		return "", err
+	}
+	aliases, err := db.fetchAliases()
+	if err != nil {
+		return "", err
+	}
+	return newResolver(docs, aliases).Resolve(name)
 }
