@@ -117,6 +117,9 @@ import {
 	pinVaultArgs,
 	formatIndexState,
 	describeComponent,
+	parseVersion,
+	compareVersions,
+	firstExistingSystem,
 	trimChatHistory,
 	type ChatTurn,
 	type DiffRow,
@@ -245,6 +248,80 @@ describe('resolveCliPath', () => {
 		// A user-configured path takes precedence over everything, including managed.
 		expect(resolveCliPath('/custom/2nb', exists, env, managed)).toBe('/custom/2nb');
 		expect(exists).not.toHaveBeenCalled();
+	});
+
+	// Version-aware selection: a managed copy must not shadow a STRICTLY newer
+	// system binary (the stale-0.10.3-shadows-brew-0.10.5 bug).
+	const managed = '/vault/.obsidian/plugins/obsidian-2ndbrain/bin/2nb';
+	const both = (p: string) => p === managed || p === '/opt/homebrew/bin/2nb';
+
+	it('prefers brew when the system binary is strictly newer than the managed copy', () => {
+		expect(resolveCliPath('2nb', both, env, managed, { managed: '0.10.3', system: '0.10.5' }))
+			.toBe('/opt/homebrew/bin/2nb');
+	});
+
+	it('keeps the managed copy when it is newer than or equal to the system binary', () => {
+		expect(resolveCliPath('2nb', both, env, managed, { managed: '0.10.5', system: '0.10.5' })).toBe(managed);
+		expect(resolveCliPath('2nb', both, env, managed, { managed: '0.10.6', system: '0.10.5' })).toBe(managed);
+	});
+
+	it('keeps the managed copy when a version is unknown (offline / dev build)', () => {
+		// Either side unknown -> no strictly-newer proof -> managed stays (offline-safe).
+		expect(resolveCliPath('2nb', both, env, managed, { managed: null, system: '0.10.5' })).toBe(managed);
+		expect(resolveCliPath('2nb', both, env, managed, { managed: '0.10.3', system: null })).toBe(managed);
+	});
+
+	it('keeps the managed copy when versions are omitted entirely (legacy call)', () => {
+		expect(resolveCliPath('2nb', both, env, managed)).toBe(managed);
+	});
+
+	it('uses the system binary when no managed copy exists, regardless of versions', () => {
+		const sysOnly = (p: string) => p === '/opt/homebrew/bin/2nb';
+		expect(resolveCliPath('2nb', sysOnly, env, managed, { managed: null, system: '0.10.5' }))
+			.toBe('/opt/homebrew/bin/2nb');
+	});
+});
+
+describe('parseVersion', () => {
+	it('extracts the triple from `2nb version` output', () => {
+		expect(parseVersion('2nb version 0.10.5')).toBe('0.10.5');
+	});
+	it('extracts a bare triple and ignores trailing junk', () => {
+		expect(parseVersion('0.10.5\n')).toBe('0.10.5');
+		expect(parseVersion('v0.10.5 (abc123)')).toBe('0.10.5');
+	});
+	it('returns null for a dev build or unparseable input', () => {
+		expect(parseVersion('dev')).toBeNull();
+		expect(parseVersion('')).toBeNull();
+		expect(parseVersion(undefined as unknown as string)).toBeNull();
+	});
+});
+
+describe('compareVersions', () => {
+	it('orders by major, minor, then patch', () => {
+		expect(compareVersions('0.10.5', '0.10.4')).toBe(1);
+		expect(compareVersions('0.10.4', '0.10.5')).toBe(-1);
+		expect(compareVersions('1.0.0', '0.99.99')).toBe(1);
+		expect(compareVersions('0.11.0', '0.10.9')).toBe(1);
+	});
+	it('treats equal versions as 0', () => {
+		expect(compareVersions('0.10.5', '0.10.5')).toBe(0);
+	});
+	it('treats missing components as 0', () => {
+		expect(compareVersions('1', '1.0.0')).toBe(0);
+	});
+});
+
+describe('firstExistingSystem', () => {
+	const env: NodeJS.ProcessEnv = { HOME: '/Users/test' };
+	it('returns Homebrew ARM first, then Intel, then ~/go/bin', () => {
+		expect(firstExistingSystem(() => true, env)).toBe('/opt/homebrew/bin/2nb');
+		expect(firstExistingSystem(p => p === '/usr/local/bin/2nb', env)).toBe('/usr/local/bin/2nb');
+		expect(firstExistingSystem(p => p === '/Users/test/go/bin/2nb', env)).toBe('/Users/test/go/bin/2nb');
+	});
+	it('returns null when no system binary exists', () => {
+		expect(firstExistingSystem(() => false, env)).toBeNull();
+		expect(firstExistingSystem(() => false, {})).toBeNull();
 	});
 });
 
