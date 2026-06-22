@@ -312,6 +312,8 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `config set <key> <value>` | Set a config value |
 | `config set-key <provider>` | Store API key in macOS Keychain |
 | `config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves) with one-line fix hints. Config defects fail (exit 2); an unreachable provider is a non-failing warning, so it stays usable offline/in CI |
+| `doctor` (alias `verify`) | Verify all three products — CLI, macOS app, Obsidian plugin — are installed and in sync with the latest release, with the exact fix command for any gap. The plugin is read from the open vault (or `--vault`); `--json` emits a `SuiteStatus` with a `ProductState` per component. Functional readiness stays in `config`/`mcp`/`skills doctor` |
+| `update` | Check whether a newer release is available; lists every component (CLI, app, plugin) that is behind the latest release. Offline-safe (24h cache). `--json` adds `app`/`plugin` states |
 
 All commands support `--json`, `--yaml`, `--csv`, `--tsv` for machine-readable output, plus `--format raw`/`md` to emit a document body (or any `Serialize()`-able value) verbatim, `--format text` for plain text, and (on listings) `--format paths`/`tree` and `--total`. `--copy` also writes a command's rendered output to the clipboard (macOS `pbcopy`): `read`/`print`, `meta --get`, and `daily` copy in their default output; any command run with a machine format copies that output.
 
