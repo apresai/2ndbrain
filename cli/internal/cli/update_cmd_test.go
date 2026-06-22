@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,39 +20,6 @@ func TestNormalizeReleaseVersion(t *testing.T) {
 			t.Errorf("normalizeReleaseVersion(%q) = %q, want %q", in, got, want)
 		}
 	}
-}
-
-func TestBuildUpdateStatus(t *testing.T) {
-	t.Run("update available", func(t *testing.T) {
-		s := buildUpdateStatus("0.10.0", "v0.10.1", nil)
-		if !s.Checked || !s.UpdateAvailable || s.Latest != "v0.10.1" {
-			t.Errorf("got %+v, want checked+available, latest v0.10.1", s)
-		}
-	})
-	t.Run("up to date", func(t *testing.T) {
-		s := buildUpdateStatus("0.10.1", "v0.10.1", nil)
-		if !s.Checked || s.UpdateAvailable {
-			t.Errorf("got %+v, want checked, not available", s)
-		}
-	})
-	t.Run("local build newer than latest is not an update", func(t *testing.T) {
-		s := buildUpdateStatus("0.11.0", "v0.10.1", nil)
-		if s.UpdateAvailable {
-			t.Errorf("got %+v, want not available (CLI is ahead)", s)
-		}
-	})
-	t.Run("dev build is not comparable", func(t *testing.T) {
-		s := buildUpdateStatus("dev", "v0.10.1", nil)
-		if s.UpdateAvailable || !s.Checked || s.Detail == "" {
-			t.Errorf("got %+v, want checked, not available, with a detail", s)
-		}
-	})
-	t.Run("fetch error means not checked", func(t *testing.T) {
-		s := buildUpdateStatus("0.10.1", "", errors.New("offline"))
-		if s.Checked || s.UpdateAvailable || s.Detail == "" {
-			t.Errorf("got %+v, want unchecked with a detail", s)
-		}
-	})
 }
 
 func TestReadUpdateCache_FreshVsStale(t *testing.T) {

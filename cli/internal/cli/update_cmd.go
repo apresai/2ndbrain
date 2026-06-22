@@ -26,12 +26,19 @@ var updateHTTPClient = &http.Client{Timeout: 15 * time.Second}
 // UpdateStatus reports the installed CLI version against the latest published
 // release. It is the `2nb update --json` contract (consumed by the macOS app's
 // Updates tab), so keep the field names stable.
+//
+// Current/Latest/UpdateAvailable describe the CLI (the historical contract). App
+// and Plugin carry the same parity state for the other two products, added so
+// terminal, plugin, and app consumers see all three from one payload. `2nb
+// doctor` is the richer, presence-aware view of the same data.
 type UpdateStatus struct {
-	Current         string `json:"current"`
-	Latest          string `json:"latest,omitempty"`
-	UpdateAvailable bool   `json:"update_available"`
-	Checked         bool   `json:"checked"`
-	Detail          string `json:"detail,omitempty"`
+	Current         string       `json:"current"`
+	Latest          string       `json:"latest,omitempty"`
+	UpdateAvailable bool         `json:"update_available"`
+	Checked         bool         `json:"checked"`
+	Detail          string       `json:"detail,omitempty"`
+	App             ProductState `json:"app"`
+	Plugin          ProductState `json:"plugin"`
 }
 
 var updateCmd = &cobra.Command{
@@ -53,8 +60,8 @@ func init() {
 }
 
 func runUpdate(cmd *cobra.Command, _ []string) error {
-	latest, err := fetchLatestReleaseVersion(context.Background())
-	status := buildUpdateStatus(Version, latest, err)
+	suite := gatherSuiteStatus(context.Background())
+	status := updateStatusFromSuite(suite)
 
 	if format := getFormat(cmd); format != "" {
 		return output.Write(os.Stdout, format, status)
@@ -66,12 +73,20 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	fmt.Printf("Latest:  %s\n", status.Latest)
+
+	// Flag every component that is behind, not just the CLI: a release that
+	// shipped the CLI but not the app/plugin (or vice versa) is still an update.
+	behind := outdatedProducts(suite)
 	switch {
-	case status.UpdateAvailable:
-		fmt.Print("\nAn update is available. Upgrade:\n" +
-			"  brew upgrade apresai/tap/twonb               # CLI\n" +
-			"  brew upgrade --cask apresai/tap/secondbrain  # macOS app\n" +
-			"  2nb plugin install                           # Obsidian plugin\n")
+	case len(behind) > 0:
+		// status.Latest is the "vX.Y.Z" tag; installed versions are bare, so
+		// normalize the target for a consistent "0.10.3 -> 0.10.4" line.
+		target := normalizeReleaseVersion(status.Latest)
+		fmt.Println("\nAn update is available:")
+		for _, p := range behind {
+			fmt.Printf("  %-7s %s -> %s   %s\n", p.Name, p.Version, target, p.Fix)
+		}
+		fmt.Println("\nRun `2nb doctor` for the full component breakdown.")
 	case status.Detail != "":
 		fmt.Printf("\n%s\n", status.Detail)
 	default:
@@ -80,24 +95,29 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// buildUpdateStatus derives the user-facing status from the running version, the
-// fetched latest version, and any fetch error. Pure, so the comparison logic is
-// unit-tested without touching the network.
-func buildUpdateStatus(current, latest string, fetchErr error) UpdateStatus {
-	s := UpdateStatus{Current: current}
-	if fetchErr != nil {
-		s.Detail = "couldn't check for updates (offline?): " + fetchErr.Error()
-		return s
+// updateStatusFromSuite maps the shared SuiteStatus onto the historical
+// `2nb update --json` contract (CLI fields) plus the App/Plugin states.
+func updateStatusFromSuite(s SuiteStatus) UpdateStatus {
+	return UpdateStatus{
+		Current:         s.CLI.Version,
+		Latest:          s.Latest,
+		UpdateAvailable: s.CLI.UpdateAvailable,
+		Checked:         s.Checked,
+		Detail:          s.Detail,
+		App:             s.App,
+		Plugin:          s.Plugin,
 	}
-	s.Checked = true
-	s.Latest = latest
-	if cmp, ok := comparePluginVersions(normalizeReleaseVersion(current), normalizeReleaseVersion(latest)); ok {
-		s.UpdateAvailable = cmp < 0
-	} else {
-		// A dev / non-release build (Version == "dev") isn't comparable.
-		s.Detail = fmt.Sprintf("this build (%s) isn't a released version, so it can't be compared to %s", current, latest)
+}
+
+// outdatedProducts returns the components that are installed but behind latest.
+func outdatedProducts(s SuiteStatus) []ProductState {
+	var out []ProductState
+	for _, p := range []ProductState{s.CLI, s.App, s.Plugin} {
+		if p.Status == statusOutdated {
+			out = append(out, p)
+		}
 	}
-	return s
+	return out
 }
 
 // normalizeReleaseVersion drops a leading "v" so a GitHub tag (v0.10.1) compares
