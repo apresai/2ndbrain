@@ -319,3 +319,174 @@ func TestLint_NoIDIsNotAnError(t *testing.T) {
 		}
 	}
 }
+
+// lintReport is the decoded subset of `2nb lint --json` used by the resolution
+// tests below.
+type lintReport struct {
+	Issues []struct {
+		Path    string `json:"path"`
+		Level   string `json:"level"`
+		Message string `json:"message"`
+	} `json:"issues"`
+	Errors int `json:"errors"`
+	Warns  int `json:"warnings"`
+}
+
+func runLintJSON(t *testing.T, root string, args ...string) lintReport {
+	t.Helper()
+	out, err := runCLIArgs(t, root, append([]string{"lint"}, args...)...)
+	if err != nil {
+		t.Fatalf("lint: %v", err)
+	}
+	var report lintReport
+	if jerr := json.Unmarshal(out, &report); jerr != nil {
+		t.Fatalf("decode lint report: %v\n%s", jerr, out)
+	}
+	if report.Errors != 0 {
+		t.Fatalf("expected 0 errors (keeps runLint from os.Exit), got %d: %+v", report.Errors, report.Issues)
+	}
+	return report
+}
+
+// TestLint_ResolvesByTitle is the core regression: a wikilink whose text matches
+// a note's frontmatter TITLE (not its filename) must NOT be reported broken. The
+// pre-fix lint resolved by filename only, so [[Apres AI LLC]] -> areas/apres-ai-
+// llc.md (title "Apres AI LLC") was a false positive — exactly the bug behind
+// the GUI showing "broken" links the fix tools refused to touch.
+func TestLint_ResolvesByTitle(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.MkdirAll(filepath.Join(root, "areas"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("areas/apres-ai-llc.md", "---\ntitle: Apres AI LLC\ntype: note\nstatus: draft\n---\nThe company.\n")
+	write("note.md", "---\ntitle: Note\ntype: note\nstatus: draft\n---\nOwned by [[Apres AI LLC]].\n")
+
+	report := runLintJSON(t, root, "--json")
+	if report.Warns != 0 {
+		t.Fatalf("a title-resolved link must not be flagged broken, got %d: %+v", report.Warns, report.Issues)
+	}
+}
+
+// TestLint_ResolvesByAlias proves a wikilink that matches only a note's
+// frontmatter ALIAS (not its filename or title) is not broken. The target note's
+// basename (podcaster) and title (Podcaster Tool) both differ from the link text
+// [[Podcaster]]; only the alias matches.
+func TestLint_ResolvesByAlias(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.MkdirAll(filepath.Join(root, "projects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("projects/podcaster.md", "---\ntitle: Podcaster Tool\naliases:\n  - Podcaster\ntype: note\nstatus: draft\n---\nApp.\n")
+	write("note.md", "---\ntitle: Note\ntype: note\nstatus: draft\n---\nSee [[Podcaster]].\n")
+
+	report := runLintJSON(t, root, "--json")
+	if report.Warns != 0 {
+		t.Fatalf("an alias-resolved link must not be flagged broken, got %d: %+v", report.Warns, report.Issues)
+	}
+}
+
+// TestLint_GenuinelyMissingIsFlagged confirms the fix does not over-correct: a
+// target that matches no path, title, or alias is still reported broken.
+func TestLint_GenuinelyMissingIsFlagged(t *testing.T) {
+	_, root := newContractVault(t)
+	const missing = "apple-developer-individual-to-organization-migration"
+	if err := os.WriteFile(filepath.Join(root, "note.md"),
+		[]byte("---\ntitle: Note\ntype: note\nstatus: draft\n---\nRelated: [["+missing+"]].\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report := runLintJSON(t, root, "--json")
+	if report.Warns != 1 {
+		t.Fatalf("expected exactly 1 broken-link warning, got %d: %+v", report.Warns, report.Issues)
+	}
+	if got := report.Issues[len(report.Issues)-1].Message; !containsSubstr(got, missing) {
+		t.Errorf("expected warning about %q, got %q", missing, got)
+	}
+}
+
+// TestLint_AmbiguousTargetNotFlagged confirms an ambiguous target (a basename
+// carried by >1 note) is NOT reported broken — it resolves to *something* in
+// Obsidian, so an *AmbiguousTargetError is treated as resolved, not missing.
+func TestLint_AmbiguousTargetNotFlagged(t *testing.T) {
+	_, root := newContractVault(t)
+	for _, d := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a/dup.md", "---\ntitle: Dup A\ntype: note\nstatus: draft\n---\nOne.\n")
+	write("b/dup.md", "---\ntitle: Dup B\ntype: note\nstatus: draft\n---\nTwo.\n")
+	write("note.md", "---\ntitle: Note\ntype: note\nstatus: draft\n---\nSee [[dup]].\n")
+
+	report := runLintJSON(t, root, "--json")
+	if report.Warns != 0 {
+		t.Fatalf("an ambiguous (multi-match) link must not be flagged broken, got %d: %+v", report.Warns, report.Issues)
+	}
+}
+
+// TestLint_ResolvesBareCanvasLink covers the .canvas/.base alias branch: a bare
+// [[board]] resolves to board.canvas, and a path-qualified [[diagrams/flow]]
+// resolves to diagrams/flow.canvas, even though the canonical index strips only
+// the .md extension (lint registers the stripped basename + rel-path as aliases).
+func TestLint_ResolvesBareCanvasLink(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.MkdirAll(filepath.Join(root, "diagrams"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("board.canvas", `{"nodes":[],"edges":[]}`)
+	write("diagrams/flow.canvas", `{"nodes":[],"edges":[]}`)
+	write("note.md", "---\ntitle: Note\ntype: note\nstatus: draft\n---\nSee [[board]] and [[diagrams/flow]].\n")
+
+	report := runLintJSON(t, root, "--json")
+	if report.Warns != 0 {
+		t.Fatalf("bare/path-qualified canvas links must resolve, got %d: %+v", report.Warns, report.Issues)
+	}
+}
+
+// TestLint_ResolverIgnoresDotDirNotes confirms the resolver walk mirrors the
+// indexer's prune: a note buried under .obsidian/ is NOT a valid link target, so
+// a real note linking to it IS flagged broken (it would be broken per `2nb
+// links`/the DB too, since the indexer skips dot-directories).
+func TestLint_ResolverIgnoresDotDirNotes(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.MkdirAll(filepath.Join(root, ".obsidian"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Present on disk inside a dot-directory, but not a real vault note — must
+	// not become a resolution target.
+	write(".obsidian/hidden-note.md", "---\ntitle: Hidden Note\n---\nScaffolding.\n")
+	write("note.md", "---\ntitle: Note\ntype: note\nstatus: draft\n---\nLink to [[hidden-note]].\n")
+
+	report := runLintJSON(t, root, "--json")
+	if report.Warns != 1 {
+		t.Fatalf("a link to a dot-dir note must be flagged broken (not a valid target), got %d: %+v", report.Warns, report.Issues)
+	}
+	if got := report.Issues[len(report.Issues)-1].Message; !containsSubstr(got, "hidden-note") {
+		t.Errorf("expected warning about hidden-note, got %q", got)
+	}
+}

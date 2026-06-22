@@ -92,6 +92,41 @@ func TestOutboundLinks_IncludesBrokenWithResolvedFlag(t *testing.T) {
 	}
 }
 
+// TestUpsertLinks_SkipsSameDocumentAnchors confirms same-document anchor links
+// ([[#heading]] and [[#^block]]) — which have an empty page target and are
+// intra-doc navigation, not cross-doc links — are NOT stored in the links table.
+// Before the fix they were persisted with target_id NULL and surfaced by
+// `2nb unresolved` / `2nb links` / the link graph as phantom broken links.
+func TestUpsertLinks_SkipsSameDocumentAnchors(t *testing.T) {
+	v := testutil.NewTestVault(t)
+
+	testutil.CreateAndIndex(t, v, "Doc B", "note", "Plain target document.")
+	docA := testutil.CreateAndIndex(t, v, "Doc A", "note",
+		"See [[Doc B]]. Jump to [[#Some Heading]] and the block [[#^blk]].")
+
+	if err := v.DB.ResolveLinks(); err != nil {
+		t.Fatalf("resolve links: %v", err)
+	}
+
+	refs, err := v.DB.OutboundLinks(docA.ID)
+	if err != nil {
+		t.Fatalf("outbound links: %v", err)
+	}
+	// Only the real cross-doc link [[Doc B]] is stored; the two same-document
+	// anchors are skipped entirely.
+	if len(refs) != 1 {
+		t.Fatalf("outbound(A): got %d links, want 1 (same-doc anchors must be skipped): %+v", len(refs), refs)
+	}
+	if refs[0].TargetRaw != "Doc B" {
+		t.Errorf("the only stored link should be [[Doc B]], got target_raw=%q", refs[0].TargetRaw)
+	}
+	for _, r := range refs {
+		if r.TargetRaw == "" {
+			t.Errorf("a same-document anchor (empty target) leaked into the links table: %+v", r)
+		}
+	}
+}
+
 func TestOrphans_ExcludesLinkedIncludesUnlinked(t *testing.T) {
 	v := testutil.NewTestVault(t)
 
