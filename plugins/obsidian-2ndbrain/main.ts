@@ -104,43 +104,88 @@ interface SuiteStatus {
 	plugin: ProductState;
 }
 
-// resolveCliPath resolves the 2nb binary path. Pure free function: it takes
-// its filesystem probe (existsFn) and environment (env) as parameters so it
-// can be unit-tested without touching the real disk. GUI apps don't always
-// inherit the shell PATH, so when the path is left at the default ('2nb') we
-// probe the standard install locations before falling back to bare '2nb'
-// (resolved via PATH at exec time).
-export function resolveCliPath(
-	configured: string,
+// parseVersion extracts an x.y.z triple from a string like "2nb version 0.10.5".
+// Returns null when there is no semver triple (e.g. a "dev" build), so callers
+// treat the version as unknown rather than guessing.
+export function parseVersion(s: string): string | null {
+	const m = /(\d+)\.(\d+)\.(\d+)/.exec(s ?? '');
+	return m ? `${m[1]}.${m[2]}.${m[3]}` : null;
+}
+
+// compareVersions compares two x.y.z strings: -1 if a<b, 0 if equal, 1 if a>b.
+// Missing components count as 0.
+export function compareVersions(a: string, b: string): number {
+	const pa = a.split('.').map(Number);
+	const pb = b.split('.').map(Number);
+	for (let i = 0; i < 3; i++) {
+		const x = pa[i] ?? 0;
+		const y = pb[i] ?? 0;
+		if (x > y) return 1;
+		if (x < y) return -1;
+	}
+	return 0;
+}
+
+// firstExistingSystem returns the first system-installed 2nb — Homebrew (ARM
+// then Intel), then ~/go/bin for source builds — or null if none is present.
+export function firstExistingSystem(
 	existsFn: (p: string) => boolean,
-	env: NodeJS.ProcessEnv,
-	managedPath?: string
-): string {
-	if (configured !== '2nb') {
-		return configured;
-	}
-
-	// A plugin-managed binary (downloaded into the plugin folder) wins over
-	// brew/PATH probing.
-	if (managedPath && existsFn(managedPath)) {
-		return managedPath;
-	}
-
-	// Standard macOS Homebrew paths (ARM then Intel).
+	env: NodeJS.ProcessEnv
+): string | null {
 	const brewArm = '/opt/homebrew/bin/2nb';
 	if (existsFn(brewArm)) return brewArm;
 
 	const brewIntel = '/usr/local/bin/2nb';
 	if (existsFn(brewIntel)) return brewIntel;
 
-	// ~/go/bin/2nb for developers building from source.
 	const home = env.HOME || env.USERPROFILE;
 	if (home) {
 		const goBin = `${home}/go/bin/2nb`;
 		if (existsFn(goBin)) return goBin;
 	}
+	return null;
+}
 
-	return '2nb';
+// resolveCliPath resolves the 2nb binary path. Pure free function: it takes its
+// filesystem probe (existsFn), environment (env), and (optionally) the parsed
+// versions of the managed and system binaries, so it can be unit-tested without
+// touching the real disk. GUI apps don't always inherit the shell PATH, so when
+// the path is left at the default ('2nb') we probe the standard install
+// locations.
+//
+// Selection: an explicit user path is honored verbatim. Otherwise a
+// plugin-managed copy is preferred UNLESS a system binary is STRICTLY newer (by
+// `versions`) — that is what stops a stale managed download from silently
+// shadowing a fresh `brew upgrade`. A tie, an unknown version, or no version
+// info at all (offline, or the legacy call that omits `versions`) keeps the
+// managed copy, so users without Homebrew and users offline are never left
+// worse off than before.
+export function resolveCliPath(
+	configured: string,
+	existsFn: (p: string) => boolean,
+	env: NodeJS.ProcessEnv,
+	managedPath?: string,
+	versions?: { managed?: string | null; system?: string | null }
+): string {
+	if (configured !== '2nb') {
+		return configured;
+	}
+
+	const system = firstExistingSystem(existsFn, env);
+
+	if (managedPath && existsFn(managedPath)) {
+		if (
+			system &&
+			versions?.managed &&
+			versions?.system &&
+			compareVersions(versions.system, versions.managed) > 0
+		) {
+			return system; // a strictly newer system binary wins over a stale managed copy
+		}
+		return managedPath;
+	}
+
+	return system ?? '2nb';
 }
 
 // pinVaultArgs prefixes a 2nb invocation with `--vault <path>` — the CLI's
@@ -408,6 +453,14 @@ async function renderAskResponse(
 
 export default class BrainPlugin extends Plugin {
 	settings!: BrainSettings;
+
+	// Resolved 2nb binary path + the parsed versions behind the choice, filled
+	// once by ensureCliFresh() at load. runCommand reads the cache via
+	// resolvedCliPath(); until it's filled, resolution falls back to the sync
+	// probe (no version info), which matches the pre-existing behavior.
+	private resolvedCli?: string;
+	private cliVersions?: { managed?: string | null; system?: string | null };
+	private cliFreshChecked = false;
 	statusBarEl!: HTMLElement;
 	// Single-flight lock so the command, ribbon, header action, and right-click
 	// menu can't launch overlapping polishes.
@@ -417,6 +470,11 @@ export default class BrainPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		// Keep the managed 2nb from shadowing a newer install (and self-heal a
+		// stale one). Fire-and-forget so it never delays the UI; runCommand falls
+		// back to the sync resolve until this fills the cache.
+		void this.ensureCliFresh();
 
 		// Add status bar item
 		this.statusBarEl = this.addStatusBarItem();
@@ -699,6 +757,89 @@ export default class BrainPlugin extends Plugin {
 		return dir ? join(dir, 'bin', '2nb') : null;
 	}
 
+	// resolvedCliPath returns the path runCommand will exec: the version-aware
+	// choice cached by ensureCliFresh, else a synchronous resolve (which, with no
+	// version info yet, matches the pre-existing managed-wins behavior).
+	resolvedCliPath(): string {
+		return (
+			this.resolvedCli ??
+			resolveCliPath(
+				this.settings.cliPath,
+				existsSync,
+				process.env,
+				this.managedBinaryPath() ?? undefined,
+				this.cliVersions
+			)
+		);
+	}
+
+	// binVersion returns the parsed x.y.z version of the 2nb binary at an
+	// absolute path, or null if it can't run / parse. Local exec only, so it is
+	// offline-safe.
+	private binVersion(absPath: string): Promise<string | null> {
+		return new Promise((resolve) => {
+			execFile(absPath, ['--version'], (err, stdout) => {
+				resolve(err ? null : parseVersion(stdout));
+			});
+		});
+	}
+
+	// cliVersion returns the parsed version of the RESOLVED 2nb (the one
+	// runCommand uses), or null if it isn't runnable. Used to explain a doctor
+	// failure without needing the doctor subcommand itself.
+	async cliVersion(): Promise<string | null> {
+		try {
+			return parseVersion(await this.runCommand(['--version']));
+		} catch {
+			return null;
+		}
+	}
+
+	// ensureCliFresh keeps a plugin-managed 2nb from silently shadowing a newer
+	// install. Once per session (called fire-and-forget from onload, so it never
+	// blocks the UI): it reads the managed and first system binary versions,
+	// caches the version-aware resolution, and — when the managed copy is older
+	// than an available system binary, or below the plugin's own version floor —
+	// quietly re-downloads it. It NEVER deletes the managed copy, so an offline
+	// user keeps a working CLI; a failed re-download just leaves the (still
+	// usable) stale copy, and the Components panel explains it.
+	async ensureCliFresh(): Promise<void> {
+		if (this.cliFreshChecked) return;
+		this.cliFreshChecked = true;
+		if (this.settings.cliPath !== '2nb') return; // explicit user path: hands off
+
+		const managed = this.managedBinaryPath();
+		const mgdVer = managed && existsSync(managed) ? await this.binVersion(managed) : null;
+		const system = firstExistingSystem(existsSync, process.env);
+		const sysVer = system ? await this.binVersion(system) : null;
+
+		this.cliVersions = { managed: mgdVer, system: sysVer };
+		this.resolvedCli = resolveCliPath(
+			this.settings.cliPath, existsSync, process.env, managed ?? undefined, this.cliVersions
+		);
+
+		if (!managed || !mgdVer) return; // no managed copy to heal
+
+		const floor = this.manifest.version;
+		const staleVsSystem = !!sysVer && compareVersions(sysVer, mgdVer) > 0;
+		const belowFloor =
+			compareVersions(mgdVer, floor) < 0 && (!sysVer || compareVersions(sysVer, floor) < 0);
+		if (!staleVsSystem && !belowFloor) return;
+
+		try {
+			await this.downloadCli();
+			const fresh = existsSync(managed) ? await this.binVersion(managed) : null;
+			this.cliVersions = { managed: fresh, system: sysVer };
+			this.resolvedCli = resolveCliPath(
+				this.settings.cliPath, existsSync, process.env, managed ?? undefined, this.cliVersions
+			);
+		} catch {
+			// Offline / download failed: keep the stale managed copy. The resolver
+			// already routes to a newer system binary if one exists, and the
+			// Components panel surfaces the staleness with a fix.
+		}
+	}
+
 	// checkCli reports whether a 2nb binary is actually runnable (managed,
 	// configured, or on PATH) by invoking `2nb --version`.
 	async checkCli(): Promise<boolean> {
@@ -837,7 +978,7 @@ export default class BrainPlugin extends Plugin {
 	// otherwise hang into the timeout.
 	runCommand(args: string[], stdin?: string): Promise<string> {
 		return new Promise((resolve, reject) => {
-			const cliPath = resolveCliPath(this.settings.cliPath, existsSync, process.env, this.managedBinaryPath() ?? undefined);
+			const cliPath = this.resolvedCliPath();
 
 			// If the user configured a custom binary path (not the default
 			// '2nb', which we resolve via PATH at exec time), validate it up
@@ -1440,12 +1581,24 @@ class BrainSettingTab extends PluginSettingTab {
 						this.display();
 					}
 				}));
-		this.plugin.suiteStatus().then(suite => {
+		this.plugin.suiteStatus().then(async suite => {
 			if (!suite) {
-				const msg = 'Status unavailable (2nb CLI not reachable, or too old for `doctor`).';
-				cliRow.setDesc(msg);
-				appRow.setDesc(msg);
-				pluginRow.setDesc(msg);
+				// doctor failed: degrade per-row and explain WHY with a
+				// doctor-independent `--version` probe, instead of one blanket
+				// "unavailable" on every row.
+				const floor = this.plugin.manifest.version;
+				const path = this.plugin.resolvedCliPath();
+				const v = await this.plugin.cliVersion();
+				if (!v) {
+					cliRow.setDesc(`Not reachable at ${path}. Install 2nb (e.g. \`brew install apresai/tap/2nb\`) or set the path above.`);
+				} else if (compareVersions(v, floor) < 0) {
+					cliRow.setDesc(`2nb ${v} at ${path} is older than this panel needs (≥ ${floor}). Use "Download / update CLI" above, or \`brew upgrade apresai/tap/twonb\`.`);
+				} else {
+					cliRow.setDesc(`2nb ${v} reachable, but the doctor check failed. Reopen settings to retry.`);
+				}
+				// These two are knowable without doctor.
+				pluginRow.setDesc(`v${this.plugin.manifest.version} installed.`);
+				appRow.setDesc(`Needs 2nb ≥ ${floor} to report — run \`2nb doctor\`.`);
 				return;
 			}
 			cliRow.setDesc(describeComponent(suite.cli, suite.latest));
