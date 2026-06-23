@@ -61,9 +61,13 @@ Updates just need an Obsidian reload.`,
 	RunE: runPluginInstall,
 }
 
+var pluginInstallForce bool
+
 func init() {
 	pluginCmd.AddCommand(pluginStatusCmd)
 	pluginCmd.AddCommand(pluginInstallCmd)
+	pluginInstallCmd.Flags().BoolVar(&pluginInstallForce, "force", false,
+		"Install even if it would downgrade a newer installed plugin")
 	pluginCmd.GroupID = "integr"
 	rootCmd.AddCommand(pluginCmd)
 }
@@ -268,6 +272,18 @@ func runPluginInstall(cmd *cobra.Command, args []string) error {
 	tag, err := parseLatestReleaseTag(body)
 	if err != nil {
 		return err
+	}
+
+	// No-downgrade guard: if the installed plugin is newer than the latest
+	// release (a prerelease/promotion lag, or GitHub's /releases/latest lagging),
+	// installing would DOWNGRADE it. Refuse unless --force. This protects every
+	// caller of the install path — the plugin's "Update plugin" button, the macOS
+	// app, and manual CLI use.
+	if previous != "" && !pluginInstallForce {
+		if cmp, ok := comparePluginVersions(normalizeReleaseVersion(previous), normalizeReleaseVersion(tag)); ok && cmp > 0 {
+			fmt.Printf("Obsidian plugin v%s is newer than the latest release %s; not downgrading. Use --force to override.\n", previous, tag)
+			return nil
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "Installing plugin %s into %s\n", tag, dir)
