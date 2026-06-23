@@ -1,0 +1,7 @@
+# main.js is a build artifact: `npm run build` (esbuild) produces it from
+# main.ts, and release CI (.github/workflows/release.yml) rebuilds it fresh
+# before uploading it to the GitHub release. Tracking it only let the committed
+# copy drift perpetually behind source (it shipped via the release asset, never
+# the repo), which is what let a stale CLI bug hide. Build locally with
+# `npm run build`; installs come from the release (BRAT / `2nb plugin install`).
+main.js
