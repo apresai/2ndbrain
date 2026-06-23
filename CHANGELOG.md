@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.6] - 2026-06-22
+
+### Added
+- Version-aware `2nb` CLI resolution in the Obsidian plugin (`resolveCliPath`): probes Homebrew, `~/go/bin`, and PATH, and a plugin-managed download wins over a system install only when it is at least as new, so a stale managed CLI can no longer shadow a fresh `brew upgrade`.
+- Self-heal on load (`ensureCliFresh`) that re-downloads a managed CLI copy when it falls behind the system binary or the plugin's version floor.
+- Unit tests covering CLI resolution and self-heal logic (`test/main.test.ts`).
+
+### Changed
+- Decoupled the self-heal version floor from the plugin version and hardened the resolution path.
+
+### Removed
+- Untracked the built `main.js` artifact from the plugin (now gitignored).
+
+
 ## [0.10.5] - 2026-06-22
 
 ### Added
