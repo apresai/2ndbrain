@@ -397,13 +397,13 @@ describe('formatIndexState', () => {
 });
 
 describe('describeComponent', () => {
-	it('renders up-to-date with the version and latest', () => {
+	it('renders up-to-date WITHOUT a latest suffix (no "up to date (latest X)")', () => {
 		const desc = describeComponent(
-			{ name: 'cli', status: 'ok', installed: true, version: '0.10.4', update_available: false },
-			'v0.10.4',
+			{ name: 'cli', status: 'ok', installed: true, version: '0.10.6', update_available: false },
+			'v0.10.5', // even a (pre-clamp) lower latest must not leak into the ok row
 		);
-		expect(desc).toContain('v0.10.4');
-		expect(desc).toContain('up to date');
+		expect(desc).toBe('v0.10.6 — up to date');
+		expect(desc).not.toContain('latest');
 	});
 
 	it('renders outdated with the fix command', () => {

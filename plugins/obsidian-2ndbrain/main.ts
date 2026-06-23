@@ -229,10 +229,14 @@ export function formatIndexState(documentCount: number, embeddingCount: number):
 // describeComponent renders one component's settings-row description from its
 // `2nb doctor` ProductState, using the same status vocabulary the CLI prints.
 export function describeComponent(p: ProductState, latest?: string): string {
+	// Only mention "latest" when something newer actually exists (status
+	// outdated). When up to date, the CLI clamps latest so it's never below the
+	// installed version, so "(latest X)" would be redundant ("up to date (latest
+	// = same)") or — before the clamp — the contradictory "up to date (latest <X)".
 	const suffix = latest ? ` (latest ${latest})` : '';
 	switch (p.status) {
 		case 'ok':
-			return `v${p.version} — up to date${suffix}`;
+			return `v${p.version} — up to date`;
 		case 'outdated':
 			return `v${p.version} — update available${suffix}. Fix: ${p.fix}`;
 		case 'missing':
@@ -1605,23 +1609,25 @@ class BrainSettingTab extends PluginSettingTab {
 		containerEl.createEl('h3', { text: 'Components' });
 		const cliRow = new Setting(containerEl).setName('CLI (2nb)').setDesc('Checking…');
 		const appRow = new Setting(containerEl).setName('macOS app').setDesc('Checking…');
-		const pluginRow = new Setting(containerEl)
-			.setName('Obsidian plugin')
-			.setDesc('Checking…')
-			.addButton(btn => btn
-				.setButtonText('Update plugin')
-				.onClick(async () => {
-					btn.setDisabled(true).setButtonText('Updating…');
-					try {
-						await this.plugin.runCommand(['plugin', 'install']);
-						new Notice('Obsidian plugin updated. Reload Obsidian (Cmd+R) to apply.');
-					} catch (e) {
-						new Notice(`Plugin update failed: ${(e as Error).message}`);
-					} finally {
-						btn.setDisabled(false).setButtonText('Update plugin');
-						this.display();
-					}
-				}));
+		const pluginRow = new Setting(containerEl).setName('Obsidian plugin').setDesc('Checking…');
+		// The "Update plugin" button is added only when the plugin is actually
+		// behind (below) — an always-present button implies a self-update the
+		// plugin can't do, and (without the CLI's no-downgrade guard) could even
+		// reinstall an older release over a newer one.
+		const addUpdateButton = () => pluginRow.addButton(btn => btn
+			.setButtonText('Update plugin')
+			.onClick(async () => {
+				btn.setDisabled(true).setButtonText('Updating…');
+				try {
+					await this.plugin.runCommand(['plugin', 'install']);
+					new Notice('Obsidian plugin updated. Reload Obsidian (Cmd+R) to apply.');
+				} catch (e) {
+					new Notice(`Plugin update failed: ${(e as Error).message}`);
+				} finally {
+					btn.setDisabled(false).setButtonText('Update plugin');
+					this.display();
+				}
+			}));
 		this.plugin.suiteStatus().then(async suite => {
 			if (!suite) {
 				// doctor failed: degrade per-row and explain WHY with a
@@ -1645,6 +1651,7 @@ class BrainSettingTab extends PluginSettingTab {
 			cliRow.setDesc(describeComponent(suite.cli, suite.latest));
 			appRow.setDesc(describeComponent(suite.app, suite.latest));
 			pluginRow.setDesc(describeComponent(suite.plugin, suite.latest));
+			if (suite.plugin.status === 'outdated') addUpdateButton();
 		}).catch(e => {
 			// suiteStatus/cliVersion swallow their own errors today, so this is a
 			// belt-and-suspenders guard: a future throw shows an error in the rows

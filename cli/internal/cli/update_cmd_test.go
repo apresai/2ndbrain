@@ -54,9 +54,27 @@ func TestFetchLatestReleaseVersion_FreshCacheShortCircuitsNetwork(t *testing.T) 
 	}
 	// A fresh cache returns without any network call (background ctx, but the
 	// cache is consulted first).
-	got, err := fetchLatestReleaseVersion(context.Background())
+	got, err := fetchLatestReleaseVersion(context.Background(), false)
 	if err != nil || got != "v9.9.9" {
 		t.Errorf("got (%q, %v), want (v9.9.9, nil) from fresh cache", got, err)
+	}
+}
+
+func TestFetchLatestReleaseVersion_ForceBypassesFreshCache(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	path := updateCachePath()
+	if err := writeUpdateCache(path, []byte(`{"tag_name":"v9.9.9"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// force=true skips the fresh-cache read and attempts the network; a cancelled
+	// context fails it immediately, so it must fall back to the (fresh) stale
+	// cache rather than returning before trying — proving force bypassed the
+	// short-circuit but stayed offline-safe.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := fetchLatestReleaseVersion(ctx, true)
+	if err != nil || got != "v9.9.9" {
+		t.Errorf("got (%q, %v), want (v9.9.9, nil) from cache fallback after forced fetch", got, err)
 	}
 }
 
@@ -76,8 +94,34 @@ func TestFetchLatestReleaseVersion_StaleCacheFallbackOnFetchFailure(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	got, err := fetchLatestReleaseVersion(ctx)
+	got, err := fetchLatestReleaseVersion(ctx, false)
 	if err != nil || got != "v8.8.8" {
 		t.Errorf("got (%q, %v), want (v8.8.8, nil) from stale fallback", got, err)
+	}
+}
+
+func TestUpdateCacheOlderThan(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	path := updateCachePath()
+
+	// No cache file -> false (caller treats it as just-written / fresh, so the
+	// install-ahead refetch path stays gated rather than firing every run).
+	if updateCacheOlderThan(time.Hour) {
+		t.Error("no cache should report not-older-than (false)")
+	}
+
+	if err := writeUpdateCache(path, []byte(`{"tag_name":"v1.0.0"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if updateCacheOlderThan(time.Hour) {
+		t.Error("a just-written cache must be within the cooldown (false)")
+	}
+
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if !updateCacheOlderThan(time.Hour) {
+		t.Error("a 2h-old cache must be older than a 1h cooldown (true)")
 	}
 }

@@ -19,6 +19,12 @@ const (
 	updateLatestReleaseURL = "https://api.github.com/repos/apresai/2ndbrain/releases/latest"
 	updateCacheTTL         = 24 * time.Hour
 	updateCacheFileName    = "latest-release.json"
+	// latestRefetchCooldown bounds how often gatherSuiteStatus force-refetches
+	// when an install is ahead of the cached "latest" — a successful refetch
+	// rewrites the cache (resetting its mtime), so the next refetch waits at
+	// least this long. Keeps the install-ahead path from hitting the network
+	// every run (and offline users from eating the HTTP timeout each time).
+	latestRefetchCooldown = time.Hour
 )
 
 var updateHTTPClient = &http.Client{Timeout: 15 * time.Second}
@@ -129,10 +135,15 @@ func normalizeReleaseVersion(s string) string {
 // fetchLatestReleaseVersion returns the latest published release tag, cached for
 // updateCacheTTL. A fresh cache short-circuits the network; a failed fetch falls
 // back to a stale cache; only an empty cache + failed fetch returns an error.
-func fetchLatestReleaseVersion(ctx context.Context) (string, error) {
+//
+// force=true skips the fresh-cache read and goes to the network (used when the
+// cached "latest" is provably stale because a newer version is already
+// installed), but still falls back to the stale cache on a failed fetch — so a
+// forced refresh is never less safe offline than a normal one.
+func fetchLatestReleaseVersion(ctx context.Context, force bool) (string, error) {
 	cachePath := updateCachePath()
 
-	if cachePath != "" {
+	if !force && cachePath != "" {
 		if data, ok := readUpdateCache(cachePath, true); ok {
 			if tag, err := parseLatestReleaseTag(data); err == nil {
 				return tag, nil
@@ -208,6 +219,24 @@ func updateCachePath() string {
 		return ""
 	}
 	return filepath.Join(dir, updateCacheFileName)
+}
+
+// updateCacheOlderThan reports whether the cached "latest" was last refreshed
+// more than d ago. It returns false when the cache is missing/unreadable (the
+// caller just wrote it via the non-forced fetch, so it's effectively fresh) — so
+// a force refresh is gated to "we have a cache and it has aged past d". This
+// bounds how often the install-is-ahead path force-refetches (see
+// gatherSuiteStatus), keeping the 24h cache and offline behavior intact.
+func updateCacheOlderThan(d time.Duration) bool {
+	path := updateCachePath()
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) > d
 }
 
 func readUpdateCache(path string, freshOnly bool) ([]byte, bool) {

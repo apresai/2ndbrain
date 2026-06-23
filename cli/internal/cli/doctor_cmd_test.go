@@ -6,6 +6,65 @@ import (
 	"testing"
 )
 
+// maxInstalledVersion drives the refetch-on-stale trigger: when the cached
+// "latest" is below the highest installed version, the cache is provably stale.
+func TestMaxInstalledVersion(t *testing.T) {
+	t.Run("highest across applicable products", func(t *testing.T) {
+		// cli 0.10.6, app 0.10.5 (applicable), plugin 0.10.4 (vault known) -> 0.10.6
+		if got := maxInstalledVersion("0.10.6", "0.10.5", true, "0.10.4", true); got != "0.10.6" {
+			t.Errorf("got %q, want 0.10.6", got)
+		}
+	})
+	t.Run("ignores dev / unparseable and not-applicable", func(t *testing.T) {
+		// cli dev (ignored), app not applicable (ignored), plugin 0.10.6 -> 0.10.6
+		if got := maxInstalledVersion("dev", "9.9.9", false, "0.10.6", true); got != "0.10.6" {
+			t.Errorf("got %q, want 0.10.6 (app not applicable must be ignored)", got)
+		}
+	})
+	t.Run("ignores not-installed empty versions", func(t *testing.T) {
+		// app applicable but empty (not installed), plugin vault unknown -> cli only
+		if got := maxInstalledVersion("0.10.6", "", true, "", false); got != "0.10.6" {
+			t.Errorf("got %q, want 0.10.6", got)
+		}
+	})
+	t.Run("all unparseable -> empty", func(t *testing.T) {
+		if got := maxInstalledVersion("dev", "", false, "", false); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}
+
+// TestDeriveSuiteStatus_AheadInstall guards against the clamp regression Codex
+// caught: a component installed AHEAD of the published latest (e.g. a dev/source
+// build) must report "ok", and must NOT drag the latest up so the OTHER products
+// get flagged "outdated" against an unreachable version.
+func TestDeriveSuiteStatus_AheadInstall(t *testing.T) {
+	// CLI 0.11.0 (ahead), app + plugin at the published 0.10.6 latest.
+	s := deriveSuiteStatus("0.11.0", "0.10.6", true, "0.10.6", true, "v0.10.6", nil)
+	if s.Latest != "v0.10.6" {
+		t.Errorf("Latest = %q, want the raw published v0.10.6 (not the ahead install)", s.Latest)
+	}
+	if s.CLI.Status != statusOK || s.CLI.UpdateAvailable {
+		t.Errorf("CLI = %+v, want ok (ahead is not outdated)", s.CLI)
+	}
+	if s.App.Status != statusOK || s.Plugin.Status != statusOK {
+		t.Errorf("app/plugin must stay ok at the published latest, not be flagged outdated; got app=%q plugin=%q", s.App.Status, s.Plugin.Status)
+	}
+}
+
+// TestDeriveSuiteStatus_LatestBelowInstalled: when the (un-refetchable) latest is
+// below an install, the component is still "ok" and not "outdated" — the display
+// layer is responsible for not showing a lower "(latest X)".
+func TestDeriveSuiteStatus_LatestBelowInstalled(t *testing.T) {
+	s := deriveSuiteStatus("0.10.6", "", false, "", false, "v0.10.5", nil)
+	if s.CLI.Status != statusOK || s.CLI.UpdateAvailable {
+		t.Errorf("CLI = %+v, want ok + no update (installed ahead of a stale latest)", s.CLI)
+	}
+	if s.Latest != "v0.10.5" {
+		t.Errorf("Latest = %q, want the raw v0.10.5 (no clamp)", s.Latest)
+	}
+}
+
 // deriveSuiteStatus is the pure parity core. These cover the CLI version-compare
 // cases (update-available, up-to-date, ahead, dev build, offline) plus the
 // app/plugin presence states the suite view adds.

@@ -104,10 +104,65 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 // Impure wrapper around the pure deriveSuiteStatus, shared by `doctor` and the
 // enriched `update --json`.
 func gatherSuiteStatus(ctx context.Context) SuiteStatus {
-	latest, fetchErr := fetchLatestReleaseVersion(ctx)
 	appVer, appApplicable := installedAppVersion()
 	pluginVer, vaultKnown := resolvePluginVersion()
+
+	latest, fetchErr := fetchLatestReleaseVersion(ctx, false)
+	// Refetch-on-stale: the installed version is proof a release at least that
+	// high exists, so if the (cached) "latest" is below the highest installed
+	// version the cache may be stale (a just-published release) — refetch once,
+	// bypassing the cache, to pick it up promptly.
+	//
+	// But an install that is legitimately AHEAD of the public release (a
+	// source/`make install` or prerelease build) keeps `latest < maxInst` true
+	// even after a successful refetch, which would otherwise force a network call
+	// on every run and make offline users wait on the HTTP timeout. So the
+	// refetch is gated behind a short cooldown on the cache age: a successful
+	// (forced) fetch rewrites the cache (resetting its mtime), suppressing further
+	// refetches for the cooldown window. Net: at most one extra fetch per
+	// cooldown, and a fresh cache (incl. offline) returns immediately. A `dev`
+	// build never triggers this (it isn't a parseable version in maxInst).
+	if fetchErr == nil && updateCacheOlderThan(latestRefetchCooldown) {
+		maxInst := maxInstalledVersion(Version, appVer, appApplicable, pluginVer, vaultKnown)
+		if maxInst != "" {
+			if cmp, ok := comparePluginVersions(normalizeReleaseVersion(latest), maxInst); ok && cmp < 0 {
+				if fresh, ferr := fetchLatestReleaseVersion(ctx, true); ferr == nil {
+					latest = fresh
+				}
+			}
+		}
+	}
+
 	return deriveSuiteStatus(Version, appVer, appApplicable, pluginVer, vaultKnown, latest, fetchErr)
+}
+
+// maxInstalledVersion returns the highest parseable installed version across the
+// applicable products, normalized (no leading "v"), or "" if none is parseable.
+// Dev/unparseable versions and not-installed / not-applicable products are
+// ignored, so neither a `dev` build nor a missing component skews the result.
+func maxInstalledVersion(cliVer, appVer string, appApplicable bool, pluginVer string, vaultKnown bool) string {
+	cands := []string{cliVer}
+	if appApplicable {
+		cands = append(cands, appVer)
+	}
+	if vaultKnown {
+		cands = append(cands, pluginVer)
+	}
+	max := ""
+	for _, c := range cands {
+		n := normalizeReleaseVersion(c)
+		if _, ok := comparePluginVersions(n, "0.0.0"); !ok {
+			continue // empty / dev / unparseable
+		}
+		if max == "" {
+			max = n
+			continue
+		}
+		if cmp, ok := comparePluginVersions(n, max); ok && cmp > 0 {
+			max = n
+		}
+	}
+	return max
 }
 
 // resolvePluginVersion reads the installed Obsidian plugin version WITHOUT
@@ -148,7 +203,16 @@ func deriveSuiteStatus(cliVer, appVer string, appApplicable bool, pluginVer stri
 	s := SuiteStatus{Checked: checked}
 	if !checked {
 		s.Detail = "couldn't check for updates (offline?): " + fetchErr.Error()
-	} else {
+	}
+
+	// Each component is compared against the RAW published latest — never an
+	// inflated max-installed value. Clamping the comparison up to the highest
+	// install would wrongly flag the OTHER products as "outdated" against a
+	// version the public channels can't provide (e.g. a `make install` CLI that's
+	// ahead of the published release). The "installed > latest" contradiction is
+	// instead avoided at the display layer (each surface shows "(latest X)" only
+	// when X is actually newer than that component) plus refetch-on-stale above.
+	if checked {
 		s.Latest = latest
 	}
 
