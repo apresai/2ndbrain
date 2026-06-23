@@ -119,6 +119,7 @@ import {
 	describeComponent,
 	parseVersion,
 	compareVersions,
+	needsManagedRefresh,
 	firstExistingSystem,
 	trimChatHistory,
 	type ChatTurn,
@@ -309,6 +310,31 @@ describe('compareVersions', () => {
 	});
 	it('treats missing components as 0', () => {
 		expect(compareVersions('1', '1.0.0')).toBe(0);
+	});
+	it('treats non-numeric components as 0 (no NaN "equal" trap)', () => {
+		// Without the guard, the non-numeric major would be NaN and the compare
+		// would fall through to "equal" (0). With it, 'v1' -> 0, so it's LESS.
+		expect(compareVersions('v1.2.3', '1.2.3')).toBe(-1); // 'v1' -> 0 < 1
+		expect(compareVersions('1.2.x', '1.2.0')).toBe(0);   // 'x' -> 0, equal
+		expect(compareVersions('1.3.0', 'junk')).toBe(1);    // 'junk' -> 0.0.0
+	});
+});
+
+describe('needsManagedRefresh', () => {
+	it('refreshes when a system binary is strictly newer', () => {
+		expect(needsManagedRefresh('0.10.3', '0.10.5', null)).toBe(true);
+	});
+	it('refreshes when the latest release is strictly newer', () => {
+		expect(needsManagedRefresh('0.10.3', null, '0.10.5')).toBe(true);
+	});
+	it('does NOT refresh when the managed copy is newest (plugin ahead of CLI)', () => {
+		// The floor is the latest RELEASE, not the plugin version: an up-to-date
+		// managed copy must not re-download every launch.
+		expect(needsManagedRefresh('0.10.5', '0.10.5', '0.10.5')).toBe(false);
+		expect(needsManagedRefresh('0.11.0', '0.10.5', '0.10.5')).toBe(false);
+	});
+	it('does NOT refresh when offline and no newer local binary (both null)', () => {
+		expect(needsManagedRefresh('0.10.3', null, null)).toBe(false);
 	});
 });
 

@@ -113,17 +113,36 @@ export function parseVersion(s: string): string | null {
 }
 
 // compareVersions compares two x.y.z strings: -1 if a<b, 0 if equal, 1 if a>b.
-// Missing components count as 0.
+// Missing or non-numeric components count as 0, so a stray prefix ("v1.2.3") or
+// junk never yields a NaN comparison (NaN > / < are both false, which would
+// silently read as "equal").
 export function compareVersions(a: string, b: string): number {
-	const pa = a.split('.').map(Number);
-	const pb = b.split('.').map(Number);
+	const part = (s: string, i: number): number => {
+		const n = Number(s.split('.')[i]);
+		return Number.isFinite(n) ? n : 0;
+	};
 	for (let i = 0; i < 3; i++) {
-		const x = pa[i] ?? 0;
-		const y = pb[i] ?? 0;
+		const x = part(a, i);
+		const y = part(b, i);
 		if (x > y) return 1;
 		if (x < y) return -1;
 	}
 	return 0;
+}
+
+// needsManagedRefresh decides whether a plugin-managed 2nb copy should be
+// re-downloaded: when a locally-installed system binary OR the latest published
+// release is strictly newer than the managed copy. Pure (no network/fs), so the
+// self-heal trigger is unit-tested. Decoupled from the plugin's own version — a
+// plugin that is ahead of the latest CLI release does NOT keep re-downloading.
+export function needsManagedRefresh(
+	managed: string,
+	system: string | null,
+	latest: string | null
+): boolean {
+	if (system && compareVersions(system, managed) > 0) return true;
+	if (latest && compareVersions(latest, managed) > 0) return true;
+	return false;
 }
 
 // firstExistingSystem returns the first system-installed 2nb — Homebrew (ARM
@@ -799,8 +818,10 @@ export default class BrainPlugin extends Plugin {
 	// install. Once per session (called fire-and-forget from onload, so it never
 	// blocks the UI): it reads the managed and first system binary versions,
 	// caches the version-aware resolution, and — when the managed copy is older
-	// than an available system binary, or below the plugin's own version floor —
-	// quietly re-downloads it. It NEVER deletes the managed copy, so an offline
+	// than an available system binary OR than the latest published release —
+	// quietly re-downloads it. The floor is the latest RELEASE, not the plugin's
+	// own version, so a plugin that is ahead of the latest CLI does not
+	// re-download every launch. It NEVER deletes the managed copy, so an offline
 	// user keeps a working CLI; a failed re-download just leaves the (still
 	// usable) stale copy, and the Components panel explains it.
 	async ensureCliFresh(): Promise<void> {
@@ -820,11 +841,14 @@ export default class BrainPlugin extends Plugin {
 
 		if (!managed || !mgdVer) return; // no managed copy to heal
 
-		const floor = this.manifest.version;
-		const staleVsSystem = !!sysVer && compareVersions(sysVer, mgdVer) > 0;
-		const belowFloor =
-			compareVersions(mgdVer, floor) < 0 && (!sysVer || compareVersions(sysVer, floor) < 0);
-		if (!staleVsSystem && !belowFloor) return;
+		// Refresh when the managed copy is behind a local system binary OR the
+		// latest published release. The floor is the latest RELEASE, not the
+		// plugin's own version, so a plugin that is ahead of the latest CLI does
+		// not re-download the same build every launch. Skip the network probe
+		// when a local system binary already proves a newer option exists.
+		const sysNewer = !!sysVer && compareVersions(sysVer, mgdVer) > 0;
+		const latestVer = sysNewer ? null : await this.latestReleaseVersion();
+		if (!needsManagedRefresh(mgdVer, sysVer, latestVer)) return;
 
 		try {
 			await this.downloadCli();
@@ -837,6 +861,23 @@ export default class BrainPlugin extends Plugin {
 			// Offline / download failed: keep the stale managed copy. The resolver
 			// already routes to a newer system binary if one exists, and the
 			// Components panel surfaces the staleness with a fix.
+		}
+	}
+
+	// latestReleaseVersion returns the parsed version of the latest published
+	// 2nb release, or null when offline / unavailable. Used by ensureCliFresh to
+	// decide whether a managed copy is genuinely behind.
+	private async latestReleaseVersion(): Promise<string | null> {
+		try {
+			const rel = await requestUrl({
+				url: 'https://api.github.com/repos/apresai/2ndbrain/releases/latest',
+				throw: false,
+			});
+			if (rel.status !== 200) return null;
+			const tag = (rel.json as { tag_name?: string })?.tag_name;
+			return tag ? parseVersion(tag) : null;
+		} catch {
+			return null;
 		}
 	}
 
@@ -1604,6 +1645,14 @@ class BrainSettingTab extends PluginSettingTab {
 			cliRow.setDesc(describeComponent(suite.cli, suite.latest));
 			appRow.setDesc(describeComponent(suite.app, suite.latest));
 			pluginRow.setDesc(describeComponent(suite.plugin, suite.latest));
+		}).catch(e => {
+			// suiteStatus/cliVersion swallow their own errors today, so this is a
+			// belt-and-suspenders guard: a future throw shows an error in the rows
+			// instead of an unhandled renderer rejection.
+			const msg = `Status check failed: ${(e as Error).message}`;
+			cliRow.setDesc(msg);
+			appRow.setDesc(msg);
+			pluginRow.setDesc(msg);
 		});
 	}
 }
