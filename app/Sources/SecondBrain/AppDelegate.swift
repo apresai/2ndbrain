@@ -17,6 +17,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let toolPATH = CLIPath.ensureToolPATH()
         log.debug("augmented child-process PATH: \(toolPATH, privacy: .public)")
 
+        // Clear the quarantine xattr the installer applied to the bundled 2nb so
+        // Gatekeeper can't block it as a quarantined, ticket-less standalone
+        // binary when we spawn it (a standalone Mach-O can't carry a stapled
+        // notarization ticket, so a quarantined one needs an online check that
+        // fails offline → "Apple could not verify '2nb' … Move to Trash"). Must
+        // run before the first CLI spawn (the first one is .onAppear → openVault).
+        let quarantineStrip = CLIPath.prepareBundledCLI()
+        log.debug("bundled 2nb quarantine strip: \(quarantineStrip.map { $0 ? "cleared" : "FAILED (bundle not writable?)" } ?? "n/a (no bundled CLI)", privacy: .public)")
+
         renameFileMenuToNotes()
 
         // SwiftUI rebuilds the menu when scene state changes and may reset

@@ -59,6 +59,15 @@ build-app-release: version-swift build-cli
 	@cp -f cli/bin/2nb $(APP_BUNDLE_RELEASE)/Contents/Resources/2nb
 	@cp -f app/Resources/AppIcon.icns $(APP_BUNDLE_RELEASE)/Contents/Resources/AppIcon.icns
 	@sed 's/VERSIONPLACEHOLDER/$(VERSION)/g' <<< '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>SecondBrain</string><key>CFBundleIdentifier</key><string>dev.apresai.2ndbrain</string><key>CFBundleName</key><string>SecondBrain</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>VERSIONPLACEHOLDER</string><key>CFBundleVersion</key><string>VERSIONPLACEHOLDER</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/><key>CFBundleIconFile</key><string>AppIcon</string></dict></plist>' > $(APP_BUNDLE_RELEASE)/Contents/Info.plist
+	@# Strip non-portable LC_RPATHs that `swift build` bakes into the executable
+	@# (notably the absolute Xcode toolchain path). They dangle on a Mac without
+	@# Xcode and are the documented SPM Gatekeeper footgun. Keep only the portable
+	@# entries; done before signing so the (re)signature seals the cleaned binary.
+	@exe=$(APP_BUNDLE_RELEASE)/Contents/MacOS/SecondBrain; \
+	otool -l "$$exe" | awk '/LC_RPATH/{getline;getline;print $$2}' \
+	  | grep -vE '^(@executable_path|@loader_path|/usr/lib/swift)' \
+	  | while read -r rp; do echo "  strip dangling rpath: $$rp"; \
+	      install_name_tool -delete_rpath "$$rp" "$$exe" 2>/dev/null || true; done
 	@codesign -s - --deep --force $(APP_BUNDLE_RELEASE) 2>/dev/null || true
 
 package-app: build-app-release

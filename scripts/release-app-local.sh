@@ -103,6 +103,33 @@ codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.cli --sig
 codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BUNDLE"
 codesign --verify --strict --verbose=2 "$BUNDLE"
 
+echo "==> Verifying load-command paths are portable (no dangling rpaths/dylibs)"
+# A dangling LC_RPATH (e.g. the Xcode toolchain path `swift build` bakes in) or a
+# non-system LC_LOAD_DYLIB resolves on THIS machine but not on a clean Mac, and is
+# the documented SPM Gatekeeper footgun ("Apple could not verify ... is free of
+# malware"). codesign --verify and stapler validate do NOT catch it. Gate here,
+# before notarizing, so a bad binary fails fast instead of burning a notary wait.
+check_portable_macho() {
+  local b="$1" bad_rpath bad_dylib
+  bad_rpath="$(otool -l "$b" | awk '/LC_RPATH/{getline;getline;print $2}' \
+    | grep -vE '^(@executable_path|@loader_path|/usr/lib/swift)' || true)"
+  bad_dylib="$(otool -L "$b" | tail -n +2 | awk '{print $1}' \
+    | grep -E '^/' | grep -vE '^(/usr/lib/|/System/)' || true)"
+  if [ -n "$bad_rpath" ] || [ -n "$bad_dylib" ]; then
+    echo "error: non-portable load commands in $b (would dangle on a clean Mac):" >&2
+    [ -n "$bad_rpath" ] && { echo "  dangling LC_RPATH:" >&2; echo "$bad_rpath" | sed 's/^/    /' >&2; }
+    [ -n "$bad_dylib" ] && { echo "  external LC_LOAD_DYLIB:" >&2; echo "$bad_dylib" | sed 's/^/    /' >&2; }
+    exit 1
+  fi
+}
+check_portable_macho "$BUNDLE/Contents/MacOS/SecondBrain"
+check_portable_macho "$BUNDLED_CLI"
+# The bundled 2nb must ship with the hardened runtime (notarization requires it).
+if ! codesign -dvv "$BUNDLED_CLI" 2>&1 | grep -qE 'flags=.*runtime'; then
+  echo "error: bundled 2nb is not signed with the hardened runtime" >&2
+  exit 1
+fi
+
 echo "==> Notarizing (uploads to Apple's notary service and waits)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

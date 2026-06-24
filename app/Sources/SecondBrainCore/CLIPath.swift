@@ -27,6 +27,48 @@ public enum CLIPath {
         return "/usr/local/bin/2nb"
     }
 
+    /// Best-effort removal of the `com.apple.quarantine` xattr from one file.
+    /// Returns true when the xattr is gone afterwards (removed now, or never
+    /// present — `ENOATTR` is success for our purposes). Factored out so it is
+    /// unit-testable against a temp file (the app bundle isn't present in tests).
+    @discardableResult
+    public static func clearQuarantine(at path: String) -> Bool {
+        path.withCString { cPath in
+            removexattr(cPath, "com.apple.quarantine", 0) == 0 || errno == ENOATTR
+        }
+    }
+
+    /// Strip `com.apple.quarantine` from the bundled `2nb` so the app can spawn
+    /// it without Gatekeeper independently blocking it. Call once at launch,
+    /// before any CLI spawn.
+    ///
+    /// A user's download/install (browser, or `brew install --cask`, which copies
+    /// via `ditto`) applies the quarantine xattr recursively to every file in the
+    /// bundle — including `Contents/Resources/2nb`. The app bundle has a stapled
+    /// notarization ticket and launches fine, but a standalone Mach-O binary
+    /// *cannot* carry a stapled ticket (Apple limitation), so a quarantined `2nb`
+    /// is verified ONLINE at spawn time. When that check fails (offline, or the
+    /// notarization daemon errors) macOS denies it — "Apple could not verify
+    /// '2nb' is free of malware … Move to Trash" — which breaks the whole app,
+    /// since it shells out to `2nb` for everything. Clearing the quarantine xattr
+    /// resolves it and is safe for the code signature, which excludes
+    /// `com.apple.*` system xattrs from the sealed resources. Mirrors what the
+    /// Obsidian plugin already does for its downloaded `2nb`.
+    ///
+    /// No-op for non-bundled runs (dev/tests) and best-effort otherwise: a
+    /// translocated run or a non-writable bundle just leaves the xattr in place
+    /// (the user can clear it with `xattr -dr com.apple.quarantine <app>`).
+    ///
+    /// Returns `nil` when there is no bundled CLI (dev/test run), otherwise
+    /// whether the quarantine xattr is now absent (cleared or never present).
+    /// SecondBrainCore stays logger-free; the caller logs the outcome so a
+    /// support report can answer "did the quarantine strip succeed?".
+    @discardableResult
+    public static func prepareBundledCLI() -> Bool? {
+        guard let bundled = bundledPath else { return nil }
+        return clearQuarantine(at: bundled)
+    }
+
     /// The PATH a child process should see: `current` with the directories a
     /// Homebrew or Go install lives in prepended (deduped, order preserved).
     ///
