@@ -65,3 +65,46 @@ func augmentedPATHEmpty() {
     let got = CLIPath.augmentedPATH(current: "", home: "/Users/x")
     #expect(got == "/opt/homebrew/bin:/usr/local/bin:/Users/x/go/bin")
 }
+
+/// True if `path` carries a `com.apple.quarantine` xattr (probe via getxattr's
+/// length query, which returns >= 0 when present and -1 when absent).
+private func hasQuarantine(_ path: String) -> Bool {
+    path.withCString { cPath in
+        getxattr(cPath, "com.apple.quarantine", nil, 0, 0, 0) >= 0
+    }
+}
+
+@Test("clearQuarantine removes the com.apple.quarantine xattr from a file")
+func clearQuarantineRemovesXattr() throws {
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-quarantine-\(UUID().uuidString)")
+    try Data("x".utf8).write(to: tmp)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    // Apply a realistic quarantine xattr, then confirm it's there.
+    let value = "0081;00000000;Test;\(UUID().uuidString)"
+    tmp.path.withCString { cPath in
+        value.withCString { cVal in
+            _ = setxattr(cPath, "com.apple.quarantine", cVal, strlen(cVal), 0, 0)
+        }
+    }
+    #expect(hasQuarantine(tmp.path) == true)
+
+    // Stripping it succeeds and the xattr is gone — this is what the app does to
+    // its bundled 2nb at launch so Gatekeeper can't block the quarantined helper.
+    #expect(CLIPath.clearQuarantine(at: tmp.path) == true)
+    #expect(hasQuarantine(tmp.path) == false)
+}
+
+@Test("clearQuarantine is a successful no-op when the xattr is absent")
+func clearQuarantineNoXattrIsSuccess() throws {
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-noquarantine-\(UUID().uuidString)")
+    try Data("x".utf8).write(to: tmp)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    // No quarantine to begin with: removexattr returns ENOATTR, which we treat
+    // as success (the goal — "not quarantined" — already holds).
+    #expect(hasQuarantine(tmp.path) == false)
+    #expect(CLIPath.clearQuarantine(at: tmp.path) == true)
+}

@@ -196,3 +196,10 @@ Chad-review GO on the fix commit; the two residual LOWs:
 8. **Phase 8 — tasks.** Query and toggle Obsidian-style `- [ ]` / `- [x]` task checkboxes across the vault.
 
 **Out of scope (app-coupled / not CLI work):** commands that only make sense inside Obsidian's running process (opening a file in the active pane, focusing a workspace leaf, invoking Obsidian commands/plugins, live-preview rendering). Those belong to the Obsidian plugin, not the headless `2nb` CLI.
+
+## Gatekeeper bundled-`2nb` quarantine fix — review follow-ups (from /chad-review, 2026-06-23)
+
+Shipped GO with no CRITICAL/HIGH. In-PR fixes: added a `log.debug` of the quarantine-strip outcome in `AppDelegate` (the one silent failure mode that re-surfaces the launch block); updated CLAUDE.md's signing section with the bundled-CLI Gatekeeper caveat + the two new release gates. Residual non-blocking items:
+
+- **LOW (test) — `clearQuarantine` on a non-existent path returns `false` (the `ENOENT`, not `ENOATTR`, branch) and is untested.** Defensive only; the bundled path always exists when `prepareBundledCLI` reaches it. A one-line test would lock the contract cheaply.
+- **MEDIUM/LOW (deps) — Obsidian plugin dev-dependencies are behind:** `typescript ^4.9.3 → 5.x` (one major, ~2yr), `esbuild ^0.17 → 0.25`, `@types/node ^18 → current`. All build-time-only devDependencies of `plugins/obsidian-2ndbrain`; no CVE, no deployed-runtime impact (plugin is bundled by esbuild into `main.js` and runs in Electron). Bump together when next touching the plugin.
