@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.7] - 2026-06-24
+
+### Fixed
+- App self-heals the bundled `2nb` quarantine attribute at launch, so Gatekeeper can no longer block startup after a download or cask install (#96)
+- Version-state staleness across CLI, app, and plugin: the 24h release cache is refetched when it's behind an install and a component is never shown a "latest" below its own version, eliminating "installed > latest" reports and phantom update prompts (#95)
+
+
 ## [0.10.6] - 2026-06-22
 
 ### Added
