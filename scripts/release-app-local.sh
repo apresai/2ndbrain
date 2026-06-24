@@ -125,8 +125,14 @@ check_portable_macho() {
 check_portable_macho "$BUNDLE/Contents/MacOS/SecondBrain"
 check_portable_macho "$BUNDLED_CLI"
 # The bundled 2nb must ship with the hardened runtime (notarization requires it).
-if ! codesign -dvv "$BUNDLED_CLI" 2>&1 | grep -qE 'flags=.*runtime'; then
+# Capture codesign's output first, then match a here-string: piping it into
+# `grep -q` lets grep close the pipe on its first match, which SIGPIPEs codesign,
+# and under `set -o pipefail` that surfaces as a false failure even though the
+# runtime flag IS present.
+cli_codesign="$(codesign -dvv "$BUNDLED_CLI" 2>&1 || true)"
+if ! grep -qE 'flags=[^ ]*runtime' <<<"$cli_codesign"; then
   echo "error: bundled 2nb is not signed with the hardened runtime" >&2
+  grep -i 'flags=' <<<"$cli_codesign" >&2 || true
   exit 1
 fi
 
