@@ -3,7 +3,9 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/apresai/2ndbrain/internal/output"
@@ -53,6 +55,9 @@ var skillsShowCmd = &cobra.Command{
 }
 
 func init() {
+	// Stamp installs with this binary's version so staleness is detectable later.
+	skills.Version = Version
+
 	skillsInstallCmd.Flags().Bool("all", false, "Install for all supported agents")
 	skillsInstallCmd.Flags().Bool("force", false, "Overwrite existing skill files")
 	skillsInstallCmd.Flags().Bool("user", false, "Install as user-level skill (home directory, all projects)")
@@ -83,6 +88,12 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 		}
 		// If vault not found and not --user, still show user statuses
 	}
+
+	// Self-heal: silently refresh any stamped, unmodified, out-of-date managed
+	// install (e.g. after a `brew upgrade`). Hand-edited and unstamped copies are
+	// left alone. The GUI/plugin poll this command, so a release keeps the skill
+	// current with no user action.
+	autoRefreshStaleSkills(homeDir, projectDir, userOnly)
 
 	statuses := skills.ListStatuses(projectDir, homeDir)
 
@@ -195,6 +206,36 @@ func runSkillsShow(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Print(a.RenderContent())
 	return nil
+}
+
+// autoRefreshStaleSkills re-installs any stamped, unmodified, out-of-date managed
+// SKILL.md (user scope always; project scope when a vault resolved). It is the
+// mechanism that keeps installed skills current across releases without user
+// action: hand-edited and unstamped copies are never touched, so it can't clobber
+// a user's edits. Refreshes are reported on stderr (never stdout, for --json).
+func autoRefreshStaleSkills(homeDir, projectDir string, userOnly bool) {
+	var refreshed []string
+	refresh := func(baseDir string, a skills.Agent, user bool, scope string) {
+		ok, err := skills.RefreshIfStale(baseDir, a, user)
+		if err != nil {
+			// A stale skill that can't be rewritten (read-only FS, permissions)
+			// stays stale; `skills doctor` still flags it, but don't fail silently.
+			slog.Warn("could not auto-refresh stale skill", "agent", a.Slug, "scope", scope, "err", err)
+			return
+		}
+		if ok {
+			refreshed = append(refreshed, a.Name+" ("+scope+")")
+		}
+	}
+	for _, a := range skills.Agents {
+		refresh(homeDir, a, true, "user")
+		if !userOnly && projectDir != "" {
+			refresh(projectDir, a, false, "project")
+		}
+	}
+	if len(refreshed) > 0 {
+		fmt.Fprintf(os.Stderr, "Updated stale 2nb skill(s) to %s: %s\n", Version, strings.Join(refreshed, ", "))
+	}
 }
 
 // resolveBaseDir returns the base directory and a human-readable scope label.

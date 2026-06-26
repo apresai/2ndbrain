@@ -2,6 +2,16 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Session 2026-06-25: firm vault-write guard + never-stale skill/MCP + Warp helper
+
+Chad-review GO. The HIGH (dead `vault.OpenNoInit`/`ErrSidecarMissing` with a false "the write path uses it" godoc — wiring it in would have broken legit first-use auto-init) was fixed in-PR by removing the machinery; the no-mint guarantee is the walk-up refusal that returns before any `Open`. A Pass 6 CRITICAL (auto-refresh failures swallowed) and the MEDIUMs (Open errors masked as "no vault found"; missing decision logs; `reqs.md`/`README` drift; untested `--vault`→configured and `skills doctor` freshness branches) were all fixed in-PR. The FRESHNESS advisories were actioned in-PR (`mcp-go` v0.46→v0.55.1, `cobra` v1.9.1→v1.10.2, `go-sqlite3` v1.14.24→v1.14.47; plugin `typescript` 4.9→5.9.3 / `esbuild` 0.17→0.28.1 / `@types/node` 18→22 — held `typescript` 6.0 and `@types/node` 26 as brand-new). Residual LOWs:
+- **LOW — `stripStamp` is frontmatter-unaware.** It strips any `x-2nb-version:`/`x-2nb-content-sha:` line globally during the hash comparison, not just inside the frontmatter block. Our skill body has no such lines, so zero impact; scope it to the frontmatter for robustness. `cli/internal/skills/freshness.go`.
+- **LOW — `RefreshIfStale` conflates "not installed" with "unreadable".** A read error (EACCES) is treated as ENOENT → silent no-op. Acceptable for best-effort self-heal (`skills doctor` reads the same file), but a distinct log line would be clearer. `cli/internal/skills/skills.go`.
+- **LOW — a partially-stamped file (only one stamp key) could be auto-refreshed.** `FreshnessOf` treats either stamp key as "stamped". Only reachable by manual frontmatter editing — negligible. `cli/internal/skills/freshness.go`.
+- **LOW (cosmetic) — `--unconfigured` is a global persistent flag,** so it appears on every command's `--help` even though only writes consult it. `cli/internal/cli/root.go`.
+- **LOW (coverage) — Warp `--scope project` install + `UninstallForClient` unknown-client untested.** `install_warp_test.go` covers user-scope install/uninstall/idempotent + `InstallForClient` unknown-client, not the `<vault>/.warp/.mcp.json` project path or uninstall's unknown-client error. `cli/internal/mcp/install_warp_test.go`.
+- **LOW (docs, optional) — `docs/obsidian-cli-mapping.md` vault-resolution blurb** (lines ~11-19) still describes a single resolution order without the read/write firmness split. CLAUDE.md + `reqs.md` (CLI-UB-007) cover it.
+
 ## Session 2026-06-20: GUI config work (Milestone E — Claude Code health & setup)
 
 Chad-review GO. A LOW (install wrote a meaningless `"cwd":""` into `~/.claude.json` because `mcpServerEntry.Cwd` lacked `omitempty`) was fixed in-PR. Residual LOWs:

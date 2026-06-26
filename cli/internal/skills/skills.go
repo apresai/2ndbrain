@@ -62,6 +62,10 @@ var Agents = []Agent{
 	{Slug: "junie", Name: "JetBrains Junie",
 		ProjectPath: ".junie/skills/2nb/SKILL.md",
 		UserPath:    ".junie/skills/2nb/SKILL.md"},
+	{Slug: "warp", Name: "Warp",
+		ProjectPath: ".warp/skills/2nb/SKILL.md",
+		UserPath:    ".warp/skills/2nb/SKILL.md",
+		Note:        "Warp also reads ~/.claude/skills, so a Claude Code install is already visible in Warp."},
 }
 
 // AgentBySlug returns the agent with the given slug, or false if not found.
@@ -118,8 +122,10 @@ func Install(baseDir string, a Agent, user bool, force bool) error {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
-	tmp := abs + ".tmp"
-	if err := os.WriteFile(tmp, []byte(a.RenderContent()), 0o644); err != nil {
+	// PID-suffixed temp name so a concurrent refresh (e.g. the GUI polling
+	// `skills list` while a manual install runs) can't clobber the other's temp.
+	tmp := fmt.Sprintf("%s.tmp.%d", abs, os.Getpid())
+	if err := os.WriteFile(tmp, []byte(StampedContent()), 0o644); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	if err := os.Rename(tmp, abs); err != nil {
@@ -127,6 +133,27 @@ func Install(baseDir string, a Agent, user bool, force bool) error {
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
+}
+
+// RefreshIfStale re-installs an installed skill in place when it is a stamped,
+// unmodified managed copy that is out of date relative to this binary's content.
+// It leaves a hand-edited copy (Modified) and an unstamped copy untouched, so it
+// never clobbers a user's own edits — those surface via `skills doctor` instead.
+// Returns true when it rewrote the file. A missing install is a no-op (false).
+func RefreshIfStale(baseDir string, a Agent, user bool) (bool, error) {
+	abs := a.InstallPath(user, baseDir)
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return false, nil // not installed (or unreadable) — nothing to refresh
+	}
+	f := FreshnessOf(data)
+	if !f.Stamped || f.UpToDate || f.Modified {
+		return false, nil
+	}
+	if err := Install(baseDir, a, user, true); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Uninstall removes the skill file. Returns nil if the file did not exist.

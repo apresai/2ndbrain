@@ -26,7 +26,12 @@ type Vault struct {
 	DB      *store.DB
 }
 
-// Open finds and opens an existing vault from the given directory or any parent.
+// Open finds and opens an existing vault from the given directory or any parent,
+// auto-initializing the .2ndbrain/ sidecar when a native Obsidian vault lacks one.
+// The firm write path (openVaultAndSetActive) only ever calls Open on a vetted,
+// intended target — an explicit --vault, the open Obsidian vault, or the cwd when
+// it IS the vault root — so this auto-init is always desired; a mis-resolved
+// directory is refused (walkUpRefusedError) before Open is reached.
 func Open(dir string) (*Vault, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {

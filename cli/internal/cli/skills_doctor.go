@@ -70,6 +70,16 @@ func runSkillsDoctor(cmd *cobra.Command, args []string) error {
 			Fix:    fmt.Sprintf("re-run `2nb skills install %s --user --force` (the SKILL.md is empty or malformed)", slug),
 		})
 	}
+	// WARN (only when installed): the skill content is current with this binary.
+	if ver.Installed {
+		report.Checks = append(report.Checks, DoctorCheck{
+			Name:   "skill up to date",
+			OK:     true,
+			Warn:   !(ver.Freshness.Stamped && ver.Freshness.UpToDate),
+			Detail: skillFreshnessDetail(ver),
+			Fix:    fmt.Sprintf("run `2nb skills install %s --user --force` to update the SKILL.md", slug),
+		})
+	}
 	// WARN: 2nb resolves on PATH and runs.
 	report.Checks = append(report.Checks, DoctorCheck{
 		Name:   "2nb resolves on PATH",
@@ -135,6 +145,20 @@ func skillFileDetail(v skills.Verification) string {
 		return "SKILL.md is empty"
 	}
 	return "SKILL.md has no frontmatter block"
+}
+
+func skillFreshnessDetail(v skills.Verification) string {
+	f := v.Freshness
+	switch {
+	case f.Stamped && f.UpToDate:
+		return fmt.Sprintf("up to date (%s)", f.InstalledVersion)
+	case f.Modified:
+		return "hand-edited since install — leave as-is, or --force to reset to the shipped content"
+	case f.Stamped:
+		return fmt.Sprintf("out of date (installed %s, this CLI is %s)", f.InstalledVersion, Version)
+	default:
+		return "older install with no version stamp — re-install to refresh and enable auto-update"
+	}
 }
 
 func skillBinaryDetail(v skills.Verification) string {

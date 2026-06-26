@@ -185,7 +185,7 @@ Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bed
 
 Commands are organized into groups (`2nb --help` shows the full list).
 
-**Global flags:** `--json`, `--csv`, `--yaml`, `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--vault`, `--copy` (also copy output to the clipboard), `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
+**Global flags:** `--json`, `--csv`, `--yaml`, `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--vault`, `--unconfigured` (permit a write to a vault Obsidian doesn't know — without it such a write is refused), `--copy` (also copy output to the clipboard), `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
 
 ### Getting Started
 

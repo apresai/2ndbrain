@@ -17,16 +17,16 @@ const serverKeyName = "2ndbrain"
 type InstallResult struct {
 	Client     string `json:"client"`
 	ConfigPath string `json:"config_path"`
-	Configured bool   `json:"configured"`           // configured for this vault AFTER the op
-	Changed    bool   `json:"changed"`              // the config file was modified
-	BackupPath string `json:"backup_path"`          // "" if no backup was written
+	Configured bool   `json:"configured"`  // configured for this vault AFTER the op
+	Changed    bool   `json:"changed"`     // the config file was modified
+	BackupPath string `json:"backup_path"` // "" if no backup was written
 	ServerKey  string `json:"server_key"`
 	Scope      string `json:"scope"`
 }
 
-// Install writes (or updates) the 2ndbrain MCP server entry into the AI client
-// config so the server is launched for this vault. scope is "user" (top-level
-// mcpServers, pinned to the vault via --vault) or "project"
+// Install writes (or updates) the 2ndbrain MCP server entry into Claude Code's
+// config (~/.claude.json) so the server is launched for this vault. scope is
+// "user" (top-level mcpServers, pinned to the vault via --vault) or "project"
 // (projects[<vault>].mcpServers, pinned by the project key). command is the
 // binary to launch ("2nb" by default; the GUI passes the bundled CLI's path
 // when no Homebrew 2nb is on PATH). dryRun reports what would change without
@@ -35,9 +35,137 @@ func Install(v *vault.Vault, command, scope string, dryRun bool) (InstallResult,
 	return installToFile(claudeConfigPath(), v.Root, command, scope, dryRun)
 }
 
-// Uninstall removes the 2ndbrain entry for this vault's scope.
+// Uninstall removes the 2ndbrain entry for this vault's scope from Claude Code's config.
 func Uninstall(v *vault.Vault, scope string, dryRun bool) (InstallResult, error) {
 	return uninstallFromFile(claudeConfigPath(), v.Root, scope, dryRun)
+}
+
+// InstallForClient routes to the right AI-client config writer. "" and
+// "claude-code" target ~/.claude.json; "warp" targets Warp's ~/.warp/.mcp.json
+// (project scope: <vault>/.warp/.mcp.json), pinning the vault via both --vault
+// and Warp's working_directory so the server can't drift off the vault.
+func InstallForClient(v *vault.Vault, client, command, scope string, dryRun bool) (InstallResult, error) {
+	switch client {
+	case "", "claude-code", "claude":
+		return Install(v, command, scope, dryRun)
+	case "warp":
+		return installWarp(v.Root, command, scope, dryRun)
+	default:
+		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code or warp)", client)
+	}
+}
+
+// UninstallForClient is the client-aware inverse of InstallForClient.
+func UninstallForClient(v *vault.Vault, client, scope string, dryRun bool) (InstallResult, error) {
+	switch client {
+	case "", "claude-code", "claude":
+		return Uninstall(v, scope, dryRun)
+	case "warp":
+		return uninstallWarp(v.Root, scope, dryRun)
+	default:
+		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code or warp)", client)
+	}
+}
+
+// warpConfigPath returns the on-disk path and its display form for the Warp MCP
+// config at the given scope: user → ~/.warp/.mcp.json, project → the vault's
+// own .warp/.mcp.json. Both use a flat top-level mcpServers map.
+func warpConfigPath(vaultRoot, scope string) (path, display string) {
+	if scope == "project" {
+		p := filepath.Join(vaultRoot, ".warp", ".mcp.json")
+		return p, p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".warp/.mcp.json", "~/.warp/.mcp.json"
+	}
+	return filepath.Join(home, ".warp", ".mcp.json"), "~/.warp/.mcp.json"
+}
+
+// warpEntry pins the vault both via --vault and Warp's working_directory.
+func warpEntry(command, vaultRoot string) mcpServerEntry {
+	if command == "" {
+		command = "2nb"
+	}
+	return mcpServerEntry{
+		Command:          command,
+		Args:             []string{"mcp-server", "--vault", vaultRoot},
+		WorkingDirectory: vaultRoot,
+	}
+}
+
+func installWarp(vaultRoot, command, scope string, dryRun bool) (InstallResult, error) {
+	if scope != "user" && scope != "project" {
+		return InstallResult{}, fmt.Errorf("invalid scope %q (want user or project)", scope)
+	}
+	cfgPath, display := warpConfigPath(vaultRoot, scope)
+	res := InstallResult{Client: "warp", ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
+
+	root, orig, err := readConfigTree(cfgPath)
+	if err != nil {
+		return res, err
+	}
+
+	entryJSON, _ := json.Marshal(warpEntry(command, vaultRoot))
+	// Warp uses a flat top-level mcpServers map for both scopes (the scope only
+	// selects which file), so reuse the "user"-style top-level mutation.
+	changed, err := mutateServerEntry(root, "user", vaultRoot, func(servers map[string]json.RawMessage) bool {
+		if existing, ok := servers[serverKeyName]; ok && jsonEqual(existing, entryJSON) {
+			return false
+		}
+		servers[serverKeyName] = entryJSON
+		return true
+	})
+	if err != nil {
+		return res, err
+	}
+
+	res.Changed = changed
+	res.Configured = true
+	if changed && !dryRun {
+		if mkerr := os.MkdirAll(filepath.Dir(cfgPath), 0o755); mkerr != nil {
+			return res, fmt.Errorf("create %s: %w", filepath.Dir(cfgPath), mkerr)
+		}
+		backup, werr := writeConfigTree(cfgPath, root, orig)
+		if werr != nil {
+			return res, werr
+		}
+		res.BackupPath = backup
+	}
+	return res, nil
+}
+
+func uninstallWarp(vaultRoot, scope string, dryRun bool) (InstallResult, error) {
+	if scope != "user" && scope != "project" {
+		return InstallResult{}, fmt.Errorf("invalid scope %q (want user or project)", scope)
+	}
+	cfgPath, display := warpConfigPath(vaultRoot, scope)
+	res := InstallResult{Client: "warp", ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
+
+	root, orig, err := readConfigTree(cfgPath)
+	if err != nil {
+		return res, err
+	}
+	changed, err := mutateServerEntry(root, "user", vaultRoot, func(servers map[string]json.RawMessage) bool {
+		if _, ok := servers[serverKeyName]; !ok {
+			return false
+		}
+		delete(servers, serverKeyName)
+		return true
+	})
+	if err != nil {
+		return res, err
+	}
+	res.Changed = changed
+	res.Configured = false
+	if changed && !dryRun {
+		backup, werr := writeConfigTree(cfgPath, root, orig)
+		if werr != nil {
+			return res, werr
+		}
+		res.BackupPath = backup
+	}
+	return res, nil
 }
 
 func claudeConfigPath() string {

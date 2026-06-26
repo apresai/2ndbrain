@@ -20,6 +20,10 @@ type Verification struct {
 	BinaryOK      bool   `json:"binary_ok"`      // and `2nb --version` ran
 	BinaryVersion string `json:"binary_version"`
 	SelfPath      string `json:"self_path"` // the running binary, for a self-vs-PATH mismatch
+
+	// Freshness of the installed SKILL.md vs this binary's embedded content, so a
+	// release can't leave a stale skill in place undetected.
+	Freshness Freshness `json:"freshness"`
 }
 
 // Injected for tests: the default impls shell out. Tests substitute these to
@@ -63,6 +67,7 @@ func Doctor(slug, projectDir, homeDir string) Verification {
 				trimmed := strings.TrimSpace(string(data))
 				ver.FileNonEmpty = len(trimmed) > 0
 				ver.Parses = hasFrontmatter(trimmed)
+				ver.Freshness = FreshnessOf(data)
 			}
 		}
 	}

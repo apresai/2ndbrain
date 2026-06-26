@@ -55,7 +55,12 @@ func resolveIdleTimeout(flagChanged bool, flagVal time.Duration, env string) tim
 }
 
 func runMCPServer(cmd *cobra.Command, args []string) error {
-	v, err := openVault()
+	// The MCP server serves write tools (kb_create/kb_append/…), so it resolves
+	// the vault through the firm WRITE path: it binds to the vault Obsidian has
+	// open by default — even when launched from a stray cwd (the Warp failure) —
+	// honors a pinned --vault/2NB_VAULT, and refuses to start on a walked-up or
+	// unconfigured target (acknowledge the latter with 2NB_UNCONFIGURED=1).
+	v, err := openVaultAndSetActive()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
 	}
