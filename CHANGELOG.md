@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.8] - 2026-06-25
+
+### Added
+- Warp MCP client support: `mcp install --client warp` writes the server entry to `~/.warp/.mcp.json` (or `<vault>/.warp/.mcp.json` for `--scope project`), pinning the vault via `--vault` and Warp's `working_directory`.
+- Skill freshness tracking: managed `SKILL.md` installs are now stamped with `x-2nb-version`/`x-2nb-content-sha`, and `skills doctor` reports whether a managed copy is up to date.
+
+### Changed
+- `skills list` self-heals a stale, unmodified managed skill install in place, so a `brew upgrade` keeps the agent skill current without clobbering hand-edited copies.
+- MCP/skill "configured" reporting is now durable rather than tied to a running server.
+
+### Fixed
+- Firmed the vault-write guard: a cwd that resolves a vault only by walking up to a parent is now refused before any open, so a write (or a freshly minted `.2ndbrain/` sidecar) can never silently land in an unintended vault.
+- Release: the hardened-runtime gate no longer misfires under `pipefail` when a piped reader exits early (SIGPIPE), which was failing otherwise-valid signed builds.
+
+
 ## [0.10.7] - 2026-06-24
 
 ### Fixed
