@@ -11,15 +11,21 @@ import (
 
 var mcpInstallCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Write the 2ndbrain MCP server entry into the AI client config (~/.claude.json)",
-	Long: `Adds (or updates) the 2ndbrain MCP server in ~/.claude.json so Claude Code
-launches it for this vault — the write-side inverse of "2nb mcp configured".
+	Short: "Write the 2ndbrain MCP server entry into an AI client config (Claude Code or Warp)",
+	Long: `Adds (or updates) the 2ndbrain MCP server in an AI client's config so the
+client launches it for this vault — the write-side inverse of "2nb mcp configured".
+
+--client claude-code (default) writes ~/.claude.json. --client warp writes Warp's
+~/.warp/.mcp.json (or <vault>/.warp/.mcp.json with --scope project) and pins the
+vault via both --vault and Warp's working_directory, so kb_* tools can't drift off
+your vault even if Warp launches the server from another directory.
 
 It is idempotent (no change if an equivalent entry already exists), backs up the
-file first (~/.claude.json.bak), and preserves every unrelated key (it mutates
-only the mcpServers entry, never the rest of your config). A malformed config is
-refused rather than overwritten. --dry-run shows the plan without writing.`,
+file first (<config>.bak), and preserves every unrelated key (it mutates only the
+mcpServers entry, never the rest of your config). A malformed config is refused
+rather than overwritten. --dry-run shows the plan without writing.`,
 	Example: `  2nb mcp install
+  2nb mcp install --client warp
   2nb mcp install --scope project
   2nb mcp install --command /path/to/2nb --dry-run`,
 	RunE: runMCPInstall,
@@ -33,18 +39,22 @@ var mcpUninstallCmd = &cobra.Command{
 }
 
 var (
-	mcpInstallScope   string
-	mcpInstallCommand string
-	mcpInstallDryRun  bool
-	mcpUninstallScope string
-	mcpUninstallDry   bool
+	mcpInstallScope    string
+	mcpInstallCommand  string
+	mcpInstallClient   string
+	mcpInstallDryRun   bool
+	mcpUninstallScope  string
+	mcpUninstallClient string
+	mcpUninstallDry    bool
 )
 
 func init() {
 	mcpInstallCmd.Flags().StringVar(&mcpInstallScope, "scope", "user", "Where to write the entry: user (top-level) or project (cwd-keyed)")
-	mcpInstallCmd.Flags().StringVar(&mcpInstallCommand, "command", "2nb", "The command Claude Code launches (default: 2nb on PATH; the app passes its bundled CLI path)")
+	mcpInstallCmd.Flags().StringVar(&mcpInstallCommand, "command", "2nb", "The command the client launches (default: 2nb on PATH; the app passes its bundled CLI path)")
+	mcpInstallCmd.Flags().StringVar(&mcpInstallClient, "client", "claude-code", "AI client config to write: claude-code (~/.claude.json) or warp (~/.warp/.mcp.json)")
 	mcpInstallCmd.Flags().BoolVar(&mcpInstallDryRun, "dry-run", false, "Print the planned change without writing")
 	mcpUninstallCmd.Flags().StringVar(&mcpUninstallScope, "scope", "user", "user or project")
+	mcpUninstallCmd.Flags().StringVar(&mcpUninstallClient, "client", "claude-code", "AI client config to edit: claude-code or warp")
 	mcpUninstallCmd.Flags().BoolVar(&mcpUninstallDry, "dry-run", false, "Print the planned change without writing")
 	mcpCmd.AddCommand(mcpInstallCmd)
 	mcpCmd.AddCommand(mcpUninstallCmd)
@@ -57,7 +67,7 @@ func runMCPInstall(cmd *cobra.Command, _ []string) error {
 	}
 	defer v.Close()
 
-	res, err := mcppkg.Install(v, mcpInstallCommand, mcpInstallScope, mcpInstallDryRun)
+	res, err := mcppkg.InstallForClient(v, mcpInstallClient, mcpInstallCommand, mcpInstallScope, mcpInstallDryRun)
 	if err != nil {
 		return err
 	}
@@ -70,9 +80,9 @@ func runMCPInstall(cmd *cobra.Command, _ []string) error {
 	case !res.Changed:
 		fmt.Printf("Already configured (%s scope); no change.\n", res.Scope)
 	case mcpInstallDryRun:
-		fmt.Printf("Would write the 2ndbrain MCP server entry to ~/.claude.json (%s scope).\n", res.Scope)
+		fmt.Printf("Would write the 2ndbrain MCP server entry to %s (%s scope).\n", res.ConfigPath, res.Scope)
 	default:
-		fmt.Printf("Configured the 2ndbrain MCP server in ~/.claude.json (%s scope).\n", res.Scope)
+		fmt.Printf("Configured the 2ndbrain MCP server in %s (%s scope).\n", res.ConfigPath, res.Scope)
 		if res.BackupPath != "" {
 			fmt.Printf("Backup saved to %s\n", res.BackupPath)
 		}
@@ -87,7 +97,7 @@ func runMCPUninstall(cmd *cobra.Command, _ []string) error {
 	}
 	defer v.Close()
 
-	res, err := mcppkg.Uninstall(v, mcpUninstallScope, mcpUninstallDry)
+	res, err := mcppkg.UninstallForClient(v, mcpUninstallClient, mcpUninstallScope, mcpUninstallDry)
 	if err != nil {
 		return err
 	}

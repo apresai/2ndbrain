@@ -17,10 +17,11 @@ import (
 var Version = "dev"
 
 var (
-	flagFormat    string
-	flagPorcelain bool
-	flagVault     string
-	flagVerbose   bool
+	flagFormat       string
+	flagPorcelain    bool
+	flagVault        string
+	flagVerbose      bool
+	flagUnconfigured bool
 )
 
 const (
@@ -65,8 +66,9 @@ func init() {
 	rootCmd.PersistentFlags().Bool("json", false, "Output as JSON (shorthand for --format json)")
 	rootCmd.PersistentFlags().Bool("csv", false, "Output as CSV (shorthand for --format csv)")
 	rootCmd.PersistentFlags().Bool("yaml", false, "Output as YAML (shorthand for --format yaml)")
-	rootCmd.PersistentFlags().StringVar(&flagVault, "vault", "", "Path to vault (default: current directory or 2NB_VAULT env var)")
+	rootCmd.PersistentFlags().StringVar(&flagVault, "vault", "", "Path to vault (default: the vault you have open in Obsidian, or 2NB_VAULT)")
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose logging (debug level)")
+	rootCmd.PersistentFlags().BoolVar(&flagUnconfigured, "unconfigured", false, "Permit a write to a vault Obsidian doesn't know (warns: the note won't appear in Obsidian or your 2nb index)")
 	rootCmd.PersistentFlags().BoolVar(&flagCopy, "copy", false, "Also copy the output to the clipboard (macOS pbcopy; supported commands only)")
 	// Hidden: set by the obsidian-syntax shim from path=/file=. exact = strict
 	// vault-relative path; fuzzy = always run the title/alias/suffix resolver;
@@ -322,23 +324,235 @@ func openVault() (*vault.Vault, error) {
 	return openResolvedVault(dir, source)
 }
 
-// openVaultAndSetActive opens the vault and, when it was resolved from the open
-// Obsidian vault or the current directory, records it in the recents list (so
-// `vault list` shows vaults you've worked in). Recents is display-only — it is
-// never a resolution source — so there is no active-vault pointer to drift. An
-// explicit --vault flag or 2NB_VAULT env var is a one-shot override that must NOT
-// land in recents (the GUI and the Obsidian plugin pin --vault on every call).
-// Use for write commands (create, index, delete). Read commands use openVault().
+// openVaultAndSetActive is the WRITE opener and enforces the firm vault rule:
+// a write goes to the vault you have open in Obsidian unless you deliberately
+// override it, and 2nb never silently guesses a vault by walking up from the
+// current directory (the failure mode that splits notes across vaults). Read
+// commands use openVault(), which stays permissive.
+//
+// Resolution, in order:
+//  1. --vault / 2NB_VAULT — an explicit, one-shot override (the GUI and plugin
+//     pin --vault on every call). Honored; a target that isn't your configured
+//     Obsidian vault gets a notice, and an unconfigured target is refused unless
+//     --unconfigured (or 2NB_UNCONFIGURED) acknowledges it.
+//  2. The vault Obsidian has open (or, if closed, its most-recent) — the default,
+//     no flags. Inert under 2NB_TEST so the binary harness can't bind the live
+//     vault. The cwd is never consulted here.
+//  3. Only when there is no override and no Obsidian vault at all: the current
+//     directory, but ONLY if you are standing in the vault root. A cwd that would
+//     resolve by walking up to a parent vault is refused, not silently used.
+//
+// An explicit --vault / 2NB_VAULT is a one-shot override and is NOT recorded in
+// recents; the Obsidian and cwd defaults are.
 func openVaultAndSetActive() (*vault.Vault, error) {
-	dir, source := resolveVaultDir()
-	v, err := openResolvedVault(dir, source)
+	if dir := expandPath(flagVault); dir != "" {
+		return openWriteTarget(dir, sourceFlag)
+	}
+	if dir := expandPath(os.Getenv("2NB_VAULT")); dir != "" {
+		return openWriteTarget(dir, sourceEnv)
+	}
+
+	// Default: the vault Obsidian has open is authoritative for writes. Never the
+	// cwd. Inert under 2NB_TEST (the same isolation guard resolveVaultDir uses).
+	if os.Getenv("2NB_TEST") == "" {
+		if active, wasOpen := vault.ObsidianActiveVault(); active != "" && vault.IsVaultRoot(active) {
+			v, err := openResolvedWriteVault(active, sourceObsidian)
+			if err != nil {
+				return nil, err
+			}
+			if wasOpen {
+				noteWrite("writing to %s (open Obsidian vault)", v.Root)
+			} else {
+				// Suppressible on a non-TTY consumer, so also log it: "why did my
+				// write go to this vault?" must be answerable from cli.log.
+				slog.Info("Obsidian not open; writing to most-recent vault", "path", v.Root)
+				noteWrite("Obsidian isn't open — writing to your most-recent vault %s (pass --vault to be sure)", v.Root)
+			}
+			addRecentVault(canonicalVaultPath(v.Root))
+			return v, nil
+		} else if active != "" {
+			slog.Debug("Obsidian registry vault is not a valid vault root; falling back to cwd", "path", active)
+		}
+	}
+
+	// No override and no Obsidian vault. Use the cwd only when we are standing IN
+	// a vault root; never silently walk up to a parent vault.
+	cwd, _ := filepath.Abs(".")
+	root := vault.FindVaultRoot(cwd)
+	if root == "" {
+		return nil, vaultNotFoundError(cwd, sourceCwd)
+	}
+	if canonicalVaultPath(root) != canonicalVaultPath(cwd) {
+		slog.Warn("refusing a walked-up write (cwd is not a vault root)", "cwd", cwd, "found_vault", root)
+		return nil, walkUpRefusedError(cwd, root)
+	}
+	v, err := openResolvedWriteVault(root, sourceCwd)
 	if err != nil {
 		return nil, err
 	}
-	if source == sourceCwd || source == sourceObsidian {
-		addRecentVault(canonicalVaultPath(v.Root))
-	}
+	noteWrite("writing to %s (current directory)", v.Root)
+	addRecentVault(canonicalVaultPath(v.Root))
 	return v, nil
+}
+
+// openResolvedWriteVault opens a vault root that FindVaultRoot/IsVaultRoot has
+// already vetted for a write, surfacing a genuine open failure (corrupt index,
+// permissions, a sidecar-create error) wrapped with %w instead of masking it as
+// the misleading "no vault found" guidance. It also logs the resolved target so
+// a write's destination is recoverable from cli.log even when the TTY notice is
+// suppressed (a piped/MCP consumer).
+func openResolvedWriteVault(root string, source vaultSource) (*vault.Vault, error) {
+	v, err := vault.Open(root)
+	if err != nil {
+		return nil, fmt.Errorf("open vault %s (resolved from %s): %w", root, source, err)
+	}
+	slog.Debug("write vault resolved", "path", v.Root, "source", string(source))
+	return v, nil
+}
+
+// openWriteTarget honors an explicit --vault / 2NB_VAULT target while keeping the
+// firm rule's transparency: a target that matches your configured Obsidian vault
+// (or when no Obsidian vault is configured at all) is silent; another real
+// Obsidian vault gets a one-line notice; an unconfigured target (a stray 2nb-only
+// vault Obsidian doesn't know) is refused unless --unconfigured acknowledges that
+// the note won't appear in Obsidian or your main 2nb index.
+func openWriteTarget(explicitDir string, source vaultSource) (*vault.Vault, error) {
+	absDir, _ := filepath.Abs(explicitDir)
+	root := vault.FindVaultRoot(absDir)
+	if root == "" {
+		// Nothing to write to (not a vault, no ancestor vault). Don't mint one
+		// here — point at `vault create` via the standard guidance.
+		return nil, vaultNotFoundError(absDir, source)
+	}
+	canon := canonicalVaultPath(root)
+	configured := obsidianConfiguredCanonical() // "" under 2NB_TEST or no registry
+
+	switch {
+	case configured == "" || canon == configured:
+		// The configured Obsidian vault, or no Obsidian vault configured: honor.
+		return openAndAnnounce(root, source, "")
+	case isObsidianVault(root) || obsidianKnownCanonical()[canon]:
+		// A different but real / Obsidian-known vault: proceed with a notice.
+		return openAndAnnounce(root, source,
+			fmt.Sprintf("%s is not your current Obsidian vault (%s)", root, configured))
+	default:
+		// Unconfigured: a stray 2nb-only vault Obsidian doesn't know.
+		if !unconfiguredAllowed() {
+			slog.Warn("refusing a write to an unconfigured vault", "target", root, "configured_obsidian_vault", configured)
+			return nil, unconfiguredVaultError(root, configured)
+		}
+		// Acknowledged via --unconfigured / 2NB_UNCONFIGURED. The note won't appear
+		// in Obsidian or the main 2nb index — log it (the TTY warning is suppressed
+		// on the MCP/captured path this can be reached from).
+		slog.Warn("writing to an unconfigured vault (acknowledged) — note will not appear in Obsidian or the 2nb index", "target", root)
+		return openAndAnnounce(root, source,
+			fmt.Sprintf("WARNING: %s is an unconfigured vault — this note won't appear in Obsidian or your main 2nb index", root))
+	}
+}
+
+// openAndAnnounce opens an explicit write target (one-shot — not recorded in
+// recents) and prints an optional notice plus the resolved write target.
+func openAndAnnounce(root string, source vaultSource, notice string) (*vault.Vault, error) {
+	v, err := openResolvedWriteVault(root, source)
+	if err != nil {
+		return nil, err
+	}
+	if notice != "" {
+		noteWrite("%s", notice)
+	}
+	noteWrite("writing to %s (%s)", v.Root, source)
+	return v, nil
+}
+
+// noteWrite prints an informational write-target line to stderr for an
+// interactive human. It is suppressed under --porcelain and whenever stderr is
+// not a terminal (piped/captured) — so a machine consumer that merges stderr
+// into stdout (the e2e harness, the macOS app, the plugin, a Warp tool capture)
+// never sees it corrupt a --json payload. The firm rule's correctness and its
+// hard refusals (returned errors) do not depend on this line.
+func noteWrite(format string, args ...any) {
+	if flagPorcelain || !stderrIsTTY() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "2nb: "+format+"\n", args...)
+}
+
+// stderrIsTTY reports whether stderr is an interactive terminal (a character
+// device), using only the standard library.
+func stderrIsTTY() bool {
+	fi, err := os.Stderr.Stat()
+	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+}
+
+// unconfiguredAllowed reports whether a write to an unconfigured vault has been
+// acknowledged, via the --unconfigured flag (CLI) or 2NB_UNCONFIGURED (the MCP
+// server has no flags).
+func unconfiguredAllowed() bool {
+	return flagUnconfigured || os.Getenv("2NB_UNCONFIGURED") != ""
+}
+
+// obsidianConfiguredCanonical returns the canonical path of the vault Obsidian
+// has open (or most-recent), or "" under 2NB_TEST or when no registry resolves.
+func obsidianConfiguredCanonical() string {
+	if os.Getenv("2NB_TEST") != "" {
+		return ""
+	}
+	active, _ := vault.ObsidianActiveVault()
+	if active == "" || !vault.IsVaultRoot(active) {
+		return ""
+	}
+	return canonicalVaultPath(active)
+}
+
+// obsidianKnownCanonical returns the set of canonical paths of every vault
+// Obsidian knows (open + recents). Empty under 2NB_TEST or with no registry.
+func obsidianKnownCanonical() map[string]bool {
+	out := map[string]bool{}
+	if os.Getenv("2NB_TEST") != "" {
+		return out
+	}
+	for _, p := range vault.ObsidianKnownVaults() {
+		if c := canonicalVaultPath(p); c != "" {
+			out[c] = true
+		}
+	}
+	return out
+}
+
+// isObsidianVault reports whether root has an .obsidian/ child — i.e. it is a
+// real Obsidian vault (notes written there will show up in Obsidian), as opposed
+// to a 2nb-only directory.
+func isObsidianVault(root string) bool {
+	_, err := os.Stat(filepath.Join(root, ".obsidian"))
+	return err == nil
+}
+
+// walkUpRefusedError is returned when a write would resolve a vault only by
+// walking up from a non-vault current directory — the split trap.
+func walkUpRefusedError(cwd, foundRoot string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "refusing to write: %s is not a vault", cwd)
+	fmt.Fprintf(&b, "\n\n2nb found a vault by walking up the directory tree (%s), but writing there\n"+
+		"could split your notes across vaults. By default 2nb writes to the vault you\n"+
+		"have open in Obsidian — nothing was written.", foundRoot)
+	b.WriteString("\n\nTo fix:\n" +
+		"  • Open your vault in Obsidian (2nb follows Obsidian's open vault)\n" +
+		fmt.Sprintf("  • Or target it explicitly: --vault %q\n", foundRoot) +
+		"  • Or cd into the vault root")
+	return errors.New(b.String())
+}
+
+// unconfiguredVaultError is returned when an explicit --vault / 2NB_VAULT points
+// at a vault Obsidian doesn't know, without --unconfigured to acknowledge it.
+func unconfiguredVaultError(root, configured string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "refusing to write to %s — it is not your configured Obsidian vault", root)
+	if configured != "" {
+		fmt.Fprintf(&b, " (%s)", configured)
+	}
+	b.WriteString(".\nA note written there won't appear in Obsidian and won't be in your main 2nb index.")
+	b.WriteString("\n\nIf that's really what you want, re-run with --unconfigured.")
+	return errors.New(b.String())
 }
 
 func getFormat(cmd *cobra.Command) output.Format {

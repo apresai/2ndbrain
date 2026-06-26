@@ -1,16 +1,17 @@
 module github.com/apresai/2ndbrain
 
-go 1.25.0
+go 1.25.5
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/service/bedrock v1.59.0
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.4
+	github.com/aws/smithy-go v1.24.2
 	github.com/google/uuid v1.6.0
-	github.com/mark3labs/mcp-go v0.46.0
-	github.com/mattn/go-sqlite3 v1.14.24
-	github.com/spf13/cobra v1.9.1
+	github.com/mark3labs/mcp-go v0.55.1
+	github.com/mattn/go-sqlite3 v1.14.47
+	github.com/spf13/cobra v1.10.2
 	golang.org/x/text v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -28,10 +29,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.15 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.10 // indirect
-	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
-	github.com/spf13/pflag v1.0.6 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 )

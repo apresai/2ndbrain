@@ -9,7 +9,7 @@ This project uses **2ndbrain** (`2nb`), an AI companion for Obsidian-native mark
 
 ## First — orient yourself in the vault (the 5-command drill)
 
-**Run these before any create / write / index action.** They prevent the most common failure mode (writing to the wrong vault because the active vault wasn't checked). Each answers a specific question, in order:
+**Run these before any create / write / index action.** They tell you which vault you're working with and whether AI is available. (You don't have to babysit the write target: `2nb` writes to the vault you have open in Obsidian by default — see "Which vault gets written" below — so a misplaced `cd` can't split your notes.) Each answers a specific question, in order:
 
 ```bash
 2nb vault status              # Is this a vault? Is it healthy? How many docs?
@@ -19,11 +19,16 @@ This project uses **2ndbrain** (`2nb`), an AI companion for Obsidian-native mark
 2nb skills show claude-code   # Self-referential: what am I supposed to know?
 ```
 
-If `vault_root` (from `config show`) isn't the directory you expected, pass `--vault <path>` on every command. The "active vault" is the vault you have open in Obsidian — 2nb reads Obsidian's own registry — independent of your current working directory. So `2nb create` run from inside `~/dev/sophie` writes to whatever vault Obsidian has open, not to `~/dev/sophie`, unless you pass `--vault`.
+### Which vault gets written (read this before any write)
 
-**If the current directory isn't a 2nb vault**, you have two choices:
-1. Initialize it: `2nb vault create .` (adds a `.2ndbrain/` directory so 2nb can index it). The legacy `2nb init` still works but is deprecated.
-2. Treat it as a foreign filesystem: use direct file writes with correct frontmatter (see "Document Format" below) and skip `2nb create` entirely. This is how you'd add notes to an Obsidian vault that you *don't* want to convert to 2nb.
+The **active vault is the one you have open in Obsidian** — 2nb reads Obsidian's own registry, independent of your current working directory. Write commands (`create`, `append`, `prepend`, `replace`, `meta --set`, `move`, `index`, the `kb_*` write tools) resolve the target in this fixed order:
+
+1. `--vault <path>` or `2NB_VAULT` — an explicit override (use this only when you mean a *different* vault).
+2. Otherwise, **the vault Obsidian has open** (or, if Obsidian is closed, your most-recently-opened vault). This is the default and needs no flags.
+
+The current directory is **not** an implicit write target. If you run a write from a folder that isn't a vault, 2nb does **not** walk up the tree or create a stray vault — it writes to your open Obsidian vault, or refuses with an actionable error. So a wrong `cd` can never split your notes. `kb_info` or `2nb vault show` report which vault is active.
+
+**Don't run `2nb vault create .`** to "make the current directory work" — that mints a second vault and is exactly how notes get split. To write somewhere other than your Obsidian vault, pass `--vault <path>`; to write to a folder Obsidian doesn't know (rare; the note won't show in Obsidian or your 2nb index), add `--unconfigured`.
 
 ## Semantic-search playbook (the core loop)
 
@@ -45,7 +50,7 @@ Three intents cover almost every request. Pick the path; do not improvise a one-
 - `kb_ask` / `2nb ask "..."` searches and synthesizes an answer with a source list. `ask` is STRICTER than `search`: it weighs only the top 5 hits against the same threshold, so a borderline match at rank 8 appears in `search` but not `ask`. If `ask` returns "no relevant documents," drop to `kb_search` with broader terms.
 - RAG can hallucinate a specific detail out of a real chunk. `kb_read` each cited source before repeating an exact claim, number, or name.
 
-**Confirm the vault before writing.** The top failure mode is operating on the wrong vault. `kb_info` or `2nb vault show --json` answers "which vault?". The active vault is the vault you have open in Obsidian (2nb reads Obsidian's own registry), independent of your shell's cwd, so `2nb create` run from some other folder still writes to the open Obsidian vault unless you pass `--vault <path>` (or set `2NB_VAULT`).
+**Know which vault you're writing to.** `kb_info` or `2nb vault show --json` answers "which vault?". The default write target is the vault you have open in Obsidian (see "Which vault gets written" above) — the cwd is never an implicit target. Pass `--vault <path>` (or set `2NB_VAULT`) only to override to a different vault on purpose.
 
 **Watch for degraded search.** If `mode` comes back `keyword` when you expected semantic ranking, the vector channel is off (provider down, dimension mismatch, or an unindexed vault). Check `mode` on every `--json` result and read `warnings` when it is present. Never report "no matches" without first confirming `mode` was `hybrid` (see "Search scoring" and the recovery playbook below).
 
@@ -515,7 +520,7 @@ Wikilinks inside fenced code blocks or inline backticks are ignored by the extra
 
 ## Key Conventions and Pitfalls
 
-- **Check the active vault before writing** — `2nb config show` answers "which vault?". Don't assume `cwd` is the vault.
+- **Writes go to your open Obsidian vault by default** — the cwd is never an implicit target and 2nb won't mint a stray vault; pass `--vault` only to override on purpose. `2nb vault show --json` confirms "which vault?".
 - **Every document has a UUID `id`** — use it for stable references, and never rewrite it during an edit.
 - **Don't hand-edit `modified` timestamps** — the save path does this automatically; a manual edit can desync with `content_hash` and force a spurious re-embed.
 - **Search before create** — the vault accumulates duplicates fast otherwise. `kb_search` + `kb_list --tag` are cheap.

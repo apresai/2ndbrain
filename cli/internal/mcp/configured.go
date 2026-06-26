@@ -46,6 +46,9 @@ type mcpServerEntry struct {
 	// user's config for a user-scope (vault-pinned) entry. Only affects
 	// marshaling (install); the detector only unmarshals this struct.
 	Cwd string `json:"cwd,omitempty"`
+	// WorkingDirectory is Warp's field for a CLI server's launch directory
+	// (~/.warp/.mcp.json). omitempty keeps it out of Claude Code entries.
+	WorkingDirectory string `json:"working_directory,omitempty"`
 }
 
 // Configured reports whether the 2ndbrain MCP server is configured for the
