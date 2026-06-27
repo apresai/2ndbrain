@@ -162,12 +162,32 @@ final class AppState {
     var showMCPStatus = false
     var mcpStatuses: [MCPServerStatusInfo] = []
     private var mcpStatusTimer: Timer?
-    // Claude Code integration status for the Home "Claude Code" card: whether
-    // the 2ndbrain skill is installed (skillStatuses) and whether the MCP
-    // server is configured in ~/.claude.json (mcpConfigured). Refreshed on
-    // vault switch; empty/nil when the CLI is unreachable or too old.
+    // AI-client integration status for the Home "AI Clients" card: which 2nb
+    // skills are installed (skillStatuses, across all client slugs) and which
+    // clients have the MCP server configured (mcpConfiguredAll, one entry per
+    // client). Refreshed on vault switch; empty when the CLI is unreachable or
+    // too old.
     var skillStatuses: [SkillStatusInfo] = []
-    var mcpConfigured: MCPConfiguredInfo?
+    var mcpConfiguredAll: [MCPConfiguredInfo] = []
+
+    /// MCP-configured status for a specific client (claude-code, warp,
+    /// claude-desktop, codex), or nil if that client isn't in the last refresh.
+    func mcpConfigured(forClient key: String) -> MCPConfiguredInfo? {
+        mcpConfiguredAll.first { $0.client == key }
+    }
+
+    /// Back-compat accessor: the Claude Code entry, the historical meaning of
+    /// `mcpConfigured`. Computed from `mcpConfiguredAll`, so callers and the
+    /// cross-dependency callout keep working unchanged.
+    var mcpConfigured: MCPConfiguredInfo? {
+        mcpConfigured(forClient: "claude-code")
+    }
+
+    /// Skill install status for a specific slug (claude-code, warp, codex, …),
+    /// or nil if that slug isn't in the last refresh.
+    func skillStatus(forSlug slug: String) -> SkillStatusInfo? {
+        skillStatuses.first { $0.slug == slug }
+    }
 
     // Claude Code "Verify" health panel state.
     var verifying = false
@@ -1490,25 +1510,25 @@ final class AppState {
         }
     }
 
-    /// Refreshes whether the 2ndbrain MCP server is configured for this vault
-    /// via `2nb mcp configured --json` (a slice-of-one we unwrap). Best-effort,
-    /// same as `refreshSkillStatus`: empty/unparseable/older-CLI → nil → the
-    /// Home row reads "unknown".
+    /// Refreshes which clients have the 2ndbrain MCP server configured for this
+    /// vault via `2nb mcp configured --all --json` (one entry per client).
+    /// Best-effort, same as `refreshSkillStatus`: empty/unparseable/older-CLI →
+    /// empty → each row reads "unknown".
     func refreshMCPConfigured() async {
         guard let vault else {
-            mcpConfigured = nil
+            mcpConfiguredAll = []
             return
         }
         do {
-            let data = try await runCLI(["mcp", "configured", "--json"], cwd: vault.rootURL)
+            let data = try await runCLI(["mcp", "configured", "--all", "--json"], cwd: vault.rootURL)
             if data.isEmpty {
-                mcpConfigured = nil
+                mcpConfiguredAll = []
                 return
             }
-            mcpConfigured = try JSONDecoder().decode([MCPConfiguredInfo].self, from: data).first
+            mcpConfiguredAll = try JSONDecoder().decode([MCPConfiguredInfo].self, from: data)
         } catch {
             log.warning("mcp configured unavailable: \(error.localizedDescription)")
-            mcpConfigured = nil
+            mcpConfiguredAll = []
         }
     }
 
@@ -1573,11 +1593,23 @@ final class AppState {
         }
     }
 
-    /// Write the 2ndbrain MCP server entry into ~/.claude.json (`mcp install`).
-    func installMCP(scope: String = "user") async throws -> MCPInstallInfo {
+    /// Write the 2ndbrain MCP server entry for one client (`mcp install
+    /// --client <key>`). Defaults preserve the historical claude-code/user
+    /// behavior. Single-client only — `--client all` returns an array, which this
+    /// single-object decode doesn't handle.
+    func installMCP(client: String = "claude-code", scope: String = "user") async throws -> MCPInstallInfo {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["mcp", "install", "--scope", scope, "--json"], cwd: vault.rootURL)
+        let data = try await runCLI(["mcp", "install", "--client", client, "--scope", scope, "--json"], cwd: vault.rootURL)
         return try JSONDecoder().decode(MCPInstallInfo.self, from: data)
+    }
+
+    /// One-command setup for a single AI client: installs the skill (where the
+    /// client has one) plus the MCP server via `2nb setup --client <key>`. Zero
+    /// exit = success (`runCLI` throws on non-zero); the caller refreshes skill +
+    /// MCP status afterward.
+    func setupClient(_ client: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await runCLI(["setup", "--client", client], cwd: vault.rootURL)
     }
 
     /// Collapse the index WAL (`vault checkpoint`).

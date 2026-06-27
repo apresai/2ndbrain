@@ -16,8 +16,10 @@ struct HomeView: View {
     @State private var testing = false
     @State private var updatingCLI = false
     @State private var installingPlugin = false
-    @State private var installingSkill = false
-    @State private var configuringMCP = false
+    // The id of the client currently being configured (nil = none in flight), so
+    // only that row's button shows "Configuring…" and all Configure buttons
+    // disable while one runs.
+    @State private var configuringClient: String?
     @State private var actionMessage: String?
     @State private var actionIsError = false
     // The vault Obsidian has open, loaded once in `.task` instead of read from
@@ -37,7 +39,7 @@ struct HomeView: View {
                 Divider()
                 aiCard
                 Divider()
-                claudeCodeCard
+                aiClientsCard
                 Divider()
                 indexCard
                 if let actionMessage {
@@ -263,63 +265,67 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Claude Code
+    // MARK: - AI Clients
 
-    /// "Is my Claude Code integration ready?": the skill (installed to
-    /// ~/.claude/skills/) and the MCP server (wired into ~/.claude.json). Both
-    /// are Claude Code artifacts, distinct from the Obsidian plugin row on the
-    /// Vault card (which is a vault artifact), so they get their own card.
-    private var claudeCodeCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SheetSectionHeader(title: "Claude Code", systemImage: "terminal")
-            skillRow
-            mcpConfiguredRow
-            if let dep = crossDepMessage {
-                Label(dep, systemImage: "link")
+    /// "Is my AI tooling wired up?": one row per AI client (Claude Code, Warp,
+    /// Claude Desktop, Codex), each showing its skill status (where the client
+    /// has a skill) + MCP-configured status + a single Configure button that
+    /// shells `2nb setup --client <key>`. These are AI-client artifacts, distinct
+    /// from the Obsidian plugin row on the Vault card (a vault artifact), so they
+    /// get their own card. The Claude Code Verify panel + cross-dependency
+    /// callout live under the Claude Code row only.
+    private var aiClientsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SheetSectionHeader(title: "AI Clients", systemImage: "sparkles")
+            ForEach(ClientDescriptor.all) { client in
+                clientRow(client)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func clientRow(_ client: ClientDescriptor) -> some View {
+        let skill = client.skillSlug.flatMap { appState.skillStatus(forSlug: $0) }
+        let mcp = appState.mcpConfigured(forClient: client.mcpClientKey)
+        let mcpState = ClientConfig.mcpRow(mcp)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Label(client.displayName, systemImage: client.systemImage)
+                    .font(.callout.weight(.medium))
+                Spacer()
+                Button(configuringClient == client.id ? "Configuring…" : "Configure") {
+                    Task { await configureClient(client) }
+                }
+                .controlSize(.small)
+                .disabled(configuringClient != nil || appState.vault == nil)
+            }
+            if client.skillSlug != nil {
+                let skillState = ClientConfig.skillRow(skill)
+                statusLine(ok: skillState.ok, text: "Skill: \(skillState.label)")
+            }
+            statusLine(ok: mcpState.ok, text: "MCP server: \(mcpState.label)")
+            // The config file path, once configured, so the user can find what
+            // was written (e.g. ~/.claude.json, ~/.warp/.mcp.json).
+            if mcpState.ok, let path = mcp?.configPath, !path.isEmpty {
+                Text(path)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if let note = client.note, !note.isEmpty {
+                Text(note)
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.secondary)
             }
-            ClaudeCodeHealthView()
-        }
-    }
-
-    /// Claude Code needs BOTH the skill and the MCP server; warn when only one
-    /// is set up.
-    private var crossDepMessage: String? {
-        let skill = appState.skillStatuses.first { $0.slug == "claude-code" }
-        let skillInstalled = (skill?.userInstalled ?? false) || (skill?.projectInstalled ?? false)
-        let mcpConfigured = appState.mcpConfigured?.configured ?? false
-        return ClaudeCodeHealth.crossDependency(skillInstalled: skillInstalled, mcpConfigured: mcpConfigured)
-    }
-
-    @ViewBuilder
-    private var skillRow: some View {
-        let status = appState.skillStatuses.first { $0.slug == "claude-code" }
-        let state = HomeSkill.rowState(status)
-        HStack(spacing: 8) {
-            Text("Skill: \(state.label)")
-            if let buttonTitle = state.button {
-                Button(installingSkill ? "Installing…" : buttonTitle) {
-                    Task { await installSkill() }
+            // Claude Code keeps the richer affordances: the cross-dependency
+            // callout (it needs BOTH skill + MCP), a Show-setup snippet fallback,
+            // and the end-to-end Verify panel.
+            if client.id == ClientDescriptor.claudeCode.id {
+                if let dep = crossDepMessage {
+                    Label(dep, systemImage: "link")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
-                .disabled(installingSkill || appState.vault == nil)
-                .controlSize(.small)
-            }
-        }
-        .font(.callout)
-    }
-
-    @ViewBuilder
-    private var mcpConfiguredRow: some View {
-        let state = HomeMCPConfigured.rowState(appState.mcpConfigured)
-        HStack(spacing: 8) {
-            Text("MCP server: \(state.label)")
-            if state.button != nil {
-                Button(configuringMCP ? "Configuring…" : "Configure automatically") {
-                    Task { await configureMCP() }
-                }
-                .controlSize(.small)
-                .disabled(configuringMCP || appState.vault == nil)
                 Button("Show setup") {
                     Task {
                         await appState.loadMCPSetup()
@@ -327,53 +333,55 @@ struct HomeView: View {
                     }
                 }
                 .controlSize(.small)
+                ClaudeCodeHealthView()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func statusLine(ok: Bool, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ok ? Color.green : Color.secondary)
+            Text(text)
         }
         .font(.callout)
     }
 
-    /// Write the MCP server entry into ~/.claude.json behind a confirm (it edits
-    /// an external config; a backup is saved), then re-check.
-    private func configureMCP() async {
+    /// Claude Code needs BOTH the skill and the MCP server; warn when only one
+    /// is set up.
+    private var crossDepMessage: String? {
+        let skill = appState.skillStatus(forSlug: "claude-code")
+        let skillInstalled = (skill?.userInstalled ?? false) || (skill?.projectInstalled ?? false)
+        let mcpConfigured = appState.mcpConfigured?.configured ?? false
+        return ClaudeCodeHealth.crossDependency(skillInstalled: skillInstalled, mcpConfigured: mcpConfigured)
+    }
+
+    /// Install the skill (where applicable) + configure the MCP server for one
+    /// client behind a confirm (it edits an external config; a backup is saved),
+    /// then re-check both statuses.
+    private func configureClient(_ client: ClientDescriptor) async {
         #if canImport(AppKit)
+        let confirm = ClientConfig.configureConfirm(client)
         let alert = NSAlert()
-        alert.messageText = "Configure the 2ndbrain MCP server?"
-        alert.informativeText = "This adds an entry to ~/.claude.json so Claude Code launches 2ndbrain for this vault. A backup is saved first and all your other settings are preserved."
+        alert.messageText = confirm.title
+        alert.informativeText = confirm.info
         alert.addButton(withTitle: "Configure")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         #endif
-        configuringMCP = true
+        configuringClient = client.id
         actionMessage = nil
-        defer { configuringMCP = false }
+        defer { configuringClient = nil }
         do {
-            let res = try await appState.installMCP()
+            try await appState.setupClient(client.mcpClientKey)
+            await appState.refreshSkillStatus()
             await appState.refreshMCPConfigured()
             actionIsError = false
-            if res.changed {
-                actionMessage = "Configured the MCP server (\(res.scope) scope)."
-                    + (res.backupPath.isEmpty ? "" : " Backup: \(res.backupPath)")
-            } else {
-                actionMessage = "Already configured (\(res.scope) scope)."
-            }
+            actionMessage = ClientConfig.successMessage(client)
         } catch {
             actionIsError = true
             actionMessage = "Configure failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func installSkill() async {
-        installingSkill = true
-        actionMessage = nil
-        defer { installingSkill = false }
-        do {
-            try await appState.installClaudeCodeSkill()
-            await appState.refreshSkillStatus()
-            actionIsError = false
-            actionMessage = HomeSkill.successMessage()
-        } catch {
-            actionIsError = true
-            actionMessage = "Skill install failed: \(error.localizedDescription)"
         }
     }
 
