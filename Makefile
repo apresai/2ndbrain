@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog
+.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -16,6 +16,18 @@ version-swift:
 # drift (parity guard in .github/workflows/release.yml).
 version-plugin:
 	@node scripts/sync-plugin-version.js
+
+# Regenerate the in-repo SKILL.md mirrors (.agents/.warp/.claude) from the
+# canonical Go-embedded source cli/internal/skills/content/2ndbrain-skill.md,
+# so agents that open the repo discover the 2nb skill with zero install.
+sync-skills:
+	@scripts/sync-skill.sh
+
+# Fail if any mirror has drifted from the embedded source (the CI parity guard,
+# same shape as the plugin-manifest-vs-VERSION gate in release.yml). Fix with
+# `make sync-skills`.
+check-skills-sync:
+	@scripts/sync-skill.sh --check
 
 # One-shot version set across every product: make set-version V=0.8.0
 set-version:

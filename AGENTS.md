@@ -14,6 +14,8 @@ Obsidian-native AI companion. **Obsidian stays the editor**; the Go CLI (`2nb`) 
 - `reqs.md` — EARS-format requirements specification
 - `test-plan.md` — Requirements validation test plan
 
+> **You already have the 2nb skill.** This repo ships the canonical `2nb` agent skill at `.agents/skills/2nb/SKILL.md` (+ `.warp/`, `.claude/` mirrors), so opening the repo loads it automatically: the 5-command drill, search-before-create, hybrid-search scoring, the MCP-vs-CLI table, and error recovery. Source of truth is `cli/internal/skills/content/2ndbrain-skill.md` (Go-`embed`ed); regenerate the mirrors with `make sync-skills` (release CI fails on drift), never edit a mirror directly.
+
 ## Versioning
 
 Format: `major.minor.build`. Single source of truth: `VERSION` file at repo root.

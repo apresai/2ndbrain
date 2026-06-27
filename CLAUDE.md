@@ -11,6 +11,10 @@ Obsidian-native AI companion. **Obsidian stays your editor**; the Go CLI (`2nb`)
 - `press-release.md` — Product vision document
 - `test-plan.md` — Requirements validation test plan
 
+### Self-hosted agent skill
+
+The canonical `2nb` agent skill lives in this repo, so any agent (Warp, Claude Code, Cursor, ...) opened on the repo loads it with zero install. Source of truth: `cli/internal/skills/content/2ndbrain-skill.md` (Go-`embed`ed into the CLI; `2nb skills install`/`show` render it). For walk-up discovery it is mirrored to the repo-root paths agents look for: `.agents/skills/2nb/SKILL.md` (Warp's recommended primary), `.warp/skills/2nb/SKILL.md`, and `.claude/skills/2nb/SKILL.md` (the last is tracked via a `.gitignore` carve-out, since `.claude/` is otherwise ignored). Edit the source file, then run `make sync-skills` to regenerate the mirrors; `make check-skills-sync` runs in release CI and fails on any drift. Never edit a mirror directly.
+
 ### Project docs (`docs/`)
 
 - [`quick-start.md`](docs/quick-start.md): end-to-end getting-started walkthrough (install, vault, AI, index, search, MCP)

@@ -2,6 +2,10 @@
 
 Thanks for your interest in contributing to 2ndbrain.
 
+## For AI agents
+
+Opening this repo in an agent (Warp, Claude Code, Cursor, ...) gives you the `2nb` skill automatically: it ships at `.agents/skills/2nb/SKILL.md` (plus `.warp/` and `.claude/` mirrors), the discovery paths agents walk up to find. The skill's source of truth is `cli/internal/skills/content/2ndbrain-skill.md`, embedded into the CLI and installable for any agent via `2nb skills install <agent>`. If you change the skill, edit that source file and run `make sync-skills` (release CI fails on mirror drift); see `CLAUDE.md` (full reference) and `AGENTS.md` (condensed).
+
 ## Prerequisites
 
 - **Go 1.25+** with `CGO_ENABLED=1` (SQLite requires it)
