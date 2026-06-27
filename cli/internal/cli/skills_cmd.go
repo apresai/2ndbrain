@@ -144,8 +144,19 @@ func runSkillsInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Repo-root guard: a project-scope `--all` from the 2ndbrain source tree would
+	// stamp the committed .agents/.warp/.claude mirrors (regenerate those with
+	// `make sync-skills`). Skip the mirror slugs in that case; an explicit
+	// single-agent install stays allowed (a deliberate override).
+	skipMirrors := all && !user && skills.IsSourceRepoRoot(baseDir)
+
 	for _, a := range targets {
-		if err := skills.Install(baseDir, a, user, force); err != nil {
+		if skipMirrors && isRepoMirrorSlug(a.Slug) {
+			fmt.Fprintf(os.Stderr, "skip %s: committed mirror in the 2ndbrain source tree; run `make sync-skills` instead\n", a.Name)
+			continue
+		}
+		backup, err := skills.InstallWithBackup(baseDir, a, user, force)
+		if err != nil {
 			if errors.Is(err, skills.ErrAlreadyInstalled) {
 				fmt.Fprintf(os.Stderr, "skip %s: already installed (--force to overwrite)\n", a.Name)
 				continue
@@ -158,11 +169,26 @@ func runSkillsInstall(cmd *cobra.Command, args []string) error {
 			path = "~/" + a.UserPath
 		}
 		fmt.Printf("Installed %s (%s) → %s\n", a.Name, scope, path)
+		if backup != "" {
+			fmt.Fprintf(os.Stderr, "  Backed up previous SKILL.md to %s\n", backup)
+		}
 		if a.Note != "" {
 			fmt.Fprintf(os.Stderr, "  Note: %s\n", a.Note)
 		}
 	}
 	return nil
+}
+
+// isRepoMirrorSlug reports whether a skill slug maps to one of the repo's
+// committed SKILL.md mirrors (kept in sync by `make sync-skills`): .agents,
+// .warp, and .claude. (codex's .codex/skills is install-only, not a mirror.)
+func isRepoMirrorSlug(slug string) bool {
+	switch slug {
+	case "agents", "warp", "claude-code":
+		return true
+	default:
+		return false
+	}
 }
 
 func runSkillsUninstall(cmd *cobra.Command, args []string) error {

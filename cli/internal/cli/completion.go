@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
 	"github.com/apresai/2ndbrain/internal/skills"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -679,6 +680,12 @@ func completeAgentSlugs(cmd *cobra.Command, args []string, toComplete string) ([
 		out = append(out, a.Slug)
 	}
 	return out, cobra.ShellCompDirectiveNoFileComp
+}
+
+// completeMCPClients completes the --client flag for mcp install/uninstall/
+// configured and setup, from the single source of truth plus "all".
+func completeMCPClients(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	return append(mcppkg.SupportedClients(), "all"), cobra.ShellCompDirectiveNoFileComp
 }
 
 // completeModelIDs merges the built-in catalog with the user catalog,

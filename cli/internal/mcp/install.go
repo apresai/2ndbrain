@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/apresai/2ndbrain/internal/vault"
 )
@@ -22,6 +25,13 @@ type InstallResult struct {
 	BackupPath string `json:"backup_path"` // "" if no backup was written
 	ServerKey  string `json:"server_key"`
 	Scope      string `json:"scope"`
+	// Instructions holds manual setup steps when auto-config wasn't possible
+	// (e.g. the `codex` CLI isn't on PATH so we print the command to run).
+	Instructions string `json:"instructions,omitempty"`
+	// Error is a per-client failure message. InstallAll/UninstallAll set it so
+	// one client's failure doesn't abort configuring the rest; single-client
+	// callers still receive the error via the returned error value.
+	Error string `json:"error,omitempty"`
 }
 
 // Install writes (or updates) the 2ndbrain MCP server entry into Claude Code's
@@ -55,8 +65,12 @@ func InstallForClient(v *vault.Vault, client, command, scope string, dryRun bool
 		return installFlatClient(v.Root, command, scope, "warp", ".warp", dryRun)
 	case "agents":
 		return installFlatClient(v.Root, command, scope, "agents", ".agents", dryRun)
+	case "claude-desktop":
+		return installClaudeDesktop(command, v.Root, dryRun)
+	case "codex":
+		return installCodex(command, v.Root, dryRun)
 	default:
-		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code, warp, or agents)", client)
+		return InstallResult{}, fmt.Errorf("unknown client %q (want %s, or all)", client, strings.Join(SupportedClients(), ", "))
 	}
 }
 
@@ -69,9 +83,56 @@ func UninstallForClient(v *vault.Vault, client, scope string, dryRun bool) (Inst
 		return uninstallFlatClient(v.Root, scope, "warp", ".warp", dryRun)
 	case "agents":
 		return uninstallFlatClient(v.Root, scope, "agents", ".agents", dryRun)
+	case "claude-desktop":
+		return uninstallClaudeDesktop(dryRun)
+	case "codex":
+		return uninstallCodex(dryRun)
 	default:
-		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code, warp, or agents)", client)
+		return InstallResult{}, fmt.Errorf("unknown client %q (want %s, or all)", client, strings.Join(SupportedClients(), ", "))
 	}
+}
+
+// SupportedClients is the ordered set of AI clients that `mcp install`,
+// `setup`, and `mcp configured` understand. Single source of truth for flag
+// help, shell completion, `--client all`, and multi-client detection.
+func SupportedClients() []string {
+	return []string{"claude-code", "claude-desktop", "warp", "agents", "codex"}
+}
+
+// InstallAll configures every supported client, never aborting on one client's
+// failure: a per-client error is captured in that result's Error field so the
+// remaining clients still run. claude-desktop and codex are user-scope only, so
+// their scope is coerced to "user".
+func InstallAll(v *vault.Vault, command, scope string, dryRun bool) []InstallResult {
+	return runAll(SupportedClients(), func(c, s string) (InstallResult, error) {
+		return InstallForClient(v, c, command, s, dryRun)
+	}, scope)
+}
+
+// UninstallAll is the inverse of InstallAll.
+func UninstallAll(v *vault.Vault, scope string, dryRun bool) []InstallResult {
+	return runAll(SupportedClients(), func(c, s string) (InstallResult, error) {
+		return UninstallForClient(v, c, s, dryRun)
+	}, scope)
+}
+
+func runAll(clients []string, op func(client, scope string) (InstallResult, error), scope string) []InstallResult {
+	out := make([]InstallResult, 0, len(clients))
+	for _, c := range clients {
+		s := scope
+		if c == "claude-desktop" || c == "codex" {
+			s = "user" // these clients have a single global config, no project scope
+		}
+		res, err := op(c, s)
+		if err != nil {
+			if res.Client == "" {
+				res.Client = c
+			}
+			res.Error = err.Error()
+		}
+		out = append(out, res)
+	}
+	return out
 }
 
 // flatClientConfigPath returns the on-disk path and its display form for a flat
@@ -108,17 +169,30 @@ func installFlatClient(vaultRoot, command, scope, client, dotDir string, dryRun 
 		return InstallResult{}, fmt.Errorf("invalid scope %q (want user or project)", scope)
 	}
 	cfgPath, display := flatClientConfigPath(vaultRoot, scope, dotDir)
-	res := InstallResult{Client: client, ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
+	return installFlatFile(client, cfgPath, display, scope, flatServerEntry(command, vaultRoot), dryRun)
+}
 
+func uninstallFlatClient(vaultRoot, scope, client, dotDir string, dryRun bool) (InstallResult, error) {
+	if scope != "user" && scope != "project" {
+		return InstallResult{}, fmt.Errorf("invalid scope %q (want user or project)", scope)
+	}
+	cfgPath, display := flatClientConfigPath(vaultRoot, scope, dotDir)
+	return uninstallFlatFile(client, cfgPath, display, scope, dryRun)
+}
+
+// installFlatFile writes entry into a flat top-level mcpServers JSON config at
+// cfgPath (backup-first, preserving every other key byte-for-byte). Shared by
+// Warp, the cross-tool .agents location, and Claude Desktop — all of which use a
+// flat mcpServers map. The scope argument only labels the result; the file is
+// already chosen by cfgPath.
+func installFlatFile(client, cfgPath, display, scope string, entry mcpServerEntry, dryRun bool) (InstallResult, error) {
+	res := InstallResult{Client: client, ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
 	root, orig, err := readConfigTree(cfgPath)
 	if err != nil {
 		return res, err
 	}
-
-	entryJSON, _ := json.Marshal(flatServerEntry(command, vaultRoot))
-	// Flat-config clients use a flat top-level mcpServers map for both scopes (the
-	// scope only selects which file), so reuse the "user"-style top-level mutation.
-	changed, err := mutateServerEntry(root, "user", vaultRoot, func(servers map[string]json.RawMessage) bool {
+	entryJSON, _ := json.Marshal(entry)
+	changed, err := mutateServerEntry(root, "user", "", func(servers map[string]json.RawMessage) bool {
 		if existing, ok := servers[serverKeyName]; ok && jsonEqual(existing, entryJSON) {
 			return false
 		}
@@ -128,7 +202,6 @@ func installFlatClient(vaultRoot, command, scope, client, dotDir string, dryRun 
 	if err != nil {
 		return res, err
 	}
-
 	res.Changed = changed
 	res.Configured = true
 	if changed && !dryRun {
@@ -144,18 +217,13 @@ func installFlatClient(vaultRoot, command, scope, client, dotDir string, dryRun 
 	return res, nil
 }
 
-func uninstallFlatClient(vaultRoot, scope, client, dotDir string, dryRun bool) (InstallResult, error) {
-	if scope != "user" && scope != "project" {
-		return InstallResult{}, fmt.Errorf("invalid scope %q (want user or project)", scope)
-	}
-	cfgPath, display := flatClientConfigPath(vaultRoot, scope, dotDir)
+func uninstallFlatFile(client, cfgPath, display, scope string, dryRun bool) (InstallResult, error) {
 	res := InstallResult{Client: client, ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
-
 	root, orig, err := readConfigTree(cfgPath)
 	if err != nil {
 		return res, err
 	}
-	changed, err := mutateServerEntry(root, "user", vaultRoot, func(servers map[string]json.RawMessage) bool {
+	changed, err := mutateServerEntry(root, "user", "", func(servers map[string]json.RawMessage) bool {
 		if _, ok := servers[serverKeyName]; !ok {
 			return false
 		}
@@ -175,6 +243,85 @@ func uninstallFlatClient(vaultRoot, scope, client, dotDir string, dryRun bool) (
 		res.BackupPath = backup
 	}
 	return res, nil
+}
+
+// Injectable for tests (mirrors the DI pattern in skills/doctor.go).
+var (
+	desktopLookPath = exec.LookPath
+	osExecutable    = os.Executable
+)
+
+// claudeDesktopConfigPath returns the OS-specific Claude Desktop MCP config path
+// and its display form. Claude Desktop ships only on macOS and Windows; other
+// platforms return an error so callers degrade cleanly rather than panic.
+func claudeDesktopConfigPath() (path, display string, err error) {
+	switch runtime.GOOS {
+	case "darwin":
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return "", "", herr
+		}
+		p := filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+		return p, "~/Library/Application Support/Claude/claude_desktop_config.json", nil
+	case "windows":
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			return "", "", fmt.Errorf("APPDATA is not set; cannot locate the Claude Desktop config")
+		}
+		return filepath.Join(appData, "Claude", "claude_desktop_config.json"), `%APPDATA%\Claude\claude_desktop_config.json`, nil
+	default:
+		return "", "", fmt.Errorf("Claude Desktop has no supported config location on %s", runtime.GOOS)
+	}
+}
+
+// resolveAbsCommand resolves an ABSOLUTE path to the 2nb binary, required for GUI
+// clients (Claude Desktop) that launch MCP servers with a minimal PATH where a
+// bare "2nb" won't resolve. It deliberately does NOT resolve symlinks, so the
+// stable Homebrew bin symlink survives a `brew upgrade`. An explicit --command
+// (absolute, or resolvable on PATH) wins.
+func resolveAbsCommand(command string) (string, error) {
+	if command != "" && command != "2nb" {
+		if filepath.IsAbs(command) {
+			return command, nil
+		}
+		if p, err := desktopLookPath(command); err == nil {
+			return p, nil
+		}
+		return "", fmt.Errorf("could not resolve an absolute path for --command %q", command)
+	}
+	if p, err := desktopLookPath("2nb"); err == nil && filepath.IsAbs(p) {
+		return p, nil
+	}
+	if p, err := osExecutable(); err == nil && filepath.IsAbs(p) {
+		return p, nil
+	}
+	return "", fmt.Errorf("could not resolve an absolute 2nb path for a GUI client; pass --command /absolute/path/to/2nb")
+}
+
+// installClaudeDesktop writes the 2ndbrain server into Claude Desktop's JSON
+// config (flat mcpServers). Claude Desktop supports only command/args/env (no
+// cwd/working_directory, and a `url` field silently destroys the file), and it's
+// a GUI app, so the command is resolved to an absolute path and the vault is
+// pinned via --vault in args only. User scope only (single global config).
+func installClaudeDesktop(command, vaultRoot string, dryRun bool) (InstallResult, error) {
+	cfgPath, display, err := claudeDesktopConfigPath()
+	if err != nil {
+		return InstallResult{Client: "claude-desktop", Scope: "user", ServerKey: serverKeyName}, err
+	}
+	abs, err := resolveAbsCommand(command)
+	if err != nil {
+		return InstallResult{Client: "claude-desktop", ConfigPath: display, Scope: "user", ServerKey: serverKeyName}, err
+	}
+	entry := mcpServerEntry{Command: abs, Args: []string{"mcp-server", "--vault", vaultRoot}}
+	return installFlatFile("claude-desktop", cfgPath, display, "user", entry, dryRun)
+}
+
+func uninstallClaudeDesktop(dryRun bool) (InstallResult, error) {
+	cfgPath, display, err := claudeDesktopConfigPath()
+	if err != nil {
+		return InstallResult{Client: "claude-desktop", Scope: "user", ServerKey: serverKeyName}, err
+	}
+	return uninstallFlatFile("claude-desktop", cfgPath, display, "user", dryRun)
 }
 
 func claudeConfigPath() string {
