@@ -31,6 +31,27 @@ private func mcp(client: String, configured: Bool, scope: String?, configPath: S
     )
 }
 
+private func setupResult(
+    client: String,
+    configured: Bool = true,
+    instructions: String? = nil,
+    error: String? = nil
+) -> SetupClientResult {
+    SetupClientResult(
+        client: client,
+        skillSlug: nil,
+        skillPath: nil,
+        skillBackup: nil,
+        skillSkipped: nil,
+        mcpConfigPath: configured ? "~/.claude.json" : nil,
+        mcpBackup: nil,
+        mcpChanged: configured,
+        configured: configured,
+        instructions: instructions,
+        error: error
+    )
+}
+
 // MARK: - ClientDescriptor catalog
 
 @Test("ClientDescriptor.all lists the four clients in display order")
@@ -128,6 +149,23 @@ func configureConfirmClaudeCode() {
     #expect(!confirm.info.contains("Quit"))
 }
 
+@Test("configureConfirm(.warp) is a plain skill+MCP confirm, no restart/absolute copy")
+func configureConfirmWarp() {
+    let confirm = ClientConfig.configureConfirm(.warp)
+    #expect(confirm.title.contains("Warp"))
+    #expect(confirm.info.contains("skill"))
+    #expect(!confirm.info.contains("absolute"))
+    #expect(!confirm.info.contains("Quit"))
+}
+
+@Test("successMessage(.codex) mentions the skill and needs no restart nudge")
+func successMessageCodex() {
+    let msg = ClientConfig.successMessage(.codex)
+    #expect(msg.contains("Codex"))
+    #expect(msg.contains("skill"))
+    #expect(!msg.contains("Quit and reopen"))
+}
+
 @Test("successMessage adds the restart nudge only for clients that need one")
 func successMessageRestart() {
     #expect(ClientConfig.successMessage(.claudeDesktop).contains("Quit and reopen"))
@@ -167,4 +205,98 @@ func mcpConfiguredAllDecodeAndSelect() throws {
     #expect(state.mcpConfigured(forClient: "nonexistent") == nil)
     // The back-compat accessor returns the claude-code entry.
     #expect(state.mcpConfigured?.client == "claude-code")
+}
+
+// MARK: - ClientConfig.configureOutcome (false-success guard)
+
+@Test("configureOutcome: success only when configured with no error/instructions")
+func configureOutcomeSuccess() {
+    let outcome = ClientConfig.configureOutcome(.claudeCode, result: setupResult(client: "claude-code"))
+    #expect(outcome == .success(ClientConfig.successMessage(.claudeCode)))
+}
+
+@Test("configureOutcome: instructions (no error) is a manual step, not success")
+func configureOutcomeManual() {
+    // The worst case from the review: Codex with no `codex` CLI returns
+    // instructions + configured=false, exit 0 — must NOT read as configured.
+    let result = setupResult(
+        client: "codex",
+        configured: false,
+        instructions: "Run: codex mcp add 2ndbrain -- 2nb mcp-server"
+    )
+    let outcome = ClientConfig.configureOutcome(.codex, result: result)
+    guard case let .manual(msg) = outcome else {
+        Issue.record("expected .manual, got \(outcome)")
+        return
+    }
+    #expect(msg.contains("codex mcp add"))
+    #expect(msg.contains("manual step"))
+}
+
+@Test("configureOutcome: a non-empty error is a failure, not success")
+func configureOutcomeError() {
+    let result = setupResult(client: "warp", configured: false, error: "mcp: permission denied")
+    let outcome = ClientConfig.configureOutcome(.warp, result: result)
+    guard case let .failure(msg) = outcome else {
+        Issue.record("expected .failure, got \(outcome)")
+        return
+    }
+    #expect(msg.contains("permission denied"))
+}
+
+@Test("configureOutcome: error wins over instructions")
+func configureOutcomeErrorBeatsInstructions() {
+    let result = setupResult(
+        client: "codex",
+        configured: false,
+        instructions: "Run: codex mcp add ...",
+        error: "mcp: codex add failed"
+    )
+    if case .failure = ClientConfig.configureOutcome(.codex, result: result) {
+        // expected
+    } else {
+        Issue.record("error must take precedence over instructions")
+    }
+}
+
+@Test("configureOutcome: a missing result entry is a failure, never a false success")
+func configureOutcomeNil() {
+    if case .failure = ClientConfig.configureOutcome(.codex, result: nil) {
+        // expected
+    } else {
+        Issue.record("a nil result must be a failure")
+    }
+}
+
+// MARK: - [SetupClientResult] array decode (2nb setup --json --porcelain)
+
+@Test("[SetupClientResult] decodes the setup --json array and the codex manual case maps to .manual")
+func setupClientResultDecode() throws {
+    // Mirrors `2nb setup --all --json`: claude-code fully configured; codex with
+    // no `codex` CLI emits instructions + configured=false at exit 0.
+    let json = """
+    [
+      {"client":"claude-code","skill_slug":"claude-code","skill_path":"~/.claude/skills/2nb/SKILL.md","mcp_config_path":"~/.claude.json","mcp_changed":true,"configured":true},
+      {"client":"codex","skill_slug":"codex","skill_path":"~/.codex/skills/2nb/SKILL.md","mcp_changed":false,"configured":false,"instructions":"Run: codex mcp add 2ndbrain -- 2nb mcp-server"}
+    ]
+    """
+    let decoded = try JSONDecoder().decode([SetupClientResult].self, from: Data(json.utf8))
+    #expect(decoded.count == 2)
+
+    let cc = try #require(decoded.first { $0.client == "claude-code" })
+    #expect(cc.configured)
+    #expect(cc.mcpChanged)
+    #expect(cc.error == nil)
+    #expect(cc.instructions == nil)
+    #expect(ClientConfig.configureOutcome(.claudeCode, result: cc) == .success(ClientConfig.successMessage(.claudeCode)))
+
+    let codex = try #require(decoded.first { $0.client == "codex" })
+    #expect(!codex.configured)
+    #expect(codex.instructions?.contains("codex mcp add") == true)
+    // The whole point: exit 0 + configured=false must surface as a manual step.
+    if case .manual = ClientConfig.configureOutcome(.codex, result: codex) {
+        // expected
+    } else {
+        Issue.record("codex instructions case must map to .manual")
+    }
 }

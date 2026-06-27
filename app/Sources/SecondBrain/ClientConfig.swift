@@ -131,4 +131,36 @@ enum ClientConfig {
         }
         return msg
     }
+
+    /// The outcome of a `2nb setup --client <key>` run for one client, used to
+    /// pick the message and its styling. `2nb setup` always exits 0, so this is
+    /// derived from the returned `SetupClientResult`, never the process exit code.
+    enum ConfigureOutcome: Equatable {
+        /// Skill + MCP genuinely wired up.
+        case success(String)
+        /// No hard error, but a manual step is still required (e.g. Codex with no
+        /// `codex` CLI returns `instructions` + `configured` false). Not a
+        /// failure, but not a plain success.
+        case manual(String)
+        /// A step failed (`error` set) — must not read as success.
+        case failure(String)
+    }
+
+    /// Map this client's `SetupClientResult` (or its absence) to a
+    /// `ConfigureOutcome`. Precedence: a non-empty `error` is a failure; else a
+    /// non-empty `instructions` is a manual step; else success. A nil result
+    /// (the client's entry is missing from the array) is a failure, so a missing
+    /// entry can never be misreported as configured.
+    static func configureOutcome(_ client: ClientDescriptor, result: SetupClientResult?) -> ConfigureOutcome {
+        guard let result else {
+            return .failure("Setup returned no result for \(client.displayName).")
+        }
+        if let err = result.error, !err.isEmpty {
+            return .failure("Configuring \(client.displayName) failed: \(err)")
+        }
+        if let instructions = result.instructions, !instructions.isEmpty {
+            return .manual("\(client.displayName) needs a manual step:\n\(instructions)")
+        }
+        return .success(successMessage(client))
+    }
 }

@@ -374,11 +374,24 @@ struct HomeView: View {
         actionMessage = nil
         defer { configuringClient = nil }
         do {
-            try await appState.setupClient(client.mcpClientKey)
+            let results = try await appState.setupClient(client.mcpClientKey)
             await appState.refreshSkillStatus()
             await appState.refreshMCPConfigured()
-            actionIsError = false
-            actionMessage = ClientConfig.successMessage(client)
+            // `2nb setup` always exits 0, so trust the per-client result, not the
+            // exit code: surface a real error or a still-needed manual step
+            // instead of a false "Configured" (e.g. Codex with no `codex` CLI).
+            let result = results.first { $0.client == client.mcpClientKey }
+            switch ClientConfig.configureOutcome(client, result: result) {
+            case .success(let msg):
+                actionIsError = false
+                actionMessage = msg
+            case .manual(let msg):
+                actionIsError = false
+                actionMessage = msg
+            case .failure(let msg):
+                actionIsError = true
+                actionMessage = msg
+            }
         } catch {
             actionIsError = true
             actionMessage = "Configure failed: \(error.localizedDescription)"

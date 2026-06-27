@@ -1532,14 +1532,6 @@ final class AppState {
         }
     }
 
-    /// Installs the Claude Code skill at user scope via
-    /// `2nb skills install claude-code --user`, so it's available across all
-    /// Claude Code sessions (matches the Obsidian plugin settings row).
-    func installClaudeCodeSkill() async throws {
-        guard let vault else { throw CLIError.noVault }
-        _ = try await runCLI(["skills", "install", "claude-code", "--user"], cwd: vault.rootURL)
-    }
-
     // MARK: - Claude Code health (Verify) + one-click MCP setup
 
     /// Run the real end-to-end self-test: fan out the doctors + a real model test
@@ -1593,23 +1585,24 @@ final class AppState {
         }
     }
 
-    /// Write the 2ndbrain MCP server entry for one client (`mcp install
-    /// --client <key>`). Defaults preserve the historical claude-code/user
-    /// behavior. Single-client only — `--client all` returns an array, which this
-    /// single-object decode doesn't handle.
-    func installMCP(client: String = "claude-code", scope: String = "user") async throws -> MCPInstallInfo {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["mcp", "install", "--client", client, "--scope", scope, "--json"], cwd: vault.rootURL)
-        return try JSONDecoder().decode(MCPInstallInfo.self, from: data)
-    }
-
     /// One-command setup for a single AI client: installs the skill (where the
-    /// client has one) plus the MCP server via `2nb setup --client <key>`. Zero
-    /// exit = success (`runCLI` throws on non-zero); the caller refreshes skill +
-    /// MCP status afterward.
-    func setupClient(_ client: String) async throws {
+    /// client has one) plus the MCP server via `2nb setup --client <key> --json`,
+    /// returning the decoded per-client results.
+    ///
+    /// `2nb setup` exits 0 even when a step fails or only emits manual
+    /// instructions (e.g. Codex with no `codex` CLI: `configured` false +
+    /// `instructions` set), so a zero exit is NOT proof of success — the caller
+    /// must inspect the returned `SetupClientResult` (`error`/`instructions`/
+    /// `configured`). Passes `--command <resolved CLI path>` so the absolute path
+    /// written into a client config (notably Claude Desktop, which launchd can't
+    /// PATH-resolve) is this app's version-matched binary, not a bare `2nb`.
+    func setupClient(_ client: String) async throws -> [SetupClientResult] {
         guard let vault else { throw CLIError.noVault }
-        _ = try await runCLI(["setup", "--client", client], cwd: vault.rootURL)
+        let data = try await runCLI(
+            ["setup", "--client", client, "--command", CLIPath.resolve(), "--json", "--porcelain"],
+            cwd: vault.rootURL
+        )
+        return try JSONDecoder().decode([SetupClientResult].self, from: data)
     }
 
     /// Collapse the index WAL (`vault checkpoint`).
