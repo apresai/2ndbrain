@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.10.9] - 2026-06-27
+
+### Added
+- `2nb setup` one-command front door to install the 2nb skill + MCP server for an AI client (`--client claude-code|claude-desktop|warp|agents|codex` or `--all`), each step idempotent and backup-safe.
+- Multi-client MCP install: Claude Desktop (`claude_desktop_config.json`, absolute path, no `cwd`) and Codex (via `codex mcp add`) join Claude Code, Warp, and agents.
+- `2nb mcp configured --all` per-client check reporting MCP-configured status across all supported clients.
+- AI Clients card on the macOS app Home tab: per-client skill-installed + MCP-configured status with a single per-client Configure button and cross-dependency callout.
+- Per-client AI Clients section in the Obsidian plugin settings with Configure and copy-setup-snippet actions, vault-pinned.
+- Canonical self-hosted `2nb` agent skill at `.agents/skills/2nb/SKILL.md` (Warp's recommended primary) with `.warp/` and `.claude/` mirrors and a `make sync-skills` generator.
+- Cross-tool `.agents/` paths taught to the skills and MCP registries.
+
+### Changed
+- Bumped the AWS SDK v2 module group and `golang.org/x/text` (freshness; no CVE).
+- Synced README and CLAUDE.md app + plugin docs to the new multi-client setup and AI Clients UI.
+
+
 ## [0.10.8] - 2026-06-25
 
 ### Added
