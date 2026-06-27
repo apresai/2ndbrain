@@ -597,10 +597,32 @@ describe('mcpSnippetFor', () => {
 		expect(entry.args).toEqual(['mcp-server', '--vault', vault]);
 	});
 
-	it('emits a `codex mcp add` command line for codex', () => {
+	it('emits a `codex mcp add` command line for codex (paths shell-quoted)', () => {
 		const snippet = mcpSnippetFor('codex', vault, cli);
-		expect(snippet).toBe(`codex mcp add 2ndbrain -- ${cli} mcp-server --vault ${vault}`);
+		// Paths with no spaces are still single-quoted (harmless, uniform).
+		expect(snippet).toBe(`codex mcp add 2ndbrain -- '${cli}' mcp-server --vault '${vault}'`);
 		expect(snippet.startsWith('codex mcp add')).toBe(true);
+	});
+
+	it('shell-quotes paths with spaces so the codex command stays copy-paste safe', () => {
+		const spacedVault = '/path with spaces/vault';
+		const spacedCli = '/abs path/2nb';
+		const snippet = mcpSnippetFor('codex', spacedVault, spacedCli);
+		// Each spaced path must be wrapped in single quotes so the shell treats it
+		// as one argument; an unquoted space would split the command and break it.
+		expect(snippet).toContain(`'${spacedCli}'`);
+		expect(snippet).toContain(`'${spacedVault}'`);
+		expect(snippet).toBe(
+			`codex mcp add 2ndbrain -- '${spacedCli}' mcp-server --vault '${spacedVault}'`,
+		);
+		// The bare (unquoted) path must NOT appear loose in the command.
+		expect(snippet).not.toContain(`-- ${spacedCli} `);
+	});
+
+	it('escapes an embedded single quote the POSIX way', () => {
+		const snippet = mcpSnippetFor('codex', "/Users/o'brien/vault", cli);
+		// ' -> '\'' so the closing/opening quotes wrap an escaped literal quote.
+		expect(snippet).toContain(`'/Users/o'\\''brien/vault'`);
 	});
 
 	it('defaults unknown clients to the claude-code JSON shape', () => {

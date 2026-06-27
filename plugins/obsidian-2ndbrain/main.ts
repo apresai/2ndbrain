@@ -286,6 +286,14 @@ export function filepathBase(path: string): string {
 	return parts[parts.length - 1];
 }
 
+// shellQuote POSIX single-quotes a string so it survives copy-paste into a shell
+// verbatim, even when it contains spaces or shell metacharacters. Single quotes
+// disable all interpretation; an embedded single quote is handled the POSIX way
+// by closing the quote, adding an escaped quote, and reopening: ' -> '\''.
+export function shellQuote(s: string): string {
+	return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 // mcpSnippetFor renders the manual MCP-setup snippet for a client — the "Copy
 // setup snippet" fallback for when the one-click Configure (which shells
 // `2nb setup --client <key>`) isn't an option. Pure and exported for tests.
@@ -298,11 +306,14 @@ export function filepathBase(path: string): string {
 //   - warp:           ~/.warp/.mcp.json shape, vault pinned via both --vault and
 //                     working_directory.
 //   - codex:          a `codex mcp add` command line (Codex registers MCP servers
-//                     via its own CLI, not a config file).
+//                     via its own CLI, not a config file). The cliPath and
+//                     vaultPath are shell-quoted so a path with spaces (an iCloud
+//                     "Mobile Documents" vault, "My Vault", …) stays copy-paste
+//                     safe. The JSON variants are already safe via JSON.stringify.
 export function mcpSnippetFor(client: string, vaultPath: string, cliPath: string): string {
 	switch (client) {
 		case 'codex':
-			return `codex mcp add 2ndbrain -- ${cliPath} mcp-server --vault ${vaultPath}`;
+			return `codex mcp add 2ndbrain -- ${shellQuote(cliPath)} mcp-server --vault ${shellQuote(vaultPath)}`;
 		case 'warp':
 			return JSON.stringify({
 				mcpServers: {
