@@ -12,7 +12,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 |---|---|---|
 | **`2nb` CLI** | Full Cobra command tree with `--json`, `--yaml`, `--porcelain`, `--vault` global flags. Parent-command defaults (`2nb ai` → `ai status`, etc.) | Any agent with shell access. One-shot queries, piping, scripting, or CI. Works even when MCP isn't wired up. |
 | **MCP server** | 22 tools served over stdio (`2nb mcp-server`). Sidecar status files at `.2ndbrain/mcp/<pid>.json` record live processes + invocation history. | MCP-capable clients. Persistent session caching (embeddings, threshold), structured JSON I/O, schema validation. |
-| **Skills system** | `SKILL.md` embedded in the binary (`cli/internal/skills/content/2ndbrain-skill.md`), installed per-agent by `2nb skills install`. 8 agents supported (`cli/internal/skills/skills.go:39-65`). | The *teaching layer* — explains the CLI and MCP to an agent in one document. This is the file to invest in. |
+| **Skills system** | `SKILL.md` embedded in the binary (`cli/internal/skills/content/2ndbrain-skill.md`), installed per-agent by `2nb skills install`. 9 agents supported (`cli/internal/skills/skills.go`). Also mirrored into the repo at `.agents/skills/2nb/SKILL.md` (+ `.warp/`, `.claude/`) so an agent opened on this repo discovers it with zero install; `make sync-skills` keeps the mirrors in step with the embedded source and CI fails on drift. | The *teaching layer* — explains the CLI and MCP to an agent in one document. This is the file to invest in. |
 
 ## MCP vs CLI — when to use which
 

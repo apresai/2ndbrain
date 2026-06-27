@@ -35,6 +35,15 @@ jobs:
           VERSION=$(cat VERSION | tr -d '\n')
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
+      # The 2nb skill is embedded into the CLI from
+      # cli/internal/skills/content/2ndbrain-skill.md and mirrored to the
+      # repo-root discovery paths (.agents/.warp/.claude). Fail the release if a
+      # mirror has drifted from that source, rather than shipping a stale skill.
+      # Fix locally with `make sync-skills`. (Same shape as the plugin-manifest
+      # gate below.)
+      - name: Verify skill mirrors match the embedded source
+        run: make check-skills-sync
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
