@@ -89,6 +89,37 @@ struct MCPInstallInfo: Codable {
     }
 }
 
+/// One per-client entry of `2nb setup --json` (mirrors the Go `SetupClientResult`
+/// in cli/internal/cli/setup_cmd.go). `2nb setup` exits 0 even when a client step
+/// fails (`error` set) or only needs a manual step (`instructions` set — e.g. the
+/// `codex` CLI isn't installed so its MCP can't be wired and `configured` is
+/// false), so the app must inspect these fields rather than trust the exit code.
+/// All string fields are `omitempty` on the Go side, hence optional here.
+struct SetupClientResult: Codable {
+    let client: String
+    let skillSlug: String?
+    let skillPath: String?
+    let skillBackup: String?
+    let skillSkipped: String?
+    let mcpConfigPath: String?
+    let mcpBackup: String?
+    let mcpChanged: Bool
+    let configured: Bool
+    let instructions: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case client, configured, instructions, error
+        case skillSlug = "skill_slug"
+        case skillPath = "skill_path"
+        case skillBackup = "skill_backup"
+        case skillSkipped = "skill_skipped"
+        case mcpConfigPath = "mcp_config_path"
+        case mcpBackup = "mcp_backup"
+        case mcpChanged = "mcp_changed"
+    }
+}
+
 /// `2nb vault checkpoint --json`.
 struct VaultCheckpointResult: Codable {
     let walBytesBefore: Int64
