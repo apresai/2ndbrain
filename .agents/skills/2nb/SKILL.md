@@ -280,7 +280,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 | `2nb mcp status` | List live MCP servers via `.2ndbrain/mcp/<pid>.json` sidecar files (servers running *right now*) |
 | `2nb mcp configured` | Report whether the 2ndbrain MCP server is wired into the AI client config (`~/.claude.json`) for this vault. The durable "is it set up?" check: answers "will my AI tool find this vault?" even when the client is closed, unlike `mcp status`. If not configured, run `2nb mcp-setup`. |
 | `2nb mcp-server` | Start the MCP server on stdio (this is what AI clients invoke) |
-| `2nb skills install <agent> [--all] [--user]` | Install this SKILL.md for Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, or JetBrains Junie |
+| `2nb skills install <agent> [--all] [--user]` | Install this SKILL.md for any supported agent — Claude Code, Cursor, Warp, the cross-tool `agents` (`.agents/skills`) standard, and more; run `2nb skills list` for the full set |
 | `2nb plugin status` / `plugin install` | Inspect or install/update the Obsidian plugin in the open vault (downloads the latest release assets into `.obsidian/plugins/obsidian-2ndbrain/`; enabling in Obsidian stays manual) |
 | `2nb import-obsidian <path>` / `export-obsidian` | Convert between 2nb and Obsidian vault formats |
 

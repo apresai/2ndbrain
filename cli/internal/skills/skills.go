@@ -37,6 +37,10 @@ var ErrAlreadyInstalled = errors.New("skill already installed (use --force to ov
 // Agents is the full registry of supported coding agents.
 // All use the open SKILL.md standard with name/description frontmatter.
 var Agents = []Agent{
+	{Slug: "agents", Name: "Agents (cross-tool standard)",
+		ProjectPath: ".agents/skills/2nb/SKILL.md",
+		UserPath:    ".agents/skills/2nb/SKILL.md",
+		Note:        "The cross-tool .agents/skills standard; read by Warp (its recommended primary) and other agents. In this repo this path is a committed mirror kept in sync by `make sync-skills` — don't `skills install agents` here, it would stamp the mirror."},
 	{Slug: "claude-code", Name: "Claude Code",
 		ProjectPath: ".claude/skills/2nb/SKILL.md",
 		UserPath:    ".claude/skills/2nb/SKILL.md"},

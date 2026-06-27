@@ -42,16 +42,21 @@ func Uninstall(v *vault.Vault, scope string, dryRun bool) (InstallResult, error)
 
 // InstallForClient routes to the right AI-client config writer. "" and
 // "claude-code" target ~/.claude.json; "warp" targets Warp's ~/.warp/.mcp.json
-// (project scope: <vault>/.warp/.mcp.json), pinning the vault via both --vault
-// and Warp's working_directory so the server can't drift off the vault.
+// and "agents" the cross-tool ~/.agents/.mcp.json (project scope:
+// <vault>/.warp|.agents/.mcp.json). Warp also auto-reads ~/.agents/.mcp.json, so
+// "agents" reaches Warp and any other tool that honors the cross-tool location.
+// Both flat-config clients pin the vault via --vault and working_directory so the
+// server can't drift off the vault.
 func InstallForClient(v *vault.Vault, client, command, scope string, dryRun bool) (InstallResult, error) {
 	switch client {
 	case "", "claude-code", "claude":
 		return Install(v, command, scope, dryRun)
 	case "warp":
-		return installWarp(v.Root, command, scope, dryRun)
+		return installFlatClient(v.Root, command, scope, "warp", ".warp", dryRun)
+	case "agents":
+		return installFlatClient(v.Root, command, scope, "agents", ".agents", dryRun)
 	default:
-		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code or warp)", client)
+		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code, warp, or agents)", client)
 	}
 }
 
@@ -61,29 +66,33 @@ func UninstallForClient(v *vault.Vault, client, scope string, dryRun bool) (Inst
 	case "", "claude-code", "claude":
 		return Uninstall(v, scope, dryRun)
 	case "warp":
-		return uninstallWarp(v.Root, scope, dryRun)
+		return uninstallFlatClient(v.Root, scope, "warp", ".warp", dryRun)
+	case "agents":
+		return uninstallFlatClient(v.Root, scope, "agents", ".agents", dryRun)
 	default:
-		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code or warp)", client)
+		return InstallResult{}, fmt.Errorf("unknown client %q (want claude-code, warp, or agents)", client)
 	}
 }
 
-// warpConfigPath returns the on-disk path and its display form for the Warp MCP
-// config at the given scope: user → ~/.warp/.mcp.json, project → the vault's
-// own .warp/.mcp.json. Both use a flat top-level mcpServers map.
-func warpConfigPath(vaultRoot, scope string) (path, display string) {
+// flatClientConfigPath returns the on-disk path and its display form for a flat
+// mcpServers client config at the given scope: user → ~/<dotDir>/.mcp.json,
+// project → the vault's own <dotDir>/.mcp.json. Used by Warp (".warp") and the
+// cross-tool ".agents" location; both use a flat top-level mcpServers map.
+func flatClientConfigPath(vaultRoot, scope, dotDir string) (path, display string) {
 	if scope == "project" {
-		p := filepath.Join(vaultRoot, ".warp", ".mcp.json")
+		p := filepath.Join(vaultRoot, dotDir, ".mcp.json")
 		return p, p
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".warp/.mcp.json", "~/.warp/.mcp.json"
+		return filepath.Join(dotDir, ".mcp.json"), "~/" + dotDir + "/.mcp.json"
 	}
-	return filepath.Join(home, ".warp", ".mcp.json"), "~/.warp/.mcp.json"
+	return filepath.Join(home, dotDir, ".mcp.json"), "~/" + dotDir + "/.mcp.json"
 }
 
-// warpEntry pins the vault both via --vault and Warp's working_directory.
-func warpEntry(command, vaultRoot string) mcpServerEntry {
+// flatServerEntry pins the vault via both --vault and working_directory, for
+// flat-config clients (Warp, and the cross-tool .agents location).
+func flatServerEntry(command, vaultRoot string) mcpServerEntry {
 	if command == "" {
 		command = "2nb"
 	}
@@ -94,21 +103,21 @@ func warpEntry(command, vaultRoot string) mcpServerEntry {
 	}
 }
 
-func installWarp(vaultRoot, command, scope string, dryRun bool) (InstallResult, error) {
+func installFlatClient(vaultRoot, command, scope, client, dotDir string, dryRun bool) (InstallResult, error) {
 	if scope != "user" && scope != "project" {
 		return InstallResult{}, fmt.Errorf("invalid scope %q (want user or project)", scope)
 	}
-	cfgPath, display := warpConfigPath(vaultRoot, scope)
-	res := InstallResult{Client: "warp", ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
+	cfgPath, display := flatClientConfigPath(vaultRoot, scope, dotDir)
+	res := InstallResult{Client: client, ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
 
 	root, orig, err := readConfigTree(cfgPath)
 	if err != nil {
 		return res, err
 	}
 
-	entryJSON, _ := json.Marshal(warpEntry(command, vaultRoot))
-	// Warp uses a flat top-level mcpServers map for both scopes (the scope only
-	// selects which file), so reuse the "user"-style top-level mutation.
+	entryJSON, _ := json.Marshal(flatServerEntry(command, vaultRoot))
+	// Flat-config clients use a flat top-level mcpServers map for both scopes (the
+	// scope only selects which file), so reuse the "user"-style top-level mutation.
 	changed, err := mutateServerEntry(root, "user", vaultRoot, func(servers map[string]json.RawMessage) bool {
 		if existing, ok := servers[serverKeyName]; ok && jsonEqual(existing, entryJSON) {
 			return false
@@ -135,12 +144,12 @@ func installWarp(vaultRoot, command, scope string, dryRun bool) (InstallResult, 
 	return res, nil
 }
 
-func uninstallWarp(vaultRoot, scope string, dryRun bool) (InstallResult, error) {
+func uninstallFlatClient(vaultRoot, scope, client, dotDir string, dryRun bool) (InstallResult, error) {
 	if scope != "user" && scope != "project" {
 		return InstallResult{}, fmt.Errorf("invalid scope %q (want user or project)", scope)
 	}
-	cfgPath, display := warpConfigPath(vaultRoot, scope)
-	res := InstallResult{Client: "warp", ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
+	cfgPath, display := flatClientConfigPath(vaultRoot, scope, dotDir)
+	res := InstallResult{Client: client, ConfigPath: display, ServerKey: serverKeyName, Scope: scope}
 
 	root, orig, err := readConfigTree(cfgPath)
 	if err != nil {

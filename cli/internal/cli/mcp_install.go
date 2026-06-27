@@ -11,14 +11,16 @@ import (
 
 var mcpInstallCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Write the 2ndbrain MCP server entry into an AI client config (Claude Code or Warp)",
+	Short: "Write the 2ndbrain MCP server entry into an AI client config (Claude Code, Warp, or .agents)",
 	Long: `Adds (or updates) the 2ndbrain MCP server in an AI client's config so the
 client launches it for this vault — the write-side inverse of "2nb mcp configured".
 
 --client claude-code (default) writes ~/.claude.json. --client warp writes Warp's
-~/.warp/.mcp.json (or <vault>/.warp/.mcp.json with --scope project) and pins the
-vault via both --vault and Warp's working_directory, so kb_* tools can't drift off
-your vault even if Warp launches the server from another directory.
+~/.warp/.mcp.json and --client agents writes the cross-tool ~/.agents/.mcp.json
+(both take <vault>/.warp|.agents/.mcp.json with --scope project; Warp also
+auto-reads ~/.agents/.mcp.json). The flat-config clients pin the vault via both
+--vault and working_directory, so kb_* tools can't drift off your vault even if
+the client launches the server from another directory.
 
 It is idempotent (no change if an equivalent entry already exists), backs up the
 file first (<config>.bak), and preserves every unrelated key (it mutates only the
@@ -26,6 +28,7 @@ mcpServers entry, never the rest of your config). A malformed config is refused
 rather than overwritten. --dry-run shows the plan without writing.`,
 	Example: `  2nb mcp install
   2nb mcp install --client warp
+  2nb mcp install --client agents
   2nb mcp install --scope project
   2nb mcp install --command /path/to/2nb --dry-run`,
 	RunE: runMCPInstall,
@@ -51,10 +54,10 @@ var (
 func init() {
 	mcpInstallCmd.Flags().StringVar(&mcpInstallScope, "scope", "user", "Where to write the entry: user (top-level) or project (cwd-keyed)")
 	mcpInstallCmd.Flags().StringVar(&mcpInstallCommand, "command", "2nb", "The command the client launches (default: 2nb on PATH; the app passes its bundled CLI path)")
-	mcpInstallCmd.Flags().StringVar(&mcpInstallClient, "client", "claude-code", "AI client config to write: claude-code (~/.claude.json) or warp (~/.warp/.mcp.json)")
+	mcpInstallCmd.Flags().StringVar(&mcpInstallClient, "client", "claude-code", "AI client config to write: claude-code (~/.claude.json), warp (~/.warp/.mcp.json), or agents (~/.agents/.mcp.json)")
 	mcpInstallCmd.Flags().BoolVar(&mcpInstallDryRun, "dry-run", false, "Print the planned change without writing")
 	mcpUninstallCmd.Flags().StringVar(&mcpUninstallScope, "scope", "user", "user or project")
-	mcpUninstallCmd.Flags().StringVar(&mcpUninstallClient, "client", "claude-code", "AI client config to edit: claude-code or warp")
+	mcpUninstallCmd.Flags().StringVar(&mcpUninstallClient, "client", "claude-code", "AI client config to edit: claude-code, warp, or agents")
 	mcpUninstallCmd.Flags().BoolVar(&mcpUninstallDry, "dry-run", false, "Print the planned change without writing")
 	mcpCmd.AddCommand(mcpInstallCmd)
 	mcpCmd.AddCommand(mcpUninstallCmd)
