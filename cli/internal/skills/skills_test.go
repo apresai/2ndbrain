@@ -23,6 +23,7 @@ func TestAgentBySlug(t *testing.T) {
 		{"roo-code", true, "Roo Code"},
 		{"junie", true, "JetBrains Junie"},
 		{"warp", true, "Warp"},
+		{"codex", true, "Codex"},
 		{"nonexistent", false, ""},
 	}
 
@@ -49,6 +50,96 @@ func TestAgentsCrossToolPath(t *testing.T) {
 	const want = ".agents/skills/2nb/SKILL.md"
 	if a.ProjectPath != want || a.UserPath != want {
 		t.Fatalf("agents paths = (%q, %q), want both %q", a.ProjectPath, a.UserPath, want)
+	}
+}
+
+func TestCodexSkillPath(t *testing.T) {
+	a, ok := AgentBySlug("codex")
+	if !ok {
+		t.Fatal("AgentBySlug(\"codex\") not found")
+	}
+	const want = ".codex/skills/2nb/SKILL.md"
+	if a.ProjectPath != want || a.UserPath != want {
+		t.Fatalf("codex paths = (%q, %q), want both %q", a.ProjectPath, a.UserPath, want)
+	}
+}
+
+// InstallWithBackup writes a .bak only when a force-overwrite replaces an
+// existing file whose content differs from what we're writing.
+func TestInstallBackupOnForce(t *testing.T) {
+	base := t.TempDir()
+	a, _ := AgentBySlug("claude-code")
+	abs := a.InstallPath(true, base)
+
+	// Fresh install: no backup.
+	if bak, err := InstallWithBackup(base, *a, true, false); err != nil || bak != "" {
+		t.Fatalf("fresh install should have no backup: bak=%q err=%v", bak, err)
+	}
+	// Hand-edit, then force-overwrite: a .bak with the old content.
+	if err := os.WriteFile(abs, []byte("HAND EDIT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bak, err := InstallWithBackup(base, *a, true, true)
+	if err != nil {
+		t.Fatalf("force install: %v", err)
+	}
+	if bak == "" {
+		t.Fatal("force-overwrite of a differing file must write a .bak")
+	}
+	if data, _ := os.ReadFile(bak); string(data) != "HAND EDIT\n" {
+		t.Errorf("backup should hold the old content; got %q", data)
+	}
+	// Re-force with now-identical content: no new backup.
+	if bak2, err := InstallWithBackup(base, *a, true, true); err != nil || bak2 != "" {
+		t.Errorf("force-overwrite of identical content should not back up: bak=%q err=%v", bak2, err)
+	}
+}
+
+// RefreshIfStale re-installs a stale managed copy WITHOUT writing a .bak (so a
+// brew-upgrade auto-refresh doesn't accumulate one per upgrade).
+func TestRefreshIfStaleNoBackup(t *testing.T) {
+	base := t.TempDir()
+	a, _ := AgentBySlug("claude-code")
+	abs := a.InstallPath(true, base)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Fabricate a stale install: a different body, stamped with a claimed sha that
+	// matches THAT body (so it's unmodified) but differs from the current content.
+	oldBody := "---\nname: 2nb\ndescription: old\n---\n\n# Old body\n"
+	stale := injectStampForTest(oldBody, "0.0.1", sha256Hex(oldBody))
+	if err := os.WriteFile(abs, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := RefreshIfStale(base, *a, true)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if !refreshed {
+		t.Fatal("expected a stale refresh")
+	}
+	if _, err := os.Stat(abs + ".bak"); !os.IsNotExist(err) {
+		t.Error("auto-refresh must not leave a .bak")
+	}
+	if data, _ := os.ReadFile(abs); string(data) != StampedContent() {
+		t.Error("refreshed file should hold the current stamped content")
+	}
+}
+
+func TestIsSourceRepoRoot(t *testing.T) {
+	dir := t.TempDir()
+	if IsSourceRepoRoot(dir) {
+		t.Error("empty dir is not the source repo root")
+	}
+	marker := filepath.Join(dir, "cli", "internal", "skills", "content", "2ndbrain-skill.md")
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !IsSourceRepoRoot(dir) {
+		t.Error("dir with the embedded skill source should be the source repo root")
 	}
 }
 

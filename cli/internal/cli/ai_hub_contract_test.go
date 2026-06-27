@@ -116,6 +116,13 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	tagsRenameDryRun = false
 	dailyAppendText, dailyAppendFile = "", ""
 	moveDryRun, moveForce = false, false
+	// Multi-client setup / mcp install / mcp configured flags (this PR).
+	setupClient, setupScope, setupCommand = "claude-code", "user", "2nb"
+	setupAll, setupDryRun, setupForce = false, false, false
+	mcpInstallClient, mcpInstallScope, mcpInstallCommand = "claude-code", "user", "2nb"
+	mcpInstallDryRun = false
+	mcpUninstallClient, mcpUninstallScope, mcpUninstallDry = "claude-code", "user", false
+	mcpConfiguredClient, mcpConfiguredAll = "claude-code", false
 	// Body-write commands branch on cmd.Flags().Changed("text"); cobra keeps
 	// that per-flag bit set across Execute() calls, so a prior `append --text`
 	// would make the next `append` (stdin) wrongly take the --text branch.

@@ -67,6 +67,127 @@ func Configured(v *vault.Vault) ConfiguredStatus {
 	return st
 }
 
+// ConfiguredFor reports whether the 2ndbrain MCP server is configured for the
+// given vault in the named client's config. Unknown clients resolve to a
+// not-configured status (never an error). claude-code preserves the exact
+// behavior of Configured(); the flat clients read their own mcpServers JSON and
+// codex does a dependency-free presence scan of its TOML.
+func ConfiguredFor(v *vault.Vault, client string) ConfiguredStatus {
+	switch client {
+	case "", "claude-code", "claude":
+		return Configured(v)
+	case "warp":
+		return flatConfiguredFromFile("warp", ".warp", v.Root)
+	case "agents":
+		return flatConfiguredFromFile("agents", ".agents", v.Root)
+	case "claude-desktop":
+		return claudeDesktopConfigured(v.Root)
+	case "codex":
+		return codexConfigured(v.Root)
+	default:
+		return ConfiguredStatus{Client: client, VaultPath: v.Root}
+	}
+}
+
+// ConfiguredAll reports configured-status for every SupportedClients() entry, in
+// that order. The JSON array shape is what the Obsidian plugin / macOS app
+// decode.
+func ConfiguredAll(v *vault.Vault) []ConfiguredStatus {
+	clients := SupportedClients()
+	out := make([]ConfiguredStatus, 0, len(clients))
+	for _, c := range clients {
+		out = append(out, ConfiguredFor(v, c))
+	}
+	return out
+}
+
+// flatConfiguredFromFile detects the 2ndbrain server in a flat top-level
+// mcpServers JSON config (~/<dotDir>/.mcp.json) — Warp and the cross-tool
+// .agents location. User scope only.
+func flatConfiguredFromFile(client, dotDir, vaultPath string) ConfiguredStatus {
+	cfgPath, display := flatClientConfigPath("", "user", dotDir)
+	st := ConfiguredStatus{Client: client, ConfigPath: display, VaultPath: vaultPath}
+	st.Configured, st.ServerKey = detectFlatMCP(cfgPath, vaultPath, client)
+	if st.Configured {
+		st.Scope = "user"
+	}
+	return st
+}
+
+// claudeDesktopConfigured detects the 2ndbrain server in Claude Desktop's flat
+// mcpServers JSON. On an unsupported OS (Linux) it reports not-configured with a
+// clear path note rather than erroring.
+func claudeDesktopConfigured(vaultPath string) ConfiguredStatus {
+	cfgPath, display, err := claudeDesktopConfigPath()
+	if err != nil {
+		return ConfiguredStatus{Client: "claude-desktop", ConfigPath: "(unsupported on this OS)", VaultPath: vaultPath}
+	}
+	st := ConfiguredStatus{Client: "claude-desktop", ConfigPath: display, VaultPath: vaultPath}
+	st.Configured, st.ServerKey = detectFlatMCP(cfgPath, vaultPath, "claude-desktop")
+	if st.Configured {
+		st.Scope = "user"
+	}
+	return st
+}
+
+// detectFlatMCP reads a flat-mcpServers JSON file and returns whether a
+// 2ndbrain server for vaultPath is present plus its key. Missing/malformed files
+// soft-fail to (false, "") with a trace.
+func detectFlatMCP(cfgPath, vaultPath, client string) (bool, string) {
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("mcp configured: could not read client config", "client", client, "path", cfgPath, "err", err)
+		}
+		return false, ""
+	}
+	var cfg struct {
+		MCPServers map[string]mcpServerEntry `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		slog.Warn("mcp configured: client config is not valid JSON", "client", client, "path", cfgPath, "err", err)
+		return false, ""
+	}
+	key, ok := match2ndbrainServer(cfg.MCPServers, vaultPath)
+	return ok, key
+}
+
+// codexConfigured does a dependency-free presence scan of ~/.codex/config.toml
+// for an [mcp_servers.2ndbrain] table header (bare or quoted). It does not parse
+// TOML and cannot cheaply vault-pin, so this is presence-only: "is the 2ndbrain
+// server declared at all?"
+func codexConfigured(vaultPath string) ConfiguredStatus {
+	st := ConfiguredStatus{Client: "codex", ConfigPath: "~/.codex/config.toml", VaultPath: vaultPath}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return st
+	}
+	cfgPath := filepath.Join(home, ".codex", "config.toml")
+	data, rerr := os.ReadFile(cfgPath)
+	if rerr != nil {
+		if !os.IsNotExist(rerr) {
+			slog.Warn("mcp configured: could not read Codex config", "path", cfgPath, "err", rerr)
+		}
+		return st
+	}
+	// Scan for the table header on its own (non-comment) line, so a commented-out
+	// `# [mcp_servers.2ndbrain]` doesn't read as configured and a longer name like
+	// [mcp_servers.2ndbrain_other] doesn't match.
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if t == "[mcp_servers."+serverKeyName+"]" || t == "[mcp_servers.\""+serverKeyName+"\"]" {
+			st.Configured = true
+			st.Scope = "user"
+			st.ServerKey = serverKeyName
+			break
+		}
+	}
+	return st
+}
+
 // configuredFromFile is the testable core: it reads a specific config file and
 // reports whether a 2ndbrain server is configured for vaultPath. Separated from
 // Configured so tests can point it at a temp file instead of the real config.

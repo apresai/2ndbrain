@@ -52,17 +52,28 @@ and asking questions about your knowledge base.
 
 ───────────────────────────────────────────────
  Claude Desktop  (~/Library/Application Support/Claude/claude_desktop_config.json)
+   Tip: run  2nb mcp install --client claude-desktop  to write this for you.
+   It's a GUI app (no shell PATH), so use an ABSOLUTE 2nb path and NO "cwd"/"url"
+   field (a "url" field silently corrupts the file). Restart the app to apply.
 ───────────────────────────────────────────────
 
 {
   "mcpServers": {
     "2ndbrain": {
-      "command": "/usr/local/bin/2nb",
-      "args": ["mcp-server"],
-      "cwd": "%s"
+      "command": "/opt/homebrew/bin/2nb",
+      "args": ["mcp-server", "--vault", "%s"]
     }
   }
 }
+
+───────────────────────────────────────────────
+ Codex  (~/.codex/config.toml)
+   Tip: run  2nb mcp install --client codex  (uses "codex mcp add"). Restart your Codex session.
+───────────────────────────────────────────────
+
+[mcp_servers.2ndbrain]
+command = "2nb"
+args = ["mcp-server", "--vault", "%s"]
 
 ───────────────────────────────────────────────
  Cursor  (.cursor/mcp.json)
@@ -153,7 +164,7 @@ and asking questions about your knowledge base.
   "Mark the JWT ADR as accepted"
   "Reindex the knowledge base"
 
-`, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath)
+`, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath)
 
 	return nil
 }

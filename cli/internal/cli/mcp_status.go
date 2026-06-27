@@ -45,8 +45,16 @@ If it reports not configured, run '2nb mcp-setup' for the snippet to add.`,
 	RunE: runMCPConfigured,
 }
 
+var (
+	mcpConfiguredClient string
+	mcpConfiguredAll    bool
+)
+
 func init() {
 	mcpCmd.GroupID = "integr"
+	mcpConfiguredCmd.Flags().StringVar(&mcpConfiguredClient, "client", "claude-code", clientFlagHelp())
+	mcpConfiguredCmd.Flags().BoolVar(&mcpConfiguredAll, "all", false, "Report configured-status for every supported client")
+	_ = mcpConfiguredCmd.RegisterFlagCompletionFunc("client", completeMCPClients)
 	mcpCmd.AddCommand(mcpStatusCmd)
 	mcpCmd.AddCommand(mcpConfiguredCmd)
 	rootCmd.AddCommand(mcpCmd)
@@ -59,9 +67,14 @@ func runMCPConfigured(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	// The plugin and other consumers expect a JSON array (slice-of-one today,
-	// room for more clients later), so wrap the single status before encoding.
-	statuses := []mcppkg.ConfiguredStatus{mcppkg.Configured(v)}
+	// Always a JSON array (the plugin/app contract). Default (no --client/--all)
+	// stays slice-of-one claude-code via ConfiguredFor(v, "claude-code").
+	var statuses []mcppkg.ConfiguredStatus
+	if mcpConfiguredAll {
+		statuses = mcppkg.ConfiguredAll(v)
+	} else {
+		statuses = []mcppkg.ConfiguredStatus{mcppkg.ConfiguredFor(v, mcpConfiguredClient)}
+	}
 
 	if getFormat(cmd) == output.FormatJSON {
 		out, err := json.MarshalIndent(statuses, "", "  ")
@@ -72,18 +85,42 @@ func runMCPConfigured(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	st := statuses[0]
-	if st.Configured {
-		scope := st.Scope
-		if scope == "" {
-			scope = "configured"
+	anyMissing := false
+	for _, st := range statuses {
+		name := clientDisplayName(st.Client)
+		if st.Configured {
+			scope := st.Scope
+			if scope == "" {
+				scope = "configured"
+			}
+			fmt.Printf("%s MCP server: configured (%s scope) in %s\n", name, scope, st.ConfigPath)
+			continue
 		}
-		fmt.Printf("Claude Code MCP server: configured (%s scope) in %s\n", scope, st.ConfigPath)
-		return nil
+		anyMissing = true
+		fmt.Printf("%s MCP server: not configured in %s\n", name, st.ConfigPath)
 	}
-	fmt.Printf("Claude Code MCP server: not configured in %s\n", st.ConfigPath)
-	fmt.Fprintln(os.Stderr, "  Add it with the snippet from: 2nb mcp-setup")
+	if anyMissing {
+		fmt.Fprintln(os.Stderr, "  Configure with: 2nb mcp install --client <name>  (or '2nb setup'); see '2nb mcp-setup' for snippets")
+	}
 	return nil
+}
+
+// clientDisplayName maps a client slug to a human label for terminal output.
+func clientDisplayName(client string) string {
+	switch client {
+	case "", "claude-code", "claude":
+		return "Claude Code"
+	case "claude-desktop":
+		return "Claude Desktop"
+	case "warp":
+		return "Warp"
+	case "agents":
+		return "Agents (.agents)"
+	case "codex":
+		return "Codex"
+	default:
+		return client
+	}
 }
 
 func runMCPStatus(cmd *cobra.Command, args []string) error {
