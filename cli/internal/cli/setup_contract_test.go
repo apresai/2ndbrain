@@ -43,6 +43,42 @@ func TestContract_Setup_ClaudeCode(t *testing.T) {
 	}
 }
 
+// `setup` at project scope from the source tree must also skip a mirror slug's
+// skill (here warp) while still configuring its MCP server. Single mirror client
+// keeps codex out of the test (no real `codex` exec).
+func TestContract_Setup_SkipsRepoMirrorSkill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	root := t.TempDir()
+	v, err := vault.Init(root)
+	if err != nil {
+		t.Fatalf("init vault: %v", err)
+	}
+	t.Cleanup(func() { v.Close() })
+	marker := filepath.Join(root, "cli", "internal", "skills", "content", "2ndbrain-skill.md")
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIArgs(t, root, "setup", "--client", "warp", "--scope", "project")
+	if err != nil {
+		t.Fatalf("setup: %v\n%s", err, out)
+	}
+	// Skill mirror skipped...
+	if _, err := os.Stat(filepath.Join(root, ".warp", "skills", "2nb", "SKILL.md")); err == nil {
+		t.Error("warp skill mirror must be skipped at project scope in the source tree")
+	}
+	// ...but the MCP server (not a mirror) is still configured.
+	if _, err := os.Stat(filepath.Join(root, ".warp", ".mcp.json")); err != nil {
+		t.Errorf("warp MCP project config should still be written: %v", err)
+	}
+}
+
 // A project-scope `skills install --all` run from the 2ndbrain source tree must
 // SKIP the committed mirror slugs (.agents/.warp/.claude) so it can't stamp them,
 // while still installing a non-mirror agent.

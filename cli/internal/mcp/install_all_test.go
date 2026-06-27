@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -25,6 +26,9 @@ func resultByClient(results []InstallResult, client string) (InstallResult, bool
 }
 
 func TestInstallAll_AllClients(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("asserts claude-desktop configured, which requires a supported OS")
+	}
 	t.Setenv("HOME", t.TempDir())
 	stubDesktopLookPath(t, "/abs/2nb")
 	stubCodexAbsent(t)
@@ -82,5 +86,40 @@ func TestInstallAll_OneFailureDoesNotAbort(t *testing.T) {
 	cd, _ := resultByClient(results, "claude-desktop")
 	if cd.Error == "" {
 		t.Errorf("claude-desktop should capture its resolve error: %+v", cd)
+	}
+}
+
+// UninstallAll returns every client and removes the entries that InstallAll wrote.
+func TestUninstallAll(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("claude-desktop step requires a supported OS")
+	}
+	t.Setenv("HOME", t.TempDir())
+	stubDesktopLookPath(t, "/abs/2nb")
+	stubCodexAbsent(t)
+
+	v, err := vault.Init(t.TempDir())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	defer v.Close()
+
+	InstallAll(v, "2nb", "user", false)
+	results := UninstallAll(v, "user", false)
+	if len(results) != len(SupportedClients()) {
+		t.Fatalf("UninstallAll returned %d, want %d", len(results), len(SupportedClients()))
+	}
+	// The JSON clients had an entry, so uninstall reports a change and no error.
+	for _, client := range []string{"claude-code", "warp", "agents", "claude-desktop"} {
+		r, _ := resultByClient(results, client)
+		if r.Error != "" {
+			t.Errorf("%s uninstall errored: %+v", client, r)
+		}
+	}
+	// All entries are gone: a follow-up ConfiguredAll reports none configured.
+	for _, st := range ConfiguredAll(v) {
+		if st.Configured {
+			t.Errorf("%s still configured after UninstallAll: %+v", st.Client, st)
+		}
 	}
 }

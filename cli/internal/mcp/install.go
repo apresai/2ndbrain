@@ -284,10 +284,13 @@ func resolveAbsCommand(command string) (string, error) {
 		if filepath.IsAbs(command) {
 			return command, nil
 		}
-		if p, err := desktopLookPath(command); err == nil {
+		// A relative --command must still resolve to an absolute path for a GUI
+		// client; LookPath of a bare name returns an absolute path, but a relative
+		// path with a slash can stay relative, so require IsAbs and error otherwise.
+		if p, err := desktopLookPath(command); err == nil && filepath.IsAbs(p) {
 			return p, nil
 		}
-		return "", fmt.Errorf("could not resolve an absolute path for --command %q", command)
+		return "", fmt.Errorf("could not resolve --command %q to an absolute path; pass an absolute path", command)
 	}
 	if p, err := desktopLookPath("2nb"); err == nil && filepath.IsAbs(p) {
 		return p, nil

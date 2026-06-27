@@ -84,6 +84,33 @@ func TestConfiguredFor_CodexHeaderScan(t *testing.T) {
 	}
 }
 
+func TestConfiguredFor_ClaudeDesktopConfigured(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("Claude Desktop config path is only defined on macOS/Windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	}
+	v, err := vault.Init(t.TempDir())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	defer v.Close()
+
+	cfgPath, _, perr := claudeDesktopConfigPath()
+	if perr != nil {
+		t.Fatalf("config path: %v", perr)
+	}
+	writeFileT(t, cfgPath, `{"mcpServers": {"2ndbrain": {"command": "/abs/2nb", "args": ["mcp-server", "--vault", "`+v.Root+`"]}}}`)
+
+	st := ConfiguredFor(v, "claude-desktop")
+	if !st.Configured || st.Client != "claude-desktop" || st.Scope != "user" {
+		t.Errorf("claude-desktop should be configured: %+v", st)
+	}
+}
+
 func TestConfiguredFor_ClaudeDesktopUnsupportedOS(t *testing.T) {
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		t.Skip("this exercises the unsupported-OS path")

@@ -61,17 +61,33 @@ func installCodex(command, vaultRoot string, dryRun bool) (InstallResult, error)
 		return res, nil
 	}
 	// Idempotency: skip the add if Codex already lists our server.
-	if out, lerr := codexList(); lerr == nil && strings.Contains(out, serverKeyName) {
+	if out, lerr := codexList(); lerr == nil && codexListHasServer(out) {
 		res.Configured = true
 		return res, nil
 	}
 	if runErr := codexRun(codexAddArgs(abs, vaultRoot)...); runErr != nil {
-		res.Error = fmt.Sprintf("codex mcp add failed: %v", runErr) // captured, not fatal
-		return res, nil
+		// Return the error so a single-client `mcp install --client codex` exits
+		// non-zero; InstallAll's runAll captures it (res.Error) and keeps going.
+		return res, fmt.Errorf("codex mcp add failed: %w", runErr)
 	}
 	res.Changed = true
 	res.Configured = true
 	return res, nil
+}
+
+// codexListHasServer reports whether `codex mcp list` output names our server as
+// a standalone field. It deliberately does NOT substring-match the raw dump: a
+// user's vault path can itself contain "2ndbrain" (e.g. ~/dev/2ndbrain), which
+// would otherwise be a false positive that skips the real `codex mcp add`.
+func codexListHasServer(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		for _, f := range strings.Fields(line) {
+			if strings.Trim(f, "\"'`-•*:,") == serverKeyName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func uninstallCodex(dryRun bool) (InstallResult, error) {
@@ -85,8 +101,7 @@ func uninstallCodex(dryRun bool) (InstallResult, error) {
 		return res, nil
 	}
 	if runErr := codexRun(codexRemoveArgs()...); runErr != nil {
-		res.Error = fmt.Sprintf("codex mcp remove failed: %v", runErr)
-		return res, nil
+		return res, fmt.Errorf("codex mcp remove failed: %w", runErr)
 	}
 	res.Changed = true
 	return res, nil

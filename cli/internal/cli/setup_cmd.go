@@ -138,6 +138,7 @@ func setupSkill(res *SetupClientResult, client, skillBase string, user, repoMirr
 	}
 	if setupDryRun {
 		res.SkillPath = skillPathFor(a, user)
+		skillDone[slug] = res.SkillPath // dedupe so --all --dry-run doesn't repeat the shared skill
 		return
 	}
 	backup, ierr := skills.InstallWithBackup(skillBase, *a, user, setupForce)

@@ -170,12 +170,20 @@ func codexConfigured(vaultPath string) ConfiguredStatus {
 		}
 		return st
 	}
-	text := string(data)
-	if strings.Contains(text, "[mcp_servers."+serverKeyName+"]") ||
-		strings.Contains(text, "[mcp_servers.\""+serverKeyName+"\"]") {
-		st.Configured = true
-		st.Scope = "user"
-		st.ServerKey = serverKeyName
+	// Scan for the table header on its own (non-comment) line, so a commented-out
+	// `# [mcp_servers.2ndbrain]` doesn't read as configured and a longer name like
+	// [mcp_servers.2ndbrain_other] doesn't match.
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if t == "[mcp_servers."+serverKeyName+"]" || t == "[mcp_servers.\""+serverKeyName+"\"]" {
+			st.Configured = true
+			st.Scope = "user"
+			st.ServerKey = serverKeyName
+			break
+		}
 	}
 	return st
 }
