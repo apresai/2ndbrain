@@ -122,6 +122,8 @@ import {
 	needsManagedRefresh,
 	firstExistingSystem,
 	trimChatHistory,
+	mcpSnippetFor,
+	MCP_CLIENTS,
 	type ChatTurn,
 	type DiffRow,
 } from '../main.ts';
@@ -556,6 +558,73 @@ describe('parsePolishResponse', () => {
 		expect(r.links_repaired).toEqual([]);
 		expect(r.links_skipped).toEqual([]);
 		expect(r.warning).toBe('');
+	});
+});
+
+describe('mcpSnippetFor', () => {
+	const vault = '/Users/chad/dev/obsidian';
+	const cli = '/opt/homebrew/bin/2nb';
+
+	it('renders the legacy ~/.claude.json shape for claude-code (bare "2nb" + cwd)', () => {
+		const snippet = mcpSnippetFor('claude-code', vault, cli);
+		// Must match the legacy hardcoded shape: bare "2nb" command, mcp-server
+		// arg, vault pinned via cwd (NOT --vault, NOT the absolute cliPath).
+		expect(JSON.parse(snippet)).toEqual({
+			mcpServers: {
+				'2ndbrain': { command: '2nb', args: ['mcp-server'], cwd: vault },
+			},
+		});
+		expect(snippet).not.toContain(cli);
+	});
+
+	it('uses the absolute cliPath (not bare "2nb") and no cwd for claude-desktop', () => {
+		const snippet = mcpSnippetFor('claude-desktop', vault, cli);
+		const parsed = JSON.parse(snippet);
+		const entry = parsed.mcpServers['2ndbrain'];
+		// GUI app, minimal PATH: absolute command, vault via --vault, no cwd.
+		expect(entry.command).toBe(cli);
+		expect(entry.command).not.toBe('2nb');
+		expect(entry.args).toEqual(['mcp-server', '--vault', vault]);
+		expect(entry.cwd).toBeUndefined();
+		expect('working_directory' in entry).toBe(false);
+	});
+
+	it('emits the ~/.warp/.mcp.json shape with working_directory for warp', () => {
+		const snippet = mcpSnippetFor('warp', vault, cli);
+		expect(snippet).toContain('working_directory');
+		const entry = JSON.parse(snippet).mcpServers['2ndbrain'];
+		expect(entry.working_directory).toBe(vault);
+		expect(entry.args).toEqual(['mcp-server', '--vault', vault]);
+	});
+
+	it('emits a `codex mcp add` command line for codex', () => {
+		const snippet = mcpSnippetFor('codex', vault, cli);
+		expect(snippet).toBe(`codex mcp add 2ndbrain -- ${cli} mcp-server --vault ${vault}`);
+		expect(snippet.startsWith('codex mcp add')).toBe(true);
+	});
+
+	it('defaults unknown clients to the claude-code JSON shape', () => {
+		expect(mcpSnippetFor('mystery', vault, cli)).toBe(mcpSnippetFor('claude-code', vault, cli));
+	});
+
+	it('every MCP_CLIENTS key produces a non-empty snippet', () => {
+		for (const c of MCP_CLIENTS) {
+			expect(mcpSnippetFor(c.key, vault, cli).length).toBeGreaterThan(0);
+		}
+	});
+});
+
+describe('MCP_CLIENTS', () => {
+	it('covers the four plugin-relevant clients with the right skill mapping', () => {
+		const byKey = Object.fromEntries(MCP_CLIENTS.map((c) => [c.key, c]));
+		expect(Object.keys(byKey).sort()).toEqual(['claude-code', 'claude-desktop', 'codex', 'warp']);
+		// Claude Code + Warp + Codex ship a skill; Claude Desktop is MCP-only
+		// (it shares Claude Code's skill folder).
+		expect(byKey['claude-code'].skillSlug).toBe('claude-code');
+		expect(byKey['warp'].skillSlug).toBe('warp');
+		expect(byKey['codex'].skillSlug).toBe('codex');
+		expect(byKey['claude-desktop'].skillSlug).toBeUndefined();
+		expect(byKey['claude-desktop'].absoluteCliPath).toBe(true);
 	});
 });
 

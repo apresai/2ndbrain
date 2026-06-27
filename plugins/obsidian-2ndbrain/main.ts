@@ -80,6 +80,36 @@ interface ConfiguredStatus {
 	vault_path: string;
 }
 
+// ClientDef describes one AI client the plugin can set up (skill where
+// applicable + MCP server). `key` is the `--client` value the CLI understands
+// (`2nb setup --client <key>`, `2nb mcp configured --client <key>`); `skillSlug`
+// is the `2nb skills` slug the client uses, omitted for MCP-only clients
+// (Claude Desktop shares Claude Code's ~/.claude/skills folder). `note` is an
+// extra one-line caveat shown under the MCP row; `absoluteCliPath` marks a GUI
+// client whose minimal PATH means its MCP config must use the absolute 2nb path.
+export interface ClientDef {
+	key: string;
+	name: string;
+	skillSlug?: string;
+	note?: string;
+	absoluteCliPath?: boolean;
+}
+
+// MCP_CLIENTS is the set of AI clients the settings UI offers a per-client
+// Configure row for. Mirrors the CLI's mcp.SupportedClients() that ship a
+// plugin-relevant setup path (the cross-tool `.agents` target is CLI-only).
+export const MCP_CLIENTS: ClientDef[] = [
+	{ key: 'claude-code', name: 'Claude Code', skillSlug: 'claude-code' },
+	{ key: 'warp', name: 'Warp', skillSlug: 'warp' },
+	{
+		key: 'claude-desktop',
+		name: 'Claude Desktop',
+		absoluteCliPath: true,
+		note: 'MCP only (Claude Desktop shares Claude Code’s skill). After configuring, quit and reopen Claude Desktop.',
+	},
+	{ key: 'codex', name: 'Codex', skillSlug: 'codex', note: 'MCP registered via `codex mcp add`.' },
+];
+
 // ProductState mirrors one component of `2nb doctor --json` (the Go
 // ProductState struct): a single product's install + version-parity state.
 // status is one of: ok | outdated | missing | unknown | n/a.
@@ -254,6 +284,52 @@ export function describeComponent(p: ProductState, latest?: string): string {
 export function filepathBase(path: string): string {
 	const parts = path.split('/');
 	return parts[parts.length - 1];
+}
+
+// mcpSnippetFor renders the manual MCP-setup snippet for a client — the "Copy
+// setup snippet" fallback for when the one-click Configure (which shells
+// `2nb setup --client <key>`) isn't an option. Pure and exported for tests.
+//
+//   - claude-code:    ~/.claude.json mcpServers JSON, the legacy shape (bare
+//                     "2nb" on PATH, vault via cwd).
+//   - claude-desktop: same mcpServers JSON, but Claude Desktop is a GUI app with
+//                     a minimal PATH, so it uses the absolute cliPath and pins
+//                     the vault via --vault (it supports no cwd/working_directory).
+//   - warp:           ~/.warp/.mcp.json shape, vault pinned via both --vault and
+//                     working_directory.
+//   - codex:          a `codex mcp add` command line (Codex registers MCP servers
+//                     via its own CLI, not a config file).
+export function mcpSnippetFor(client: string, vaultPath: string, cliPath: string): string {
+	switch (client) {
+		case 'codex':
+			return `codex mcp add 2ndbrain -- ${cliPath} mcp-server --vault ${vaultPath}`;
+		case 'warp':
+			return JSON.stringify({
+				mcpServers: {
+					'2ndbrain': {
+						command: cliPath,
+						args: ['mcp-server', '--vault', vaultPath],
+						working_directory: vaultPath,
+					},
+				},
+			}, null, 2);
+		case 'claude-desktop':
+			return JSON.stringify({
+				mcpServers: {
+					'2ndbrain': {
+						command: cliPath,
+						args: ['mcp-server', '--vault', vaultPath],
+					},
+				},
+			}, null, 2);
+		case 'claude-code':
+		default:
+			return JSON.stringify({
+				mcpServers: {
+					'2ndbrain': { command: '2nb', args: ['mcp-server'], cwd: vaultPath },
+				},
+			}, null, 2);
+	}
 }
 
 interface SearchResult {
@@ -906,30 +982,63 @@ export default class BrainPlugin extends Plugin {
 		}
 	}
 
-	// skillInstalled reports whether the Claude Code skill is installed (user
-	// or project scope). Returns null if the CLI isn't reachable / can't parse
-	// (e.g. a pre-skills CLI), so the caller can distinguish "no" from "unknown".
-	async skillInstalled(): Promise<boolean | null> {
+	// skillsListMap parses `2nb skills list --json` once and keys it by slug, so
+	// the per-client settings UI can look up every client's skill status in a
+	// single CLI call. Returns null if the CLI isn't reachable / can't parse
+	// (e.g. a pre-skills CLI), so callers can distinguish "no" from "unknown".
+	async skillsListMap(): Promise<Record<string, InstallStatus> | null> {
 		try {
 			const arr = JSON.parse(await this.runCommand(['skills', 'list', '--json'])) as InstallStatus[];
-			const cc = arr.find(s => s.slug === 'claude-code');
-			return !!(cc && (cc.user_installed || cc.project_installed));
+			const map: Record<string, InstallStatus> = {};
+			for (const s of arr) map[s.slug] = s;
+			return map;
 		} catch {
 			return null;
 		}
 	}
 
-	// mcpConfigured reports whether the 2ndbrain MCP server is configured in the
-	// Claude Code client config for the open vault. Returns null if the CLI
-	// isn't reachable / lacks the `mcp configured` subcommand (pre-0.8.x CLI).
-	async mcpConfigured(): Promise<boolean | null> {
+	// mcpConfiguredMap parses `2nb mcp configured --all --json` once and keys it
+	// by client, so the per-client settings UI can look up every client's
+	// MCP-configured status in a single CLI call. Returns null if the CLI isn't
+	// reachable / lacks the `mcp configured` subcommand (pre-0.8.x CLI).
+	async mcpConfiguredMap(): Promise<Record<string, ConfiguredStatus> | null> {
 		try {
-			const arr = JSON.parse(await this.runCommand(['mcp', 'configured', '--json'])) as ConfiguredStatus[];
-			const cc = arr.find(s => s.client === 'claude-code');
-			return cc ? cc.configured : false;
+			const arr = JSON.parse(await this.runCommand(['mcp', 'configured', '--all', '--json'])) as ConfiguredStatus[];
+			const map: Record<string, ConfiguredStatus> = {};
+			for (const s of arr) map[s.client] = s;
+			return map;
 		} catch {
 			return null;
 		}
+	}
+
+	// skillInstalled reports whether the Claude Code skill is installed (user
+	// or project scope). Delegates to skillsListMap. Returns null when the
+	// status is unknown (CLI unreachable / pre-skills), so the caller can
+	// distinguish "no" from "unknown".
+	async skillInstalled(): Promise<boolean | null> {
+		const map = await this.skillsListMap();
+		if (map === null) return null;
+		const cc = map['claude-code'];
+		return !!(cc && (cc.user_installed || cc.project_installed));
+	}
+
+	// mcpConfigured reports whether the 2ndbrain MCP server is configured in the
+	// Claude Code client config for the open vault. Delegates to mcpConfiguredMap.
+	// Returns null when the status is unknown (CLI unreachable / pre-0.8.x).
+	async mcpConfigured(): Promise<boolean | null> {
+		const map = await this.mcpConfiguredMap();
+		if (map === null) return null;
+		const cc = map['claude-code'];
+		return cc ? cc.configured : false;
+	}
+
+	// configureClient shells `2nb setup --client <key>`: installs the agent skill
+	// (where applicable) and writes the MCP-server config for that client, both
+	// idempotent and backup-first on the CLI side. runCommand pins --vault to the
+	// open Obsidian vault (pinVaultArgs), so setup always targets this vault.
+	async configureClient(key: string): Promise<void> {
+		await this.runCommand(['setup', '--client', key]);
 	}
 
 	// suiteStatus reports the CLI, macOS app, and Obsidian plugin against the
@@ -1537,69 +1646,88 @@ class BrainSettingTab extends PluginSettingTab {
 			vaultSetting.setDesc(`${vaultName} — ${vaultPath} · ${state}`);
 		});
 
-		// Claude Code skill: is the 2nb SKILL.md installed for this user? The
-		// Install button shells `2nb skills install claude-code --user` so the
-		// skill is available across all Claude Code sessions.
-		const skillSetting = new Setting(containerEl)
-			.setName('Claude Code skill')
-			.setDesc('Checking…')
-			.addButton(btn => btn
-				.setButtonText('Install skill')
-				.onClick(async () => {
-					btn.setDisabled(true).setButtonText('Installing…');
-					try {
-						await this.plugin.runCommand(['skills', 'install', 'claude-code', '--user']);
-						new Notice('2ndbrain skill installed for Claude Code.');
-					} catch (e) {
-						new Notice(`Skill install failed: ${(e as Error).message}`);
-					} finally {
-						btn.setDisabled(false).setButtonText('Install skill');
-						this.display();
-					}
-				}));
-		this.plugin.skillInstalled().then(installed => {
-			if (installed === null) {
-				skillSetting.setDesc('Status unavailable (2nb CLI not reachable, or too old for `skills list`).');
-			} else if (installed) {
-				skillSetting.setDesc('Installed. Claude Code can use the 2ndbrain skill.');
-			} else {
-				skillSetting.setDesc('Not installed. Click Install skill to teach Claude Code about 2ndbrain.');
-			}
-		});
+		// AI client integrations: one sub-section per supported client (Claude
+		// Code, Warp, Claude Desktop, Codex), each with its skill status (where the
+		// client ships one) and MCP-configured status. "Configure" is now the
+		// primary action — it shells `2nb setup --client <key>`, which installs the
+		// skill (where applicable) and writes the MCP config in one idempotent,
+		// backup-first step (so it's safe to run on an existing config). "Copy
+		// setup snippet" stays as a manual fallback. MCP "configured" (not
+		// "running") is the durable signal: each client launches the server on
+		// demand, so a running-check would read red whenever the client is closed.
+		// The status maps are fetched ONCE up front (one CLI call each) and shared
+		// across every client row.
+		containerEl.createEl('h3', { text: 'AI client integrations' });
+		const mcpMapPromise = this.plugin.mcpConfiguredMap();
+		const skillsMapPromise = this.plugin.skillsListMap();
 
-		// Claude Code MCP server: is it CONFIGURED in ~/.claude.json for this
-		// vault? This is the durable signal, since the server is launched on
-		// demand by Claude Code, so "running" would read red whenever Claude
-		// Code is closed even when set up correctly. The button copies the config
-		// snippet rather than writing ~/.claude.json directly (mutating a user's
-		// global Claude config from a plugin is intentionally out of scope).
-		const mcpSetting = new Setting(containerEl)
-			.setName('Claude Code MCP server')
-			.setDesc('Checking…')
-			.addButton(btn => btn
-				.setButtonText('Copy setup snippet')
-				.onClick(async () => {
-					const snippet = JSON.stringify({
-						mcpServers: {
-							'2ndbrain': { command: '2nb', args: ['mcp-server'], cwd: vaultPath },
-						},
-					}, null, 2);
-					try {
-						await navigator.clipboard.writeText(snippet);
-						new Notice('Copied. Add it to ~/.claude.json, then restart Claude Code.');
-					} catch {
-						new Notice(`Add this to ~/.claude.json:\n\n${snippet}`);
+		for (const c of MCP_CLIENTS) {
+			containerEl.createEl('h4', { text: c.name });
+
+			// Skill row only for clients that ship a 2nb skill.
+			let skillRow: Setting | null = null;
+			if (c.skillSlug) {
+				const slug = c.skillSlug;
+				skillRow = new Setting(containerEl).setName('Agent skill').setDesc('Checking…');
+				void skillsMapPromise.then(map => {
+					if (map === null) {
+						skillRow!.setDesc('Status unavailable (2nb CLI not reachable, or too old for `skills list`).');
+						return;
 					}
-				}));
-		this.plugin.mcpConfigured().then(configured => {
-			if (configured === null) {
-				mcpSetting.setDesc('Status unavailable (2nb CLI not reachable, or too old for `mcp configured`).');
-			} else if (configured) {
-				mcpSetting.setDesc('Configured. Claude Code is wired to this vault in ~/.claude.json.');
-			} else {
-				mcpSetting.setDesc('Not configured. Click Copy setup snippet to wire Claude Code to this vault.');
+					const st = map[slug];
+					const installed = !!(st && (st.user_installed || st.project_installed));
+					skillRow!.setDesc(installed
+						? `Installed. ${c.name} can use the 2ndbrain skill.`
+						: 'Not installed. Click Configure to install it.');
+				});
 			}
-		});
+
+			// MCP row: status + Configure (one-click) + Copy setup snippet (manual).
+			const mcpRow = new Setting(containerEl)
+				.setName('MCP server')
+				.setDesc('Checking…')
+				.addButton(btn => btn
+					.setButtonText('Configure')
+					.onClick(async () => {
+						btn.setDisabled(true).setButtonText('Configuring…');
+						try {
+							await this.plugin.configureClient(c.key);
+							new Notice(`${c.name}: 2ndbrain set up.${c.note ? ' ' + c.note : ''}`);
+						} catch (e) {
+							new Notice(`${c.name} setup failed: ${(e as Error).message}`);
+						} finally {
+							btn.setDisabled(false).setButtonText('Configure');
+							this.display();
+						}
+					}))
+				.addButton(btn => btn
+					.setButtonText('Copy setup snippet')
+					.onClick(async () => {
+						const snippet = mcpSnippetFor(c.key, vaultPath, this.plugin.resolvedCliPath());
+						try {
+							await navigator.clipboard.writeText(snippet);
+							new Notice(c.key === 'codex'
+								? 'Copied. Run it in a terminal to register the 2ndbrain MCP server with Codex.'
+								: `Copied the ${c.name} MCP config snippet to the clipboard.`);
+						} catch {
+							new Notice(`Add this manually:\n\n${snippet}`);
+						}
+					}));
+			void mcpMapPromise.then(map => {
+				const noteSuffix = c.note ? ` ${c.note}` : '';
+				if (map === null) {
+					mcpRow.setDesc(`Status unavailable (2nb CLI not reachable, or too old for \`mcp configured\`).${noteSuffix}`);
+					return;
+				}
+				const st = map[c.key];
+				if (st && st.configured) {
+					const scope = st.scope ? `, ${st.scope} scope` : '';
+					mcpRow.setDesc(`Configured in ${st.config_path}${scope}.${noteSuffix}`);
+				} else {
+					mcpRow.setDesc(`Not configured. Click Configure to wire ${c.name} to this vault.${noteSuffix}`);
+				}
+			});
+		}
 
 		// Components: are the CLI, macOS app, and Obsidian plugin all installed
 		// and in sync with the latest release? `2nb doctor --json` is the single
