@@ -66,7 +66,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 - **Polish** — AI copy-editor that fixes spelling, grammar, and clarity, repairs broken `[[wikilinks]]` to existing notes (case/separator/whitespace/alias drift, never guessing an ambiguous target), and adds grounded new links (never inventing a target). Returns the original and polished text together so any client can show a diff; the Obsidian plugin applies it in one click from the note toolbar, ribbon, command, or right-click menu, with an Undo button
 - **Vault health dashboard** — unified panel showing index state, embedding portability, stale docs, and provider reachability with one-click Sync and Re-embed All. Notes edited in Obsidian are re-indexed and re-embedded automatically (a debounced incremental index), so search and AI stay current without a manual rebuild
 - **Built-in installer**: the dashboard updates the CLI (`brew upgrade` behind an Update CLI button) and installs or updates the Obsidian plugin into the bound vault (`2nb plugin install` behind an Install/Update button)
-- **Claude Code integration card**: shows whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
+- **AI Clients card**: per-client rows for Claude Code, Warp, Claude Desktop, and Codex — each showing whether the skill is installed and whether the 2ndbrain MCP server is configured, with a one-click **Configure** button (runs `2nb setup --client …`, backup-safe) so you can wire up any assistant at a glance
 - **AI connection testing** — one-click probe of your configured embedding and generation models with live latency
 - **Incremental re-embed** — `2nb index` rebuilds embeddings only for documents whose content hash changed
 - **Git integration (read-only)** — Recent Activity panel with per-commit file diffs in the dashboard, plus MCP git tools for AI clients
@@ -287,7 +287,9 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `mcp-server` | Start MCP server on stdio |
 | `mcp-setup` | Show MCP setup instructions for all AI tools |
 | `mcp status [--json]` | List live MCP server processes and their recent tool invocations |
-| `mcp configured [--json]` | Report whether the 2ndbrain MCP server is configured in the AI client config (`~/.claude.json`) for this vault. The durable "is it set up?" check, unlike `mcp status` which reports "is it running right now?" |
+| `mcp configured [--client <name>] [--all] [--json]` | Report whether the 2ndbrain MCP server is configured in the AI client config for this vault. Defaults to Claude Code; `--all` reports every client. The durable "is it set up?" check, unlike `mcp status` which reports "is it running right now?" |
+| `setup [--all \| --client <name>]` | One-command setup: install the skill **and** the MCP server for an AI client (claude-code, claude-desktop, warp, agents, codex) or all of them — idempotent and backup-safe |
+| `mcp install [--client <name> \| --all]` / `mcp uninstall` | Write/remove the 2ndbrain MCP server entry in a client config (claude-code → `~/.claude.json`, warp → `~/.warp/.mcp.json`, agents → `~/.agents/.mcp.json`, claude-desktop → its JSON, codex → via `codex mcp add`). Backs up the file first and preserves your other servers |
 | `plugin status [--json]` | Installed Obsidian plugin version vs this CLI |
 | `plugin install` | Install or update the Obsidian plugin in the open vault from the latest release (alias: `plugin update`). Won't downgrade a newer installed plugin unless `--force` |
 | `export-context --types <types>` | Generate CLAUDE.md context bundle |
@@ -391,6 +393,8 @@ The MCP server exposes 22 tools for AI coding assistants:
 
 Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` with PID, start time, parent PID, and the last 50 tool invocations. Run `2nb mcp status` to list live servers, or use the Cmd+Shift+M status panel in the dashboard.
 
+**The easy way:** `2nb setup --client claude-code` (or `claude-desktop`, `warp`, `codex`, or `--all`) installs the skill and writes the MCP config for you, backing up any existing file and preserving your other servers. `2nb mcp install --client <name>` writes just the MCP entry. The manual snippets below are a fallback.
+
 ### Claude Code
 
 Add to `~/.claude.json`:
@@ -425,19 +429,24 @@ Add to `.cursor/mcp.json`:
 
 ### Claude Desktop
 
+`2nb setup --client claude-desktop` (or `mcp install --client claude-desktop`) writes this for you. Claude Desktop is a GUI app launched with a minimal PATH, so the command must be an **absolute** `2nb` path and must NOT include a `cwd` or `url` field (a `url` field silently corrupts the file). Restart Claude Desktop to apply.
+
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "2ndbrain": {
-      "command": "/usr/local/bin/2nb",
-      "args": ["mcp-server"],
-      "cwd": "/path/to/your/vault"
+      "command": "/opt/homebrew/bin/2nb",
+      "args": ["mcp-server", "--vault", "/path/to/your/vault"]
     }
   }
 }
 ```
+
+### Codex
+
+`2nb mcp install --client codex` (or `2nb setup --client codex`) runs `codex mcp add` so Codex manages its own `~/.codex/config.toml` — no manual edit. If the `codex` CLI isn't installed, the command prints the exact `codex mcp add` line and the `[mcp_servers.2ndbrain]` TOML to paste.
 
 Run `2nb mcp-setup` for config snippets for additional tools (Gemini CLI, Amazon Q, Kiro).
 
@@ -459,7 +468,7 @@ Install a skill file to teach AI coding agents about your vault's CLI, MCP tools
 2nb skills install claude-code --user
 ```
 
-Supported agents: Claude Code, Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, JetBrains Junie.
+Supported agents: Claude Code (also serves Claude Desktop, which reads the same `~/.claude/skills`), Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, JetBrains Junie, Warp, Codex, and the cross-tool `agents` (`.agents/skills/`) standard. `2nb setup --client <name>` installs the skill **and** the MCP server in one step; a force-overwrite of an existing skill backs it up first.
 
 ## macOS Dashboard
 
@@ -469,7 +478,7 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 
 - **Vault card**: active vault name and path, a badge confirming it matches the vault Obsidian has open, and an Obsidian plugin row showing the installed plugin version with an Install/Update button (runs `2nb plugin install`)
 - **AI card**: provider and models (AWS Bedrock with Claude Haiku 4.5 + Amazon Nova-2 by default) with a readiness dot, Save-as-default, and Test buttons
-- **Claude Code card**: whether the Claude Code skill is installed (with an Install button) and whether the 2ndbrain MCP server is configured in `~/.claude.json` for this vault (with a Show-setup button), so you can see at a glance if your AI assistant is wired up
+- **AI Clients card**: per-client rows (Claude Code, Warp, Claude Desktop, Codex) showing skill-installed and MCP-configured status, each with a one-click **Configure** button (runs `2nb setup --client …`, backup-safe; Codex without its CLI shows the manual `codex mcp add` step instead of a false success)
 - **Index card**: document and embedding counts, a "N notes awaiting embedding" hint, and Sync (incremental, embeds only what changed) and Re-embed All buttons. Notes edited in Obsidian sync automatically
 - The app bundles its own version-matched `2nb` CLI and prefers it, so its AI/indexing calls never run a stale Homebrew copy. An orange banner only appears on dev builds that fall back to an older PATH `2nb`; when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` to refresh the terminal/plugin's copy
 
