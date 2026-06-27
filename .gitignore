@@ -15,6 +15,7 @@ node_modules/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/2nb/
+.claude/skills/2nb/*
 !.claude/skills/2nb/SKILL.md
 
 # Go
