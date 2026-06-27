@@ -13,6 +13,7 @@ func TestAgentBySlug(t *testing.T) {
 		found bool
 		name  string
 	}{
+		{"agents", true, "Agents (cross-tool standard)"},
 		{"claude-code", true, "Claude Code"},
 		{"cursor", true, "Cursor"},
 		{"windsurf", true, "Windsurf"},
@@ -21,6 +22,7 @@ func TestAgentBySlug(t *testing.T) {
 		{"cline", true, "Cline"},
 		{"roo-code", true, "Roo Code"},
 		{"junie", true, "JetBrains Junie"},
+		{"warp", true, "Warp"},
 		{"nonexistent", false, ""},
 	}
 
@@ -34,6 +36,19 @@ func TestAgentBySlug(t *testing.T) {
 				t.Fatalf("AgentBySlug(%q).Name=%q, want %q", tt.slug, a.Name, tt.name)
 			}
 		})
+	}
+}
+
+// The cross-tool "agents" entry targets .agents/skills/2nb/SKILL.md (Warp's
+// recommended primary), for both project and user scope.
+func TestAgentsCrossToolPath(t *testing.T) {
+	a, ok := AgentBySlug("agents")
+	if !ok {
+		t.Fatal("AgentBySlug(\"agents\") not found")
+	}
+	const want = ".agents/skills/2nb/SKILL.md"
+	if a.ProjectPath != want || a.UserPath != want {
+		t.Fatalf("agents paths = (%q, %q), want both %q", a.ProjectPath, a.UserPath, want)
 	}
 }
 
