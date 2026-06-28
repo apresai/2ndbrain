@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -26,6 +27,29 @@ type ChunkScore struct {
 	ChunkID string
 	DocID   string
 	Score   float64 // cosine similarity (1 - vec0 cosine distance)
+}
+
+// FiniteNonZero reports whether v is safe to store in a cosine-metric vec0
+// index: every component is finite (no NaN/Inf) and at least one is non-zero.
+// With distance_metric=cosine a zero-norm or NaN/Inf vector makes vec0 return a
+// NULL distance, which sorts first under ORDER BY distance and (when scanned
+// into a float64) aborts the entire KNN; vecLiteral would also emit invalid
+// JSON (`NaN`/`+Inf`) that vec0 stores silently. Callers skip such vectors.
+func FiniteNonZero(v []float32) bool {
+	if len(v) == 0 {
+		return false
+	}
+	nonZero := false
+	for _, f := range v {
+		f64 := float64(f)
+		if math.IsNaN(f64) || math.IsInf(f64, 0) {
+			return false
+		}
+		if f != 0 {
+			nonZero = true
+		}
+	}
+	return nonZero
 }
 
 // vecLiteral formats a vector as the sqlite-vec JSON array literal used to bind
@@ -105,10 +129,29 @@ func (db *DB) EnsureVecChunks(dim int) error {
 // (vec0 has no UPSERT, so it deletes the doc's rows then inserts). Call inside
 // a doc's embedding step after EnsureVecChunks.
 func (db *DB) SetDocChunkVectors(docID string, vectors []ChunkVector, model string) error {
+	// Dedup by ChunkID, last occurrence wins (mirrors the chunks table's
+	// ON CONFLICT(id) DO UPDATE), so colliding chunk IDs from duplicate heading
+	// paths can't UNIQUE-fail the vec0 chunk_id PRIMARY KEY for an external
+	// caller. embed.Document already dedups by content; this guards the API.
+	keep := make(map[string]ChunkVector, len(vectors))
+	order := make([]string, 0, len(vectors))
+	for _, cv := range vectors {
+		if _, seen := keep[cv.ChunkID]; !seen {
+			order = append(order, cv.ChunkID)
+		}
+		keep[cv.ChunkID] = cv
+	}
+
 	if _, err := db.conn.Exec(`DELETE FROM vec_chunks WHERE doc_id = ?`, docID); err != nil {
 		return fmt.Errorf("clear doc chunk vectors: %w", err)
 	}
-	for _, cv := range vectors {
+	for _, id := range order {
+		cv := keep[id]
+		// Skip a non-finite or zero-norm vector: a single degenerate chunk
+		// embedding must not poison cosine KNN for the whole vault.
+		if !FiniteNonZero(cv.Vector) {
+			continue
+		}
 		if _, err := db.conn.Exec(
 			`INSERT INTO vec_chunks(chunk_id, embedding, doc_id, content_hash, model) VALUES (?, ?, ?, ?, ?)`,
 			cv.ChunkID, vecLiteral(cv.Vector), cv.DocID, cv.ContentHash, model,
@@ -154,11 +197,14 @@ func (db *DB) VecSearchChunks(query []float32, k int, minScore float64) ([]Chunk
 	var out []ChunkScore
 	for rows.Next() {
 		var cs ChunkScore
-		var dist float64
+		var dist sql.NullFloat64
 		if err := rows.Scan(&cs.ChunkID, &cs.DocID, &dist); err != nil {
 			return nil, fmt.Errorf("scan vec hit: %w", err)
 		}
-		cs.Score = 1 - dist // cosine distance -> cosine similarity
+		if !dist.Valid {
+			continue // NULL distance from a poisoned (zero-norm/NaN) stored row
+		}
+		cs.Score = 1 - dist.Float64 // cosine distance -> cosine similarity
 		if minScore > 0 && cs.Score < minScore {
 			continue
 		}

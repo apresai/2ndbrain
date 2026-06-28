@@ -4,6 +4,9 @@
 - Date: 2026-06-28
 - Prompted by: [issue #70](https://github.com/apresai/2ndbrain/issues/70) (@cschanhniem) — "add an approximate nearest neighbor vector index for larger vaults"
 
+> [!IMPORTANT]
+> **Superseded by implementation (the body below is the original proposal).** The shipped design differs from this ADR in three ways: (1) sqlite-vec is the **CGO-free `modernc.org/sqlite/vec`** package, not the `github.com/asg017/sqlite-vec-go-bindings/cgo` C amalgamation — the CLI builds `CGO_ENABLED=0` with no C toolchain, so the "new CGO dependency / Homebrew-from-source" consequences below do **not** apply. (2) The vec0 table is **per-chunk `vec_chunks`** (`chunk_id` PK), written via `embed.Document`, with `documents.embedding` holding the **mean** of the chunk vectors — not the per-document `vec_documents` table written in `SetEmbedding`. (3) The `2NB_DISABLE_VEC=1` escape hatch was **not** implemented; the brute-force fallback triggers automatically when `vec_chunks` is absent or does not yet cover the whole corpus.
+
 ## Context
 
 Vector search is brute-force cosine over every stored embedding. `search.VectorSearchThreshold`

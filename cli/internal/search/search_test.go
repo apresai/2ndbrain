@@ -251,3 +251,40 @@ func TestFtsQuery_PlainWordsNotQuoted(t *testing.T) {
 		t.Errorf("ftsQuery = %q, want unquoted", got)
 	}
 }
+
+// TestVecChunkSearchByDoc_CoverageGate locks the fix for the lazy-vec_chunks
+// fallback hole: vec_chunks is populated per-doc as notes are re-embedded, so a
+// partially-migrated vault must NOT take the vec0 path (which would hide every
+// not-yet-re-embedded doc) — it defers to the whole-doc brute force until the
+// chunk-vector coverage matches the doc-level corpus size.
+func TestVecChunkSearchByDoc_CoverageGate(t *testing.T) {
+	db := setupSearchDB(t)
+	if err := db.EnsureVecChunks(4); err != nil {
+		t.Fatal(err)
+	}
+	// Only ONE document's chunk vectors are present in vec_chunks.
+	if err := db.SetDocChunkVectors("doc-1", []store.ChunkVector{
+		{ChunkID: "doc-1#a", DocID: "doc-1", ContentHash: "h1", Vector: []float32{1, 0, 0, 0}},
+	}, "m"); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(db.Conn())
+	q := []float32{1, 0, 0, 0}
+
+	// Corpus has 2 embedded docs but vec_chunks covers only 1 -> defer (ok=false).
+	if res, ok, err := engine.vecChunkSearchByDoc(q, 10, 0, 2); err != nil || ok || res != nil {
+		t.Fatalf("incomplete coverage: ok=%v err=%v res=%v, want ok=false (defer to brute force)", ok, err, res)
+	}
+	// Coverage matches the corpus (1) -> take the vec0 path.
+	res, ok, err := engine.vecChunkSearchByDoc(q, 10, 0, 1)
+	if err != nil || !ok {
+		t.Fatalf("complete coverage: ok=%v err=%v, want ok=true", ok, err)
+	}
+	if len(res) != 1 || res[0].DocID != "doc-1" {
+		t.Fatalf("res = %+v, want one hit for doc-1", res)
+	}
+	// No doc-level corpus to defer to (wantCoverage=0) -> table presence suffices.
+	if _, ok, err := engine.vecChunkSearchByDoc(q, 10, 0, 0); err != nil || !ok {
+		t.Fatalf("zero coverage target: ok=%v err=%v, want ok=true", ok, err)
+	}
+}

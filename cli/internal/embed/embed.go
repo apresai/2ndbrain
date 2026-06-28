@@ -28,17 +28,32 @@ func Document(ctx context.Context, db *store.DB, embedder ai.EmbeddingProvider, 
 	parsed.ID = docID
 
 	chunks := document.ChunkDocument(parsed)
-	var contents []string
+	// Dedup the kept chunks by ID (last occurrence wins), mirroring the chunks
+	// table's INSERT ... ON CONFLICT(id) DO UPDATE collapse. Two sections that
+	// share a heading path (e.g. two `## Notes`, a repeated changelog date)
+	// produce the SAME chunk_id (makeChunkID = sha256(docID+":"+headingPath)),
+	// and vec0's chunk_id PRIMARY KEY has no UPSERT — a duplicate INSERT would
+	// hard-error and leave the doc with no embedding. Deduping before embedding
+	// also avoids paying for an embedding call on the discarded collision.
+	idx := make(map[string]int, len(chunks))
 	var embedChunks []document.Chunk
 	for _, ch := range chunks {
 		if strings.TrimSpace(ch.Content) == "" {
 			continue
 		}
+		if i, dup := idx[ch.ID]; dup {
+			embedChunks[i] = ch // last wins
+			continue
+		}
+		idx[ch.ID] = len(embedChunks)
 		embedChunks = append(embedChunks, ch)
-		contents = append(contents, ch.Content)
 	}
-	if len(contents) == 0 {
+	if len(embedChunks) == 0 {
 		return 0, nil
+	}
+	contents := make([]string, len(embedChunks))
+	for i, ch := range embedChunks {
+		contents[i] = ch.Content
 	}
 
 	vecs, err := embedder.Embed(ctx, contents)
@@ -60,8 +75,23 @@ func Document(ctx context.Context, db *store.DB, embedder ai.EmbeddingProvider, 
 		return 0, fmt.Errorf("store chunk vectors: %w", err)
 	}
 
+	// Build the doc-level mean from the usable vectors only: a NaN/Inf or
+	// zero-norm chunk vector would poison documents.embedding (and the
+	// brute-force fallback that scans it) the same way it poisons vec0's cosine
+	// KNN. If every chunk vector is degenerate, skip the doc (0, nil) — the same
+	// non-error path as an empty document.
+	usable := make([][]float32, 0, len(vecs))
+	for _, v := range vecs {
+		if store.FiniteNonZero(v) {
+			usable = append(usable, v)
+		}
+	}
+	if len(usable) == 0 {
+		return 0, nil
+	}
+
 	parsed.ComputeContentHash()
-	if err := db.SetEmbedding(docID, meanPool(vecs), model, parsed.ContentHash); err != nil {
+	if err := db.SetEmbedding(docID, meanPool(usable), model, parsed.ContentHash); err != nil {
 		return 0, fmt.Errorf("store doc embedding: %w", err)
 	}
 	return len(cvs), nil

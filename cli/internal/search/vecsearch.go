@@ -31,8 +31,20 @@ func vecLiteral(v []float32) string {
 // embeddings: the vector signal is now per-chunk (a query that matches one
 // section scores its document via that section, not a diluted whole-doc
 // vector). Returns ok=false (not an error) when the vec_chunks table is absent
-// so HybridSearch can fall back to the brute-force path.
-func (e *Engine) vecChunkSearchByDoc(query []float32, k int, minScore float64) (results []ScoredDoc, ok bool, err error) {
+// OR not yet covering the whole corpus, so HybridSearch can fall back to the
+// brute-force path.
+//
+// wantCoverage is the number of documents that have a doc-level embedding (the
+// brute-force corpus size). vec_chunks is populated lazily per-doc as notes are
+// (re)embedded, so on a vault upgraded to the vec0 index it can hold only the
+// few docs touched since. Taking the vec0 path then would silently hide every
+// not-yet-re-embedded doc from the vector channel (the brute-force fallback
+// over the full doc-level corpus would be unreachable). Every doc with a
+// doc-level embedding went through embed.Document, which writes BOTH a chunk
+// vector and the mean doc vector, so once the vault is fully migrated the
+// distinct-doc count in vec_chunks equals wantCoverage. Until then we defer to
+// brute-force, which covers every embedded doc.
+func (e *Engine) vecChunkSearchByDoc(query []float32, k int, minScore float64, wantCoverage int) (results []ScoredDoc, ok bool, err error) {
 	if len(query) == 0 {
 		return nil, false, nil
 	}
@@ -42,6 +54,15 @@ func (e *Engine) vecChunkSearchByDoc(query []float32, k int, minScore float64) (
 		return nil, false, nil
 	case err != nil:
 		return nil, false, err
+	}
+	if wantCoverage > 0 {
+		var covered int
+		if err := e.db.QueryRow(`SELECT COUNT(DISTINCT doc_id) FROM vec_chunks`).Scan(&covered); err != nil {
+			return nil, false, err
+		}
+		if covered < wantCoverage {
+			return nil, false, nil
+		}
 	}
 	if k <= 0 {
 		k = 40
@@ -59,11 +80,14 @@ func (e *Engine) vecChunkSearchByDoc(query []float32, k int, minScore float64) (
 	var order []string
 	for rows.Next() {
 		var docID string
-		var dist float64
+		var dist sql.NullFloat64
 		if err := rows.Scan(&docID, &dist); err != nil {
 			return nil, false, err
 		}
-		cos := 1 - dist // cosine distance -> cosine similarity
+		if !dist.Valid {
+			continue // NULL distance from a poisoned (zero-norm/NaN) stored row
+		}
+		cos := 1 - dist.Float64 // cosine distance -> cosine similarity
 		if minScore > 0 && cos < minScore {
 			continue
 		}
