@@ -80,7 +80,7 @@ const DefaultSimilarityThreshold = 0.20
 
 // DefaultAIConfig returns sensible defaults. SimilarityThreshold is left at
 // zero so ResolveSimilarityThresholdFull falls through to the active
-// embedding model's RecommendedSimilarityThreshold (e.g., Nova-2 → 0.65)
+// embedding model's RecommendedSimilarityThreshold (e.g., Nova-2 → 0.25)
 // instead of permanently shadowing it with the conservative global default.
 func DefaultAIConfig() AIConfig {
 	return AIConfig{

@@ -12,12 +12,16 @@ func BuiltinCatalog() []ModelInfo {
 	var models []ModelInfo
 
 	// --- Bedrock Embedding (Nova Embeddings v2 format) ---
-	// RecommendedSimilarityThreshold=0.65: Nova-2 clusters tight — on real
-	// vaults, unrelated-pair cosine sits at ~0.55–0.64, so the conservative
-	// global default of 0.20 lets noise dominate semantic search. 0.65 is
-	// calibrated against a real 22-doc mixed-topic vault. Bump to 0.70+ if
-	// a vault still surfaces off-topic neighbors; drop to ~0.55 if legit
-	// matches get cut.
+	// RecommendedSimilarityThreshold=0.25: queries embed with Nova's asymmetric
+	// GENERIC_RETRIEVAL purpose (documents stay GENERIC_INDEX), which collapses
+	// the cosine scale — measured on a real 151-doc vault, true-match cosine
+	// sits at p50≈0.34 and unrelated-pair cosine at p95≈0.23, vs ~0.80/~0.72
+	// under the old symmetric (GENERIC_INDEX-for-queries) embedding. So 0.25
+	// sits just above the negative p95 and well under the true-match p50; the
+	// old 0.65 would reject every real match post-flip. (Asymmetric purpose
+	// also widened match/noise separation 0.077 -> 0.115 and lifted Recall@10
+	// to 1.0; see internal/eval/asymmetry.go.) Bump toward ~0.30 if a vault
+	// surfaces off-topic neighbors; drop toward ~0.20 if legit matches get cut.
 	models = append(models, ModelInfo{
 		ID:                             "amazon.nova-2-multimodal-embeddings-v1:0",
 		Name:                           "Amazon Nova Embeddings v2",
@@ -32,7 +36,7 @@ func BuiltinCatalog() []ModelInfo {
 		Local:                          false,
 		Tier:                           TierVerified,
 		ConfigHint:                     configHint("bedrock", "embedding", "amazon.nova-2-multimodal-embeddings-v1:0"),
-		RecommendedSimilarityThreshold: 0.65,
+		RecommendedSimilarityThreshold: 0.25,
 		InvokeStrategy:                 StrategyBedrockInvokeNovaEmbed,
 	})
 
@@ -86,11 +90,11 @@ func BuiltinCatalog() []ModelInfo {
 
 	// --- Bedrock Generation (Converse API — works across all Bedrock models) ---
 	for _, m := range []struct {
-		id, name   string
-		ctxLen     int
-		priceIn    float64
-		priceOut   float64
-		notes      string
+		id, name string
+		ctxLen   int
+		priceIn  float64
+		priceOut float64
+		notes    string
 	}{
 		{"us.anthropic.claude-haiku-4-5-20251001-v1:0", "Claude Haiku 4.5", 200000, 0.80, 4.00, ""},
 		{"us.anthropic.claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 3.00, 15.00, "1M context"},

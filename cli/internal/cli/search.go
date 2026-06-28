@@ -136,7 +136,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	if !opts.BM25Only && opts.Query != "" {
 		// VectorCompat passed — embedder is usable and dim matches.
-		queryVecs, err := embedder.Embed(ctx, []string{opts.Query})
+		queryVecs, err := embedder.Embed(ctx, []string{opts.Query}, ai.WithPurpose(ai.PurposeQuery))
 		if err == nil && len(queryVecs) > 0 {
 			docIDs, embeddings, err := v.DB.AllEmbeddings()
 			if err == nil {

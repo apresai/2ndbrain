@@ -248,7 +248,7 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 		// Apply timeout to embedding call to prevent indefinite hangs
 		embedCtx, embedCancel := context.WithTimeout(ctx, 60*time.Second)
 		defer embedCancel()
-		queryVecs, err := embedder.Embed(embedCtx, []string{query})
+		queryVecs, err := embedder.Embed(embedCtx, []string{query}, ai.WithPurpose(ai.PurposeQuery))
 		if err == nil && len(queryVecs) > 0 {
 			docIDs, embeddings, err := h.getCachedEmbeddings()
 			if err == nil {
@@ -322,7 +322,7 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		// Apply timeout to embedding call
 		embedCtx, embedCancel := context.WithTimeout(ctx, 60*time.Second)
 		defer embedCancel()
-		queryVecs, err := embedder.Embed(embedCtx, []string{question})
+		queryVecs, err := embedder.Embed(embedCtx, []string{question}, ai.WithPurpose(ai.PurposeQuery))
 		if err == nil && len(queryVecs) > 0 {
 			docIDs, embeddings, err := h.getCachedEmbeddings()
 			if err != nil {
@@ -1187,7 +1187,7 @@ func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.Call
 	if len(runes) > 2000 {
 		runes = runes[:2000]
 	}
-	queryVecs, err := embedder.Embed(ctx, []string{string(runes)})
+	queryVecs, err := embedder.Embed(ctx, []string{string(runes)}, ai.WithPurpose(ai.PurposeQuery))
 	if err != nil || len(queryVecs) == 0 {
 		return mcplib.NewToolResultError(fmt.Sprintf("embed source: %v", err)), nil
 	}

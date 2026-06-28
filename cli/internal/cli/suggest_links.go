@@ -86,7 +86,7 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 	}
 	queryText := string(runes)
 
-	queryVecs, err := embedder.Embed(ctx, []string{queryText})
+	queryVecs, err := embedder.Embed(ctx, []string{queryText}, ai.WithPurpose(ai.PurposeQuery))
 	if err != nil {
 		return fmt.Errorf("embed source: %w", err)
 	}
