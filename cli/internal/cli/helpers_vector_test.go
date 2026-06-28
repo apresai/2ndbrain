@@ -25,7 +25,7 @@ type fakeEmbedder struct {
 func (f *fakeEmbedder) Name() string                                             { return f.name }
 func (f *fakeEmbedder) Dimensions() int                                          { return f.dims }
 func (f *fakeEmbedder) Available(ctx context.Context) bool                       { return f.available }
-func (f *fakeEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+func (f *fakeEmbedder) Embed(ctx context.Context, texts []string, _ ...ai.EmbedOption) ([][]float32, error) {
 	vecs := make([][]float32, len(texts))
 	for i := range vecs {
 		vecs[i] = make([]float32, f.dims)

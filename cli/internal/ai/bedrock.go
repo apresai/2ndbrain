@@ -261,7 +261,8 @@ func detectEmbedFormat(modelID string) bedrockEmbedFmt {
 
 // ── Embed dispatch ─────────────────────────────────────────────────────────
 
-func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string, opts ...EmbedOption) ([][]float32, error) {
+	cfg := ResolveEmbedOptions(opts...)
 	format := b.resolvedEmbedFormat()
 	switch format {
 	case fmtCohere:
@@ -277,7 +278,7 @@ func (b *BedrockEmbedder) Embed(ctx context.Context, texts []string) ([][]float3
 	case fmtTitanImage:
 		return nil, fmt.Errorf("titan image embedding model requires image input — text embedding not supported")
 	default:
-		return b.embedNova(ctx, texts)
+		return b.embedNova(ctx, texts, cfg)
 	}
 }
 
@@ -321,14 +322,30 @@ func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]by
 	return nil, fmt.Errorf("invoke %s: %w", b.model, err)
 }
 
-func (b *BedrockEmbedder) embedNova(ctx context.Context, texts []string) ([][]float32, error) {
+// novaEmbeddingPurpose maps a generic EmbedConfig purpose to Nova-2's
+// asymmetric embedding purpose: a stored document uses GENERIC_INDEX, a
+// search query uses GENERIC_RETRIEVAL.
+func novaEmbeddingPurpose(purpose string) string {
+	if purpose == PurposeQuery {
+		return "GENERIC_RETRIEVAL"
+	}
+	return "GENERIC_INDEX"
+}
+
+func (b *BedrockEmbedder) embedNova(ctx context.Context, texts []string, cfg EmbedConfig) ([][]float32, error) {
+	purpose := novaEmbeddingPurpose(cfg.Purpose)
+	// Matryoshka: honor a per-call dimension override, else the vault default.
+	dim := b.dims
+	if cfg.Dimension > 0 {
+		dim = cfg.Dimension
+	}
 	results := make([][]float32, len(texts))
 	for i, text := range texts {
 		req := novaEmbedRequest{
 			TaskType: "SINGLE_EMBEDDING",
 			SingleEmbeddingParams: &novaEmbeddingParams{
-				EmbeddingPurpose:   "GENERIC_INDEX",
-				EmbeddingDimension: b.dims,
+				EmbeddingPurpose:   purpose,
+				EmbeddingDimension: dim,
 				Text: &novaTextInput{
 					TruncationMode: "END",
 					Value:          text,

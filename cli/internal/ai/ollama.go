@@ -62,7 +62,9 @@ type ollamaEmbedResponse struct {
 	Embeddings [][]float64 `json:"embeddings"`
 }
 
-func (o *OllamaEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+// Embed generates embeddings. Ollama has no index-vs-query or dimension
+// notion, so EmbedOptions are accepted for interface parity and ignored.
+func (o *OllamaEmbedder) Embed(ctx context.Context, texts []string, _ ...EmbedOption) ([][]float32, error) {
 	req := ollamaEmbedRequest{
 		Model: o.model,
 		Input: texts,
