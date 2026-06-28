@@ -9,7 +9,7 @@
 Vector search is brute-force cosine over every stored embedding. `search.VectorSearchThreshold`
 (`cli/internal/search/vector.go`) scores all embeddings per query; the six CLI commands that do
 semantic retrieval (`search`, `ask`, `suggest-links`, `polish`, `suggest-target`, `models calibrate`)
-load the whole corpus per process via `store.AllEmbeddings()` (`SELECT id, embedding FROM documents`,
+load the whole corpus per process via `store.AllEmbeddings()` (`SELECT id, embedding FROM documents WHERE embedding IS NOT NULL`,
 no LIMIT, decode each BLOB) with no cache. The long-lived paths (MCP `kb_search`/`kb_ask`, the macOS
 GUI) cache the loaded set per session. Embeddings are stored **per document**, so N is the document
 count, and the default dimension is 1024 (Amazon Nova-2).
