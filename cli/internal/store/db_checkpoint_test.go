@@ -25,7 +25,7 @@ func TestNamedDriver_AutocheckpointAndDefaultStillRegistered(t *testing.T) {
 	}
 
 	// The default driver must remain registered for raw opens elsewhere.
-	raw, err := sql.Open("sqlite3", ":memory:")
+	raw, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("raw sqlite3 open: %v", err)
 	}

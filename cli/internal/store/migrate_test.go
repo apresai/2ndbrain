@@ -13,7 +13,7 @@ func TestMigrate_V2toV3(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "index.db")
 
 	// Build a v2 database directly: v1 schema + v2 ALTERs + version=2 + a row.
-	raw, err := sql.Open("sqlite3", dbPath)
+	raw, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

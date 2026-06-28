@@ -11,7 +11,7 @@ project_name: 2nb
 before:
   hooks:
     - cd cli && go mod tidy
-    - cd cli && go test -short -tags fts5 ./...
+    - cd cli && go test -short ./...
 
 builds:
   - id: 2nb
@@ -23,10 +23,10 @@ builds:
       - -s -w
       - -X github.com/apresai/2ndbrain/internal/cli.Version={{.Version}}
 
-    tags:
-      - fts5
-
-    # macOS only — CGO (SQLite) requires native toolchain
+    # Pure-Go SQLite (modernc.org/sqlite): no CGO, no fts5 build tag. Both
+    # macOS arches build from a single runner with no C toolchain — this is
+    # what makes the x86_64 build actually produce x86_64 (the prior CGO setup
+    # silently emitted an arm64 binary for the amd64 target).
     goos:
       - darwin
 
@@ -35,7 +35,7 @@ builds:
       - arm64
 
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
 
 archives:
   - id: 2nb

@@ -1,11 +1,13 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func TestIsBusyErr(t *testing.T) {
@@ -15,12 +17,13 @@ func TestIsBusyErr(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"busy code", sqlite3.Error{Code: sqlite3.ErrBusy}, true},
-		{"locked code", sqlite3.Error{Code: sqlite3.ErrLocked}, true},
-		{"wrapped busy code", fmt.Errorf("upsert: %w", sqlite3.Error{Code: sqlite3.ErrBusy}), true},
-		{"message fallback", errors.New("database is locked"), true},
+		{"message busy", errors.New("database is locked"), true},
+		{"message table locked", errors.New("database table is locked"), true},
+		{"modernc busy phrasing", errors.New("The database file is locked (SQLITE_BUSY)"), true},
+		{"modernc locked phrasing", errors.New("A table in the database is locked (SQLITE_LOCKED)"), true},
+		{"wrapped busy", fmt.Errorf("upsert: %w", errors.New("database is locked")), true},
 		{"unrelated error", errors.New("syntax error"), false},
-		{"other sqlite code", sqlite3.Error{Code: sqlite3.ErrConstraint}, false},
+		{"other sqlite phrasing", errors.New("constraint violation"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -31,8 +34,50 @@ func TestIsBusyErr(t *testing.T) {
 	}
 }
 
+// TestIsBusyErr_RealContention forces a genuine modernc *sqlite.Error with
+// SQLITE_BUSY via two connections contending for the write lock (busy_timeout=0),
+// exercising the typed errors.As + masked-Code() path against a real driver error
+// — modernc's Error has unexported fields, so this is the only way to cover it.
+func TestIsBusyErr_RealContention(t *testing.T) {
+	dsn := "file:" + filepath.Join(t.TempDir(), "t.db") +
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(0)&_txlock=immediate"
+	c1, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c1.Close()
+	c1.SetMaxOpenConns(1)
+	c2, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+	c2.SetMaxOpenConns(1)
+
+	if _, err := c1.Exec("CREATE TABLE t(x INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	// Hold the write lock on c1 (BEGIN IMMEDIATE via _txlock).
+	tx, err := c1.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("INSERT INTO t VALUES(1)"); err != nil {
+		t.Fatal(err)
+	}
+	// c2's write tries to take the write lock and, with busy_timeout=0, fails fast.
+	_, err = c2.Exec("INSERT INTO t VALUES(2)")
+	if err == nil {
+		t.Skip("environment serialized the writes; no contention error produced")
+	}
+	if !IsBusyErr(err) {
+		t.Errorf("IsBusyErr did not recognize a real contention error: %v", err)
+	}
+}
+
 func TestRetryBusy(t *testing.T) {
-	busy := sqlite3.Error{Code: sqlite3.ErrBusy}
+	busy := errors.New("database is locked")
 
 	t.Run("success on first try", func(t *testing.T) {
 		calls := 0
