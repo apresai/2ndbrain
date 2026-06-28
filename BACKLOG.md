@@ -2,6 +2,14 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Future: true ANN (HNSW/IVF) vector index — DEFERRED (issue #70, @cschanhniem)
+
+We adopted sqlite-vec (exact in-DB SIMD KNN, see [docs/adr/0001-vector-search.md](docs/adr/0001-vector-search.md)), which removes the per-query embedding load+decode while staying inside the portable `index.db`. sqlite-vec is **not** ANN — search stays O(n), just much cheaper. True approximate nearest neighbor (HNSW/IVF) is deferred until a real vault either exceeds **~100,000 embedded docs** or misses the **300 ms** `2nb search` p95 budget *after* sqlite-vec. At that point evaluate sqlite-vec's own ANN support before any external dependency (preserve the single-file vault). Measured baseline at decision time (M4, 1024-dim): cosine scan ~9 ms @10k / ~99 ms @100k; `AllEmbeddings` load+decode ~25 ms @10k / ~259 ms (1.26 GB transient) @100k.
+
+Chad-review LOWs from the Phase 1 PR (#107), non-blocking:
+- **MEDIUM (coverage) — no credential-free test asserts `ask` loads the embedding corpus once.** The hoist in `cli/internal/cli/ask.go` de-duplicates the rewrite-fallback's double `AllEmbeddings()` load, but the only test that drives `askOnce`'s retrieval (`TestAskWithHistory_E2E_Bedrock`) skips without Bedrock creds, so offline/CI never exercises it. A spy-DB regression test asserting one load would lock in the improvement; needs an interface seam around `*store.DB` first.
+- **LOW (bench) — `BenchmarkVectorBruteForce` discards its result to `_`.** A package-level sink var would harden against dead-code elimination; the alloc+sort makes elimination unlikely, so cosmetic. `cli/internal/search/vector_bench_test.go`.
+
 ## Session 2026-06-25: firm vault-write guard + never-stale skill/MCP + Warp helper
 
 Chad-review GO. The HIGH (dead `vault.OpenNoInit`/`ErrSidecarMissing` with a false "the write path uses it" godoc — wiring it in would have broken legit first-use auto-init) was fixed in-PR by removing the machinery; the no-mint guarantee is the walk-up refusal that returns before any `Open`. A Pass 6 CRITICAL (auto-refresh failures swallowed) and the MEDIUMs (Open errors masked as "no vault found"; missing decision logs; `reqs.md`/`README` drift; untested `--vault`→configured and `skills doctor` freshness branches) were all fixed in-PR. The FRESHNESS advisories were actioned in-PR (`mcp-go` v0.46→v0.55.1, `cobra` v1.9.1→v1.10.2, `go-sqlite3` v1.14.24→v1.14.47; plugin `typescript` 4.9→5.9.3 / `esbuild` 0.17→0.28.1 / `@types/node` 18→22 — held `typescript` 6.0 and `@types/node` 26 as brand-new). Residual LOWs:
