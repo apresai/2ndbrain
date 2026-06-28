@@ -138,6 +138,35 @@ func runModelsCalibrate(cmd *cobra.Command, args []string) error {
 		ActiveSource:    source,
 	}
 
+	// Asymmetric models (Nova embeds queries GENERIC_RETRIEVAL but documents
+	// GENERIC_INDEX) break this command's premise: it samples document<->document
+	// cosines, which the query-side purpose flip leaves unchanged, so the
+	// recommendation reads far too high (the document noise floor, not the
+	// query->document one). Persisting that via --save would override the correct
+	// builtin and silently degrade semantic search to BM25-only — so we warn AND
+	// refuse to save (including under --porcelain), rather than warning while
+	// saving anyway. Phase 1b will measure the query side so --save becomes
+	// correct for these models.
+	asymmetric := ai.IsAsymmetricEmbeddingModel(cfg.EmbeddingModel)
+	if asymmetric {
+		if !flagPorcelain {
+			fmt.Fprintf(os.Stderr,
+				"warning: %s embeds queries (GENERIC_RETRIEVAL) and documents (GENERIC_INDEX)\n"+
+					"  asymmetrically, so this document-to-document calibration OVERSTATES the search-time\n"+
+					"  threshold and would reject real matches. The model's built-in recommendation\n"+
+					"  (see `2nb ai status` / `2nb models list`) is the safe pick.\n",
+				cfg.EmbeddingModel)
+		}
+		if calibrateSave {
+			if !flagPorcelain {
+				fmt.Fprintln(os.Stderr,
+					"  --save refused for this model: it would persist the overstated threshold and break\n"+
+						"  search. Set one explicitly with `2nb config set ai.similarity_threshold` if needed.")
+			}
+			calibrateSave = false
+		}
+	}
+
 	if calibrateSave {
 		scope, vaultRoot, err := resolveCatalogScope(calibrateScope)
 		if err != nil {
@@ -154,7 +183,7 @@ func runModelsCalibrate(cmd *cobra.Command, args []string) error {
 		return output.Write(os.Stdout, format, result)
 	}
 
-	printCalibration(cmd, result, calibrateSave)
+	printCalibration(cmd, result, calibrateSave, asymmetric)
 	return nil
 }
 
@@ -229,7 +258,7 @@ func saveCalibration(scope ai.UserCatalogScope, vaultRoot, provider, modelID str
 	return ai.SaveUserCatalogEntry(scope, vaultRoot, entry)
 }
 
-func printCalibration(cmd *cobra.Command, r calibrationResult, saved bool) {
+func printCalibration(cmd *cobra.Command, r calibrationResult, saved, asymmetric bool) {
 	w := cmd.OutOrStdout()
 	fmt.Fprintf(w, "Calibrating %s/%s on %d documents (%d random pairs)\n\n",
 		r.Provider, r.Model, r.DocCount, r.SampleCount)
@@ -244,9 +273,14 @@ func printCalibration(cmd *cobra.Command, r calibrationResult, saved bool) {
 	fmt.Fprintf(w, "Currently active:      %.2f  (%s)\n", r.ActiveThreshold, r.ActiveSource)
 	if saved {
 		fmt.Fprintf(w, "\nSaved to %s (source will now show as \"user calibration\")\n", r.Saved)
+	} else if asymmetric {
+		// For an asymmetric model the doc-to-doc value above overstates the
+		// search-time threshold, so don't nudge the user toward --save (the run
+		// already warned and refused it). Point them at the safe builtin instead.
+		fmt.Fprintln(w, "\nThis model embeds queries asymmetrically; the value above overstates the search-time")
+		fmt.Fprintln(w, "threshold. The built-in recommendation (`2nb ai status`) is the safe pick — not --save.")
 	} else {
 		fmt.Fprintln(w, "\nTo apply this for your vault: 2nb models calibrate --save")
 		fmt.Fprintln(w, "To apply globally:             2nb models calibrate --save --scope global")
 	}
 }
-

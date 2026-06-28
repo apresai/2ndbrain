@@ -51,7 +51,7 @@ func TestResolveSimilarityThreshold(t *testing.T) {
 		{
 			name:       "nova-2 catalog recommendation when config unset",
 			cfg:        AIConfig{Provider: "bedrock", EmbeddingModel: "amazon.nova-2-multimodal-embeddings-v1:0"},
-			want:       0.65,
+			want:       0.25,
 			wantSource: ThresholdSourceModel,
 		},
 		{
@@ -96,7 +96,7 @@ func TestRecommendedSimilarityThresholdFor(t *testing.T) {
 		modelID  string
 		want     float64
 	}{
-		{"nova-2 has measured recommendation", "bedrock", "amazon.nova-2-multimodal-embeddings-v1:0", 0.65},
+		{"nova-2 has measured recommendation", "bedrock", "amazon.nova-2-multimodal-embeddings-v1:0", 0.25},
 		{"nemotron has estimate", "openrouter", "nvidia/llama-nemotron-embed-vl-1b-v2:free", 0.60},
 		{"nomic has estimate", "ollama", "nomic-embed-text", 0.50},
 		{"mxbai has estimate", "ollama", "mxbai-embed-large", 0.55},
@@ -137,7 +137,7 @@ func TestResolveSimilarityThresholdFull_UserCatalogOverride(t *testing.T) {
 	cfg := AIConfig{Provider: "bedrock", EmbeddingModel: "amazon.nova-2-multimodal-embeddings-v1:0"}
 	got, source := cfg.ResolveSimilarityThresholdFull(vault)
 	if got != 0.72 {
-		t.Errorf("threshold = %v, want 0.72 (user calibration should override builtin 0.65)", got)
+		t.Errorf("threshold = %v, want 0.72 (user calibration should override builtin 0.25)", got)
 	}
 	if source != ThresholdSourceUserCalibration {
 		t.Errorf("source = %q, want %q", source, ThresholdSourceUserCalibration)
@@ -160,8 +160,8 @@ func TestResolveSimilarityThresholdFull_UserCatalogOverride(t *testing.T) {
 	// Empty vaultRoot bypasses user-catalog lookup entirely.
 	cfg3 := AIConfig{Provider: "bedrock", EmbeddingModel: "amazon.nova-2-multimodal-embeddings-v1:0"}
 	got, source = cfg3.ResolveSimilarityThresholdFull("")
-	if got != 0.65 || source != ThresholdSourceModel {
-		t.Errorf("empty vaultRoot should skip user catalog: got (%v, %q), want (0.65, %q)", got, source, ThresholdSourceModel)
+	if got != 0.25 || source != ThresholdSourceModel {
+		t.Errorf("empty vaultRoot should skip user catalog: got (%v, %q), want (0.25, %q)", got, source, ThresholdSourceModel)
 	}
 }
 

@@ -64,7 +64,7 @@ func GatherCandidates(ctx context.Context, v *vault.Vault, embedder ai.Embedding
 		if len(runes) > queryWindowRunes {
 			runes = runes[:queryWindowRunes]
 		}
-		if vecs, err := embedder.Embed(ctx, []string{string(runes)}); err == nil && len(vecs) > 0 {
+		if vecs, err := embedder.Embed(ctx, []string{string(runes)}, ai.WithPurpose(ai.PurposeQuery)); err == nil && len(vecs) > 0 {
 			scored := search.VectorSearchThreshold(vecs[0], in.DocIDs, in.Embeddings, max*3, in.Threshold)
 			engine := search.NewEngine(v.DB.Conn())
 			for _, s := range scored {

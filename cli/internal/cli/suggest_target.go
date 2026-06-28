@@ -94,7 +94,7 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 	if embedder, eerr := ai.DefaultRegistry.Embedder(cfg.Provider); eerr == nil && embedder.Available(ctx) {
-		if qv, verr := embedder.Embed(ctx, []string{target}); verr == nil && len(qv) > 0 {
+		if qv, verr := embedder.Embed(ctx, []string{target}, ai.WithPurpose(ai.PurposeQuery)); verr == nil && len(qv) > 0 {
 			if docIDs, embeddings, lerr := v.DB.AllEmbeddings(); lerr == nil {
 				threshold, _ := cfg.ResolveSimilarityThresholdFull(v.Root)
 				for _, s := range search.VectorSearchThreshold(qv[0], docIDs, embeddings, suggestTargetLimit*3, threshold) {

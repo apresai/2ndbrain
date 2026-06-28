@@ -332,6 +332,15 @@ func novaEmbeddingPurpose(purpose string) string {
 	return "GENERIC_INDEX"
 }
 
+// IsAsymmetricEmbeddingModel reports whether a model embeds queries and
+// documents with different purposes (Nova's GENERIC_RETRIEVAL vs GENERIC_INDEX).
+// For such models the search-time distribution is query->document, so a
+// threshold calibrated on document<->document cosines — or carried over from the
+// old symmetric behavior — does not reflect real retrieval and reads too high.
+func IsAsymmetricEmbeddingModel(model string) bool {
+	return strings.Contains(model, "nova-2-multimodal-embeddings")
+}
+
 func (b *BedrockEmbedder) embedNova(ctx context.Context, texts []string, cfg EmbedConfig) ([][]float32, error) {
 	purpose := novaEmbeddingPurpose(cfg.Purpose)
 	// Matryoshka: honor a per-call dimension override, else the vault default.

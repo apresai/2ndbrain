@@ -40,3 +40,24 @@ func TestNovaEmbeddingPurpose(t *testing.T) {
 		t.Errorf("empty purpose = %q, want GENERIC_INDEX", got)
 	}
 }
+
+func TestIsAsymmetricEmbeddingModel(t *testing.T) {
+	// This gate guards both migration-safety warnings (ai status > 0.45 and the
+	// calibrate refuse-save), so a regression in the match silently disables them.
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{"amazon.nova-2-multimodal-embeddings-v1:0", true},
+		{"us.amazon.nova-2-multimodal-embeddings-v1:0", true}, // inference-profile prefix
+		{"amazon.titan-embed-text-v2:0", false},
+		{"cohere.embed-english-v3", false},
+		{"nomic-embed-text", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := IsAsymmetricEmbeddingModel(tc.model); got != tc.want {
+			t.Errorf("IsAsymmetricEmbeddingModel(%q) = %v, want %v", tc.model, got, tc.want)
+		}
+	}
+}

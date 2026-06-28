@@ -168,6 +168,16 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	// so coverage reads cleanly against what can actually be embedded.
 	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.VaultEmbeddableDocs)
 	fmt.Printf("Search threshold: %g (%s)\n", status.SimilarityThreshold, status.SimilarityThresholdSource)
+	// Loud degradation: an asymmetric model (Nova) embeds queries
+	// GENERIC_RETRIEVAL, which collapses the cosine scale (true matches land
+	// ~0.25-0.45). A threshold above ~0.45 is almost certainly carried over from
+	// the old symmetric embedding and will silently reject every semantic match,
+	// degrading search to BM25-only. Flag it with the one-line fix.
+	if ai.IsAsymmetricEmbeddingModel(status.EmbeddingModel) && status.SimilarityThreshold > 0.45 {
+		fmt.Printf("  ⚠ threshold %g looks calibrated for the old symmetric embedding; semantic search\n"+
+			"    will reject real matches. Fix: `2nb config set ai.similarity_threshold 0.25` (or clear\n"+
+			"    the saved calibration so the built-in ~0.25 applies).\n", status.SimilarityThreshold)
+	}
 
 	// Vault embedding state (portability) — the authoritative "is this
 	// vault ready to use here?" section. Always shown so the user never

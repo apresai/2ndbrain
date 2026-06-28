@@ -235,7 +235,7 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 			MinVectorScore: threshold,
 		}
 		if vectorReady {
-			queryVecs, err := embedder.Embed(ctx, []string{query})
+			queryVecs, err := embedder.Embed(ctx, []string{query}, ai.WithPurpose(ai.PurposeQuery))
 			if err != nil {
 				msg := fmt.Sprintf("semantic retrieval disabled: embedder returned error (%v)", err)
 				slog.Warn("ask semantic retrieval disabled: embedder failed", "err", err)
