@@ -299,6 +299,12 @@ func (db *DB) FindByContentHash(hash string, excludeID string) (string, error) {
 }
 
 func (db *DB) DeleteDocument(docID string) error {
+	// vec_chunks (vec0) has no FK cascade, so clear the doc's chunk vectors
+	// explicitly. chunks/links/tags cascade via ON DELETE CASCADE on the
+	// documents row below.
+	if err := db.DeleteDocChunkVectors(docID); err != nil {
+		return fmt.Errorf("delete chunk vectors: %w", err)
+	}
 	_, err := db.conn.Exec("DELETE FROM documents WHERE id = ?", docID)
 	return err
 }

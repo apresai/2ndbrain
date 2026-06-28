@@ -13,6 +13,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
+	"github.com/apresai/2ndbrain/internal/embed"
 	gitpkg "github.com/apresai/2ndbrain/internal/git"
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
 	"github.com/apresai/2ndbrain/internal/polish"
@@ -195,12 +196,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 			if err != nil {
 				continue
 			}
-			vecs, err := embedder.Embed(ctx, []string{parsed.IndexableBody()})
-			if err != nil {
-				continue
-			}
-			parsed.ComputeContentHash()
-			if h.vault.DB.SetEmbedding(doc.ID, vecs[0], model, parsed.ContentHash) == nil {
+			if n, err := embed.Document(ctx, h.vault.DB, embedder, doc.ID, parsed, model); err == nil && n > 0 {
 				embedded++
 			}
 		}
@@ -513,9 +509,7 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 	cfg := h.vault.Config.AI
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if embErr == nil && embedder.Available(ctx) {
-		if vecs, err := embedder.Embed(ctx, []string{doc.IndexableBody()}); err == nil {
-			h.vault.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash)
-		}
+		embed.Document(ctx, h.vault.DB, embedder, doc.ID, doc, cfg.EmbeddingModel)
 		h.invalidateEmbeddings()
 	}
 
@@ -951,9 +945,7 @@ func (h *handlers) writeBodyAndReindex(ctx context.Context, doc *document.Docume
 	doc.ComputeContentHash()
 	cfg := h.vault.Config.AI
 	if embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider); embErr == nil && embedder.Available(ctx) {
-		if vecs, err := embedder.Embed(ctx, []string{doc.IndexableBody()}); err == nil && len(vecs) > 0 {
-			h.vault.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash)
-		}
+		embed.Document(ctx, h.vault.DB, embedder, doc.ID, doc, cfg.EmbeddingModel)
 		h.invalidateEmbeddings()
 	}
 

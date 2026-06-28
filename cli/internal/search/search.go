@@ -87,13 +87,22 @@ func (e *Engine) HybridSearch(opts Options, queryEmbedding []float32, docIDs []s
 		return nil, "", err
 	}
 
-	// If no embeddings or forced BM25-only, return keyword results
-	if opts.BM25Only || len(embeddings) == 0 || queryEmbedding == nil {
+	if opts.BM25Only || queryEmbedding == nil {
 		return bm25Results, ModeKeyword, nil
 	}
 
-	// Vector search, with optional threshold to drop noise neighbors
-	vectorResults := VectorSearchThreshold(queryEmbedding, docIDs, embeddings, opts.Limit*2, opts.MinVectorScore)
+	// Prefer the in-SQL per-chunk vec0 KNN (rolled up to best-per-doc): it
+	// removes the Go-side embedding load and makes the vector signal per-chunk.
+	// Fall back to the brute-force over whole-doc embeddings when the vec_chunks
+	// table isn't present (a vault not yet re-embedded under the vec0 index).
+	var vectorResults []ScoredDoc
+	if vd, ok, verr := e.vecChunkSearchByDoc(queryEmbedding, opts.Limit*4, opts.MinVectorScore); verr == nil && ok {
+		vectorResults = vd
+	} else if len(embeddings) > 0 {
+		vectorResults = VectorSearchThreshold(queryEmbedding, docIDs, embeddings, opts.Limit*2, opts.MinVectorScore)
+	} else {
+		return bm25Results, ModeKeyword, nil
+	}
 
 	// Combine with RRF (engine implements DocLookup for vector-only results)
 	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e)
