@@ -11,6 +11,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
+	"github.com/apresai/2ndbrain/internal/embed"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -249,14 +250,10 @@ func embedNewDocument(v *vault.Vault, doc *document.Document) {
 		return
 	}
 
-	vecs, err := embedder.Embed(ctx, []string{doc.IndexableBody()})
-	if err != nil {
+	// Per-chunk embed via the shared path (vec_chunks + mean doc vector), so a
+	// freshly-created note is immediately searchable through vec0. Best-effort:
+	// a failure backfills on the next index.
+	if _, err := embed.Document(ctx, v.DB, embedder, doc.ID, doc, cfg.EmbeddingModel); err != nil {
 		slog.Debug("inline embed skipped: embed error; will backfill on next index", "path", doc.Path, "provider", cfg.Provider, "err", err)
-		return
-	}
-
-	if err := v.DB.SetEmbedding(doc.ID, vecs[0], cfg.EmbeddingModel, doc.ContentHash); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to store embedding: %v\n", err)
-		slog.Warn("failed to store embedding", "err", err)
 	}
 }

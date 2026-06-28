@@ -23,7 +23,7 @@ The canonical `2nb` agent skill lives in this repo, so any agent (Warp, Claude C
 - [`mcp-integration.md`](docs/mcp-integration.md) — MCP setup snippets for Claude Code, Cursor, and other clients
 - [`templates.md`](docs/templates.md) — Built-in document type templates (adr, runbook, prd, prfaq, note, postmortem)
 - [`polish-prompt-eval.md`](docs/polish-prompt-eval.md) — How the `polish` copy-edit system prompt was chosen (LLM-as-judge), with the reproducible harness and rationale
-- [`adr/0001-vector-search.md`](docs/adr/0001-vector-search.md) — Vector-search architecture decision: brute-force today, sqlite-vec (exact in-DB SIMD KNN) next, true ANN/HNSW deferred — with measured latency/memory numbers and the revisit trigger
+- [`adr/0001-vector-search.md`](docs/adr/0001-vector-search.md) — Vector-search architecture decision: per-chunk sqlite-vec (exact in-DB SIMD KNN over `vec_chunks`) is now the primary vector path, with the Go brute-force over whole-doc embeddings as the fallback until a vault is fully re-embedded; true ANN/HNSW stays deferred — with measured latency/memory numbers and the revisit trigger
 - [`vault-structure.md`](docs/vault-structure.md) — On-disk vault layout reference (Superseded for 0.5.0, see [docs/obsidian/README.md](docs/obsidian/README.md))
 - [`obsidian/README.md`](docs/obsidian/README.md) — Obsidian-native pivot documentation and architectural model
 
@@ -115,7 +115,7 @@ Key patterns:
 
 ## Go CLI (`cli/`)
 
-**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** `modernc.org/sqlite` (pure-Go) with FTS5 compiled in (sqlite-vec available via modernc's `vec/`, wired in a follow-up)
+**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** `modernc.org/sqlite` (pure-Go) with FTS5 compiled in; sqlite-vec (modernc's `vec/`) backs the per-chunk `vec_chunks` vec0 KNN that is now the primary vector path
 
 ### Package Layout
 
@@ -453,7 +453,7 @@ Beyond `.md`, the indexer now parses and indexes `.canvas` (JSON Canvas) and `.b
 | **note** | title | draft, complete |
 | **postmortem** | title, status, incident-date | draft, reviewed, published |
 
-**SQLite tables (`index.db`):** `documents`, `chunks`, `chunks_fts` (FTS5), `links`, `tags`, `aliases`, `schema_version`. Schema v3 adds the `aliases` table (`doc_id`, `alias`) and a `block_id` column on both `chunks` and `links` for Obsidian block references (`^block-id`).
+**SQLite tables (`index.db`):** `documents`, `chunks`, `chunks_fts` (FTS5), `vec_chunks` (sqlite-vec vec0), `links`, `tags`, `aliases`, `schema_version`. Schema v3 adds the `aliases` table (`doc_id`, `alias`) and a `block_id` column on both `chunks` and `links` for Obsidian block references (`^block-id`). `vec_chunks` is a vec0 virtual table (`chunk_id` PK, `embedding float[dim] distance_metric=cosine`, `+doc_id`/`+content_hash`/`+model` aux columns) holding per-chunk embeddings for KNN; it is created lazily on first embed and dropped+recreated when the embedding dimension changes (no `schema_version` bump, since it is derived, regenerable state).
 
 **SQLite tables (`bench.db`):** `favorites` (provider, model_id, model_type, added_at), `runs` (timestamp, provider, model_id, probe, latency_ms, ok, detail, vault_doc_count), `schema_version`. Created on first `models bench`.
 

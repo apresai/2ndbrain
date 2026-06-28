@@ -8,13 +8,13 @@ import (
 )
 
 type Result struct {
-	DocID       string         `json:"doc_id"`
-	Path        string         `json:"path"`
-	Title       string         `json:"title"`
-	ChunkID     string         `json:"chunk_id"`
-	HeadingPath string         `json:"heading_path"`
-	Content     string         `json:"content"`
-	Score       float64        `json:"score"`
+	DocID       string  `json:"doc_id"`
+	Path        string  `json:"path"`
+	Title       string  `json:"title"`
+	ChunkID     string  `json:"chunk_id"`
+	HeadingPath string  `json:"heading_path"`
+	Content     string  `json:"content"`
+	Score       float64 `json:"score"`
 	// VectorScore is the raw cosine similarity when a result came through
 	// the vector channel. Zero when the result is BM25-only. Lets callers
 	// distinguish "strong semantic match" from "RRF scraped the barrel".
@@ -87,13 +87,24 @@ func (e *Engine) HybridSearch(opts Options, queryEmbedding []float32, docIDs []s
 		return nil, "", err
 	}
 
-	// If no embeddings or forced BM25-only, return keyword results
-	if opts.BM25Only || len(embeddings) == 0 || queryEmbedding == nil {
+	if opts.BM25Only || queryEmbedding == nil {
 		return bm25Results, ModeKeyword, nil
 	}
 
-	// Vector search, with optional threshold to drop noise neighbors
-	vectorResults := VectorSearchThreshold(queryEmbedding, docIDs, embeddings, opts.Limit*2, opts.MinVectorScore)
+	// Prefer the in-SQL per-chunk vec0 KNN (rolled up to best-per-doc): it
+	// removes the Go-side embedding load and makes the vector signal per-chunk.
+	// Fall back to the brute-force over whole-doc embeddings when the vec_chunks
+	// table isn't present, or when it doesn't yet cover the whole corpus (a
+	// vault only partially re-embedded under the vec0 index) — len(embeddings)
+	// is the coverage target, since every embedded doc is in that corpus.
+	var vectorResults []ScoredDoc
+	if vd, ok, verr := e.vecChunkSearchByDoc(queryEmbedding, opts.Limit*4, opts.MinVectorScore, len(embeddings)); verr == nil && ok {
+		vectorResults = vd
+	} else if len(embeddings) > 0 {
+		vectorResults = VectorSearchThreshold(queryEmbedding, docIDs, embeddings, opts.Limit*2, opts.MinVectorScore)
+	} else {
+		return bm25Results, ModeKeyword, nil
+	}
 
 	// Combine with RRF (engine implements DocLookup for vector-only results)
 	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e)

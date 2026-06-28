@@ -2,6 +2,16 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## per-chunk vec0 single-path (PR #110) — chad-review follow-ups
+
+9-pass review (5 dimensions, adversarially verified). The two HIGHs were fixed in-PR: (1) duplicate-heading `chunk_id` collisions now collapse last-wins in `embed.Document` + `SetDocChunkVectors` instead of UNIQUE-failing the vec0 PK and wedging a doc's embedding; (2) the vec0 path is now gated on chunk-vector **coverage** (`COUNT(DISTINCT doc_id)` vs the doc-level corpus size) so a partially-migrated vault defers to brute-force instead of silently hiding un-re-embedded docs. The NaN/Inf/zero-norm poison guard (MEDIUM) and the doc drift (CLAUDE.md ×3 / vault-structure.md / ADR 0001) were also fixed in-PR. Residual MEDIUM/LOW:
+
+- **LOW — `SetDocChunkVectors` delete+insert is non-transactional.** A mid-loop insert error (or crash) leaves the doc with its old vectors deleted and only some new ones inserted; a concurrent reader can observe the partial state. The common/transient case self-heals (the doc-level re-embed gate stays dirty until the next index), and the dedup/guard fixes remove the known permanent-error trigger. Wrap the DELETE + INSERTs in one tx for atomic replace, matching `indexer.go`'s chunk-write pattern. `cli/internal/store/vec.go`.
+- **LOW — `EnsureVecChunks` DROP+CREATE on a dimension change is unsynchronized DDL.** Two processes re-embedding concurrently right after a model switch could race the drop/create. Low likelihood (requires simultaneous dimension change). `cli/internal/store/vec.go`.
+- **LOW (dead code / dup) — `store.VecSearchChunks`/`ChunkScore`/`ChunkVectorCount` are exported but unused by production** (search uses its own `vecChunkSearchByDoc`), and `vecLiteral` is duplicated in `store/vec.go` and `search/vecsearch.go` (the two KNN paths default to k=20 vs k=40 and could drift). Either route search through the store API and drop the dup, or document the store API as future-facing. `cli/internal/store/vec.go`, `cli/internal/search/vecsearch.go`.
+- **LOW (coverage) — `DeleteDocument → DeleteDocChunkVectors` wiring is untested with `vec_chunks` populated.** All delete tests run with the table absent (the call short-circuits), so a regression dropping the call would leave orphan chunk vectors as ghost KNN hits with no failing test. `DeleteDocChunkVectors` itself is unit-tested. Add: `EnsureVecChunks` + `SetDocChunkVectors` + `UpsertDocument` + `DeleteDocument` → assert `ChunkVectorCount == 0`. `cli/internal/store/docs.go:305`.
+- **LOW (coverage) — `embed.Document` orchestration is only transitively tested** (the meanPool helper and the new dedup/guard/coverage paths are now unit-tested at the store/search layers, but the orchestration's empty-chunk → `(0,nil)` Skipped classification and the `parsed.ID = docID` pin need a live embedder, which skips without creds per the no-mock policy). The credential-free empty-chunks branch is the one realistically lockable piece. `cli/internal/embed/embed.go`.
+
 ## modernc migration (PR #109) — chad-review follow-ups
 
 The HIGH doc stragglers (`AGENTS.md`, `CONTRIBUTING.md`) and the e2e build-flag divergence were fixed in-PR. Residual MEDIUM/LOW:

@@ -10,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // pure-Go, CGO-free SQLite driver (registers "sqlite")
+	_ "modernc.org/sqlite"     // pure-Go, CGO-free SQLite driver (registers "sqlite")
+	_ "modernc.org/sqlite/vec" // sqlite-vec (vec0 virtual table), compiled into modernc
 )
 
 // driverName is the pure-Go modernc SQLite driver (CGO-free), registered by the

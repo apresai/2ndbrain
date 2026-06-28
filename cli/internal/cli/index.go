@@ -7,11 +7,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
+	"github.com/apresai/2ndbrain/internal/embed"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -293,42 +293,23 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 			continue
 		}
 
-		// Empty or whitespace-only notes (e.g. a blank "Untitled.md") have
-		// nothing to embed, and providers like Amazon Nova-2 reject empty
-		// input with a 400 ValidationException. Skip them — counted as
-		// skipped, not failed, so a vault full of blank notes still reports a
-		// clean (exit 0) index instead of a perpetual failure that wedges the
-		// app's progress UI.
-		body := parsed.IndexableBody()
-		if strings.TrimSpace(body) == "" {
-			stats.Skipped++
-			slog.Debug("embedding skipped: empty document", "path", doc.Path)
-			if !flagPorcelain {
-				fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", doc.Path)
-			}
-			continue
-		}
-
-		vecs, err := embedder.Embed(ctx, []string{body})
+		// Per-chunk embeddings via the shared embed path (also used by `create`
+		// and the MCP write tools): each heading-bounded chunk goes into
+		// vec_chunks (vec0) for chunk-level KNN, and documents.embedding is the
+		// mean of the chunk vectors. n==0 means an empty doc — skip, not fail.
+		n, err := embed.Document(ctx, v.DB, embedder, doc.ID, parsed, model)
 		if err != nil {
 			stats.Failed++
 			slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
 			fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
 			continue
 		}
-		if len(vecs) == 0 || len(vecs[0]) == 0 {
-			stats.Failed++
-			err := fmt.Errorf("provider returned empty embedding")
-			slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
-			fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
-			continue
-		}
-
-		parsed.ComputeContentHash()
-		if err := v.DB.SetEmbedding(doc.ID, vecs[0], model, parsed.ContentHash); err != nil {
-			stats.Failed++
-			slog.Warn("store embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
-			fmt.Fprintf(os.Stderr, "  store error %s: %v\n", doc.Path, err)
+		if n == 0 {
+			stats.Skipped++
+			slog.Debug("embedding skipped: empty document", "path", doc.Path)
+			if !flagPorcelain {
+				fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", doc.Path)
+			}
 			continue
 		}
 
