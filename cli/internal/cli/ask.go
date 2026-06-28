@@ -206,6 +206,26 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		vectorReady = false
 	}
 
+	// Load the embedding corpus once, up front. AllEmbeddings() reads and
+	// decodes every document vector, and a rewrite-fallback ask calls
+	// retrieve() twice — so loading inside the closure paid that cost
+	// twice for the same (identical) corpus. Hoisting it here makes ask
+	// load at most once; only the per-query vector still varies, so that
+	// stays inside the closure.
+	var corpusIDs []string
+	var corpusVecs [][]float32
+	if vectorReady {
+		ids, vecs, err := v.DB.AllEmbeddings()
+		if err != nil {
+			msg := fmt.Sprintf("semantic retrieval disabled: failed to load embeddings (%v)", err)
+			slog.Warn("ask semantic retrieval disabled: load embeddings failed", "err", err)
+			addWarning(msg)
+			vectorReady = false
+		} else {
+			corpusIDs, corpusVecs = ids, vecs
+		}
+	}
+
 	// retrieve runs one hybrid-with-fallback retrieval pass for a query.
 	// Returns the results and whether the hybrid (vector) channel was used.
 	retrieve := func(query string) ([]search.Result, bool, error) {
@@ -221,20 +241,13 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 				slog.Warn("ask semantic retrieval disabled: embedder failed", "err", err)
 				addWarning(msg)
 			} else if len(queryVecs) > 0 {
-				docIDs, embeddings, err := v.DB.AllEmbeddings()
+				results, mode, err := engine.HybridSearch(opts, queryVecs[0], corpusIDs, corpusVecs)
 				if err != nil {
-					msg := fmt.Sprintf("semantic retrieval disabled: failed to load embeddings (%v)", err)
-					slog.Warn("ask semantic retrieval disabled: load embeddings failed", "err", err)
+					msg := fmt.Sprintf("semantic retrieval disabled: hybrid search failed (%v)", err)
+					slog.Warn("ask semantic retrieval disabled: hybrid search failed", "err", err)
 					addWarning(msg)
 				} else {
-					results, mode, err := engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
-					if err != nil {
-						msg := fmt.Sprintf("semantic retrieval disabled: hybrid search failed (%v)", err)
-						slog.Warn("ask semantic retrieval disabled: hybrid search failed", "err", err)
-						addWarning(msg)
-					} else {
-						return results, mode == search.ModeHybrid, nil
-					}
+					return results, mode == search.ModeHybrid, nil
 				}
 			}
 		}
