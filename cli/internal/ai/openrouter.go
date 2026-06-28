@@ -101,7 +101,9 @@ type orEmbedResponse struct {
 	} `json:"data"`
 }
 
-func (e *OpenRouterEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+// Embed generates embeddings. OpenRouter's embedding API has no index-vs-query
+// or dimension notion here, so EmbedOptions are accepted and ignored.
+func (e *OpenRouterEmbedder) Embed(ctx context.Context, texts []string, _ ...EmbedOption) ([][]float32, error) {
 	req := orEmbedRequest{
 		Model: e.model,
 		Input: texts,

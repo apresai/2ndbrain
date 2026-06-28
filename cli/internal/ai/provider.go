@@ -17,10 +17,46 @@ func IsKnownProvider(name string) bool {
 	return false
 }
 
+// Embedding purposes. Models like Amazon Nova-2 are asymmetric: a stored
+// document and a search query are embedded differently. PurposeIndex is the
+// default (stored content); PurposeQuery is for the query side of retrieval.
+// Providers that don't distinguish (Ollama, OpenRouter) ignore the purpose.
+const (
+	PurposeIndex = "index"
+	PurposeQuery = "query"
+)
+
+// EmbedConfig is the resolved set of per-request embedding options.
+// Zero value = stored-document defaults (PurposeIndex, model's default dimension).
+type EmbedConfig struct {
+	Purpose   string // PurposeIndex (default) or PurposeQuery
+	Dimension int    // 0 = the model/config default
+}
+
+// EmbedOption tunes a single Embed call (functional-options pattern so the
+// common Embed(ctx, texts) call sites stay unchanged).
+type EmbedOption func(*EmbedConfig)
+
+// WithPurpose sets the embedding purpose (PurposeIndex / PurposeQuery).
+func WithPurpose(p string) EmbedOption { return func(c *EmbedConfig) { c.Purpose = p } }
+
+// WithDimension overrides the output embedding dimension for this call
+// (Matryoshka models like Nova-2 support 256/384/1024/3072). 0 = default.
+func WithDimension(d int) EmbedOption { return func(c *EmbedConfig) { c.Dimension = d } }
+
+// ResolveEmbedOptions folds options into an EmbedConfig with PurposeIndex default.
+func ResolveEmbedOptions(opts ...EmbedOption) EmbedConfig {
+	cfg := EmbedConfig{Purpose: PurposeIndex}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
+
 // EmbeddingProvider generates vector embeddings from text.
 type EmbeddingProvider interface {
 	Name() string
-	Embed(ctx context.Context, texts []string) ([][]float32, error)
+	Embed(ctx context.Context, texts []string, opts ...EmbedOption) ([][]float32, error)
 	Dimensions() int
 	Available(ctx context.Context) bool
 	ListModels(ctx context.Context) ([]ModelInfo, error)
@@ -74,6 +110,12 @@ type ModelInfo struct {
 	VersionSortKey string `json:"version_sort_key,omitempty" yaml:"-"`
 	Dimensions     int    `json:"dimensions,omitempty" yaml:"dimensions,omitempty"`
 	ContextLen     int    `json:"context_length,omitempty" yaml:"context_length,omitempty"`
+	// SupportedDimensions lists every output dimension a Matryoshka embedding
+	// model accepts (e.g. Nova-2: 256/384/1024/3072). Empty = only Dimensions.
+	SupportedDimensions []int `json:"supported_dimensions,omitempty" yaml:"supported_dimensions,omitempty"`
+	// Modalities lists the input modalities an embedding model accepts
+	// (e.g. Nova-2: text/image/video/audio). Empty = text only.
+	Modalities []string `json:"modalities,omitempty" yaml:"modalities,omitempty"`
 	// RecommendedSimilarityThreshold is the suggested minimum cosine similarity
 	// for semantic search with this embedding model. Used when the vault's
 	// ai.similarity_threshold isn't explicitly set. Different embedding models
