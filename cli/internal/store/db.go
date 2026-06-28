@@ -10,26 +10,16 @@ import (
 	"strings"
 	"time"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite" // pure-Go, CGO-free SQLite driver (registers "sqlite")
 )
 
-// driverName is a 2nb-specific SQLite driver registered with a ConnectHook that
-// lowers wal_autocheckpoint on every connection. The mattn default (1000 pages,
-// ~4MB) runs PASSIVE-only and never truncates the -wal file, so it parks at its
-// high-water mark — the source of the observed 11x WAL bloat. 256 pages (~1MB)
-// keeps the steady-state WAL small; `2nb vault checkpoint` (TRUNCATE) is what
-// actually shrinks the file on demand. The default "sqlite3" driver stays
-// registered (mattn's own init) for the bench DB and legacy migration opens.
-const driverName = "sqlite3_2nb"
-
-func init() {
-	sql.Register(driverName, &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			_, err := conn.Exec("PRAGMA wal_autocheckpoint=256", nil)
-			return err
-		},
-	})
-}
+// driverName is the pure-Go modernc SQLite driver (CGO-free), registered by the
+// blank import above. wal_autocheckpoint is lowered to 256 pages (~1MB) per
+// connection via the DSN _pragma in Open: the SQLite default (1000 pages, ~4MB)
+// runs PASSIVE-only and never truncates the -wal file, so it parks at its
+// high-water mark (the observed 11x WAL bloat). 256 keeps the steady-state WAL
+// small; `2nb vault checkpoint` (TRUNCATE) shrinks it on demand.
+const driverName = "sqlite"
 
 // MaxSchemaVersion is the highest schema version this binary understands.
 // A vault whose schema_version row exceeds this value was produced by a
@@ -54,7 +44,11 @@ func Open(dbPath string) (*DB, error) {
 	// immediately, bypassing busy_timeout) for the write transactions in
 	// indexFile/ResolveLinks; plain reads (Query/QueryRow, no explicit tx) are
 	// unaffected.
-	conn, err := sql.Open(driverName, dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000&_txlock=immediate")
+	// Bare path (no file: prefix): a file:-URI DSN percent-decodes the path, so a
+	// vault folder containing '%' (or other URI metacharacters) fails to open.
+	// modernc parses _pragma/_txlock from the query regardless of the prefix, so
+	// the bare form keeps the path literal (matching the prior mattn behavior).
+	conn, err := sql.Open(driverName, dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=wal_autocheckpoint(256)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

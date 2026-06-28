@@ -24,8 +24,9 @@ func TestMain(m *testing.M) {
 
 	binaryPath = filepath.Join(dir, "2nb")
 
-	cmd := exec.Command("go", "build", "-tags", "fts5", "-o", binaryPath, "./cmd/2nb")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
+	// Build the e2e binary exactly as it ships: pure-Go modernc, CGO off, no tags.
+	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/2nb")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		panic("build binary: " + err.Error() + "\n" + string(out))

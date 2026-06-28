@@ -51,7 +51,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	}
 
 	// 1. Read current version from database without migrating it
-	dbConn, err := sql.Open("sqlite3", dbPath)
+	dbConn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

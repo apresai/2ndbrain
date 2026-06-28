@@ -52,7 +52,7 @@ A release is **two steps**: CI ships the CLI + plugin; the macOS app is signed, 
 
 1. `make bump-build` (or `bump-minor`/`bump-major`) — increment `VERSION`, regenerate `Version.swift`, sync the plugin version files.
 2. `make release` — updates `CHANGELOG.md`, commits, tags `v<VERSION>`, pushes tag.
-3. GitHub Actions (`.github/workflows/release.yml`) on tag push: macos-latest arm64, CGO_ENABLED=1; GoReleaser builds CLI for arm64+x86_64 and pushes formula `twonb.rb` to `apresai/homebrew-tap`; builds + uploads the Obsidian plugin assets; maintains the `2nb` formula alias. **CI does NOT build the macOS app or the cask.**
+3. GitHub Actions (`.github/workflows/release.yml`) on tag push: macos-latest, `CGO_ENABLED=0` (pure-Go modernc); GoReleaser builds the CLI for arm64+x86_64 from one runner (no C toolchain, so x86_64 genuinely builds — the old CGO setup silently emitted arm64 for the amd64 target) and pushes formula `twonb.rb` to `apresai/homebrew-tap`; builds + uploads the Obsidian plugin assets; maintains the `2nb` formula alias. **CI does NOT build the macOS app or the cask.**
 4. `make release-app` — **local, after the CI release exists.** Runs `scripts/release-app-local.sh --publish`: builds `SecondBrain.app` (which bundles the freshly-built, version-matched `2nb` CLI at `Contents/Resources/2nb` via the `build-app-release` -> `build-cli` dependency; the script fails fast if the bundled `2nb --version` ≠ `VERSION`), Developer ID-signs the **nested `2nb` binary first** then the app (hardened runtime; the outer sign is not `--deep`, so the nested binary must be signed inside-out or notarization rejects it), gates on **portable load commands** (fails the release if the app exe or bundled `2nb` carries a dangling `LC_RPATH`/`LC_LOAD_DYLIB` that would resolve on the build Mac but not a clean one — `swift build` bakes in an absolute Xcode-toolchain `LC_RPATH`, the documented SPM Gatekeeper footgun, which `build-app-release` strips before signing) plus the bundled `2nb`'s hardened-runtime flag, Apple-notarizes via `notarytool` + staples, then builds a branded drag-to-Applications **`SecondBrain-<VERSION>-arm64.dmg`** (`scripts/make-dmg.sh`, via `create-dmg`), Developer ID-signs + notarizes + staples the **DMG too** (both app and DMG are stapled — Apple distribution best practice, so the app launches offline even after being dragged out and the downloaded `.dmg` passes Gatekeeper offline), uploads the DMG to release `v<VERSION>`, and updates the cask `secondbrain.rb` (version + sha256) in the tap. Signing config is read from `scripts/sign.env` (gitignored; template at `scripts/sign.env.example`); the private key stays in the keychain / cert store. Requires `create-dmg` (`brew install create-dmg`).
 5. `make release-local` — local CLI-only release (no app, no notarization).
 
@@ -72,7 +72,7 @@ cd cli && make test     # All Go tests
 cd cli && make install  # Install to /usr/local/bin/2nb
 ```
 
-**Required:** `CGO_ENABLED=1` and `-tags fts5` for all Go compilation.
+**Pure Go (no CGO):** the CLI uses `modernc.org/sqlite` (CGO-free), so the shipped binary builds with `CGO_ENABLED=0` and **cross-compiles to any GOOS/GOARCH from one host** with no C toolchain and no `-tags fts5` (FTS5 is compiled into the driver; sqlite-vec ships in modernc's `vec/` package, wired in the per-chunk vec0 PR). Tests keep CGO on only because the `-race` detector needs it.
 
 Launch the macOS app via `open` on the `.app` bundle — never run the raw binary directly (it won't register with the window server):
 
@@ -115,7 +115,7 @@ Key patterns:
 
 ## Go CLI (`cli/`)
 
-**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** mattn/go-sqlite3 with FTS5
+**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** `modernc.org/sqlite` (pure-Go) with FTS5 compiled in (sqlite-vec available via modernc's `vec/`, wired in a follow-up)
 
 ### Package Layout
 
@@ -353,7 +353,7 @@ The server self-announces via a one-line `instructions` string in the initialize
 
 ### Testing
 
-Tests use `t.TempDir()` for isolated vaults; each creates its own SQLite DB. Run with `cd cli && make test` (`go test -race -tags fts5 ./...`).
+Tests use `t.TempDir()` for isolated vaults; each creates its own SQLite DB. Run with `cd cli && make test` (`go test -race ./...`).
 
 ## Swift macOS App (`app/`)
 

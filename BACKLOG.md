@@ -2,6 +2,13 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## modernc migration (PR #109) — chad-review follow-ups
+
+The HIGH doc stragglers (`AGENTS.md`, `CONTRIBUTING.md`) and the e2e build-flag divergence were fixed in-PR. Residual MEDIUM/LOW:
+- **MEDIUM — stale CGO/`-tags fts5` mentions in secondary docs** (commands still run; the tag/CGO flags are now harmless no-ops): `docs/polish-prompt-eval.md:47`, `docs/obsidian/integration-guide.md:115`, `docs/obsidian/sprint-plan.md:53`, `docs/agent-teaching.md:149`. Refresh to the pure-Go reality.
+- **LOW — `docs/adr/0001-vector-search.md:69`** describes sqlite-vec on `CGO_ENABLED=1 -tags fts5`; superseded by the modernc decision (historical ADR — add a follow-up ADR 0002 rather than rewrite). **`docs/obsidian/BACKLOG.md:31`** cross-platform "CGO+fts5 needs care" caveat is now inverted (pure-Go cross-compiles freely).
+- **LOW (coverage) — `IsBusyErr` typed `errors.As`+masked-`Code()` branch isn't independently asserted.** A real modernc `*sqlite.Error`'s message already contains `(SQLITE_BUSY)`, so `TestIsBusyErr_RealContention` would pass via the message fallback even if the typed branch broke. Harmless (the fallback is the safety net); to truly isolate it would need a constructed/forced typed error with a non-matching message. `cli/internal/store/retry_test.go`.
+
 ## Future: true ANN (HNSW/IVF) vector index — DEFERRED (issue #70, @cschanhniem)
 
 We adopted sqlite-vec (exact in-DB SIMD KNN, see [docs/adr/0001-vector-search.md](docs/adr/0001-vector-search.md)), which removes the per-query embedding load+decode while staying inside the portable `index.db`. sqlite-vec is **not** ANN — search stays O(n), just much cheaper. True approximate nearest neighbor (HNSW/IVF) is deferred until a real vault either exceeds **~100,000 embedded docs** or misses the **300 ms** `2nb search` p95 budget *after* sqlite-vec. At that point evaluate sqlite-vec's own ANN support before any external dependency (preserve the single-file vault). Measured baseline at decision time (M4, 1024-dim): cosine scan ~9 ms @10k / ~99 ms @100k; `AllEmbeddings` load+decode ~25 ms @10k / ~259 ms (1.26 GB transient) @100k.

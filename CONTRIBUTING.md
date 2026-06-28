@@ -8,7 +8,7 @@ Opening this repo in an agent (Warp, Claude Code, Cursor, ...) gives you the `2n
 
 ## Prerequisites
 
-- **Go 1.25+** with `CGO_ENABLED=1` (SQLite requires it)
+- **Go 1.25+** (the CLI is pure-Go via `modernc.org/sqlite`; no CGO required)
 - **macOS 14+** (Sonoma) for the Swift dashboard app
 - **Xcode Command Line Tools** (`xcode-select --install`)
 
@@ -30,7 +30,7 @@ make build-cli
 make install
 ```
 
-The CLI requires `-tags fts5` for SQLite full-text search. The Makefiles handle this automatically.
+SQLite full-text search (FTS5) is compiled into the pure-Go `modernc.org/sqlite` driver, so no build tags or CGO are needed.
 
 ## Testing
 

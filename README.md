@@ -555,7 +555,7 @@ make test-gui       # GUI tests (AppleScript automation)
 make test-all       # Go + battery + Swift + GUI
 ```
 
-Requires Go 1.25+, CGO_ENABLED=1, macOS 14+ (for Swift app).
+Requires Go 1.25+ (the CLI is pure-Go, no CGO); macOS 14+ for the Swift app.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
@@ -606,7 +606,7 @@ make package-app         # builds a branded SecondBrain .dmg locally (Developer 
 ## Architecture
 
 ```
-cli/        Go CLI + MCP server (cobra, go-sqlite3, mcp-go, aws-sdk-go-v2)
+cli/        Go CLI + MCP server (cobra, modernc.org/sqlite, mcp-go, aws-sdk-go-v2)
 app/        Swift macOS dashboard (SwiftUI, GRDB.swift, swift-markdown)
 plugins/    Obsidian plugin (thin wrapper that shells out to 2nb)
              |                    |

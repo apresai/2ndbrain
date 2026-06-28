@@ -12,7 +12,7 @@ import (
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func mcpText(res *mcp.CallToolResult) string {
@@ -105,7 +105,7 @@ func TestBattery_MCPStdioDriveTools(t *testing.T) {
 // succeed when store.Open re-runs them.
 func writeV2Index(t *testing.T, path string) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func writeV2Index(t *testing.T, path string) {
 
 func dbMaxVersion(t *testing.T, path string) int {
 	t.Helper()
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
