@@ -6,11 +6,11 @@ BUILD_DIR := bin
 MODULE := github.com/apresai/2ndbrain
 LDFLAGS := -ldflags "-s -w -X $(MODULE)/internal/cli.Version=$(VERSION)"
 
-# Pure-Go SQLite (modernc.org/sqlite): no CGO, no fts5 build tag — FTS5 and
-# sqlite-vec are compiled into the driver. The shipped binary builds with
-# CGO_ENABLED=0 so it cross-compiles to any GOOS/GOARCH from a single host
-# with no C toolchain. Tests keep CGO on (the -race detector requires it);
-# modernc is pure Go either way.
+# Pure-Go SQLite (modernc.org/sqlite): no CGO, no fts5 build tag — FTS5 is
+# compiled into the driver (sqlite-vec ships in modernc's vec/ package, wired
+# in the per-chunk vec0 PR). The shipped binary builds with CGO_ENABLED=0 so it
+# cross-compiles to any GOOS/GOARCH from a single host with no C toolchain.
+# Tests keep CGO on (the -race detector requires it); modernc is pure Go either way.
 
 build:
 	@mkdir -p $(BUILD_DIR)

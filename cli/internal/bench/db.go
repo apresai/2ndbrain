@@ -67,7 +67,9 @@ type DB struct {
 
 // Open opens or creates bench.db at the given path.
 func Open(dbPath string) (*DB, error) {
-	conn, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)")
+	// Bare path (no file: prefix) so a path with URI metacharacters (e.g. '%')
+	// stays literal; modernc still parses _pragma from the query. See store/db.go.
+	conn, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open bench db: %w", err)
 	}

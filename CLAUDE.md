@@ -72,7 +72,7 @@ cd cli && make test     # All Go tests
 cd cli && make install  # Install to /usr/local/bin/2nb
 ```
 
-**Pure Go (no CGO):** the CLI uses `modernc.org/sqlite` (CGO-free), so the shipped binary builds with `CGO_ENABLED=0` and **cross-compiles to any GOOS/GOARCH from one host** with no C toolchain and no `-tags fts5` (FTS5 + sqlite-vec are compiled into the driver). Tests keep CGO on only because the `-race` detector needs it.
+**Pure Go (no CGO):** the CLI uses `modernc.org/sqlite` (CGO-free), so the shipped binary builds with `CGO_ENABLED=0` and **cross-compiles to any GOOS/GOARCH from one host** with no C toolchain and no `-tags fts5` (FTS5 is compiled into the driver; sqlite-vec ships in modernc's `vec/` package, wired in the per-chunk vec0 PR). Tests keep CGO on only because the `-race` detector needs it.
 
 Launch the macOS app via `open` on the `.app` bundle — never run the raw binary directly (it won't register with the window server):
 
@@ -115,7 +115,7 @@ Key patterns:
 
 ## Go CLI (`cli/`)
 
-**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** `modernc.org/sqlite` (pure-Go) with FTS5 + sqlite-vec compiled in
+**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** `modernc.org/sqlite` (pure-Go) with FTS5 compiled in (sqlite-vec available via modernc's `vec/`, wired in a follow-up)
 
 ### Package Layout
 

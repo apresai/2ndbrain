@@ -40,7 +40,7 @@ cd cli && make test     # All Go tests
 cd cli && make install  # Install to /usr/local/bin/2nb
 ```
 
-**Required:** CGO_ENABLED=1 and `-tags fts5` for all Go compilation (SQLite FTS5 + CGO).
+**Pure Go (no CGO):** the CLI uses `modernc.org/sqlite` (CGO-free), so the shipped binary builds with `CGO_ENABLED=0` and cross-compiles to any GOOS/GOARCH from one host, with no `-tags fts5` (FTS5 is compiled into the driver). Tests keep CGO on only for the `-race` detector.
 
 Launch the macOS app via `open` on the `.app` bundle — never run the raw binary directly (it won't register with the window server):
 
@@ -76,7 +76,7 @@ Test scripts live in `tests/`: `gui-helpers.sh` (shared), `gui-test-crud.sh`, `g
 
 ## Go CLI (`cli/`)
 
-**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** mattn/go-sqlite3 with FTS5
+**Module:** `github.com/apresai/2ndbrain` · **CLI:** cobra · **MCP:** mark3labs/mcp-go · **DB:** `modernc.org/sqlite` (pure-Go) with FTS5 compiled in
 
 ### Package Layout
 
@@ -157,7 +157,7 @@ Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pi
 Tests use `t.TempDir()` for isolated vaults. Each test creates its own SQLite database.
 
 ```bash
-cd cli && make test    # go test -race -tags fts5 ./...
+cd cli && make test    # go test -race ./...
 ```
 
 ## Swift macOS Dashboard (`app/`)

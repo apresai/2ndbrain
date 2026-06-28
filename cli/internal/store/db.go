@@ -44,7 +44,11 @@ func Open(dbPath string) (*DB, error) {
 	// immediately, bypassing busy_timeout) for the write transactions in
 	// indexFile/ResolveLinks; plain reads (Query/QueryRow, no explicit tx) are
 	// unaffected.
-	conn, err := sql.Open(driverName, "file:"+dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=wal_autocheckpoint(256)&_txlock=immediate")
+	// Bare path (no file: prefix): a file:-URI DSN percent-decodes the path, so a
+	// vault folder containing '%' (or other URI metacharacters) fails to open.
+	// modernc parses _pragma/_txlock from the query regardless of the prefix, so
+	// the bare form keeps the path literal (matching the prior mattn behavior).
+	conn, err := sql.Open(driverName, dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=wal_autocheckpoint(256)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
