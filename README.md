@@ -328,6 +328,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--tsv` for machine-readable o
 - **Calibration** — `2nb models calibrate` samples random chunk pairs from your vault, reports the noise-floor cosine distribution (p50/p90/p95/p99), and recommends a threshold. Add `--save` to persist it to the per-vault user catalog (or `--save --scope global` for all vaults).
 - **Score display** — `2nb search` now shows `(rrf=X.XXX, cos=Y.YYY)` on each result. The `rrf` is the Reciprocal Rank Fusion score used for ranking; `cos` is the raw cosine similarity from the vector channel, which is what you actually want to look at when judging whether a result is relevant. If legitimate matches are being cut, lower the threshold; if noise is slipping through, raise it.
 - **Hybrid weighting** — `2nb config set ai.vector_weight 1.5` (or `ai.bm25_weight`) biases the RRF fusion toward semantic or keyword recall. Both default to `1.0` (equal-weight RRF); raise `ai.vector_weight` to lean on the vector channel, `ai.bm25_weight` for exact-term-heavy vaults.
+- **RAG context** — `ask` feeds the **full matching note(s)** to the model (parent-document retrieval), so an answer in a section deep in a long note isn't truncated away; a note is only windowed around the matched section when it exceeds the budget. Tune with `2nb config set ai.rag_context_budget <runes>` (total, default 60000) / `ai.rag_note_budget` (per note, default 20000).
 
 ### Portable vaults
 

@@ -77,6 +77,15 @@ func setupTestVault() error {
 		}
 	}
 
+	// A long, multi-section note whose key decision lives in a section DEEP in
+	// the note (past the old 2000-rune head-truncation). Guards the
+	// parent-document context fix — TestE2E_AskDeepSection must surface it.
+	intro := strings.Repeat("Schema changes are risky in production: a careless ALTER can lock a hot table, break in-flight writers, or strand a half-migrated dataset, so the rollout sequence matters as much as the final schema. ", 14)
+	migration := "## Background\n\n" + intro + "\n\n## Decision\n\nWe chose EXPAND-AND-CONTRACT (parallel-change) migrations: add the new column, backfill it in batches, dual-write to old and new, switch reads to the new column, and only then drop the old one, so a rollback at any step never loses data."
+	if out, code := run("create", "Database Migration Strategy", "--type", "note", "--content", migration); code != 0 {
+		return errFromOutput("create Database Migration Strategy", out, code)
+	}
+
 	// Index.
 	if out, code := run("index"); code != 0 {
 		return errFromOutput("index", out, code)
@@ -548,4 +557,24 @@ func TestE2E_Ask(t *testing.T) {
 		t.Error("empty RAG response")
 	}
 	t.Logf("RAG response: %s", out[:min(len(out), 200)])
+}
+
+// TestE2E_AskDeepSection guards the parent-document context fix: the answer to
+// this question lives in a "## Decision" section DEEP in a long note (past the
+// old 2000-rune head-truncation that would have cut it off). With full-note
+// context the model can reach it. Credential-gated; asserts loosely (the answer
+// is non-deterministic LLM output) on the distinctive strategy terms.
+func TestE2E_AskDeepSection(t *testing.T) {
+	if !hasAWSCreds() && !hasOpenRouterKey() {
+		t.Skip("no AI provider credentials available")
+	}
+	out, code := run("ask", "What database migration strategy did the team choose?")
+	if code != 0 {
+		t.Fatalf("ask exit %d: %s", code, out)
+	}
+	low := strings.ToLower(out)
+	if !strings.Contains(low, "expand") && !strings.Contains(low, "parallel") && !strings.Contains(low, "contract") {
+		t.Errorf("deep-section answer not surfaced (expected expand-and-contract / parallel-change), got: %s", out[:min(len(out), 300)])
+	}
+	t.Logf("deep-section RAG response: %s", out[:min(len(out), 200)])
 }
