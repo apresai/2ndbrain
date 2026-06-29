@@ -148,6 +148,15 @@ echo "==> Stapling the notarization ticket"
 xcrun stapler staple "$BUNDLE"
 xcrun stapler validate "$BUNDLE"
 
+# Sweep prior local DMGs before building this one. Each release leaves a
+# gitignored SecondBrain-<version>-arm64.dmg in the repo root; every one is
+# already uploaded to its GitHub release, so the local copies just pile up
+# (13 stale DMGs / ~150 MB had accumulated by v0.11.0). create-dmg only clears
+# the current version's output, so older versions linger — clear them all here;
+# the current version's DMG is rebuilt immediately below.
+echo "==> Removing prior local DMGs"
+rm -f SecondBrain-*.dmg
+
 echo "==> Building the branded installer DMG"
 bash scripts/make-dmg.sh "$BUNDLE" "$DMG"   # builds + Developer ID-signs the DMG
 

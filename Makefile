@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
+.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -118,9 +118,17 @@ install: build install-app
 	$(MAKE) -C cli install
 	@echo "Installed 2nb to /usr/local/bin and SecondBrain.app to ~/Applications"
 
-clean:
+clean: clean-dmg
 	$(MAKE) -C cli clean
 	cd app && swift package clean
+
+# Sweep the local installer DMGs (one per release) that package-app /
+# release-app-local.sh leave in the repo root. They are gitignored build
+# artifacts already uploaded to their GitHub release, so the local copies are
+# redundant and otherwise accumulate (e.g. 13 stale DMGs / ~150 MB by v0.11.0).
+# release-app-local.sh runs this automatically before building a fresh DMG.
+clean-dmg:
+	@rm -f SecondBrain-*.dmg && echo "Removed local SecondBrain-*.dmg artifacts"
 
 test:
 	$(MAKE) -C cli test
