@@ -20,8 +20,9 @@ AI session stops holding the index open.
 Safety: it never kills the reaping process itself, never an actively-used server
 (recent tool activity), and uses SIGTERM only — the 2nb mcp-server handles
 SIGTERM cleanly (removing its sidecar and exiting), and avoiding SIGKILL
-sidesteps the risk of a recycled PID. The idle self-exit on mcp-server makes
-this a rarely-needed backstop. Use --dry-run to preview.`,
+sidesteps the risk of a recycled PID. The parent-death watchdog on mcp-server
+reaps orphans promptly on its own, so this is a rarely-needed backstop. Use
+--dry-run to preview.`,
 	Example: `  2nb mcp reap --dry-run
   2nb mcp reap --older-than 1h`,
 	RunE: runMCPReap,

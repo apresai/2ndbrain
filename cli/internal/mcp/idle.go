@@ -9,12 +9,16 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// idleWatchdog exits an mcp-server process after a period of no tool activity,
-// so a closed Claude/Kiro session doesn't leave an orphaned server holding a DB
-// handle open (the source of the WAL-pinning + lock contention the field
-// reported, where one server ran 2d9h). The design is lock-free: an atomic
-// last-activity timestamp and an in-flight counter, polled by run(). No
-// timer.Reset / channel-drain races.
+// idleWatchdog exits an mcp-server process after a period of no tool activity.
+// It is now an OPT-IN activity cap (default off): orphan cleanup — the original
+// motivation, after a closed Claude/Kiro session left a server holding a DB
+// handle open and pinning the WAL for 2d9h — is owned by [parentWatchdog], which
+// keys off the client process dying rather than tool inactivity, so it never
+// kills a live-but-quiet connection. Enable this only via --idle-timeout /
+// $2NB_MCP_IDLE_TIMEOUT when an inactivity cap is genuinely wanted.
+//
+// The design is lock-free: an atomic last-activity timestamp and an in-flight
+// counter, polled by run(). No timer.Reset / channel-drain races.
 //
 // Activity is observed by wrap()-ing each tool handler: a request increments
 // inFlight on entry and, on completion, bumps lastActive then decrements

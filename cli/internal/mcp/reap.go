@@ -33,8 +33,8 @@ var procCommand = func(pid int) (string, error) {
 // "alive" — but that process never rewrote our sidecar, so the StartedAt check
 // alone can't catch it. Requiring both "mcp-server" and a 2nb/2ndbrain token
 // biases toward false-negatives (don't reap) over false-positives (kill the
-// wrong process); a missed orphan is harmless (idle self-exit or a later reap
-// gets it), a wrong kill is not.
+// wrong process); a missed orphan is harmless (the parent-death watchdog or a
+// later reap gets it), a wrong kill is not.
 func looksLikeMCPServer(pid int) bool {
 	cmd, err := procCommand(pid)
 	if err != nil {

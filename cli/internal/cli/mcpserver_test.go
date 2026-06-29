@@ -9,6 +9,17 @@ import (
 	"github.com/apresai/2ndbrain/internal/vault"
 )
 
+// TestDefaultIdleTimeoutIsOff guards the deliberate default: the activity-based
+// self-exit is OFF (0) so the server stays alive while its client is connected.
+// The stdin-EOF and parent-death paths handle disconnect/orphan instead. A
+// regression to a positive default would reintroduce the mid-session "failed
+// connection" the parent-death watchdog was added to fix.
+func TestDefaultIdleTimeoutIsOff(t *testing.T) {
+	if defaultMCPIdleTimeout != 0 {
+		t.Fatalf("defaultMCPIdleTimeout = %v, want 0 (activity-idle off by default)", defaultMCPIdleTimeout)
+	}
+}
+
 func TestResolveIdleTimeout(t *testing.T) {
 	cases := []struct {
 		name        string

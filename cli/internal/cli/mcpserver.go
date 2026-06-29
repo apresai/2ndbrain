@@ -10,7 +10,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultMCPIdleTimeout = 30 * time.Minute
+// defaultMCPIdleTimeout is the default activity-based self-exit. It is 0 (off):
+// the server stays alive while its client is connected and relies on the
+// stdin-EOF + parent-death paths to exit when the client goes away, rather than
+// killing a live-but-quiet session. Set --idle-timeout / $2NB_MCP_IDLE_TIMEOUT
+// to opt into an activity cap.
+const defaultMCPIdleTimeout = 0
 
 var mcpServerCmd = &cobra.Command{
 	Use:   "mcp-server",
@@ -20,10 +25,13 @@ var mcpServerCmd = &cobra.Command{
 Add this to your Claude Code config:
   {"mcpServers": {"2ndbrain": {"command": "2nb", "args": ["mcp-server"]}}}
 
-The server exits on its own after 30 minutes of inactivity so a closed AI
-session doesn't leave an orphaned process holding the index open (your client
-respawns it on the next call). Override with --idle-timeout or the
-2NB_MCP_IDLE_TIMEOUT env var (e.g. 1h); set it to 0 to never self-exit.
+The server stays alive for as long as its client is connected. It exits
+immediately when the client closes the connection, and promptly when the client
+process dies (so a crashed or closed session never leaves an orphan holding the
+index open). It does NOT self-exit while a client is connected.
+
+To also cap on inactivity, set --idle-timeout or the 2NB_MCP_IDLE_TIMEOUT env
+var (e.g. 30m, 1h); the default is 0 (no activity-based self-exit).
 
 Available tools: kb_search, kb_read, kb_related, kb_create, kb_update_meta, kb_structure`,
 	RunE: runMCPServer,
@@ -34,13 +42,14 @@ var mcpIdleTimeout time.Duration
 func init() {
 	mcpServerCmd.GroupID = "integr"
 	mcpServerCmd.Flags().DurationVar(&mcpIdleTimeout, "idle-timeout", 0,
-		"Exit after this much inactivity (e.g. 30m, 1h; 0 = never). Default: $2NB_MCP_IDLE_TIMEOUT or 30m")
+		"Also exit after this much inactivity (e.g. 30m, 1h; 0 = never). Default: $2NB_MCP_IDLE_TIMEOUT or 0 (stay alive while connected)")
 	rootCmd.AddCommand(mcpServerCmd)
 }
 
 // resolveIdleTimeout picks the idle timeout: an explicit --idle-timeout flag
 // wins (including an explicit 0 = never); else $2NB_MCP_IDLE_TIMEOUT if set and
-// parseable; else the 30m default. Pure for testability.
+// parseable; else the default (0 = no activity cap; the server stays alive while
+// its client is connected). Pure for testability.
 func resolveIdleTimeout(flagChanged bool, flagVal time.Duration, env string) time.Duration {
 	if flagChanged {
 		return flagVal
