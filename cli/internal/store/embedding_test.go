@@ -146,7 +146,7 @@ func TestSampleEmbeddingDim(t *testing.T) {
 
 	// Add a 1024-dim embedding — sample still returns one consistent dim
 	// (we only sample one row; the caller is responsible for detecting
-	// mixed-dim vaults via DistinctEmbeddingModels).
+	// mixed-dim vaults via DistinctEmbeddingDims).
 	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('b', 'b.md', 'B')`)
 	vec1024 := make([]float32, 1024)
 	if err := db.SetEmbedding("b", vec1024, "nova", "h2"); err != nil {
@@ -158,6 +158,31 @@ func TestSampleEmbeddingDim(t *testing.T) {
 	}
 	if dim != 768 && dim != 1024 {
 		t.Errorf("mixed vault: got dim=%d, want 768 or 1024", dim)
+	}
+
+	// DistinctEmbeddingDims sees ALL widths (the single-sample SampleEmbeddingDim
+	// above can't) — this is what flags a partial Matryoshka re-embed.
+	dims, err := db.DistinctEmbeddingDims()
+	if err != nil {
+		t.Fatalf("DistinctEmbeddingDims: %v", err)
+	}
+	if len(dims) != 2 || dims[0] != 768 || dims[1] != 1024 {
+		t.Errorf("DistinctEmbeddingDims = %v, want [768 1024]", dims)
+	}
+}
+
+func TestDistinctEmbeddingDims_Empty(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	dims, err := db.DistinctEmbeddingDims()
+	if err != nil {
+		t.Fatalf("DistinctEmbeddingDims empty: %v", err)
+	}
+	if len(dims) != 0 {
+		t.Errorf("empty vault: got %v, want []", dims)
 	}
 }
 

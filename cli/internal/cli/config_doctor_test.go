@@ -77,20 +77,35 @@ func TestBuildDoctorChecks_DisabledActiveProvider(t *testing.T) {
 	}
 }
 
-// TestBuildDoctorChecks_DimensionMismatch: ai.dimensions diverging from the
-// active embedding model's catalog dimension must fail with a fix hint.
+// TestBuildDoctorChecks_DimensionMismatch: an ai.dimensions that is neither the
+// default NOR a supported Matryoshka width (768 for Nova) must fail with a hint.
 func TestBuildDoctorChecks_DimensionMismatch(t *testing.T) {
-	cfg := ai.DefaultAIConfig() // nova-2 → 1024d in the builtin catalog
-	cfg.Dimensions = 768        // wrong
+	cfg := ai.DefaultAIConfig() // nova-2 → 1024d default, supports 256/384/1024/3072
+	cfg.Dimensions = 768        // not a supported Nova width
 	st := doctorVaultState{totalDocs: 0}
 
 	checks := buildDoctorChecks(context.Background(), "", cfg, nil, st)
 	c := findCheck(checks, "ai.dimensions matches model")
 	if c.OK {
-		t.Errorf("dimension check should fail when ai.dimensions != model dim")
+		t.Errorf("dimension check should fail when ai.dimensions is unsupported")
 	}
 	if !strings.Contains(c.Fix, "force-reembed") {
 		t.Errorf("dimension fix should mention force-reembed, got %q", c.Fix)
+	}
+}
+
+// TestBuildDoctorChecks_SupportedMatryoshkaDimensionPasses guards the fix: a
+// deliberate non-default but SUPPORTED Matryoshka width (Nova 256) is a valid
+// choice `config set` blesses, so `config doctor` must not flag it as a defect.
+func TestBuildDoctorChecks_SupportedMatryoshkaDimensionPasses(t *testing.T) {
+	cfg := ai.DefaultAIConfig() // nova-2; supports 256/384/1024/3072
+	cfg.Dimensions = 256        // valid Matryoshka width, not the 1024 default
+	st := doctorVaultState{totalDocs: 0}
+
+	checks := buildDoctorChecks(context.Background(), "", cfg, nil, st)
+	c := findCheck(checks, "ai.dimensions matches model")
+	if !c.OK {
+		t.Errorf("supported Matryoshka width 256 should pass, got fail: %q", c.Detail)
 	}
 }
 

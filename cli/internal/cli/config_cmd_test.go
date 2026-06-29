@@ -99,15 +99,16 @@ func TestSetConfigValue_Provider(t *testing.T) {
 func TestConfigSetEmbeddingModel_SyncsDimensions(t *testing.T) {
 	_, root := newContractVault(t)
 
-	// Put the vault in a deliberately wrong dimension — the state a model
-	// switch that failed to sync dims would leave behind.
-	if _, err := runCLIArgs(t, root, "config", "set", "ai.dimensions", "512"); err != nil {
-		t.Fatalf("config set ai.dimensions 512: %v", err)
+	// Put the vault on a non-default (but valid Matryoshka) dimension — the
+	// state a model switch that failed to sync dims would leave behind. (256 is
+	// a supported Nova-2 width; an unsupported value is now refused at set time.)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.dimensions", "256"); err != nil {
+		t.Fatalf("config set ai.dimensions 256: %v", err)
 	}
 
 	// Re-selecting the catalog's default Nova-2 (1024-dim) embedding model must
 	// resync ai.dimensions to 1024. Regression guard: deleting the dims-sync
-	// block in runConfigSet leaves the dimension stuck at 512 and this fails.
+	// block in runConfigSet leaves the dimension stuck at 256 and this fails.
 	nova := ai.DefaultAIConfig().EmbeddingModel
 	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", nova); err != nil {
 		t.Fatalf("config set ai.embedding_model: %v", err)
