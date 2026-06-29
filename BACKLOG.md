@@ -2,6 +2,14 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Parent-document RAG context (PR #119) follow-ups
+
+3-dimension chad-review found 0 CRITICAL/HIGH. Fixed in-PR: the whole-note path now uses `IndexableBody()` so Obsidian `%%comments%%` don't leak (windowed path already stripped them); the agent-skill "top 5" drift; the oversized-single-chunk elision marker; duplicated budget constants collapsed to one source in `internal/ai`; CLAUDE.md drift; + coverage tests (oversized clamp, comment-strip, config rejection, RRF vector-only heading). Residual:
+
+- **MEDIUM — RAG context budget isn't clamped to the active generation model's context window.** The 60k-rune default is tuned for Haiku's 200k window, but `ask`/`kb_ask` also run against Ollama, whose generate request sets no `num_ctx` (`ollamaGenOptions` carries only `NumPredict`) → the model's small default window (commonly 2k–4k) silently overflows and left-truncates a ~15k-token prompt; since `buildRAGPrompt` puts the question before the docs, the question itself can be dropped. Off the default Bedrock/Haiku path (Ollama ships disabled) and user-tunable via `ai.rag_context_budget`, so backlog. Fix: clamp `ResolveRAGContextBudget` to the active model's `ContextLen` (the catalog already records it) and/or set Ollama `num_ctx` to fit the assembled context. `cli/internal/ai/ollama.go`, `cli/internal/ai/config.go`.
+- **LOW — a hybrid hit matched by BOTH channels windows on the BM25 section, not the semantic one.** RRF keeps the BM25 `Result` (so `ragctx` anchors on the lexical match) when a doc matches both. Usually fine (both are relevant), but the semantically-best chunk may differ. Consider preferring the higher-scoring channel's heading. `cli/internal/search/vector.go`.
+- **LOW — `ai.rag_context_budget` in [1, 800) is accepted but yields a misleading error.** A positive total below `minNoteRunes` (800) means no note fits, so `ask` fails with "failed to build RAG context … unreadable sources" rather than a budget message. Reject a positive budget < ~1000 at `config set`, or have `Build` distinguish "budget too small" from "unreadable". `cli/internal/cli/config_cmd.go` / `cli/internal/ragctx/build.go`.
+
 ## ⭐ Performance — parallelize the embedding pass (raised priority)
 
 **Motivation (observed on v0.11.0):** the per-chunk vec0 path embeds *every chunk*, so a `--force-reembed` of a content-rich vault makes ~10× more Nova-2 calls than the old per-doc path. Measured on the obsidian vault: 153 docs / **1472 chunks** ≈ **10 minutes**, the whole time at **~0.1% CPU** — pure network wait on sequential Bedrock round-trips (~0.4s each). The work is embarrassingly parallel and entirely I/O-bound, so concurrency is a near-linear win.

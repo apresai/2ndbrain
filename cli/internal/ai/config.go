@@ -56,7 +56,8 @@ func normHybridWeight(w float64) float64 {
 const (
 	DefaultRAGContextBudgetRunes = 60000 // ~15k tokens total across all notes
 	DefaultRAGNoteBudgetRunes    = 20000 // ~5k tokens per note
-	DefaultRAGCandidateDocs      = 12    // over-fetch; the budget decides how many fit
+	DefaultRAGCandidateDocs      = 12    // over-fetch; the budget + DefaultRAGMaxNotes decide how many fit
+	DefaultRAGMaxNotes           = 10    // hard cap on notes in the context, below the candidate over-fetch
 )
 
 // ResolveRAGContextBudget returns the total RAG context budget in runes,

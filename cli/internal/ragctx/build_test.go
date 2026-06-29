@@ -174,6 +174,40 @@ func TestBuild_SkipsEmptyNote(t *testing.T) {
 	}
 }
 
+func TestBuild_OversizedSingleChunkClampsWithMarker(t *testing.T) {
+	dir := t.TempDir()
+	// A headless note that is one giant chunk far exceeding the per-note budget.
+	body := strings.Repeat("alpha beta gamma delta ", 500) // ~11500 runes, no headings
+	p := writeNote(t, dir, "huge.md", body)
+
+	chunks, _ := Build([]search.Result{{Path: p, Title: "Huge"}}, dir, Budget{NoteRunes: 1000, TotalRunes: 60000})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(chunks))
+	}
+	c := chunks[0].Content
+	if !strings.HasSuffix(c, "...") {
+		t.Errorf("a clamped oversized chunk must end with an elision marker")
+	}
+	if n := len([]rune(c)); n > 1010 { // ~noteCap + the "\n..." marker
+		t.Errorf("clamped content = %d runes, want ~1000", n)
+	}
+}
+
+func TestBuild_LeavesObsidianCommentsOut(t *testing.T) {
+	dir := t.TempDir()
+	p := writeNote(t, dir, "private.md", "# Note\n\n%%SECRET do not share%%\n\nReal content here.")
+	chunks, _ := Build([]search.Result{{Path: p, Title: "Note"}}, dir, Budget{})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(chunks))
+	}
+	if strings.Contains(chunks[0].Content, "SECRET") {
+		t.Errorf("Obsidian %%comment%% leaked into RAG context: %q", chunks[0].Content)
+	}
+	if !strings.Contains(chunks[0].Content, "Real content") {
+		t.Errorf("real content missing")
+	}
+}
+
 func TestBuild_CanvasUsesSyntheticBody(t *testing.T) {
 	dir := t.TempDir()
 	canvas := `{"nodes":[{"id":"n1","type":"text","text":"Core auth strategy","x":0,"y":0,"width":200,"height":100}],"edges":[]}`

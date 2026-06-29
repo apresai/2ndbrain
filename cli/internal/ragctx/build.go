@@ -26,34 +26,30 @@ type Budget struct {
 	MaxNotes   int // hard cap on the number of notes included
 }
 
-const (
-	defaultTotalRunes = 60000
-	defaultNoteRunes  = 20000
-	defaultMaxNotes   = 10
-	// minNoteRunes: once the remaining total budget drops below this, stop — a
-	// sliver of a note is noise, not useful context.
-	minNoteRunes = 800
-)
+// minNoteRunes: once the remaining total budget drops below this, stop — a
+// sliver of a note is noise, not useful context. (Budget defaults are the
+// single source of truth in internal/ai.)
+const minNoteRunes = 800
 
 func (b Budget) total() int {
 	if b.TotalRunes > 0 {
 		return b.TotalRunes
 	}
-	return defaultTotalRunes
+	return ai.DefaultRAGContextBudgetRunes
 }
 
 func (b Budget) note() int {
 	if b.NoteRunes > 0 {
 		return b.NoteRunes
 	}
-	return defaultNoteRunes
+	return ai.DefaultRAGNoteBudgetRunes
 }
 
 func (b Budget) maxNotes() int {
 	if b.MaxNotes > 0 {
 		return b.MaxNotes
 	}
-	return defaultMaxNotes
+	return ai.DefaultRAGMaxNotes
 }
 
 // Build assembles parent-document context from ranked results (best first). It
@@ -84,7 +80,11 @@ func Build(results []search.Result, vaultRoot string, b Budget) ([]ai.RAGChunk, 
 			warnings = append(warnings, fmt.Sprintf("skipped unreadable source %s: %v", r.Path, err))
 			continue
 		}
-		if strings.TrimSpace(doc.Body) == "" {
+		// IndexableBody strips Obsidian %%comments%% — honors the same
+		// "comments never leak" invariant every index/search/embed path holds
+		// (the windowed branch already strips via ChunkDocument).
+		body := doc.IndexableBody()
+		if strings.TrimSpace(body) == "" {
 			continue
 		}
 
@@ -92,7 +92,7 @@ func Build(results []search.Result, vaultRoot string, b Budget) ([]ai.RAGChunk, 
 		if remaining < noteCap {
 			noteCap = remaining
 		}
-		content := fitNote(doc, r.HeadingPath, noteCap)
+		content := fitNote(doc, body, r.HeadingPath, noteCap)
 		if strings.TrimSpace(content) == "" {
 			continue
 		}
@@ -106,10 +106,10 @@ func Build(results []search.Result, vaultRoot string, b Budget) ([]ai.RAGChunk, 
 // of heading-bounded chunks around the matched section (headingPath), expanding
 // FORWARD first (answers usually continue after the matched heading — exactly
 // the deep-section case) then backward, with "..." markers where text is elided.
-func fitNote(doc *document.Document, headingPath string, noteCap int) string {
-	full := []rune(doc.Body)
+func fitNote(doc *document.Document, body, headingPath string, noteCap int) string {
+	full := []rune(body)
 	if len(full) <= noteCap {
-		return doc.Body
+		return body
 	}
 
 	chunks := document.ChunkDocument(doc)
@@ -144,13 +144,15 @@ func fitNote(doc *document.Document, headingPath string, noteCap int) string {
 	}
 	out := strings.Join(parts, "\n\n")
 	// A single matched chunk can itself exceed noteCap; clamp rune-safely.
+	clamped := false
 	if r := []rune(out); len(r) > noteCap {
 		out = string(r[:noteCap])
+		clamped = true
 	}
 	if lo > 0 {
 		out = "...\n" + out
 	}
-	if hi < len(chunks)-1 {
+	if hi < len(chunks)-1 || clamped {
 		out += "\n..."
 	}
 	return out
