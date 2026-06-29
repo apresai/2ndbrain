@@ -65,13 +65,21 @@ type DocLookup interface {
 }
 
 // ReciprocalRankFusion combines BM25 and vector search results using RRF.
-// score = Σ 1/(k + rank_i) where k=60.
+// score = Σ weight_i/(k + rank_i) where k=60. bm25Weight/vectorWeight bias the
+// fusion toward keyword or semantic recall; a non-positive weight defaults to
+// 1.0 (classic equal-weight RRF).
 // If lookup is provided, vector-only results get populated with full metadata.
 // The raw cosine similarity from the vector channel is preserved on each
 // result as VectorScore, so callers can surface it alongside the opaque
 // RRF score and judge relevance directly.
-func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit int, lookup DocLookup) []Result {
+func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit int, lookup DocLookup, bm25Weight, vectorWeight float64) []Result {
 	const k = 60.0
+	if bm25Weight <= 0 {
+		bm25Weight = 1.0
+	}
+	if vectorWeight <= 0 {
+		vectorWeight = 1.0
+	}
 
 	scores := make(map[string]float64)
 	resultMap := make(map[string]Result)
@@ -79,13 +87,13 @@ func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit
 
 	// Score BM25 results by rank
 	for rank, r := range bm25Results {
-		scores[r.DocID] += 1.0 / (k + float64(rank+1))
+		scores[r.DocID] += bm25Weight / (k + float64(rank+1))
 		resultMap[r.DocID] = r
 	}
 
 	// Score vector results by rank and remember the raw cosine
 	for rank, v := range vectorResults {
-		scores[v.DocID] += 1.0 / (k + float64(rank+1))
+		scores[v.DocID] += vectorWeight / (k + float64(rank+1))
 		vectorScores[v.DocID] = v.Score
 		if _, exists := resultMap[v.DocID]; !exists {
 			// Try to look up full metadata for vector-only results

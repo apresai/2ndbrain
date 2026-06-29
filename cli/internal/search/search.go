@@ -36,6 +36,11 @@ type Options struct {
 	// pad the RRF output with barely-related neighbors. Zero means "no
 	// filter" — the caller should supply ai.AIConfig.ResolveSimilarityThreshold().
 	MinVectorScore float64
+	// BM25Weight / VectorWeight bias the RRF fusion toward keyword or semantic
+	// recall. Zero/non-positive means "unset" → 1.0 (classic equal-weight RRF).
+	// Callers supply ai.AIConfig.ResolveHybridWeights().
+	BM25Weight   float64
+	VectorWeight float64
 }
 
 // SearchMode indicates which search method was used.
@@ -107,7 +112,7 @@ func (e *Engine) HybridSearch(opts Options, queryEmbedding []float32, docIDs []s
 	}
 
 	// Combine with RRF (engine implements DocLookup for vector-only results)
-	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e)
+	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e, opts.BM25Weight, opts.VectorWeight)
 	return combined, ModeHybrid, nil
 }
 

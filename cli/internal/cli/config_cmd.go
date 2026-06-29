@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -240,6 +241,8 @@ var settableConfigKeys = []string{
 	"ai.generation_model",
 	"ai.dimensions",
 	"ai.similarity_threshold",
+	"ai.bm25_weight",
+	"ai.vector_weight",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
 	"ai.bedrock.disabled",
@@ -265,6 +268,10 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return fmt.Sprintf("%d", cfg.Dimensions), nil
 	case "ai.similarity_threshold":
 		return strconv.FormatFloat(cfg.SimilarityThreshold, 'g', -1, 64), nil
+	case "ai.bm25_weight":
+		return strconv.FormatFloat(cfg.BM25Weight, 'g', -1, 64), nil
+	case "ai.vector_weight":
+		return strconv.FormatFloat(cfg.VectorWeight, 'g', -1, 64), nil
 	case "ai.bedrock.profile":
 		return cfg.Bedrock.Profile, nil
 	case "ai.bedrock.region":
@@ -342,6 +349,18 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("similarity_threshold must be between 0 and 1 (got %g)", f)
 		}
 		cfg.SimilarityThreshold = f
+	case "ai.bm25_weight":
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Errorf("bm25_weight must be a finite non-negative number (got %q); 0 resolves to the default 1.0", value)
+		}
+		cfg.BM25Weight = f
+	case "ai.vector_weight":
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Errorf("vector_weight must be a finite non-negative number (got %q); 0 resolves to the default 1.0", value)
+		}
+		cfg.VectorWeight = f
 	case "ai.bedrock.profile":
 		cfg.Bedrock.Profile = value
 	case "ai.bedrock.region":

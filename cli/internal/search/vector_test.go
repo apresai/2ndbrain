@@ -87,7 +87,7 @@ func TestReciprocalRankFusion(t *testing.T) {
 		{DocID: "a", Score: 0.70},
 	}
 
-	results := ReciprocalRankFusion(bm25, vector, 4, nil)
+	results := ReciprocalRankFusion(bm25, vector, 4, nil, 1, 1)
 
 	if len(results) != 4 {
 		t.Fatalf("got %d results, want 4", len(results))
@@ -103,8 +103,32 @@ func TestReciprocalRankFusion(t *testing.T) {
 }
 
 func TestRRFEmptyInputs(t *testing.T) {
-	results := ReciprocalRankFusion(nil, nil, 10, nil)
+	results := ReciprocalRankFusion(nil, nil, 10, nil, 1, 1)
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for empty inputs, got %d", len(results))
+	}
+}
+
+func TestReciprocalRankFusion_Weighting(t *testing.T) {
+	bm25 := []Result{{DocID: "a", Score: 10}}       // a: BM25 rank 1 only
+	vector := []ScoredDoc{{DocID: "b", Score: 0.9}} // b: vector rank 1 only
+
+	// Equal weights → a and b tie (each is rank 1 in its own channel).
+	eq := ReciprocalRankFusion(bm25, vector, 2, nil, 1, 1)
+	if len(eq) != 2 || eq[0].Score != eq[1].Score {
+		t.Fatalf("equal weights: expected a tie, got %+v", eq)
+	}
+
+	// Vector weighted up → the vector-only doc b outranks the bm25-only doc a.
+	if got := ReciprocalRankFusion(bm25, vector, 2, nil, 1, 3); got[0].DocID != "b" {
+		t.Errorf("vector-weighted: top = %q, want b", got[0].DocID)
+	}
+	// BM25 weighted up → a outranks b.
+	if got := ReciprocalRankFusion(bm25, vector, 2, nil, 3, 1); got[0].DocID != "a" {
+		t.Errorf("bm25-weighted: top = %q, want a", got[0].DocID)
+	}
+	// Non-positive weights default to 1.0 (equal-weight RRF).
+	if got := ReciprocalRankFusion(bm25, vector, 2, nil, 0, 0); got[0].Score != eq[0].Score {
+		t.Errorf("zero weights should default to 1.0: got %.6f, want %.6f", got[0].Score, eq[0].Score)
 	}
 }

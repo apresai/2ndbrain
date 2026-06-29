@@ -1,6 +1,9 @@
 package ai
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // AIConfig holds AI provider configuration from vault config.yaml.
 type AIConfig struct {
@@ -12,10 +15,32 @@ type AIConfig struct {
 	// search hit to be included in results. Below this, results are
 	// treated as noise and dropped from the RRF merge so they don't pad
 	// the output with low-quality neighbors. Default: 0.20.
-	SimilarityThreshold float64          `yaml:"similarity_threshold" json:"similarity_threshold"`
-	Ollama              OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
-	Bedrock             BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
-	OpenRouter          OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
+	SimilarityThreshold float64 `yaml:"similarity_threshold" json:"similarity_threshold"`
+	// BM25Weight / VectorWeight bias the hybrid-search RRF fusion toward keyword
+	// or semantic recall. Each defaults to 1.0 (equal-weight RRF) when unset;
+	// raise VectorWeight to favor the semantic channel. Resolved via
+	// ResolveHybridWeights.
+	BM25Weight   float64          `yaml:"bm25_weight,omitempty" json:"bm25_weight,omitempty"`
+	VectorWeight float64          `yaml:"vector_weight,omitempty" json:"vector_weight,omitempty"`
+	Ollama       OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
+	Bedrock      BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
+	OpenRouter   OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
+}
+
+// ResolveHybridWeights returns the BM25 and vector weights for RRF fusion, each
+// defaulting to 1.0 (classic equal-weight RRF) when unset (<= 0) or non-finite.
+// The non-finite guard is belt-and-suspenders against a NaN/Inf that bypassed
+// config-set validation (e.g. a hand-edited config.yaml): a NaN weight would
+// otherwise make every fused score NaN and scramble the ranking silently.
+func (c AIConfig) ResolveHybridWeights() (bm25, vector float64) {
+	return normHybridWeight(c.BM25Weight), normHybridWeight(c.VectorWeight)
+}
+
+func normHybridWeight(w float64) float64 {
+	if math.IsNaN(w) || math.IsInf(w, 0) || w <= 0 {
+		return 1.0
+	}
+	return w
 }
 
 // OllamaConfig configures the local Ollama provider.
