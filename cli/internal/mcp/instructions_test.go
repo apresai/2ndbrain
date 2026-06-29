@@ -45,9 +45,12 @@ func TestServerInstructions_Constant(t *testing.T) {
 func TestServerInstructions_ReachesWire(t *testing.T) {
 	h, v := makeHandlers(t)
 	_ = h
-	s, sw := newMCPServer(v, "test")
+	s, sw, mdb := newMCPServer(v, "test")
 	if sw != nil {
 		defer sw.Remove()
+	}
+	if mdb != nil {
+		defer mdb.Close()
 	}
 
 	req := mcplib.JSONRPCRequest{

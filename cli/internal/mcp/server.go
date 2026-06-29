@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/vault"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -89,7 +91,7 @@ func withIdleWatchdog(w *idleWatchdog) serverOption {
 // server (Start), a future in-process self-test (mcp doctor), and tests all
 // exercise the identical registration. The returned StatusWriter may be nil (its setup
 // is best-effort and must not block the server) and is owned by the caller.
-func newMCPServer(v *vault.Vault, version string, opts ...serverOption) (*server.MCPServer, *StatusWriter) {
+func newMCPServer(v *vault.Vault, version string, opts ...serverOption) (*server.MCPServer, *StatusWriter, *metrics.DB) {
 	cfg := &serverConfig{}
 	for _, o := range opts {
 		o(cfg)
@@ -114,7 +116,22 @@ func newMCPServer(v *vault.Vault, version string, opts ...serverOption) (*server
 		slog.Warn("mcp status writer unavailable", "err", err)
 	}
 
+	// Observatory recorder: one metrics.db handle reused across tool calls (the
+	// long-lived server can't afford a per-call open/close). Best-effort — a nil
+	// recorder just means MCP-driven ops go unrecorded; it never blocks startup.
+	var metricsDB *metrics.DB
+	if mdb, err := metrics.Open(filepath.Join(v.DotDir, "metrics.db")); err == nil {
+		metricsDB = mdb
+	} else {
+		slog.Warn("mcp metrics recorder unavailable", "err", err)
+	}
+
 	addTool := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {
+		// Innermost wrap: record op latency for the perf-relevant tools, tagged
+		// source=mcp, so the observatory sees agent-driven search/ask/index too.
+		if op := mcpMetricOp(tool.Name); op != "" && metricsDB != nil {
+			handler = wrapMCPMetric(metricsDB, op, version, handler)
+		}
 		if statusWriter != nil {
 			handler = statusWriter.Wrap(tool.Name, handler)
 		}
@@ -130,7 +147,49 @@ func newMCPServer(v *vault.Vault, version string, opts ...serverOption) (*server
 		addTool(reg.tool, withTimeout(reg.timeout, reg.handler))
 	}
 
-	return s, statusWriter
+	return s, statusWriter, metricsDB
+}
+
+// mcpMetricOp maps an MCP tool name to the observatory operation it should be
+// recorded as, or "" for tools that aren't performance-interesting (read-only
+// metadata, graph, git). The write tools that reindex map to index_doc.
+func mcpMetricOp(tool string) string {
+	switch tool {
+	case "kb_search":
+		return metrics.OpSearch
+	case "kb_ask":
+		return metrics.OpAsk
+	case "kb_index":
+		return metrics.OpIndex
+	case "kb_append", "kb_replace_section", "kb_create", "kb_update_meta":
+		return metrics.OpIndexDoc
+	default:
+		return ""
+	}
+}
+
+// wrapMCPMetric records one operation row (best-effort) around a tool handler.
+// Latency/ok only: detailed counts (result_count, docs_indexed) aren't extracted
+// from the serialized tool result here — the CLI path carries those; MCP rows
+// give op + latency + source.
+func wrapMCPMetric(mdb *metrics.DB, op, version string, fn server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		start := time.Now()
+		result, err := fn(ctx, req)
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		_ = mdb.Record(metrics.Operation{
+			Operation:  op,
+			Source:     "mcp",
+			DurationMs: time.Since(start).Milliseconds(),
+			OK:         err == nil,
+			Error:      errMsg,
+			CLIVersion: version,
+		})
+		return result, err
+	}
 }
 
 // Start runs the stdio MCP server until its client disconnects, its parent (the
@@ -160,7 +219,8 @@ func Start(v *vault.Vault, version string, idleTimeout time.Duration) error {
 	}
 
 	var s *server.MCPServer
-	s, statusWriter = newMCPServer(v, version, sOpts...)
+	var metricsDB *metrics.DB
+	s, statusWriter, metricsDB = newMCPServer(v, version, sOpts...)
 
 	if statusWriter != nil {
 		sigs := make(chan os.Signal, 1)
@@ -197,6 +257,12 @@ func Start(v *vault.Vault, version string, idleTimeout time.Duration) error {
 	err := server.ServeStdio(s)
 	if statusWriter != nil {
 		statusWriter.Remove()
+	}
+	// Close on the clean-disconnect path. The os.Exit watchdog paths (parent
+	// death, idle, signal) skip this, but metrics.db is WAL-mode so an unclosed
+	// handle on process exit is crash-safe and reclaimed on the next open.
+	if metricsDB != nil {
+		metricsDB.Close()
 	}
 	return err
 }

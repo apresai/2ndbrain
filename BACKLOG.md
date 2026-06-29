@@ -2,6 +2,14 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Vault performance observatory — Phase 2 MCP recording (PR #122) follow-ups
+
+chad-review found 0 CRITICAL/HIGH; concurrency verified clean (1000 concurrent `Record`s across 50 goroutines under `-race`); lifecycle consistent with the existing `v.DB` (closed on the clean ServeStdio path, WAL-safe on the os.Exit watchdog paths). Residual LOW:
+
+- **LOW — MCP rows lack the detailed counts the CLI path records.** `wrapMCPMetric` is a generic wrap, so MCP `search`/`ask` rows carry latency + op + `source=mcp` but `result_count=0`, and `index`/`index_doc` rows carry no `docs_indexed`/`embedded`. Extracting those would mean parsing the serialized tool result (fragile) or per-handler instrumentation. The Phase 3 GUI should therefore only show `result_count`/doc-counts when > 0 (so an MCP search isn't mislabeled "0 results"). Follow-up: record counts from the handlers directly if the GUI wants them for MCP rows. `cli/internal/mcp/server.go`, handlers in `tools.go`.
+- **LOW — a metric is dropped if a tool handler is in-flight at exactly the moment the server closes the metrics DB.** `Start` closes the handle on the clean ServeStdio return; a still-running handler's `Record` then hits a closed DB → error → swallowed by the best-effort `_ =`. No panic, just one dropped telemetry row on shutdown. Acceptable; would be moot with the buffered/async writer already backlogged below. `cli/internal/mcp/server.go`.
+- **LOW (coverage) — the nil-`metricsDB` no-op branch and the clean-path `Close` are untested** (trivial). `cli/internal/mcp/server.go`.
+
 ## Vault performance observatory — Phase 1 storage + CLI (PR #121) follow-ups
 
 3-dimension chad-review found 0 CRITICAL/HIGH. Fixed in-PR: the `schema_version` table grew one row per `Open` (the `INSERT OR IGNORE` never ignored without a key, and `metrics.Open` runs on *every* index/search/ask) → made `version` a `PRIMARY KEY` (now genuinely idempotent), with a regression test; lowered the metrics `busy_timeout` 5000→2000ms so a best-effort write can't stall the hot `index --doc` path up to 5s; renamed the `cap`-shadows-builtin param; doc-wording nit (created lazily on first open, read or write); + added a `Clear` test and a `TestIndexOperation` builder test (the stat→Operation mapping + force→reembed switch that the `runIndex` defer depends on). Residual:

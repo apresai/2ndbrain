@@ -340,6 +340,8 @@ tar czf vault.tar.gz \
 
 Each `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` (PID, start time, parent PID, last 50 invocations: tool, timestamp, duration, ok/error). The dashboard polls `2nb mcp status --json` every 5s. mark3labs/mcp-go has no client-connected hook, so sidecar files are the only enumeration mechanism.
 
+The server also records the performance-relevant tool calls to the vault metrics observatory (`.2ndbrain/metrics.db`, `source=mcp`): `kb_search`→`search`, `kb_ask`→`ask`, `kb_index`→`index`, and the reindexing write tools (`kb_append`/`kb_replace_section`/`kb_create`/`kb_update_meta`)→`index_doc`. It holds ONE `*metrics.DB` for the server's lifetime (opened in `newMCPServer`, reused across calls so the hot path never opens/closes per invocation), and the innermost `wrapMCPMetric` records op + latency + ok best-effort (a metrics failure never affects the tool result). MCP rows carry latency/op/source but not the detailed counts (`result_count`/`docs_indexed`) the CLI path records — see `2nb metrics`.
+
 The server self-announces via a one-line `instructions` string in the initialize response (`mcp.ServerInstructions`, wired through `newMCPServer` — the single source of truth for server construction shared by `Start`, tests, and future in-process self-tests). Clients fold it into their session-start "MCP Server Instructions" summary, so a connected-but-idle server is not misread as absent.
 
 | Tool | Purpose |
