@@ -133,10 +133,16 @@ func newMCPServer(v *vault.Vault, version string, opts ...serverOption) (*server
 	return s, statusWriter
 }
 
-// Start runs the stdio MCP server until its client disconnects, a signal
-// arrives, or — when idleTimeout > 0 — the server has been idle that long (it
-// then exits cleanly so a closed session doesn't leave an orphan). idleTimeout
-// <= 0 disables the idle self-exit.
+// Start runs the stdio MCP server until its client disconnects, its parent (the
+// client) process dies, a signal arrives, or — when idleTimeout > 0 — the server
+// has been idle that long.
+//
+// The server exits instantly when the client closes the stdio pipe (ServeStdio
+// returns on stdin EOF) and promptly when the client process dies WITHOUT
+// closing the pipe (the parent-death watchdog), so a crashed or closed session
+// never leaves an orphan holding the index open. It does NOT self-exit while a
+// client is connected: idleTimeout is an opt-in activity cap, disabled by
+// default (idleTimeout <= 0).
 func Start(v *vault.Vault, version string, idleTimeout time.Duration) error {
 	var statusWriter *StatusWriter
 
@@ -166,8 +172,24 @@ func Start(v *vault.Vault, version string, idleTimeout time.Duration) error {
 		}()
 	}
 
+	// Parent-death watchdog: an stdio server's parent is its MCP client, so when
+	// the client process dies without cleanly closing the pipe (crash, SIGKILL,
+	// leaked child) the parent PID changes and we exit promptly — reaping the
+	// orphan that would otherwise pin the index/WAL. It never fires while the
+	// client is connected, so it does not interrupt a live-but-quiet session.
+	// Always on; replaces the activity-idle timer's orphan-cleanup role.
+	parent := newParentWatchdog(defaultParentPollInterval, func(startPPID, nowPPID int) {
+		if statusWriter != nil {
+			statusWriter.Remove()
+		}
+		slog.Info("mcp server exiting; client/parent process gone",
+			"start_ppid", startPPID, "now_ppid", nowPPID)
+		os.Exit(0)
+	})
+	go parent.run()
+
 	// Launch the idle watchdog after statusWriter is assigned so its onExpire
-	// closure observes the writer. No-op when idleTimeout <= 0.
+	// closure observes the writer. No-op when idleTimeout <= 0 (the default).
 	if watchdog != nil {
 		go watchdog.run()
 	}
