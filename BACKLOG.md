@@ -2,6 +2,13 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Vault performance observatory — Phase 3 macOS Metrics tab (PR #123) follow-ups
+
+chad-review found one **CRITICAL** (fixed in-PR): the empty-vault `2nb metrics --json` emitted `"recent":null` (Go nil-slice marshals to null), and the Swift `recent` was a non-optional array, so the whole `VaultMetrics` decode threw and the tab blanked on any fresh/cleared vault. Fixed at both ends — the CLI now initializes `recent` to `[]` (with a Go test asserting `"recent":[]`), and the Swift structs make `recent`/`aggregates` optional and decode `null` leniently (with tests for both the `null` and `[]`/`{}` shapes). The masking test (which used `[]`, not the real `null`) was the HIGH and is now corrected. Residual LOW:
+
+- **LOW — `relativeDate` uses a default `ISO8601DateFormatter`, which rejects fractional-second timestamps.** Fine today (the CLI stamps `ts` as `time.RFC3339` with no fractional seconds), but a future `.SSS` timestamp would silently fall back to showing the raw string. Add `.withFractionalSeconds` as a second parse attempt (mirror `GitActivityView.friendlyDate`). `app/Sources/SecondBrain/MetricsView.swift`.
+- **LOW (verification) — the tab's visual rendering wasn't smoke-tested in a running app.** `swift build` + the full 234-test suite (incl. decode + tab-parity) are green and the JSON contract is locked, but the actual on-screen layout/empty-state is a maintainer manual check (open the app → Metrics tab on a real vault). Optional: add a `make test-gui` AppleScript+screencapture case.
+
 ## Vault performance observatory — Phase 2 MCP recording (PR #122) follow-ups
 
 chad-review found 0 CRITICAL/HIGH; concurrency verified clean (1000 concurrent `Record`s across 50 goroutines under `-race`); lifecycle consistent with the existing `v.DB` (closed on the clean ServeStdio path, WAL-safe on the os.Exit watchdog paths). Residual LOW:

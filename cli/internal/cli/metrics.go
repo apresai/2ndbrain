@@ -92,6 +92,13 @@ func buildMetricsReport(v *vault.Vault, limit int) (MetricsReport, error) {
 	if err != nil {
 		return MetricsReport{}, err
 	}
+	// Emit `[]`, not `null`, for an empty vault: Recent returns a nil slice when
+	// there are no rows, and a nil Go slice marshals to JSON null, which a typed
+	// consumer (the macOS app's non-optional array) can't decode. Aggregates is
+	// already a non-nil map, so it always renders `{}`.
+	if recent == nil {
+		recent = []metrics.Operation{}
+	}
 	for i := range recent {
 		recent[i] = recent[i].WithRates()
 	}

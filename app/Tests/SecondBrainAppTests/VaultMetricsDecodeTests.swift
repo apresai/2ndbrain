@@ -33,31 +33,49 @@ func vaultMetricsDecodeFull() throws {
     #expect(m.gauges.indexDbBytes == 4370432)
     #expect(m.gauges.walBytes == 4152)
 
-    #expect(m.recent.count == 2)
-    let search = try #require(m.recent.first { $0.operation == "search" })
+    let recent = try #require(m.recent)
+    #expect(recent.count == 2)
+    let search = try #require(recent.first { $0.operation == "search" })
     #expect(search.source == "mcp")
     #expect(search.mode == "hybrid")
     #expect(search.resultCount == nil) // omitempty absent → nil (MCP query rows have no count)
     #expect(search.docsIndexed == nil)
 
-    #expect(m.aggregates["index"]?.count == 1)
-    #expect(m.aggregates["index"]?.avgDocsPerSec == 0.14)
-    #expect(m.aggregates["search"]?.avgMs == 1190.5)
-    #expect(m.aggregates["search"]?.avgDocsPerSec == nil) // omitempty absent → nil
+    let aggs = try #require(m.aggregates)
+    #expect(aggs["index"]?.count == 1)
+    #expect(aggs["index"]?.avgDocsPerSec == 0.14)
+    #expect(aggs["search"]?.avgMs == 1190.5)
+    #expect(aggs["search"]?.avgDocsPerSec == nil) // omitempty absent → nil
 
     // Identifiable ids are unique across the recent list (no ForEach collisions).
-    #expect(Set(m.recent.map(\.id)).count == m.recent.count)
+    #expect(Set(recent.map(\.id)).count == recent.count)
 }
 
-@Test("VaultMetrics decodes a null last_build (empty vault)")
+// Decodes the real empty-vault contract. The CLI now emits `[]`/`{}`, but a nil
+// Go slice/map would marshal to `null`; decoding must survive either so a fresh
+// or `metrics clear`-ed vault never blanks the whole tab on a decode throw.
+@Test("VaultMetrics tolerates null recent/aggregates and a null last_build")
 func vaultMetricsDecodeEmpty() throws {
     let json = """
-    {"last_build":null,"gauges":{"doc_count":0,"embedded_count":0,"embedding_coverage":0,"chunk_count":0,"stale_count":0,"index_db_bytes":0,"wal_bytes":0},"recent":[],"aggregates":{}}
+    {"last_build":null,"gauges":{"doc_count":0,"embedded_count":0,"embedding_coverage":0,"chunk_count":0,"stale_count":0,"index_db_bytes":0,"wal_bytes":0},"recent":null,"aggregates":null}
     """
     let m = try JSONDecoder().decode(VaultMetrics.self, from: Data(json.utf8))
     #expect(m.lastBuild == nil)
-    #expect(m.recent.isEmpty)
-    #expect(m.aggregates.isEmpty)
+    #expect((m.recent ?? []).isEmpty)
+    #expect((m.aggregates ?? [:]).isEmpty)
     #expect(m.gauges.docCount == 0)
     #expect(m.gauges.embeddingModel == nil)
+}
+
+// And the post-fix CLI output (`[]`/`{}`) must decode just as cleanly.
+@Test("VaultMetrics decodes empty arrays/objects from the fixed CLI output")
+func vaultMetricsDecodeEmptyBracketed() throws {
+    let json = """
+    {"last_build":null,"gauges":{"doc_count":1,"embedded_count":0,"embedding_coverage":0,"chunk_count":0,"stale_count":0,"index_db_bytes":4096,"wal_bytes":0},"recent":[],"aggregates":{}}
+    """
+    let m = try JSONDecoder().decode(VaultMetrics.self, from: Data(json.utf8))
+    #expect(m.lastBuild == nil)
+    #expect((m.recent ?? []).isEmpty)
+    #expect((m.aggregates ?? [:]).isEmpty)
+    #expect(m.gauges.docCount == 1)
 }

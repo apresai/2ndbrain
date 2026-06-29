@@ -5,8 +5,11 @@ import SwiftUI
 struct VaultMetrics: Codable {
     let lastBuild: MetricOperation?
     let gauges: MetricGauges
-    let recent: [MetricOperation]
-    let aggregates: [String: MetricAggregate]
+    // Optional/defensive: the CLI now emits `[]` for an empty vault, but a nil Go
+    // slice would marshal to `null` — decode it leniently either way so a fresh or
+    // cleared vault never blanks the whole tab on a decode throw.
+    let recent: [MetricOperation]?
+    let aggregates: [String: MetricAggregate]?
 
     enum CodingKeys: String, CodingKey {
         case lastBuild = "last_build"
@@ -158,11 +161,11 @@ struct MetricsView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     lastBuildSection(m.lastBuild)
                     gaugesSection(m.gauges)
-                    if !m.aggregates.isEmpty {
-                        aggregatesSection(m.aggregates)
+                    if let aggs = m.aggregates, !aggs.isEmpty {
+                        aggregatesSection(aggs)
                     }
-                    if !m.recent.isEmpty {
-                        recentSection(m.recent)
+                    if let recent = m.recent, !recent.isEmpty {
+                        recentSection(recent)
                     }
                 }
                 .padding()
