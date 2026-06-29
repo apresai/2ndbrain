@@ -2,6 +2,10 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## E2E test realism (PR #115) follow-up
+
+- **LOW (test hardening) — `TestE2E_Ask` asserts only non-empty output, not that the JWT ADR was actually retrieved.** It is implicitly stronger than it reads (`ask` exits non-zero on zero results, so retrieval must find *something*), but the answer-content assertion is just `TrimSpace(out) != ""` — a future regression retrieving the wrong doc wouldn't be caught. Pin retrieval *quality* by asserting the answer mentions the topic — but assert on `"auth"` (the question echoes it), NOT `"jwt"`: the LLM may answer "JSON Web Tokens" without the acronym, and asserting on non-deterministic Bedrock output is a flakiness anti-pattern, so keep it loose. `cli/e2e_test.go` (TestE2E_Ask).
+
 ## Nova Tier 1 — hybrid weighting + completion (Phase 3) follow-ups
 
 Phase 3 added configurable RRF weights (`ai.bm25_weight`/`ai.vector_weight`, default 1.0 = behavior-preserving), the Nova-2 catalog-truth pin, and a credential-gated cross-lingual showcase. 3-dimension chad-review found 0 CRITICAL/HIGH (all 7 findings LOW). Fixed in-PR: the NaN/Inf weight guard (config-set rejects non-finite + `ResolveHybridWeights` normalizes, with tests), the cross-lingual doc softened to match the directional test, and the agent skill updated with the new knobs (`make sync-skills`). Residual LOW:
