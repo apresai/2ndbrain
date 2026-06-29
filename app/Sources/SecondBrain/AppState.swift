@@ -124,6 +124,10 @@ final class AppState {
     var gitActivityDays: Int = UserDefaults.standard.object(forKey: "gitActivityDays") as? Int ?? 7
     var showGitActivity: Bool = false
 
+    // Vault performance observatory (the Metrics tab), read from `2nb metrics --json`.
+    var vaultMetrics: VaultMetrics?
+    var metricsLoading: Bool = false
+
     // AI state
     var aiStatus: AIStatusInfo?
     // Installed `2nb` CLI version ("X.Y.Z"), or nil if it couldn't be read.
@@ -1935,6 +1939,22 @@ final class AppState {
         } catch {
             log.warning("git activity unavailable: \(error.localizedDescription)")
             gitActivity = []
+        }
+    }
+
+    /// Loads the vault performance observatory from `2nb metrics --json`. Pinned
+    /// to the open vault by runCLI; best-effort (a CLI/decoder failure leaves the
+    /// last snapshot and logs, like the other read panels).
+    func refreshMetrics() async {
+        guard let vault else { return }
+        metricsLoading = true
+        defer { metricsLoading = false }
+        do {
+            let data = try await runCLI(["metrics", "--json"], cwd: vault.rootURL)
+            if data.isEmpty { return }
+            vaultMetrics = try JSONDecoder().decode(VaultMetrics.self, from: data)
+        } catch {
+            log.warning("metrics unavailable: \(error.localizedDescription)")
         }
     }
 

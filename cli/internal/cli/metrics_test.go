@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,5 +116,15 @@ func TestMetricsReport_EmptyVault(t *testing.T) {
 	}
 	if len(report.Recent) != 0 {
 		t.Errorf("recent = %d, want 0", len(report.Recent))
+	}
+	// recent must marshal as [] not null — a nil Go slice becomes JSON null,
+	// which the macOS app's typed [MetricOperation] decode can't accept and which
+	// would blank the whole Metrics tab on a fresh/cleared vault.
+	blob, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	if !strings.Contains(string(blob), `"recent":[]`) {
+		t.Errorf("empty-vault JSON must contain \"recent\":[] (not null); got: %s", blob)
 	}
 }
