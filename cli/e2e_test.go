@@ -52,14 +52,27 @@ func setupTestVault() error {
 		return errFromOutput("init", out, code)
 	}
 
-	// Create test documents via the CLI (proper UUIDs, frontmatter, etc.).
-	docs := []struct{ title, typ string }{
-		{"Use JWT for Auth", "adr"},
-		{"Debug Auth Failures", "runbook"},
-		{"Go Language Notes", "note"},
+	// Create test documents via the CLI (proper UUIDs, frontmatter, etc.) with
+	// real bodies — not bare templates. Nova's asymmetric query purpose and the
+	// recalibrated 0.25 threshold genuinely DISCRIMINATE, so an empty-template
+	// doc no longer loosely matches an arbitrary question the way the old
+	// symmetric embeddings did (every pair sat at ~0.7 cosine, clearing the old
+	// 0.65 threshold regardless of relevance). Seeding genuine content gives the
+	// vector + BM25 channels real signal, so retrieval-dependent tests like
+	// TestE2E_Ask reflect real-world behavior instead of the old non-discriminating
+	// match. (Verified: with this content the question embeds to cos≈0.30 against
+	// the JWT ADR, above 0.25, and BM25 also matches "authentication"/"approach".)
+	// Bodies contain both the literal "auth" token (TestE2E_Search greps the
+	// word "auth"; FTS5 does not stem "authentication"→"auth") and the natural
+	// phrasing TestE2E_Ask's question retrieves against ("authentication
+	// approach").
+	docs := []struct{ title, typ, content string }{
+		{"Use JWT for Auth", "adr", "We chose JSON Web Tokens (JWT) for API auth. JWT is the authentication approach the team chose over server-side session cookies, because it enables stateless authentication across microservices: each request carries a signed auth token that any service can verify without a shared session store."},
+		{"Debug Auth Failures", "runbook", "Runbook for debugging auth failures: check the JWT token expiry, verify the signing key matches, and confirm the Authorization header is present on the request."},
+		{"Go Language Notes", "note", "Notes on the Go programming language: goroutines and channels for concurrency, interfaces for abstraction, and explicit error-handling idioms."},
 	}
 	for _, d := range docs {
-		if out, code := run("create", d.title, "--type", d.typ); code != 0 {
+		if out, code := run("create", d.title, "--type", d.typ, "--content", d.content); code != 0 {
 			return errFromOutput("create "+d.title, out, code)
 		}
 	}
