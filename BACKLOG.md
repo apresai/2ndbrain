@@ -2,6 +2,17 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## ⭐ Performance — parallelize the embedding pass (raised priority)
+
+**Motivation (observed on v0.11.0):** the per-chunk vec0 path embeds *every chunk*, so a `--force-reembed` of a content-rich vault makes ~10× more Nova-2 calls than the old per-doc path. Measured on the obsidian vault: 153 docs / **1472 chunks** ≈ **10 minutes**, the whole time at **~0.1% CPU** — pure network wait on sequential Bedrock round-trips (~0.4s each). The work is embarrassingly parallel and entirely I/O-bound, so concurrency is a near-linear win.
+
+The embed path is sequential at **both** levels:
+- `embedNova` (`cli/internal/ai/bedrock.go`) loops `for i, text := range texts`, one sync `InvokeModel` per chunk.
+- `embedDocumentsWithProvider` (`cli/internal/cli/index.go:282`) loops `for i, doc := range docs`, one `embed.Document` at a time, gated by a **fixed inter-request delay** (`ThrottleDelay(ProviderRPSDefault(...))`, `index.go:280`) — a delay, not concurrency.
+
+- **Phase A — concurrent `InvokeModel` (the quick, big win; do first).** Replace the fixed `ThrottleDelay` with a bounded worker pool (`errgroup` + a semaphore sized to the provider's RPS/TPS budget) issuing N concurrent embed calls. N≈8–16 should cut a full re-embed from ~10 min to **<2 min**. Requirements: (1) cap concurrency to the Bedrock account's TPS so it doesn't self-throttle; (2) add exponential backoff on `ThrottlingException`/429 — the embed path currently has **no** Bedrock-throttle retry (only the DB has `RetryBusy`); (3) keep results deterministic and the per-doc mean-pool intact; (4) keep `stats.Embedded/Failed/Skipped` accounting correct under concurrency; (5) keep one stable progress signal (the `embedding documents`/`embedding complete` slog lines + the GUI progress). Localized to `index.go`'s embed loop and/or `embedNova`. Verify against a real vault (real Bedrock, no mocks) that wall-clock drops and results match the sequential run.
+- **Phase B — Nova async batch (`StartAsyncInvoke` → S3) for very large vaults (heavier; defer).** Nova's async invoke writes embeddings to S3, cheaper/faster than the sync loop at scale; adds async-submit + poll + S3 plumbing (shared with the deferred Tier 3 audio path and Tier 5 batch). Reserve for vaults where even concurrent sync is too slow — Phase A covers the common case.
+
 ## E2E test realism (PR #115) follow-up
 
 - **LOW (test hardening) — `TestE2E_Ask` asserts only non-empty output, not that the JWT ADR was actually retrieved.** It is implicitly stronger than it reads (`ask` exits non-zero on zero results, so retrieval must find *something*), but the answer-content assertion is just `TrimSpace(out) != ""` — a future regression retrieving the wrong doc wouldn't be caught. Pin retrieval *quality* by asserting the answer mentions the topic — but assert on `"auth"` (the question echoes it), NOT `"jwt"`: the LLM may answer "JSON Web Tokens" without the acronym, and asserting on non-deterministic Bedrock output is a flakiness anti-pattern, so keep it loose. `cli/e2e_test.go` (TestE2E_Ask).
