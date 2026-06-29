@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.12.0] - 2026-06-29
+
+### Added
+- **Vault performance observatory** — a local `.2ndbrain/metrics.db` records index/reindex/reembed/search/ask operations (timing, throughput, doc/chunk/embed counts) automatically and best-effort, never failing the underlying op. Pruned to ~200 rows per operation type; query text is never stored.
+- **`2nb metrics`** command (default `metrics show`) reports the last index build, live vault gauges (doc/chunk/embedded counts, coverage, index.db + WAL size, stale count, embedding model/dims), recent operations, and per-operation aggregates (count/avg/p50/avg-docs-per-sec). `metrics clear` wipes history; `--json` and `--limit` supported.
+- **MCP-driven operations** are recorded to the observatory (`source=mcp`): `kb_search`, `kb_ask`, `kb_index`, and the reindexing write tools, via a single long-lived metrics DB held for the server's lifetime.
+- **macOS Metrics tab** (`MetricsView`) surfaces the observatory: last build stats, live gauges, per-operation aggregates, and a recent-operations list with per-op icons, latency, and a source chip for non-CLI rows. Refreshes on appear and on demand (no polling).
+
+
 ## [0.11.1] - 2026-06-29
 
 ### Added
