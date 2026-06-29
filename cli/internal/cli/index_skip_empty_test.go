@@ -97,7 +97,7 @@ func TestForceReembedCompletesWithEmptyDocuments(t *testing.T) {
 	real := testutil.CreateAndIndex(t, v, "Real Note", "note", "This note has genuinely embeddable content.")
 
 	cfg := ai.AIConfig{Provider: "bedrock", EmbeddingModel: embedModel}
-	if err := forceReembedDocuments(ctx, v, cfg); err != nil {
+	if _, err := forceReembedDocuments(ctx, v, cfg); err != nil {
 		t.Fatalf("force-reembed must succeed when the only shortfall is a skipped empty note: %v", err)
 	}
 

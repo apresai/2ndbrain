@@ -12,6 +12,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/embed"
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -57,6 +58,39 @@ type embeddingRunStats struct {
 	// simply nothing to embed — and embedding providers like Amazon Nova-2
 	// reject empty input (minLength: 1), so we never send them.
 	Skipped int
+	// Throughput inputs for the metrics observatory, set by
+	// embedDocumentsWithProvider: the embed-phase wall time, the total body
+	// chars embedded, and the model used. Zero when nothing needed embedding.
+	DurationMs int64
+	TotalChars int
+	Model      string
+}
+
+// indexOperation builds the metrics-observatory row for a full index run (or a
+// reembed when force is set). For a reembed the index counts reflect the full
+// index that runs before re-embedding, since `index --force-reembed` does both.
+func indexOperation(force bool, start time.Time, ix vault.IndexStats, es embeddingRunStats, cfg ai.AIConfig, opErr error) metrics.Operation {
+	op := metrics.Operation{
+		Operation:      metrics.OpIndex,
+		DurationMs:     time.Since(start).Milliseconds(),
+		OK:             opErr == nil,
+		Error:          errString(opErr),
+		FilesScanned:   ix.FilesScanned,
+		DocsIndexed:    ix.DocsIndexed,
+		ChunksCreated:  ix.ChunksCreated,
+		LinksFound:     ix.LinksFound,
+		Embedded:       es.Embedded,
+		EmbedSkipped:   es.Skipped,
+		EmbedFailed:    es.Failed,
+		EmbedMs:        es.DurationMs,
+		TotalChars:     es.TotalChars,
+		EmbeddingModel: es.Model,
+		EmbeddingDims:  cfg.Dimensions,
+	}
+	if force {
+		op.Operation = metrics.OpReembed
+	}
+	return op
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
@@ -85,6 +119,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	})
 	if err != nil {
+		// Record the failed build (best-effort) before bailing so the
+		// observatory shows the failure, not just a gap.
+		recordMetric(v, indexOperation(indexForceReembed, startTime, vault.IndexStats{}, embeddingRunStats{}, v.Config.AI, err))
 		slog.Error("index failed", "error", err, "elapsed", time.Since(startTime))
 		return fmt.Errorf("index vault: %w", err)
 	}
@@ -101,13 +138,16 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
+	var embedStats embeddingRunStats
 	if indexForceReembed {
-		if err := forceReembedDocuments(ctx, v, cfg); err != nil {
+		embedStats, err = forceReembedDocuments(ctx, v, cfg)
+		if err != nil {
+			recordMetric(v, indexOperation(true, startTime, *stats, embedStats, cfg, err))
 			slog.Error("force-reembed failed", "error", err)
 			return err
 		}
-	} else if stats, err := embedDocuments(ctx, v, cfg); err != nil {
-		slog.Debug("embedding skipped", "reason", err.Error())
+	} else if es, eerr := embedDocuments(ctx, v, cfg); eerr != nil {
+		slog.Debug("embedding skipped", "reason", eerr.Error())
 		if !flagPorcelain {
 			// When no provider is configured at all, guide the user
 			// directly to `2nb ai setup` instead of printing a raw
@@ -116,12 +156,17 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			if cfg.Provider == "" {
 				fmt.Fprintln(os.Stderr, "  no AI provider configured — run '2nb ai setup' to enable semantic search (BM25 index built)")
 			} else {
-				fmt.Fprintf(os.Stderr, "  embedding skipped: %v\n", err)
+				fmt.Fprintf(os.Stderr, "  embedding skipped: %v\n", eerr)
 			}
 		}
-	} else if stats.Failed > 0 {
-		slog.Warn("embedding completed with document failures", "embedded", stats.Embedded, "attempted", stats.Attempted, "failed", stats.Failed)
+	} else {
+		embedStats = es
+		if es.Failed > 0 {
+			slog.Warn("embedding completed with document failures", "embedded", es.Embedded, "attempted", es.Attempted, "failed", es.Failed)
+		}
 	}
+
+	recordMetric(v, indexOperation(indexForceReembed, startTime, *stats, embedStats, cfg, nil))
 
 	format := getFormat(cmd)
 	if format != "" {
@@ -139,19 +184,40 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) error {
+func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err error) {
 	start := time.Now()
+
+	// Record the single-doc reindex (best-effort) on every return path —
+	// success or failure. This is the high-frequency operation: editors and the
+	// macOS app shell `2nb index --doc` on each note save.
+	var embedStats embeddingRunStats
+	defer func() {
+		recordMetric(v, metrics.Operation{
+			Operation:      metrics.OpIndexDoc,
+			DurationMs:     time.Since(start).Milliseconds(),
+			OK:             err == nil,
+			Error:          errString(err),
+			DocsIndexed:    1,
+			Embedded:       embedStats.Embedded,
+			EmbedSkipped:   embedStats.Skipped,
+			EmbedFailed:    embedStats.Failed,
+			EmbedMs:        embedStats.DurationMs,
+			TotalChars:     embedStats.TotalChars,
+			EmbeddingModel: embedStats.Model,
+			EmbeddingDims:  v.Config.AI.Dimensions,
+		})
+	}()
 
 	absPath := docArg
 	if !filepath.IsAbs(absPath) {
 		absPath = filepath.Join(v.Root, docArg)
 	}
-	if _, err := os.Stat(absPath); err != nil {
-		return fmt.Errorf("resolve doc path: %w", err)
+	if _, statErr := os.Stat(absPath); statErr != nil {
+		return fmt.Errorf("resolve doc path: %w", statErr)
 	}
 
-	if err := vault.IndexSingleFile(v, absPath); err != nil {
-		return err
+	if idxErr := vault.IndexSingleFile(v, absPath); idxErr != nil {
+		return idxErr
 	}
 
 	// Re-run embeddings. DocumentsNeedingEmbedding will only include docs
@@ -161,9 +227,10 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) error 
 	ctx := context.Background()
 	cfg := v.Config.AI
 	embedded := false
-	if stats, err := embedDocuments(ctx, v, cfg); err != nil {
-		slog.Debug("incremental embed skipped", "reason", err.Error())
+	if stats, embErr := embedDocuments(ctx, v, cfg); embErr != nil {
+		slog.Debug("incremental embed skipped", "reason", embErr.Error())
 	} else {
+		embedStats = stats
 		embedded = stats.Embedded > 0
 	}
 
@@ -200,15 +267,15 @@ func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.Embeddi
 	return embedder, nil
 }
 
-func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) error {
+func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
 	embedder, err := validateEmbeddingProvider(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("force-reembed preflight: %w", err)
+		return embeddingRunStats{}, fmt.Errorf("force-reembed preflight: %w", err)
 	}
 
 	snapshot, err := v.DB.SnapshotEmbeddings()
 	if err != nil {
-		return err
+		return embeddingRunStats{}, err
 	}
 
 	// --force-reembed clears embedding_hash on every embedded row so
@@ -217,7 +284,7 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	// immediately instead of per-document drift re-embedding.
 	n, err := v.DB.InvalidateAllEmbeddings()
 	if err != nil {
-		return fmt.Errorf("invalidate embeddings: %w", err)
+		return embeddingRunStats{}, fmt.Errorf("invalidate embeddings: %w", err)
 	}
 	slog.Info("force-reembed: invalidated embeddings", "count", n)
 	if !flagPorcelain {
@@ -232,17 +299,17 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, stats.Attempted-stats.Skipped, stats.Failed)
 	}
 	if err == nil {
-		return nil
+		return stats, nil
 	}
 
 	slog.Warn("force-reembed failed; restoring previous embeddings", "error", err, "embedded", stats.Embedded, "attempted", stats.Attempted, "failed", stats.Failed)
 	if restoreErr := v.DB.RestoreEmbeddings(snapshot); restoreErr != nil {
-		return fmt.Errorf("%w; failed to restore previous embeddings: %v", err, restoreErr)
+		return stats, fmt.Errorf("%w; failed to restore previous embeddings: %v", err, restoreErr)
 	}
 	if !flagPorcelain {
 		fmt.Fprintln(os.Stderr, "  force-reembed failed; restored previous embeddings")
 	}
-	return err
+	return stats, err
 }
 
 func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
@@ -259,7 +326,7 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 	if err != nil {
 		return embeddingRunStats{}, err
 	}
-	stats := embeddingRunStats{Attempted: len(docs)}
+	stats := embeddingRunStats{Attempted: len(docs), Model: model}
 
 	if len(docs) == 0 {
 		slog.Debug("all embeddings up to date", "model", model)
@@ -343,6 +410,8 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		}
 	}
 
+	stats.DurationMs = time.Since(embedStart).Milliseconds()
+	stats.TotalChars = totalChars
 	slog.Info("embedding complete", "embedded", embedded, "total", len(docs), "failed", stats.Failed, "skipped", stats.Skipped, "elapsed", time.Since(embedStart))
 	if !flagPorcelain && stats.Skipped > 0 {
 		fmt.Fprintf(os.Stderr, "  skipped %d empty document(s)\n", stats.Skipped)
