@@ -21,7 +21,7 @@ func TestForceReembedPreflightsProviderBeforeInvalidating(t *testing.T) {
 		Provider:       "missing-provider",
 		EmbeddingModel: "new-model",
 	}
-	err := forceReembedDocuments(context.Background(), v, cfg)
+	_, err := forceReembedDocuments(context.Background(), v, cfg)
 	if err == nil {
 		t.Fatal("forceReembedDocuments with missing provider should fail")
 	}

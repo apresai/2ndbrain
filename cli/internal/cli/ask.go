@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/ragctx"
 	"github.com/apresai/2ndbrain/internal/search"
@@ -105,13 +107,28 @@ func loadHistoryArg(arg string) ([]ai.ChatTurn, error) {
 	return parseHistoryJSON(data)
 }
 
-func runAsk(cmd *cobra.Command, args []string) error {
+func runAsk(cmd *cobra.Command, args []string) (err error) {
 	v, err := openVault()
 	if err != nil {
 		return err
 	}
 	defer v.Close()
 	setupFileLogging(v)
+
+	// Record the ask (best-effort) on every return path. result_count is the
+	// number of cited source notes; mode is "hybrid" or "keyword".
+	startTime := time.Now()
+	var resp AskResponse
+	defer func() {
+		recordMetric(v, metrics.Operation{
+			Operation:   metrics.OpAsk,
+			DurationMs:  time.Since(startTime).Milliseconds(),
+			OK:          err == nil,
+			Error:       errString(err),
+			ResultCount: len(resp.Sources),
+			Mode:        resp.Mode,
+		})
+	}()
 
 	initAIProviders(v)
 	ctx := context.Background()
@@ -136,7 +153,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generation provider %q not available", cfg.Provider)
 	}
 
-	resp, err := askOnce(ctx, v, generator, question, history)
+	resp, err = askOnce(ctx, v, generator, question, history)
 	if err != nil {
 		return err
 	}

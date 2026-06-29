@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -57,7 +58,7 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 }
 
-func runSearch(cmd *cobra.Command, args []string) error {
+func runSearch(cmd *cobra.Command, args []string) (err error) {
 	v, err := openVault()
 	if err != nil {
 		return err
@@ -117,6 +118,19 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	var warnings []string
 	ctx := context.Background()
 	cfg := v.Config.AI
+
+	// Record the query (best-effort) on every return path, including
+	// zero-result and error cases. mode is "hybrid" or "keyword".
+	defer func() {
+		recordMetric(v, metrics.Operation{
+			Operation:   metrics.OpSearch,
+			DurationMs:  time.Since(startTime).Milliseconds(),
+			OK:          err == nil,
+			Error:       errString(err),
+			ResultCount: len(results),
+			Mode:        string(mode),
+		})
+	}()
 
 	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
 

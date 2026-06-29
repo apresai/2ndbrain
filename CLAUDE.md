@@ -134,11 +134,12 @@ Key patterns:
 | `internal/skills` | Skill file generation and agent registry |
 | `internal/output` | JSON/CSV/TSV/YAML/raw/md/text formatters |
 | `internal/bench` | Benchmark history DB (`bench.db`: favorites, runs) + probes |
+| `internal/metrics` | Vault performance observatory DB (`metrics.db`: `operations` table — index/reindex/reembed/search/ask timing + throughput) |
 | `internal/testutil` | Test helpers (NewTestVault, CreateAndIndex) |
 
 Key types: `document.Document`, `store.DB`, `vault.Vault`, `search.Engine`, `graph.Graph`.
 
-### CLI Commands (90)
+### CLI Commands (91)
 
 Organized into groups: Getting Started, Documents, Search & AI, Quality, Integration, Import/Export, Configuration. Use `--help` on any command for full flag detail.
 
@@ -164,6 +165,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 | `list` | List documents with filters (`--type --status --tag --limit --sort`). Alias: `files`. `--total` prints only the count; `--format paths` prints one vault-relative path per line; `--format tree` prints an indented directory hierarchy |
 | `lint [glob]` | Validate schemas, check broken wikilinks |
 | `stale` | List documents not modified within N days (`--since`) |
+| `metrics` | Vault performance observatory: read the local `.2ndbrain/metrics.db` and report the last index build (duration, docs/sec, throughput), live vault gauges (doc/chunk/embedded counts, coverage, index.db + WAL size, stale count, embedding model/dims), recent operations, and per-operation aggregates (count/avg/p50/avg-docs-per-sec). Metrics are recorded automatically (best-effort, never failing the op) by `index`/`index --doc`/`--force-reembed`/`search`/`ask`. Parent default is `metrics show`; `metrics clear` wipes history. `--json` emits `{last_build, gauges, recent, aggregates}`; `--limit` bounds the recent window |
 | `related` | Find related docs via link graph (`--depth`) |
 | `backlinks <path>` | List resolved inbound links to a document: which docs link to it, with the source path/title and the link's heading/alias/raw form |
 | `links <path>` | List outbound links from a document, including unresolved ones (each carries a `resolved` bool), so it doubles as a per-file broken-link view |
@@ -240,7 +242,7 @@ Organized into groups: Getting Started, Documents, Search & AI, Quality, Integra
 
 **Obsidian-CLI syntax compatibility:** an argv preprocessor (`preprocessArgs` in `root.go`) lets `2nb` accept `obsidian`-CLI-style invocations as a drop-in (full mapping table plus accepted forms in [docs/obsidian-cli-mapping.md](docs/obsidian-cli-mapping.md)): `key=value` arguments (`file=`, `path=`, `to=`, `content=`, `name=`, `value=`, `query=`, `ref=`, `vault=`, `format=`, plus `template=` for create, `old=`/`new=` for tags:rename, and `tag=` for tag:add/tag:remove), boolean tokens (`total`, `append`, `overwrite`, `done`/`todo`/`toggle`, `verbose`), and colon-commands (`daily:read`/`daily:append`/`daily:prepend`/`daily:path`, `property:read`/`property:set`/`property:remove` → `meta`, `tags:rename` → `tags rename`, `tag:add`/`tag:remove` → `tag add`/`tag remove`, `link:unresolved`/`link:orphans`/`link:deadends`, `search:context`). Target resolution: `path=` is a strict exact vault-relative path; `file=` is the fuzzy resolver (exact → shortest-unique basename/suffix → title → alias, failing loudly with candidates on ambiguity); a bare positional is auto (exact-on-disk, else fuzzy). The resolver lives in `store.ResolveTarget` (shared with wikilink resolution via `buildLookupIndex`); CLI commands route through `resolveTargetArg` (a hidden `--resolve exact|fuzzy|auto` set by the shim). Compatibility command translations: `print` → `read`; `frontmatter`/`fm`/`properties` → `meta` (also cobra aliases); `files` → `list`; `search-content` → `search --bm25-only`; `list-vaults`/`set-default-vault`/`add-vault` → `vault list`/`set`/`create`. It only rewrites recognized command + parameter shapes; a free-text `search`/`ask`/`chat`/`search-content` query is never parsed as `key=value` (so a query containing `=` is preserved), and an unrecognized `key=value` on any command passes through verbatim rather than being dropped.
 
-**Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works (Cobra intercepts before `RunE`).
+**Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`, `2nb metrics` → `metrics show`. `--help` still works (Cobra intercepts before `RunE`).
 
 ### AI Providers
 
@@ -324,10 +326,11 @@ tar czf vault.tar.gz \
   --exclude='.2ndbrain/recovery' \
   --exclude='.2ndbrain/mcp' \
   --exclude='.2ndbrain/bench.db' \
+  --exclude='.2ndbrain/metrics.db' \
   my-vault/
 ```
 
-`.2ndbrain/config.yaml` and `.2ndbrain/index.db` *should* stay in single-user tarballs. For git-shared team vaults, `2nb vault create` writes a `.gitignore` excluding `config.yaml`, `index.db` (+ WAL), `bench.db`, `logs/`, `recovery/`, `mcp/`, `*.bak`. Only `schemas.yaml` is committable.
+`.2ndbrain/config.yaml` and `.2ndbrain/index.db` *should* stay in single-user tarballs. For git-shared team vaults, `2nb vault create` writes a `.gitignore` excluding `config.yaml`, `index.db` (+ WAL), `bench.db`, `metrics.db` (+ WAL), `logs/`, `recovery/`, `mcp/`, `*.bak`. Only `schemas.yaml` is committable.
 
 **Privacy caveat:** embeddings are a lossy reconstruction of source text — shipping a vault with embeddings is functionally equivalent to shipping (approximate) content. A `--strip-embeddings` export mode is future work.
 
@@ -446,6 +449,7 @@ vault-root/
 │   ├── schemas.yaml     # Document type schemas (committable)
 │   ├── index.db         # SQLite index (shared between CLI and app)
 │   ├── bench.db         # Benchmark history + favorites
+│   ├── metrics.db       # Performance observatory (operations: index/search/ask timing)
 │   ├── mcp/             # <pid>.json per running mcp-server
 │   ├── recovery/        # Crash recovery snapshots
 │   └── logs/            # Error logs
@@ -471,6 +475,8 @@ Beyond `.md`, the indexer now parses and indexes `.canvas` (JSON Canvas) and `.b
 **SQLite tables (`index.db`):** `documents`, `chunks`, `chunks_fts` (FTS5), `vec_chunks` (sqlite-vec vec0), `links`, `tags`, `aliases`, `schema_version`. Schema v3 adds the `aliases` table (`doc_id`, `alias`) and a `block_id` column on both `chunks` and `links` for Obsidian block references (`^block-id`). `vec_chunks` is a vec0 virtual table (`chunk_id` PK, `embedding float[dim] distance_metric=cosine`, `+doc_id`/`+content_hash`/`+model` aux columns) holding per-chunk embeddings for KNN; it is created lazily on first embed and dropped+recreated when the embedding dimension changes (no `schema_version` bump, since it is derived, regenerable state).
 
 **SQLite tables (`bench.db`):** `favorites` (provider, model_id, model_type, added_at), `runs` (timestamp, provider, model_id, probe, latency_ms, ok, detail, vault_doc_count), `schema_version`. Created on first `models bench`.
+
+**SQLite tables (`metrics.db`):** `operations` (id, ts, operation `index|index_doc|reembed|search|ask`, source `cli|mcp|app`, duration_ms, ok, error, the index/embed counters `files_scanned`/`docs_indexed`/`chunks_created`/`links_found`/`embedded`/`embed_skipped`/`embed_failed`/`embed_ms`/`total_chars`/`embedding_model`/`embedding_dims`, the query fields `result_count`/`mode`, and `cli_version`), `schema_version`. Derived rates (docs/sec, embeddings/sec, chars/sec) are computed at read time, never stored. Created lazily on the first open (a read via `2nb metrics` or a write via any recorded op); pruned to the most recent ~200 rows **per operation type** (a flood of `search` rows never evicts `index` build history). Query text is never stored (privacy). Read by `2nb metrics` and the macOS Metrics tab.
 
 ## Obsidian Conversion
 
