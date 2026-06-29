@@ -2,6 +2,15 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Vault performance observatory — Phase 1 storage + CLI (PR #121) follow-ups
+
+3-dimension chad-review found 0 CRITICAL/HIGH. Fixed in-PR: the `schema_version` table grew one row per `Open` (the `INSERT OR IGNORE` never ignored without a key, and `metrics.Open` runs on *every* index/search/ask) → made `version` a `PRIMARY KEY` (now genuinely idempotent), with a regression test; lowered the metrics `busy_timeout` 5000→2000ms so a best-effort write can't stall the hot `index --doc` path up to 5s; renamed the `cap`-shadows-builtin param; doc-wording nit (created lazily on first open, read or write); + added a `Clear` test and a `TestIndexOperation` builder test (the stat→Operation mapping + force→reembed switch that the `runIndex` defer depends on). Residual:
+
+- **MEDIUM (coverage) — no end-to-end test asserts the CLI paths actually record a metric.** The package + report-builder + the `indexOperation` mapping are unit-tested, but nothing drives `runIndex`/`runIndexSingleDoc`/`runSearch`/`runAsk` and then checks a row landed — a wrong/shadowed captured var in a named-return defer would pass every test. Best added in the Phase 2 usage suite / `e2e_test.go` (drives the real binary), where a seeded `2nb index` + `2nb metrics --json` round-trip can assert `last_build.docs_indexed>0`. `cli/internal/usage`, `cli/e2e_test.go`.
+- **MEDIUM (perf) — metrics writes are synchronous on the hot path.** Each `recordMetric` does Open→INSERT+prune→Close inline; even at `busy_timeout(2000)` a sustained FSEvents burst (git checkout → hundreds of `index --doc`) can add bounded latency to the op being measured. Consider a buffered/async writer (a process-lifetime channel + single background flusher, or fire-and-forget goroutine with a deadline) so the hot path never blocks on metrics I/O. Pairs naturally with the embedding-parallelization work above and with the Phase 2 long-lived MCP server (which will hold one `*metrics.DB` open). `cli/internal/cli/metrics_record.go`, `cli/internal/metrics/db.go`.
+- **LOW (coverage) — `printMetricsReport` + `metricsDurationF` untested.** The only real branch is the `%dm%02ds` minute format (duration ≥ 60000ms), which no test exercises. `cli/internal/cli/metrics.go`.
+- **LOW (cross-cutting) — `bench.db` carries the same `schema_version`-without-PK pattern.** Harmless there (its `Open` runs only on `models bench`, not per-op), but align it to `PRIMARY KEY` if that file is touched. `cli/internal/bench/db.go`.
+
 ## Parent-document RAG context (PR #119) follow-ups
 
 3-dimension chad-review found 0 CRITICAL/HIGH. Fixed in-PR: the whole-note path now uses `IndexableBody()` so Obsidian `%%comments%%` don't leak (windowed path already stripped them); the agent-skill "top 5" drift; the oversized-single-chunk elision marker; duplicated budget constants collapsed to one source in `internal/ai`; CLAUDE.md drift; + coverage tests (oversized clamp, comment-strip, config rejection, RRF vector-only heading). Residual:

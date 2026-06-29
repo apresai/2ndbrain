@@ -64,9 +64,12 @@ CREATE TABLE IF NOT EXISTS operations (
 CREATE INDEX IF NOT EXISTS idx_operations_op_ts ON operations(operation, ts DESC);
 
 CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL
+    version INTEGER PRIMARY KEY
 );
 
+-- PRIMARY KEY makes this INSERT OR IGNORE genuinely idempotent: a second open
+-- conflicts on the existing row and is ignored. Without the PK the row would be
+-- re-inserted on every open, and Open runs on every index/search/ask.
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 `
 
@@ -151,7 +154,13 @@ type DB struct {
 func Open(dbPath string) (*DB, error) {
 	// Bare path (no file: prefix) so a path with URI metacharacters (e.g. '%')
 	// stays literal; modernc still parses _pragma from the query. See store/db.go.
-	conn, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)")
+	//
+	// busy_timeout is deliberately LOWER than the index DB's 5s: metrics are
+	// best-effort telemetry written synchronously on the hot path (every
+	// index/search/ask, incl. the app's per-save `index --doc` burst). Under
+	// write-lock contention we'd rather wait briefly then drop the metric than
+	// stall the operation we're measuring for up to 5 seconds.
+	conn, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(2000)")
 	if err != nil {
 		return nil, fmt.Errorf("open metrics db: %w", err)
 	}
@@ -203,10 +212,10 @@ func (db *DB) Record(op Operation) error {
 	return db.prune(op.Operation, DefaultPerTypeCap)
 }
 
-// prune keeps only the newest `cap` rows of the given operation type. Uses the
+// prune keeps only the newest `keep` rows of the given operation type. Uses the
 // monotonic rowid for "newest" so it is stable regardless of timestamp ties.
-func (db *DB) prune(operation string, cap int) error {
-	if cap <= 0 {
+func (db *DB) prune(operation string, keep int) error {
+	if keep <= 0 {
 		return nil
 	}
 	_, err := db.conn.Exec(
@@ -215,7 +224,7 @@ func (db *DB) prune(operation string, cap int) error {
 		   AND id NOT IN (
 		       SELECT id FROM operations WHERE operation = ? ORDER BY id DESC LIMIT ?
 		   )`,
-		operation, operation, cap,
+		operation, operation, keep,
 	)
 	return err
 }

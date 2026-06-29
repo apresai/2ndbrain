@@ -152,6 +152,49 @@ func TestWithRates_ZeroDurationGuard(t *testing.T) {
 	}
 }
 
+// TestSchemaVersionIdempotentAcrossOpens is a regression test for the
+// schema_version row growing one-per-open: Open runs on every recorded op, so
+// the INSERT OR IGNORE must actually be ignored on subsequent opens (it is only
+// once `version` is a PRIMARY KEY).
+func TestSchemaVersionIdempotentAcrossOpens(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "m.db")
+	for i := 0; i < 4; i++ {
+		db, err := Open(p)
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		db.Close()
+	}
+	db, err := Open(p)
+	if err != nil {
+		t.Fatalf("final open: %v", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM schema_version`).Scan(&n); err != nil {
+		t.Fatalf("count schema_version: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("schema_version rows = %d after 5 opens, want 1 (INSERT OR IGNORE must be idempotent)", n)
+	}
+}
+
+func TestClear(t *testing.T) {
+	db := openTestDB(t)
+	mustRecord(t, db, Operation{Operation: OpIndex, DurationMs: 100, DocsIndexed: 1, OK: true})
+	mustRecord(t, db, Operation{Operation: OpSearch, DurationMs: 10, OK: true})
+	n, err := db.Clear()
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("cleared = %d, want 2", n)
+	}
+	if ops, _ := db.Recent(0); len(ops) != 0 {
+		t.Errorf("after clear: %d ops, want 0", len(ops))
+	}
+}
+
 func mustRecord(t *testing.T, db *DB, op Operation) {
 	t.Helper()
 	if err := db.Record(op); err != nil {
