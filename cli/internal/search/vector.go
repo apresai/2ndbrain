@@ -5,10 +5,15 @@ import (
 	"sort"
 )
 
-// ScoredDoc is a document with a similarity score from vector search.
+// ScoredDoc is a document with a similarity score from vector search. ChunkID /
+// HeadingPath identify the document's best-matching chunk (the per-chunk vec0
+// winner), so a vector-only hit still knows WHICH section matched — used by the
+// parent-document context assembler to window a long note around the answer.
 type ScoredDoc struct {
-	DocID string
-	Score float64
+	DocID       string
+	Score       float64
+	ChunkID     string
+	HeadingPath string
 }
 
 // CosineSimilarity computes the cosine similarity between two vectors.
@@ -96,16 +101,19 @@ func ReciprocalRankFusion(bm25Results []Result, vectorResults []ScoredDoc, limit
 		scores[v.DocID] += vectorWeight / (k + float64(rank+1))
 		vectorScores[v.DocID] = v.Score
 		if _, exists := resultMap[v.DocID]; !exists {
-			// Try to look up full metadata for vector-only results
+			// Vector-only result: look up full metadata, and carry the matched
+			// chunk's heading/id so the parent-document assembler can window a
+			// long note around the section that matched. (A doc already in the
+			// map came from BM25 and keeps its own HeadingPath — never touched.)
+			r := Result{DocID: v.DocID}
 			if lookup != nil {
 				if doc, ok := lookup.GetDocumentByID(v.DocID); ok {
-					resultMap[v.DocID] = doc
-				} else {
-					resultMap[v.DocID] = Result{DocID: v.DocID}
+					r = doc
 				}
-			} else {
-				resultMap[v.DocID] = Result{DocID: v.DocID}
 			}
+			r.HeadingPath = v.HeadingPath
+			r.ChunkID = v.ChunkID
+			resultMap[v.DocID] = r
 		}
 	}
 

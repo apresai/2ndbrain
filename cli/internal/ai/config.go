@@ -20,11 +20,17 @@ type AIConfig struct {
 	// or semantic recall. Each defaults to 1.0 (equal-weight RRF) when unset;
 	// raise VectorWeight to favor the semantic channel. Resolved via
 	// ResolveHybridWeights.
-	BM25Weight   float64          `yaml:"bm25_weight,omitempty" json:"bm25_weight,omitempty"`
-	VectorWeight float64          `yaml:"vector_weight,omitempty" json:"vector_weight,omitempty"`
-	Ollama       OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
-	Bedrock      BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
-	OpenRouter   OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
+	BM25Weight   float64 `yaml:"bm25_weight,omitempty" json:"bm25_weight,omitempty"`
+	VectorWeight float64 `yaml:"vector_weight,omitempty" json:"vector_weight,omitempty"`
+	// RAGContextBudgetRunes / RAGNoteBudgetRunes bound how much retrieved note
+	// text `ask` feeds the generator (parent-document context). Runes ≈ chars
+	// (tokens ≈ runes/4). Each defaults when unset; resolved via
+	// ResolveRAGContextBudget / ResolveRAGNoteBudget.
+	RAGContextBudgetRunes int              `yaml:"rag_context_budget,omitempty" json:"rag_context_budget,omitempty"`
+	RAGNoteBudgetRunes    int              `yaml:"rag_note_budget,omitempty" json:"rag_note_budget,omitempty"`
+	Ollama                OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
+	Bedrock               BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
+	OpenRouter            OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
 }
 
 // ResolveHybridWeights returns the BM25 and vector weights for RRF fusion, each
@@ -41,6 +47,35 @@ func normHybridWeight(w float64) float64 {
 		return 1.0
 	}
 	return w
+}
+
+// RAG context (parent-document) budget defaults — generous within Claude Haiku
+// 4.5's 200k-token window while staying cost-sane (~runes/4 tokens). Most notes
+// are 1-8 KB so virtually all are fed whole; only an unusually long note is
+// windowed around the matched section.
+const (
+	DefaultRAGContextBudgetRunes = 60000 // ~15k tokens total across all notes
+	DefaultRAGNoteBudgetRunes    = 20000 // ~5k tokens per note
+	DefaultRAGCandidateDocs      = 12    // over-fetch; the budget + DefaultRAGMaxNotes decide how many fit
+	DefaultRAGMaxNotes           = 10    // hard cap on notes in the context, below the candidate over-fetch
+)
+
+// ResolveRAGContextBudget returns the total RAG context budget in runes,
+// defaulting when unset (<= 0).
+func (c AIConfig) ResolveRAGContextBudget() int {
+	if c.RAGContextBudgetRunes > 0 {
+		return c.RAGContextBudgetRunes
+	}
+	return DefaultRAGContextBudgetRunes
+}
+
+// ResolveRAGNoteBudget returns the per-note RAG context budget in runes,
+// defaulting when unset (<= 0).
+func (c AIConfig) ResolveRAGNoteBudget() int {
+	if c.RAGNoteBudgetRunes > 0 {
+		return c.RAGNoteBudgetRunes
+	}
+	return DefaultRAGNoteBudgetRunes
 }
 
 // OllamaConfig configures the local Ollama provider.

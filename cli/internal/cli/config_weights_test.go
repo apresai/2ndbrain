@@ -32,3 +32,23 @@ func TestSetConfigValue_HybridWeights(t *testing.T) {
 		}
 	}
 }
+
+// TestSetConfigValue_RAGBudget locks the RAG context-budget guard: non-negative
+// rune counts up to 400000 are accepted (0 resolves to the default), negatives /
+// over-cap / non-ints are rejected.
+func TestSetConfigValue_RAGBudget(t *testing.T) {
+	cfg := ai.AIConfig{}
+	for _, k := range []string{"ai.rag_context_budget", "ai.rag_note_budget"} {
+		if err := setConfigValue(&cfg, k, "30000"); err != nil {
+			t.Errorf("setConfigValue(%s, 30000) = %v, want nil", k, err)
+		}
+		if err := setConfigValue(&cfg, k, "0"); err != nil {
+			t.Errorf("setConfigValue(%s, 0) = %v, want nil (0 = default)", k, err)
+		}
+		for _, bad := range []string{"-1", "999999", "abc", "1.5"} {
+			if err := setConfigValue(&cfg, k, bad); err == nil {
+				t.Errorf("setConfigValue(%s, %s) = nil, want error", k, bad)
+			}
+		}
+	}
+}

@@ -49,7 +49,7 @@ Three intents cover almost every request. Pick the path; do not improvise a one-
 - `kb_suggest_links <path>` ranks docs you SHOULD link but have not yet (semantic similarity), which is different from `kb_related` (docs you already link via the wikilink graph).
 
 **3. Answer a question from the notes → ask, then verify.**
-- `kb_ask` / `2nb ask "..."` searches and synthesizes an answer with a source list. `ask` is STRICTER than `search`: it weighs only the top 5 hits against the same threshold, so a borderline match at rank 8 appears in `search` but not `ask`. If `ask` returns "no relevant documents," drop to `kb_search` with broader terms.
+- `kb_ask` / `2nb ask "..."` searches and synthesizes an answer with a source list. It feeds the FULL text of the top-ranked matching notes (parent-document context, bounded by `ai.rag_context_budget`), so an answer deep in a long note isn't truncated away. `ask` is STRICTER than `search`: matches are gated by the same threshold, so a borderline hit that clears `search` may be too weak to ground an `ask` answer. If `ask` returns "no relevant documents," drop to `kb_search` with broader terms.
 - RAG can hallucinate a specific detail out of a real chunk. `kb_read` each cited source before repeating an exact claim, number, or name.
 
 **Know which vault you're writing to.** `kb_info` or `2nb vault show --json` answers "which vault?". The default write target is the vault you have open in Obsidian (see "Which vault gets written" above) — the cwd is never an implicit target. Pass `--vault <path>` (or set `2NB_VAULT`) only to override to a different vault on purpose.
@@ -300,7 +300,7 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 | Tool | When to call it |
 |---|---|
 | `kb_search` | Hybrid BM25 + semantic search. **Check the `vector_score` field** on each result — it's the raw cosine similarity, which is a better relevance signal than `score` (the RRF fusion score). Above ~0.4 = strong match; 0.2–0.4 = related; below 0.2 is filtered out entirely. |
-| `kb_ask` | RAG Q&A — synthesizes an answer from the top matches. **Fall back to `kb_search`** if `kb_ask` returns "no relevant documents" — both use the same threshold, but `kb_ask` only considers the top 5 results; a borderline match at rank 8 will show up in `kb_search` but not in `kb_ask`. |
+| `kb_ask` | RAG Q&A — synthesizes an answer from the full text of the top-ranked matching notes (parent-document context). **Fall back to `kb_search`** if `kb_ask` returns "no relevant documents" — both use the same threshold, but a borderline match that surfaces in `kb_search` may be too weak to ground a `kb_ask` answer. |
 | `kb_read` | Full document or a specific heading chunk. Call after `kb_search`/`kb_list` to fetch content for the paths you found. |
 | `kb_structure` | Heading tree as JSON. Use to pick a chunk name before calling `kb_read` with `chunk:`. |
 | `kb_related` | BFS over the `[[wikilink]]` graph to depth N. Use for "what connects to this?" questions. |
@@ -414,7 +414,7 @@ When semantic search falls back to BM25, the CLI prints a warning to stderr and 
 | `"semantic search disabled: embedder X not registered"` | Config names a provider that isn't compiled in | `2nb config show` — check `ai.provider` |
 | Search returns `mode: keyword` with no warnings | Vault has no embeddings yet | `2nb index` — BM25 works immediately, embeddings backfill during the run |
 | Search returns empty results | Usually a threshold issue, not a content gap | Try `2nb search "foo" --threshold 0.15` or `--bm25-only` |
-| `kb_ask` returns "no relevant documents" | Top 5 results all got threshold-filtered (see note above — `ask` and `search` share thresholds but `ask` sees fewer ranks) | Drop to `kb_search` with the same query |
+| `kb_ask` returns "no relevant documents" | The top-ranked results all got threshold-filtered (see note above — `ask` and `search` share thresholds) | Drop to `kb_search` with the same query |
 | `"schema version N newer than supported"` on open | Vault opened by a newer `2nb` than the one installed | `brew upgrade apresai/tap/twonb` |
 
 ## Worked JSON examples

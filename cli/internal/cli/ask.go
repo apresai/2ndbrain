@@ -7,11 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/ragctx"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -231,7 +231,7 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 	retrieve := func(query string) ([]search.Result, bool, error) {
 		opts := search.Options{
 			Query:          query,
-			Limit:          5,
+			Limit:          ai.DefaultRAGCandidateDocs,
 			MinVectorScore: threshold,
 		}
 		opts.BM25Weight, opts.VectorWeight = cfg.ResolveHybridWeights()
@@ -275,31 +275,16 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		return AskResponse{}, fmt.Errorf("no relevant documents found for %q\n\nTo fix:\n  • Add documents to your vault: 2nb create \"My Note\"\n  • Rebuild the search index: 2nb index\n  • Check what's indexed: 2nb list", question)
 	}
 
-	// Build RAG context from search results
-	var chunks []ai.RAGChunk
-	seen := make(map[string]bool)
-	for _, r := range results {
-		if r.Path == "" || seen[r.Path] {
-			continue
-		}
-		seen[r.Path] = true
-		content, err := os.ReadFile(filepath.Join(v.Root, r.Path))
-		if err != nil {
-			msg := fmt.Sprintf("failed to read context source %s: %v", r.Path, err)
-			slog.Warn("ask context read failed", "path", r.Path, "err", err)
-			addWarning(msg)
-			continue
-		}
-		// Truncate to first 2000 runes (M3: rune-safe)
-		runes := []rune(string(content))
-		if len(runes) > 2000 {
-			runes = runes[:2000]
-		}
-		text := string(runes)
-		if len(runes) == 2000 {
-			text += "..."
-		}
-		chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: text})
+	// Build parent-document RAG context: feed each unique source note's FULL
+	// body — windowed around the matched section only when it exceeds the budget
+	// — so an answer deep in a long note isn't head-truncated away.
+	chunks, ctxWarnings := ragctx.Build(results, v.Root, ragctx.Budget{
+		TotalRunes: cfg.ResolveRAGContextBudget(),
+		NoteRunes:  cfg.ResolveRAGNoteBudget(),
+	})
+	for _, w := range ctxWarnings {
+		slog.Warn("ask context", "warn", w)
+		addWarning(w)
 	}
 	if len(chunks) == 0 {
 		return AskResponse{}, fmt.Errorf("failed to build RAG context from %d search result(s); see warnings for unreadable sources", len(results))

@@ -173,6 +173,8 @@ func dummyConfigValue(key string) string {
 		return "0.5"
 	case "ai.bm25_weight", "ai.vector_weight":
 		return "1.5"
+	case "ai.rag_context_budget", "ai.rag_note_budget":
+		return "30000"
 	}
 	if strings.HasSuffix(key, ".disabled") {
 		return "true"

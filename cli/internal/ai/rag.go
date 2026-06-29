@@ -57,7 +57,9 @@ func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string
 	}
 
 	answer, err := gen.Generate(ctx, prompt, GenOpts{
-		MaxTokens:    512,
+		// 1024 so a fuller answer (now backed by full-note parent-document
+		// context) isn't itself truncated mid-thought.
+		MaxTokens:    1024,
 		Temperature:  Ptr(0.1),
 		SystemPrompt: system,
 	})

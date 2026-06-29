@@ -243,6 +243,8 @@ var settableConfigKeys = []string{
 	"ai.similarity_threshold",
 	"ai.bm25_weight",
 	"ai.vector_weight",
+	"ai.rag_context_budget",
+	"ai.rag_note_budget",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
 	"ai.bedrock.disabled",
@@ -272,6 +274,10 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return strconv.FormatFloat(cfg.BM25Weight, 'g', -1, 64), nil
 	case "ai.vector_weight":
 		return strconv.FormatFloat(cfg.VectorWeight, 'g', -1, 64), nil
+	case "ai.rag_context_budget":
+		return strconv.Itoa(cfg.RAGContextBudgetRunes), nil
+	case "ai.rag_note_budget":
+		return strconv.Itoa(cfg.RAGNoteBudgetRunes), nil
 	case "ai.bedrock.profile":
 		return cfg.Bedrock.Profile, nil
 	case "ai.bedrock.region":
@@ -361,6 +367,18 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("vector_weight must be a finite non-negative number (got %q); 0 resolves to the default 1.0", value)
 		}
 		cfg.VectorWeight = f
+	case "ai.rag_context_budget":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 400000 {
+			return fmt.Errorf("rag_context_budget must be a non-negative rune count <= 400000 (got %q); 0 resolves to the default %d", value, ai.DefaultRAGContextBudgetRunes)
+		}
+		cfg.RAGContextBudgetRunes = n
+	case "ai.rag_note_budget":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 400000 {
+			return fmt.Errorf("rag_note_budget must be a non-negative rune count <= 400000 (got %q); 0 resolves to the default %d", value, ai.DefaultRAGNoteBudgetRunes)
+		}
+		cfg.RAGNoteBudgetRunes = n
 	case "ai.bedrock.profile":
 		cfg.Bedrock.Profile = value
 	case "ai.bedrock.region":

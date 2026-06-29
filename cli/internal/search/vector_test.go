@@ -109,6 +109,27 @@ func TestRRFEmptyInputs(t *testing.T) {
 	}
 }
 
+// TestReciprocalRankFusion_VectorOnlyHeading locks the parent-document Phase-2
+// wiring: a vector-only hit carries its matched chunk's heading/id into the
+// merged Result, but a doc that also matched BM25 keeps the BM25 heading.
+func TestReciprocalRankFusion_VectorOnlyHeading(t *testing.T) {
+	bm25 := []Result{{DocID: "a", Path: "a.md", HeadingPath: "## BM25 Section"}}
+	vector := []ScoredDoc{
+		{DocID: "a", Score: 0.9, HeadingPath: "## Semantic Section"},         // also matched BM25
+		{DocID: "b", Score: 0.8, HeadingPath: "## Deep", ChunkID: "chunk-b"}, // vector-only
+	}
+	byID := map[string]Result{}
+	for _, r := range ReciprocalRankFusion(bm25, vector, 5, nil, 1, 1) {
+		byID[r.DocID] = r
+	}
+	if byID["a"].HeadingPath != "## BM25 Section" {
+		t.Errorf("BM25 hit heading overwritten by vector: got %q", byID["a"].HeadingPath)
+	}
+	if byID["b"].HeadingPath != "## Deep" || byID["b"].ChunkID != "chunk-b" {
+		t.Errorf("vector-only matched chunk not propagated: heading=%q chunk=%q", byID["b"].HeadingPath, byID["b"].ChunkID)
+	}
+}
+
 func TestReciprocalRankFusion_Weighting(t *testing.T) {
 	bm25 := []Result{{DocID: "a", Score: 10}}       // a: BM25 rank 1 only
 	vector := []ScoredDoc{{DocID: "b", Score: 0.9}} // b: vector rank 1 only

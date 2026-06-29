@@ -17,6 +17,7 @@ import (
 	gitpkg "github.com/apresai/2ndbrain/internal/git"
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
 	"github.com/apresai/2ndbrain/internal/polish"
+	"github.com/apresai/2ndbrain/internal/ragctx"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -306,7 +307,7 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 	engine := search.NewEngine(h.vault.DB.Conn())
 	opts := search.Options{
 		Query:          question,
-		Limit:          5,
+		Limit:          ai.DefaultRAGCandidateDocs,
 		MinVectorScore: h.threshold(),
 	}
 	opts.BM25Weight, opts.VectorWeight = h.vault.Config.AI.ResolveHybridWeights()
@@ -347,26 +348,14 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		}
 	}
 
-	// Build RAG context from search results
-	var chunks []ai.RAGChunk
-	for _, r := range results {
-		if r.Content != "" {
-			chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: r.Content})
-		} else if r.Path != "" {
-			// Read from disk for vector-only results
-			content, err := os.ReadFile(filepath.Join(h.vault.Root, r.Path))
-			if err == nil {
-				runes := []rune(string(content))
-				if len(runes) > 2000 {
-					runes = runes[:2000]
-				}
-				chunks = append(chunks, ai.RAGChunk{Title: r.Title, Path: r.Path, Content: string(runes)})
-			} else {
-				slog.Warn("mcp kb_ask context read failed", "path", r.Path, "err", err)
-				warnings = append(warnings, fmt.Sprintf("failed to read context source %s: %v", r.Path, err))
-			}
-		}
-	}
+	// Build parent-document RAG context (the SAME assembler `2nb ask` uses, so
+	// the CLI and MCP paths can't diverge): full note body, windowed around the
+	// matched section only when it exceeds the budget.
+	chunks, ctxWarnings := ragctx.Build(results, h.vault.Root, ragctx.Budget{
+		TotalRunes: cfg.ResolveRAGContextBudget(),
+		NoteRunes:  cfg.ResolveRAGNoteBudget(),
+	})
+	warnings = append(warnings, ctxWarnings...)
 	if len(chunks) == 0 {
 		return mcplib.NewToolResultError("failed to build RAG context from search results"), nil
 	}
