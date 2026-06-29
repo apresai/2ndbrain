@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"     // pure-Go, CGO-free SQLite driver (registers "sqlite")
@@ -32,6 +33,12 @@ const MaxSchemaVersion = 3
 type DB struct {
 	conn *sql.DB
 	path string
+	// ensureVecMu serializes EnsureVecChunks so the concurrent embed worker pool
+	// can't race its check-then-(drop)-create of the vec_chunks vec0 table (two
+	// workers both seeing "no table" and both issuing CREATE → "table already
+	// exists"). The guarded section is a fast metadata check + at most one
+	// DDL, so contention is negligible.
+	ensureVecMu sync.Mutex
 }
 
 func Open(dbPath string) (*DB, error) {

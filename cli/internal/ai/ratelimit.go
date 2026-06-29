@@ -28,6 +28,29 @@ func ProviderRPSDefault(provider string) float64 {
 	}
 }
 
+// ProviderEmbedConcurrencyDefault returns a conservative default number of
+// simultaneous in-flight embedding requests for the bulk-embed worker pool.
+//
+// Bedrock embeddings are RPM-throttled and AWS does not publish per-account
+// defaults, so this starts LOW (4) and is self-correcting: the embed path
+// retries ThrottlingException with exponential backoff, so an over-set value
+// degrades to retries rather than failures. Raise it per-vault with
+// `2nb config set ai.embed_concurrency N` (or `2nb ai embed-probe`) once an
+// account's real ceiling is known. OpenRouter free tiers are tight; Ollama is a
+// local server that commonly serializes requests, so concurrency there is modest.
+func ProviderEmbedConcurrencyDefault(provider string) int {
+	switch provider {
+	case "bedrock":
+		return 4
+	case "openrouter":
+		return 3
+	case "ollama":
+		return 2
+	default:
+		return 4
+	}
+}
+
 // ThrottleDelay converts an RPS value into a per-request sleep duration.
 // RPS <= 0 returns 0 (no throttle).
 func ThrottleDelay(rps float64) time.Duration {

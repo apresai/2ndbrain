@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -199,21 +200,61 @@ func isBedrockModelLifecycleBlocked(err error) bool {
 		strings.Contains(msg, "marked as legacy")
 }
 
+// maxBedrockAttempts bounds the per-call retry loop (invokeModel,
+// converseWithRetry). Raised from 3 to 5 because the concurrent embed path makes
+// ThrottlingException likely, and a throttled worker should ride out a couple of
+// backoff rounds rather than fail the whole re-embed.
+const maxBedrockAttempts = 5
+
+// isBedrockRetryable reports whether a Bedrock error is worth retrying with
+// backoff. It covers server faults (InternalServerException,
+// ServiceUnavailableException) AND ThrottlingException / ModelTimeoutException —
+// the latter is a CLIENT fault (HTTP 429), so the FaultServer check alone misses
+// it. Retrying throttling with backoff is what makes the concurrent embed pool
+// self-correcting when an account's RPM quota is lower than the chosen
+// concurrency.
 func isBedrockRetryable(err error) bool {
 	var internal *runtimetypes.InternalServerException
 	if errors.As(err, &internal) {
+		return true
+	}
+	var throttle *runtimetypes.ThrottlingException
+	if errors.As(err, &throttle) {
 		return true
 	}
 	var apiErr smithy.APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	return apiErr.ErrorFault() == smithy.FaultServer || strings.EqualFold(apiErr.ErrorCode(), "InternalServerException")
+	if apiErr.ErrorFault() == smithy.FaultServer {
+		return true
+	}
+	// Match by code too, so a throttle/timeout surfaced only as a generic
+	// smithy.APIError (not the typed struct) is still retried.
+	switch {
+	case strings.EqualFold(apiErr.ErrorCode(), "InternalServerException"),
+		strings.EqualFold(apiErr.ErrorCode(), "ThrottlingException"),
+		strings.EqualFold(apiErr.ErrorCode(), "TooManyRequestsException"),
+		strings.EqualFold(apiErr.ErrorCode(), "ServiceUnavailableException"),
+		strings.EqualFold(apiErr.ErrorCode(), "ModelTimeoutException"):
+		return true
+	}
+	return false
 }
 
+// bedrockRetryDelay returns the backoff before retry `attempt`, with equal
+// jitter: at least half the exponential base plus a random portion of the other
+// half. The jitter de-syncs concurrent workers that all throttle at the same
+// instant, avoiding a thundering-herd retry. Base is 200ms * 2^(attempt-1),
+// capped at 10s.
 func bedrockRetryDelay(attempt int) time.Duration {
 	if attempt < 1 {
 		return 0
 	}
-	return 200 * time.Millisecond * time.Duration(1<<(attempt-1))
+	base := 200 * time.Millisecond * time.Duration(1<<(attempt-1))
+	if base > 10*time.Second {
+		base = 10 * time.Second
+	}
+	half := base / 2
+	return half + time.Duration(rand.Int63n(int64(half)+1))
 }

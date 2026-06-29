@@ -102,6 +102,12 @@ func (db *DB) EnsureVecChunks(dim int) error {
 	if dim <= 0 {
 		return fmt.Errorf("invalid embedding dimension %d", dim)
 	}
+	// Serialize the check-then-create so concurrent embed workers (the parallel
+	// re-embed pool) can't both create the table. The body is a fast metadata
+	// read plus at most one DDL, so the lock is barely contended.
+	db.ensureVecMu.Lock()
+	defer db.ensureVecMu.Unlock()
+
 	cur, err := db.vecChunksDim()
 	if err != nil {
 		return fmt.Errorf("inspect vec_chunks: %w", err)
@@ -114,8 +120,10 @@ func (db *DB) EnsureVecChunks(dim int) error {
 			return fmt.Errorf("drop stale vec_chunks (dim %d->%d): %w", cur, dim, err)
 		}
 	}
+	// IF NOT EXISTS is belt-and-suspenders alongside the mutex: idempotent for a
+	// redundant call and harmless if another process created it concurrently.
 	_, err = db.conn.Exec(fmt.Sprintf(
-		`CREATE VIRTUAL TABLE vec_chunks USING vec0(`+
+		`CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(`+
 			`chunk_id TEXT PRIMARY KEY, `+
 			`embedding float[%d] distance_metric=cosine, `+
 			`+doc_id TEXT, +content_hash TEXT, +model TEXT)`, dim))

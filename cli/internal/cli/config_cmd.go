@@ -245,6 +245,7 @@ var settableConfigKeys = []string{
 	"ai.vector_weight",
 	"ai.rag_context_budget",
 	"ai.rag_note_budget",
+	"ai.embed_concurrency",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
 	"ai.bedrock.disabled",
@@ -278,6 +279,8 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return strconv.Itoa(cfg.RAGContextBudgetRunes), nil
 	case "ai.rag_note_budget":
 		return strconv.Itoa(cfg.RAGNoteBudgetRunes), nil
+	case "ai.embed_concurrency":
+		return strconv.Itoa(cfg.EmbedConcurrency), nil
 	case "ai.bedrock.profile":
 		return cfg.Bedrock.Profile, nil
 	case "ai.bedrock.region":
@@ -379,6 +382,12 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("rag_note_budget must be a non-negative rune count <= 400000 (got %q); 0 resolves to the default %d", value, ai.DefaultRAGNoteBudgetRunes)
 		}
 		cfg.RAGNoteBudgetRunes = n
+	case "ai.embed_concurrency":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 64 {
+			return fmt.Errorf("embed_concurrency must be an integer between 1 and 64 (got %q); 0/unset resolves to the per-provider default", value)
+		}
+		cfg.EmbedConcurrency = n
 	case "ai.bedrock.profile":
 		cfg.Bedrock.Profile = value
 	case "ai.bedrock.region":
