@@ -193,18 +193,25 @@ func buildDoctorChecks(ctx context.Context, vaultRoot string, cfg ai.AIConfig, e
 		checks = append(checks, DoctorCheck{Name: "model belongs to active provider", OK: true, Detail: "embedding + generation models match ai.provider"})
 	}
 
-	// 4. ai.dimensions matches the active embedding model's catalog dimension.
-	//    A dim of 0 means the model isn't in any catalog (a user's own
-	//    discovered model): not a failure, just unverifiable here.
+	// 4. ai.dimensions is valid for the active embedding model — its declared
+	//    default OR any of its Matryoshka widths (a deliberate 256/384/3072 on
+	//    Nova is a valid, supported choice, not a defect). A dim of 0 means the
+	//    model isn't in any catalog (a user's own discovered model): not a
+	//    failure, just unverifiable here.
 	if dim := ai.EmbeddingDimensionsFor(vaultRoot, cfg.Provider, cfg.EmbeddingModel); dim > 0 {
-		if dim == cfg.Dimensions {
+		supported := ai.SupportedDimensionsFor(vaultRoot, cfg.Provider, cfg.EmbeddingModel)
+		if cfg.Dimensions == dim || containsInt(supported, cfg.Dimensions) {
 			checks = append(checks, DoctorCheck{Name: "ai.dimensions matches model", OK: true, Detail: fmt.Sprintf("%dd", cfg.Dimensions)})
 		} else {
+			valid := fmt.Sprintf("%dd", dim)
+			if len(supported) > 0 {
+				valid = intsCSV(supported)
+			}
 			checks = append(checks, DoctorCheck{
 				Name:   "ai.dimensions matches model",
 				OK:     false,
-				Detail: fmt.Sprintf("ai.dimensions is %d but %s expects %dd", cfg.Dimensions, cfg.EmbeddingModel, dim),
-				Fix:    fmt.Sprintf("`2nb config set ai.embedding_model %s` (resyncs dimensions), then `2nb index --force-reembed`", cfg.EmbeddingModel),
+				Detail: fmt.Sprintf("ai.dimensions is %d but %s supports %s", cfg.Dimensions, cfg.EmbeddingModel, valid),
+				Fix:    fmt.Sprintf("`2nb config set ai.dimensions <%s>`, then `2nb index --force-reembed`", valid),
 			})
 		}
 	} else {

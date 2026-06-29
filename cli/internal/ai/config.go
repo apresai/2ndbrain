@@ -201,6 +201,30 @@ func EmbeddingDimensionsFor(vaultRoot, provider, modelID string) int {
 	return 0
 }
 
+// SupportedDimensionsFor returns the Matryoshka output widths a model can emit
+// (provider, modelID), from the merged catalog — the user catalog overlaying
+// the builtin. Returns nil when the model declares none, which callers treat as
+// "no constraint" (don't validate). Pass vaultRoot="" for builtin only. Used to
+// reject an `ai.dimensions` value the provider would error on at embed time.
+func SupportedDimensionsFor(vaultRoot, provider, modelID string) []int {
+	if provider == "" || modelID == "" {
+		return nil
+	}
+	if vaultRoot != "" {
+		for _, m := range LoadUserCatalog(vaultRoot) {
+			if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && len(m.SupportedDimensions) > 0 {
+				return m.SupportedDimensions
+			}
+		}
+	}
+	for _, m := range BuiltinCatalog() {
+		if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && len(m.SupportedDimensions) > 0 {
+			return m.SupportedDimensions
+		}
+	}
+	return nil
+}
+
 // catalogProviderFor returns the provider a model of the given type is
 // registered under in the merged catalog, when the model ID is known. The
 // found result is false when the ID appears in no catalog (e.g. a user's

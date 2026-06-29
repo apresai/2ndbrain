@@ -284,6 +284,23 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 	}
 }
 
+func containsInt(xs []int, want int) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
+func intsCSV(xs []int) string {
+	parts := make([]string, len(xs))
+	for i, x := range xs {
+		parts[i] = strconv.Itoa(x)
+	}
+	return strings.Join(parts, ", ")
+}
+
 func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 	switch key {
 	case "ai.provider":
@@ -304,6 +321,16 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		var d int
 		if _, err := fmt.Sscanf(value, "%d", &d); err != nil {
 			return fmt.Errorf("dimensions must be a number")
+		}
+		if d <= 0 {
+			return fmt.Errorf("dimensions must be a positive integer")
+		}
+		// Matryoshka models emit only specific output widths; an unsupported
+		// value is rejected by the provider at embed time (a silent search
+		// break), so refuse it here against the model's declared set. Models
+		// that declare no set (SupportedDimensionsFor == nil) are unconstrained.
+		if supported := ai.SupportedDimensionsFor("", cfg.Provider, cfg.EmbeddingModel); len(supported) > 0 && !containsInt(supported, d) {
+			return fmt.Errorf("dimension %d not supported by %s (Matryoshka widths: %s)", d, cfg.EmbeddingModel, intsCSV(supported))
 		}
 		cfg.Dimensions = d
 	case "ai.similarity_threshold":

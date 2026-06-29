@@ -297,11 +297,14 @@ A vault is self-contained: markdown files + `.2ndbrain/index.db` + `.2ndbrain/co
 | model M in DB, M' ≠ M in config, same dim | **MODEL MISMATCH** | next `2nb index` auto re-embeds on content change, or `--force-reembed` now |
 | provider configured but `Available()=false` | **PROVIDER UNAVAILABLE** | start/install provider; BM25 runs meanwhile |
 | mixed models in DB | **MIXED** | `2nb index --force-reembed` |
+| mixed **dimensions** in DB (partial Matryoshka re-embed) | **MIXED DIM** | `2nb index --force-reembed` |
 | zero embeddings, docs present | **UNINDEXED** | `2nb index` (BM25 still works) |
 | vault `schema_version > max` | **DB TOO NEW** | `brew upgrade apresai/tap/twonb` |
 | `config.yaml` missing/corrupt | **self-heals** | regenerated; `.bak` preserved on corrupt |
 
-**Loud degradation:** `2nb search` and `2nb ask` call `VectorCompat` (`cli/internal/cli/helpers_vector.go`) at the hybrid gate. If embeddings aren't usable, they print one stderr line, collect into a `warnings` slice, and force BM25-only. The Swift app sees the same messages via `--json` envelope and shows a yellow banner; status-bar AI dot turns yellow on any non-OK state.
+**Loud degradation:** `2nb search` and `2nb ask` call `VectorCompat` (`cli/internal/cli/helpers_vector.go`) at the hybrid gate. If embeddings aren't usable, they print one stderr line, collect into a `warnings` slice, and force BM25-only. The Swift app sees the same messages via `--json` envelope and shows a yellow banner; status-bar AI dot turns yellow on any non-OK state. Mixed-**dimension** vaults (a Matryoshka width change re-embedded only partially — `DocumentsNeedingEmbedding` gates on content, not dimension, so a bare reindex won't normalize widths) are caught by `store.DistinctEmbeddingDims` (derived from `length(embedding)/4`, no schema column); the single-sample `SampleEmbeddingDim` can match the active provider yet miss the off-dim docs.
+
+**Matryoshka dimension (Nova):** Nova-2 emits 256/384/1024/3072-dim vectors (`SupportedDimensions` in the catalog). `config set ai.dimensions <N>` validates `N` against the active model's declared set (`ai.SupportedDimensionsFor`) and refuses a width the provider would reject at embed time; models that declare no set are unconstrained. Changing the dimension needs `2nb index --force-reembed` (the content hash is unchanged, so a bare reindex won't re-embed).
 
 **Shipping a vault:** exclude personal/local state:
 

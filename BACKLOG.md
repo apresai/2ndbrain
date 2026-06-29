@@ -2,6 +2,13 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Nova Tier 1 — Matryoshka dimension safety (Phase 2) follow-ups
+
+Phase 2 added `config set ai.dimensions` validation against the model's `SupportedDimensions`, mixed-dimension detection (`store.DistinctEmbeddingDims` via `length(embedding)/4`, surfaced in `VectorCompat`), and a `MIXED DIM` portability row. 3-dimension chad-review found 0 CRITICAL; the HIGH (`config doctor` check #4 hard-failed a now-valid non-default Matryoshka width and its fix reverted the choice) was fixed in-PR by accepting any `SupportedDimensionsFor` value, plus a regression test; the mixed-dim check was also reordered before the single-sample provider check so the accurate diagnosis wins, with a CLI test added. Residual LOW:
+
+- **LOW — `config set ai.dimensions` validation is builtin-catalog-only** (`setConfigValue` passes `vaultRoot=""` to `SupportedDimensionsFor`), so a user who *extends* a model's `SupportedDimensions` in their user catalog gets a false reject. `config doctor` (which has `vaultRoot`) is already user-catalog-aware, so the two surfaces disagree. Thread `v.Root` through `setConfigValue` (or move the check into `runConfigSet`). Niche today: the only writer of `SupportedDimensions` is the builtin Nova-2 entry. `cli/internal/cli/config_cmd.go`.
+- **LOW (coverage) — `SupportedDimensionsFor`'s user-catalog branch is untested** (every caller passes `""`); add a single-dim assertion to the `DistinctEmbeddingDims` tests; optionally add a `length(embedding) > 0` guard to `DistinctEmbeddingDims` as defense-in-depth (a zero-length non-NULL blob can't be written today given the embed-path invariants, so unreachable). `cli/internal/ai/config.go`, `cli/internal/store/embedding.go`.
+
 ## Nova Tier 1 — asymmetric purpose flip (Phase 1) follow-ups
 
 Phase 1 flipped the 8 query call sites to `GENERIC_RETRIEVAL`, dropped the Nova-2 builtin threshold 0.65→0.25 (measured), added the credential-gated `internal/eval` asymmetry harness (+ pure-logic unit tests pinning the 0.25 derivation), and added loud-degradation warnings (`ai status` when an asymmetric model resolves a threshold > 0.45; `models calibrate` warns AND refuses to `--save` the overstated doc-to-doc value for asymmetric models). 9-pass chad-review found 0 CRITICAL/HIGH; the README/`config.go` drift and the calibrate refuse-save were fixed in-PR. Residual MEDIUM/LOW:

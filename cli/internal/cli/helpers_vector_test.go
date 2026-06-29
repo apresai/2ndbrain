@@ -22,9 +22,9 @@ type fakeEmbedder struct {
 	available bool
 }
 
-func (f *fakeEmbedder) Name() string                                             { return f.name }
-func (f *fakeEmbedder) Dimensions() int                                          { return f.dims }
-func (f *fakeEmbedder) Available(ctx context.Context) bool                       { return f.available }
+func (f *fakeEmbedder) Name() string                       { return f.name }
+func (f *fakeEmbedder) Dimensions() int                    { return f.dims }
+func (f *fakeEmbedder) Available(ctx context.Context) bool { return f.available }
 func (f *fakeEmbedder) Embed(ctx context.Context, texts []string, _ ...ai.EmbedOption) ([][]float32, error) {
 	vecs := make([][]float32, len(texts))
 	for i := range vecs {
@@ -109,6 +109,28 @@ func TestVectorCompat_OK(t *testing.T) {
 	}
 	if msg != "" {
 		t.Errorf("expected empty message on OK, got: %q", msg)
+	}
+}
+
+func TestVectorCompat_MixedDimensions(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	seedEmbedding(t, v, "doc1", 768)
+	seedEmbedding(t, v, "doc2", 1024)
+	v.Config.AI.Provider = "bedrock"
+
+	// A partial Matryoshka re-embed leaves mixed widths. The mixed-dim check
+	// runs before the single-sample provider comparison, so the accurate
+	// diagnosis fires regardless of which row SampleEmbeddingDim picks or what
+	// the provider produces.
+	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "bedrock", dims: 768, available: true})
+	if ready {
+		t.Error("expected not-ready for mixed-dimension vault")
+	}
+	if !strings.Contains(msg, "mixes embedding dimensions") {
+		t.Errorf("message should report mixed dimensions, got: %q", msg)
+	}
+	if !strings.Contains(msg, "--force-reembed") {
+		t.Errorf("message should suggest --force-reembed, got: %q", msg)
 	}
 }
 

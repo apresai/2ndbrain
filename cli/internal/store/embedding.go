@@ -151,6 +151,35 @@ func (db *DB) DistinctEmbeddingModels() ([]string, error) {
 	return models, rows.Err()
 }
 
+// DistinctEmbeddingDims returns the distinct vector dimensions present in the
+// vault, derived from each embedding blob's length (bytes / 4, packed float32)
+// with no schema column. Length > 1 indicates a Matryoshka dimension change
+// that was only partially re-embedded: such a vault mixes incomparable vector
+// widths and needs `2nb index --force-reembed`. The single-sample
+// SampleEmbeddingDim can match the active provider yet miss the off-dim docs,
+// so this is the authoritative mixed-dimension check.
+func (db *DB) DistinctEmbeddingDims() ([]int, error) {
+	rows, err := db.conn.Query(`
+		SELECT DISTINCT length(embedding)/4 AS dim FROM documents
+		WHERE embedding IS NOT NULL
+		ORDER BY dim
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query distinct embedding dims: %w", err)
+	}
+	defer rows.Close()
+
+	var dims []int
+	for rows.Next() {
+		var d int
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		dims = append(dims, d)
+	}
+	return dims, rows.Err()
+}
+
 // EmbeddingCounts returns (total_docs, embedded_docs, embeddable_unembedded)
 // in a single query. Used by `2nb ai status` to avoid round trips when
 // showing vault embedding state.

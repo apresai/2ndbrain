@@ -45,6 +45,17 @@ func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProv
 		return false, fmt.Sprintf("semantic search disabled: provider %q unavailable — falling back to keyword search", providerName)
 	}
 
+	// Mixed-DIMENSION vaults (e.g. a partial re-embed after a Matryoshka
+	// dimension change — DocumentsNeedingEmbedding gates on content, not
+	// dimension, so a bare reindex won't normalize widths) can't be cosine-
+	// compared reliably. Checked BEFORE the single-sample provider comparison
+	// so the accurate mixed-dim diagnosis wins: SampleEmbeddingDim returns one
+	// arbitrary row, so the provider check below could otherwise mis-report a
+	// mixed vault as a uniform provider mismatch depending on which row it hit.
+	if dims, err := v.DB.DistinctEmbeddingDims(); err == nil && len(dims) > 1 {
+		return false, fmt.Sprintf("semantic search disabled: vault mixes embedding dimensions %v (a partial re-embed) — run '2nb index --force-reembed' to normalize", dims)
+	}
+
 	if providerDim := embedder.Dimensions(); providerDim != dim {
 		return false, fmt.Sprintf("semantic search disabled: vault was embedded with %dd vectors but current provider %q produces %dd — run '2nb index --force-reembed' or switch provider back to the one that built this vault", dim, providerName, providerDim)
 	}
