@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.11.1] - 2026-06-29
+
+### Added
+- `ai.rag_context_budget` and `ai.rag_note_budget` config keys to tune RAG context size (`config set`, reject negative/>400000, `0` resolves to default).
+- `make clean-dmg` target that sweeps stale local `SecondBrain-*.dmg` installers; the app release now auto-sweeps prior DMGs before building.
+
+### Changed
+- `ask` / `kb_ask` now feed the **full matching note(s)** as parent-document RAG context (windowed around the matched heading only when a note exceeds the budget) instead of a from-the-top 2000-rune snippet, so answers deep in long notes are no longer truncated away. Shared via the new `internal/ragctx` package; vector-only hits now return the winning `chunk_id`/heading so they window precisely.
+- MCP idle self-exit is now **opt-in and OFF by default**; enable an inactivity cap with `--idle-timeout <dur>` or `$2NB_MCP_IDLE_TIMEOUT`.
+
+### Fixed
+- `mcp-server` stays alive while its client is connected and exits promptly when the client closes the connection or dies, via a `getppid()` parent-death watchdog (`internal/mcp/parent.go`) — a closed or crashed session no longer leaves an orphan holding the index open.
+
+
 ## [0.11.0] - 2026-06-28
 
 ### Added
