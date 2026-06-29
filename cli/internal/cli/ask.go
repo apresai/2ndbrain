@@ -234,6 +234,7 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 			Limit:          5,
 			MinVectorScore: threshold,
 		}
+		opts.BM25Weight, opts.VectorWeight = cfg.ResolveHybridWeights()
 		if vectorReady {
 			queryVecs, err := embedder.Embed(ctx, []string{query}, ai.WithPurpose(ai.PurposeQuery))
 			if err != nil {

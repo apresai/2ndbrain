@@ -267,6 +267,12 @@ Configure via `2nb config set ai.similarity_threshold 0.25`, save calibration vi
 
 **Calibration** (`2nb models calibrate`) samples random doc pairs, computes cosine distribution (p50/p90/p95/p99), and recommends `p95 + 0.01` rounded up. Default 500 samples; small vaults clamp to `n*(n-1)/2`. `--save` upserts a user-catalog entry carrying only the threshold.
 
+### Hybrid Weighting
+
+`ReciprocalRankFusion` (`cli/internal/search/vector.go`) fuses the BM25 and vector rankings as `score = Σ weight_i/(k + rank_i)`, `k=60`. `ai.bm25_weight` / `ai.vector_weight` (each defaulting to `1.0` — classic equal-weight RRF — via `AIConfig.ResolveHybridWeights`, threaded into `search.Options` at all four `HybridSearch` call sites) bias the fusion toward keyword or semantic recall. Raise `ai.vector_weight` to favor the semantic channel (now that the asymmetric query purpose has sharpened it); raise `ai.bm25_weight` for exact-term-heavy vaults. `config set` rejects a negative weight; `0` resolves to the `1.0` default.
+
+**Cross-lingual (Nova's 200-language shared space):** `internal/eval/crosslingual_test.go` (credential-gated) asserts the same concept across six languages — including Japanese/Chinese — embeds closer to the English anchor than an unrelated concept does (a *directional* guard; the absolute cosine is vendor-controlled, so the test deliberately avoids a brittle hard floor). One measured run: cross-lingual cosine ~0.84–0.87 vs an unrelated-concept baseline ~0.66. So semantic search and `ask` retrieve across languages without translation.
+
 ### Other Subsystems
 
 **Bedrock embedding:** Beyond builtin models, supports TwelveLabs Marengo embed via Bedrock InvokeModel. Marengo 2.7 takes `{"inputType":"text","inputText":"..."}`; Marengo 3.0 wraps the text: `{"inputType":"text","text":{"inputText":"..."}}`. Both return `{"data":{"embedding":[...]}}`. Add via `2nb models add <id> --provider bedrock --type embedding --price-request <USD>`.

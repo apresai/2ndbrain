@@ -2,6 +2,13 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Nova Tier 1 — hybrid weighting + completion (Phase 3) follow-ups
+
+Phase 3 added configurable RRF weights (`ai.bm25_weight`/`ai.vector_weight`, default 1.0 = behavior-preserving), the Nova-2 catalog-truth pin, and a credential-gated cross-lingual showcase. 3-dimension chad-review found 0 CRITICAL/HIGH (all 7 findings LOW). Fixed in-PR: the NaN/Inf weight guard (config-set rejects non-finite + `ResolveHybridWeights` normalizes, with tests), the cross-lingual doc softened to match the directional test, and the agent skill updated with the new knobs (`make sync-skills`). Residual LOW:
+
+- **LOW — `config get ai.bm25_weight` shows raw `0` for the unset/default state, not the effective `1.0`.** Mirrors `ai.similarity_threshold` (which solves it with `config get --effective`), but the weights have no `--effective` path and aren't surfaced in `ai status`. A user could read `0` and think BM25 is off. Add `--effective` support for the weights, or surface the resolved weights in `ai status`. `cli/internal/cli/config_cmd.go`, `cli/internal/cli/ai_cmd.go`.
+- **LOW (coverage) — no end-to-end test that `opts.BM25Weight`/`VectorWeight` reach RRF through `HybridSearch`.** The RRF math, `ResolveHybridWeights`, and the config guard are unit-tested, but a bm25/vector swap at any of the 4 call-site assignments or the `HybridSearch`→RRF hand-off would pass every test and silently invert tuning. A table test asserting an up-weighted channel promotes its doc through `HybridSearch` (with `vec_chunks` populated) would lock the plumbing. `cli/internal/search/search.go` + the 4 call sites.
+
 ## Nova Tier 1 — Matryoshka dimension safety (Phase 2) follow-ups
 
 Phase 2 added `config set ai.dimensions` validation against the model's `SupportedDimensions`, mixed-dimension detection (`store.DistinctEmbeddingDims` via `length(embedding)/4`, surfaced in `VectorCompat`), and a `MIXED DIM` portability row. 3-dimension chad-review found 0 CRITICAL; the HIGH (`config doctor` check #4 hard-failed a now-valid non-default Matryoshka width and its fix reverted the choice) was fixed in-PR by accepting any `SupportedDimensionsFor` value, plus a regression test; the mixed-dim check was also reordered before the single-sample provider check so the accurate diagnosis wins, with a CLI test added. Residual LOW:

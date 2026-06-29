@@ -108,6 +108,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		BM25Only:       searchBM25Only,
 		MinVectorScore: threshold,
 	}
+	opts.BM25Weight, opts.VectorWeight = v.Config.AI.ResolveHybridWeights()
 
 	// Try hybrid search if embeddings are available
 	initAIProviders(v)

@@ -236,6 +236,7 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 		Limit:          limit,
 		MinVectorScore: h.threshold(),
 	}
+	opts.BM25Weight, opts.VectorWeight = cfg.ResolveHybridWeights()
 
 	// Try hybrid search if provider is available
 	var results []search.Result
@@ -308,6 +309,7 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		Limit:          5,
 		MinVectorScore: h.threshold(),
 	}
+	opts.BM25Weight, opts.VectorWeight = h.vault.Config.AI.ResolveHybridWeights()
 
 	var results []search.Result
 	var warnings []string

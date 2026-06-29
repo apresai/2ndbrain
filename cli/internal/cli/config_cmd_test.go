@@ -171,6 +171,8 @@ func dummyConfigValue(key string) string {
 		return "1024"
 	case "ai.similarity_threshold":
 		return "0.5"
+	case "ai.bm25_weight", "ai.vector_weight":
+		return "1.5"
 	}
 	if strings.HasSuffix(key, ".disabled") {
 		return "true"
