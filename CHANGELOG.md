@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.11.0] - 2026-06-28
+
+### Added
+- Per-chunk vector search via sqlite-vec (vec0): exact in-DB SIMD KNN over `vec_chunks` is now the primary retrieval path, with the whole-doc brute-force as fallback.
+- Configurable hybrid RRF weighting (`ai.bm25_weight` / `ai.vector_weight`) to bias fusion toward keyword or semantic recall.
+- Nova asymmetric query purpose: queries embed with `GENERIC_RETRIEVAL` while documents stay `GENERIC_INDEX`, lifting MRR@10 (0.951→0.962) and Recall@10 (0.987→1.0).
+- Matryoshka dimension validation: `config set ai.dimensions` checks the requested width against the active model's supported set (256/384/1024/3072 for Nova-2) and refuses unsupported widths.
+- Mixed-dimension vault detection (`store.DistinctEmbeddingDims`) with loud degradation to BM25-only and a `--force-reembed` fix hint.
+- `EmbedOpts` / `WithPurpose` embedding-options foundation in the provider interface.
+- Cross-lingual retrieval guard plus reproducible asymmetry and cross-lingual eval harnesses (`internal/eval`).
+- ADR recording the S3 Vectors and local vector-DB evaluation.
+
+### Changed
+- Migrated SQLite from CGO `mattn` to pure-Go `modernc.org/sqlite`: the CLI builds with `CGO_ENABLED=0`, cross-compiles to any GOOS/GOARCH with no C toolchain, and drops the `-tags fts5` requirement.
+- Recalibrated the Nova-2 similarity threshold from `0.65` to `0.25` to match the asymmetric query purpose's collapsed cosine scale.
+- Halved `ask`'s embedding loads to reduce vector-retrieval latency.
+
+### Fixed
+- Corrected Nova model catalog metadata (dimensions and recommended threshold) to reflect measured values.
+- `models calibrate` now warns that its document-to-document sampling overstates the asymmetric search-time threshold.
+
+
 ## [0.10.9] - 2026-06-27
 
 ### Added
