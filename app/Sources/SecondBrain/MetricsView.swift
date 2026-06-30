@@ -10,10 +10,14 @@ struct VaultMetrics: Codable {
     // cleared vault never blanks the whole tab on a decode throw.
     let recent: [MetricOperation]?
     let aggregates: [String: MetricAggregate]?
+    let totalInputTokens: Int?
+    let totalOutputTokens: Int?
 
     enum CodingKeys: String, CodingKey {
         case lastBuild = "last_build"
         case gauges, recent, aggregates
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
     }
 }
 
@@ -43,6 +47,8 @@ struct MetricOperation: Codable, Identifiable {
     let resultCount: Int?
     let mode: String?
     let cliVersion: String?
+    let inputTokens: Int?
+    let outputTokens: Int?
 
     let docsPerSec: Double?
     let embeddingsPerSec: Double?
@@ -66,6 +72,8 @@ struct MetricOperation: Codable, Identifiable {
         case embeddingDims = "embedding_dims"
         case resultCount = "result_count"
         case cliVersion = "cli_version"
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
         case docsPerSec = "docs_per_sec"
         case embeddingsPerSec = "embeddings_per_sec"
         case charsPerSec = "chars_per_sec"
@@ -103,12 +111,16 @@ struct MetricAggregate: Codable {
     let avgMs: Double
     let p50Ms: Int
     let avgDocsPerSec: Double?
+    let tokensIn: Int?
+    let tokensOut: Int?
 
     enum CodingKeys: String, CodingKey {
         case count
         case avgMs = "avg_ms"
         case p50Ms = "p50_ms"
         case avgDocsPerSec = "avg_docs_per_sec"
+        case tokensIn = "tokens_in"
+        case tokensOut = "tokens_out"
     }
 }
 
@@ -160,7 +172,7 @@ struct MetricsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     lastBuildSection(m.lastBuild)
-                    gaugesSection(m.gauges)
+                    gaugesSection(m.gauges, tokensIn: m.totalInputTokens ?? 0, tokensOut: m.totalOutputTokens ?? 0)
                     if let aggs = m.aggregates, !aggs.isEmpty {
                         aggregatesSection(aggs)
                     }
@@ -237,7 +249,7 @@ struct MetricsView: View {
     // MARK: Live gauges
 
     @ViewBuilder
-    private func gaugesSection(_ g: MetricGauges) -> some View {
+    private func gaugesSection(_ g: MetricGauges, tokensIn: Int, tokensOut: Int) -> some View {
         sectionCard {
             Text("Vault gauges")
                 .font(.headline)
@@ -247,6 +259,9 @@ struct MetricsView: View {
             statRow("Index DB", "\(bytes(g.indexDbBytes))  (+\(bytes(g.walBytes)) WAL)")
             if let model = g.embeddingModel, !model.isEmpty {
                 statRow("Embedding", "\(model)\(g.embeddingDims.map { "  (\($0) dims)" } ?? "")")
+            }
+            if tokensIn > 0 || tokensOut > 0 {
+                statRow("Tokens", "\(tokensIn) in / \(tokensOut) out  (recent; ask actual, embed/search est.)")
             }
         }
     }
@@ -274,6 +289,11 @@ struct MetricsView: View {
                         Text("p50 \(duration(a.p50Ms))")
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
+                        if let ti = a.tokensIn, let to = a.tokensOut, ti > 0 || to > 0 {
+                            Text("\(ti)/\(to) tok")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
                         Spacer()
                         if let r = a.avgDocsPerSec, r > 0 {
                             Text(String(format: "%.1f docs/s", r))
@@ -354,7 +374,14 @@ struct MetricsView: View {
 
     private func recentDetail(_ op: MetricOperation) -> String {
         switch op.operation {
-        case "search", "ask":
+        case "ask":
+            // ask carries real generation tokens (Bedrock); show them.
+            var parts: [String] = []
+            if let r = op.resultCount, r > 0 { parts.append("\(r) sources") }
+            let ti = op.inputTokens ?? 0, to = op.outputTokens ?? 0
+            if ti > 0 || to > 0 { parts.append("\(ti)/\(to) tok") }
+            return parts.isEmpty ? (op.mode ?? "") : parts.joined(separator: ", ")
+        case "search":
             // MCP-sourced query rows don't carry result_count yet; only show it when present.
             if let r = op.resultCount, r > 0 { return "\(r) results" }
             return op.mode ?? ""

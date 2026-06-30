@@ -12,10 +12,12 @@
 package metrics
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go, CGO-free SQLite driver (registers "sqlite")
@@ -66,11 +68,6 @@ CREATE INDEX IF NOT EXISTS idx_operations_op_ts ON operations(operation, ts DESC
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
 );
-
--- PRIMARY KEY makes this INSERT OR IGNORE genuinely idempotent: a second open
--- conflicts on the existing row and is ignored. Without the PK the row would be
--- re-inserted on every open, and Open runs on every index/search/ask.
-INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 `
 
 // Operation is one recorded vault operation. Index/embed fields are zero for
@@ -101,6 +98,11 @@ type Operation struct {
 	// query
 	ResultCount int    `json:"result_count,omitempty"`
 	Mode        string `json:"mode,omitempty"`
+
+	// tokens — input/output tokens consumed by the op. Generation (ask) uses the
+	// provider's actual usage; embeddings/search estimate (chars/4). Schema v2.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 
 	CLIVersion string `json:"cli_version,omitempty"`
 
@@ -141,6 +143,9 @@ type Aggregate struct {
 	AvgMs         float64 `json:"avg_ms"`
 	P50Ms         int64   `json:"p50_ms"`
 	AvgDocsPerSec float64 `json:"avg_docs_per_sec,omitempty"`
+	// Token sums across the retained window for this operation type.
+	TokensIn  int `json:"tokens_in,omitempty"`
+	TokensOut int `json:"tokens_out,omitempty"`
 }
 
 // DB wraps a SQLite connection for the metrics store.
@@ -168,7 +173,110 @@ func Open(dbPath string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("migrate metrics db: %w", err)
 	}
-	return &DB{conn: conn}, nil
+	db := &DB{conn: conn}
+	if err := db.migrate(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("migrate metrics db: %w", err)
+	}
+	return db, nil
+}
+
+// maxMetricsSchemaVersion is the highest schema version this binary writes.
+const maxMetricsSchemaVersion = 2
+
+// metricsSchemaV2 adds the token columns. Run as an idempotent ALTER (rather than
+// baked into the v1 CREATE) so an EXISTING metrics.db — carrying the user's
+// sequential-vs-parallel reembed history — gains the columns with DEFAULT 0
+// instead of being dropped and recreated.
+var metricsSchemaV2 = []string{
+	`ALTER TABLE operations ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`,
+}
+
+// migrate brings an existing operations table up to maxMetricsSchemaVersion.
+func (db *DB) migrate() error {
+	// Seed the single version row ONLY when the table is empty. A bare
+	// `INSERT OR IGNORE VALUES (1)` in the base schema would re-insert 1 once
+	// migrate UPDATEs the row to 2 (the PK is then 2, so 1 no longer conflicts),
+	// accumulating rows on every open. OR IGNORE also makes a concurrent
+	// double-seed safe (the loser conflicts on the PK).
+	if _, err := db.conn.Exec(
+		`INSERT OR IGNORE INTO schema_version (version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version)`,
+	); err != nil {
+		return err
+	}
+	var version int
+	if err := db.conn.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version); err != nil {
+		return err
+	}
+	// A DB written by a NEWER binary (version > what we know) is left untouched:
+	// reads select named columns, so any extra columns are harmless, and this is
+	// best-effort telemetry — never block an older binary on a forward-version DB.
+	if version >= maxMetricsSchemaVersion {
+		return nil
+	}
+	if version < 2 {
+		if err := db.applyMigration(2, metricsSchemaV2); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyMigration runs the statements for one version bump under BEGIN EXCLUSIVE
+// on a pinned connection, re-checking the version inside the lock so concurrent
+// openers (CLI + MCP + app) can't double-migrate. Duplicate-column errors are
+// tolerated (a crash between ALTER and the version bump leaves the column added).
+func (db *DB) applyMigration(target int, stmts []string) error {
+	conn, err := db.conn.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	ctx := context.Background()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	var version int
+	if err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= target {
+		// Mirror the success path: only mark committed AFTER COMMIT succeeds, so
+		// a transient COMMIT failure still triggers the deferred ROLLBACK rather
+		// than returning the pinned conn to the pool with an open txn.
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	}
+	for _, s := range stmts {
+		if _, err := conn.ExecContext(ctx, s); err != nil && !isDuplicateColumn(err) {
+			return err
+		}
+	}
+	// schema_version holds a single PK row; move it to the target version.
+	if _, err := conn.ExecContext(ctx, `UPDATE schema_version SET version = ?`, target); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate column")
 }
 
 // Close closes the database connection.
@@ -199,12 +307,14 @@ func (db *DB) Record(op Operation) error {
 			ts, operation, source, duration_ms, ok, error,
 			files_scanned, docs_indexed, chunks_created, links_found,
 			embedded, embed_skipped, embed_failed, embed_ms, total_chars,
-			embedding_model, embedding_dims, result_count, mode, cli_version
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			embedding_model, embedding_dims, result_count, mode,
+			input_tokens, output_tokens, cli_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		op.Timestamp, op.Operation, op.Source, op.DurationMs, boolToInt(op.OK), op.Error,
 		op.FilesScanned, op.DocsIndexed, op.ChunksCreated, op.LinksFound,
 		op.Embedded, op.EmbedSkipped, op.EmbedFailed, op.EmbedMs, op.TotalChars,
-		op.EmbeddingModel, op.EmbeddingDims, op.ResultCount, op.Mode, op.CLIVersion,
+		op.EmbeddingModel, op.EmbeddingDims, op.ResultCount, op.Mode,
+		op.InputTokens, op.OutputTokens, op.CLIVersion,
 	)
 	if err != nil {
 		return err
@@ -283,9 +393,10 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 		return nil, err
 	}
 	type acc struct {
-		durations []int64
-		rateSum   float64
-		rateN     int
+		durations           []int64
+		rateSum             float64
+		rateN               int
+		tokensIn, tokensOut int
 	}
 	buckets := map[string]*acc{}
 	for _, o := range ops {
@@ -295,6 +406,8 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 			buckets[o.Operation] = a
 		}
 		a.durations = append(a.durations, o.DurationMs)
+		a.tokensIn += o.InputTokens
+		a.tokensOut += o.OutputTokens
 		if r := o.WithRates().DocsPerSec; r > 0 {
 			a.rateSum += r
 			a.rateN++
@@ -307,6 +420,8 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 			AvgMs:         round2(meanInt64(a.durations)),
 			P50Ms:         medianInt64(a.durations),
 			AvgDocsPerSec: round2(safeDiv(a.rateSum, float64(a.rateN))),
+			TokensIn:      a.tokensIn,
+			TokensOut:     a.tokensOut,
 		}
 	}
 	return out, nil
@@ -315,7 +430,8 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 const opColumns = `id, ts, operation, source, duration_ms, ok, error,
 	files_scanned, docs_indexed, chunks_created, links_found,
 	embedded, embed_skipped, embed_failed, embed_ms, total_chars,
-	embedding_model, embedding_dims, result_count, mode, cli_version`
+	embedding_model, embedding_dims, result_count, mode,
+	input_tokens, output_tokens, cli_version`
 
 func scanOps(rows *sql.Rows) ([]Operation, error) {
 	var ops []Operation
@@ -326,7 +442,8 @@ func scanOps(rows *sql.Rows) ([]Operation, error) {
 			&o.ID, &o.Timestamp, &o.Operation, &o.Source, &o.DurationMs, &ok, &o.Error,
 			&o.FilesScanned, &o.DocsIndexed, &o.ChunksCreated, &o.LinksFound,
 			&o.Embedded, &o.EmbedSkipped, &o.EmbedFailed, &o.EmbedMs, &o.TotalChars,
-			&o.EmbeddingModel, &o.EmbeddingDims, &o.ResultCount, &o.Mode, &o.CLIVersion,
+			&o.EmbeddingModel, &o.EmbeddingDims, &o.ResultCount, &o.Mode,
+			&o.InputTokens, &o.OutputTokens, &o.CLIVersion,
 		); err != nil {
 			return nil, err
 		}

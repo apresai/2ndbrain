@@ -2,6 +2,15 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Token tracking — Phase 3 (PR #126) follow-ups
+
+Three-dimension chad-review (migration correctness, usage-threading/silent-failures, Swift decode + docs drift) found 0 CRITICAL/HIGH/MEDIUM. Fixed in-PR: the `applyMigration` early-return branch set `committed=true` before COMMIT (a transient COMMIT failure would skip the deferred ROLLBACK and return the pooled conn with an open txn) — now mirrors the success path; wired up the unused `maxMetricsSchemaVersion` const as a real forward-compat ("DB too new") guard that degrades gracefully instead of dead code; strengthened the empty-payload Swift decode test to assert the token totals decode to `nil`; clarified the CLAUDE.md token-semantics docs to note the non-Bedrock (OpenRouter/Ollama) chars/4 output fallback. Residual LOW:
+
+- **LOW — multi-turn `ask --history` generation tokens are uncounted.** `CondenseQuestion` makes a separate generation call to rewrite a follow-up into a standalone query; its usage isn't folded into the recorded `ask` tokens, so a multi-turn answer slightly under-reports input/output tokens. Thread `CondenseQuestion`'s usage into `RAGResult` and add it. `cli/internal/ai/rag.go`, `cli/internal/cli/ask.go`.
+- **LOW — the rewrite-fallback's second query embed is uncounted.** When history rewriting produces a new retrieval query, that extra query embedding isn't added to the search-token estimate. Negligible (one short embed), additive. `cli/internal/cli/ask.go`.
+- **LOW — chars/4 token estimates are byte-based, not rune-based.** `len(s)/4` over-counts multibyte (CJK/emoji) text. Intentionally consistent with the existing cost estimator and clearly labeled an estimate; switch to `utf8.RuneCountInString/4` if estimate fidelity on non-ASCII vaults ever matters. `cli/internal/cli/ask.go`, `search.go`, `index.go`.
+- **LOW — MCP-sourced rows carry no token detail.** `ask`/`search` driven through the MCP server record latency + op but no tokens (the generic `wrapMCPMetric` wrap, same limitation as the Phase 2 MCP-counts follow-up). Per-handler instrumentation would be needed. `cli/internal/mcp/server.go`.
+
 ## Embed concurrency probe — Phase 2 (PR #125) follow-ups
 
 chad-review found 0 CRITICAL/HIGH. Fixed in-PR: a per-level `context.WithTimeout` (3m) so a hung provider call can't block the probe forever (surfaces as an error, not a hang); an "errors capped the recommendation" caveat printed when any level throttled; a `sampleChunkTexts` test (zero / fewer-than-n / limit). Residual LOW:

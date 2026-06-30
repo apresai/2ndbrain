@@ -563,6 +563,10 @@ type BedrockGenerator struct {
 	noSystemPrompt atomic.Bool // cached: model rejects system prompts
 }
 
+// BedrockGenerator reports real token usage (Converse returns it), so ask records
+// actual input/output tokens rather than a chars/4 estimate.
+var _ UsageGenerator = (*BedrockGenerator)(nil)
+
 // NewBedrockGenerator creates a Bedrock generation provider.
 func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (*BedrockGenerator, error) {
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
@@ -589,7 +593,17 @@ func (b *BedrockGenerator) Available(ctx context.Context) bool {
 	return ok
 }
 
+// Generate satisfies GenerationProvider; it delegates to GenerateWithUsage and
+// drops the token usage.
 func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts GenOpts) (string, error) {
+	text, _, err := b.GenerateWithUsage(ctx, prompt, opts)
+	return text, err
+}
+
+// GenerateWithUsage runs the Converse call and returns the answer plus the
+// Bedrock-reported input/output token usage, which `ask` records (the usage was
+// previously parsed-and-discarded). Implements ai.UsageGenerator.
+func (b *BedrockGenerator) GenerateWithUsage(ctx context.Context, prompt string, opts GenOpts) (string, GenUsage, error) {
 	maxTokens := int32(opts.MaxTokens)
 	if maxTokens == 0 {
 		maxTokens = 512
@@ -633,19 +647,25 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 			resp, err = b.converseWithRetry(ctx, input)
 		}
 		if err != nil {
-			return "", fmt.Errorf("converse %s: %w", b.model, err)
+			return "", GenUsage{}, fmt.Errorf("converse %s: %w", b.model, err)
 		}
+	}
+
+	usage := GenUsage{}
+	if resp.Usage != nil {
+		usage.InputTokens = int(aws.ToInt32(resp.Usage.InputTokens))
+		usage.OutputTokens = int(aws.ToInt32(resp.Usage.OutputTokens))
 	}
 
 	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)
 	if !ok || len(msg.Value.Content) == 0 {
-		return "", fmt.Errorf("empty response from %s", b.model)
+		return "", usage, fmt.Errorf("empty response from %s", b.model)
 	}
 
 	// Iterate content blocks — reasoning models emit non-text blocks first.
 	for _, block := range msg.Value.Content {
 		if t, ok := block.(*types.ContentBlockMemberText); ok {
-			return t.Value, nil
+			return t.Value, usage, nil
 		}
 	}
 	// Fallback: some models (e.g. DeepSeek R1) embed their answer inside a
@@ -653,11 +673,11 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 	for _, block := range msg.Value.Content {
 		if r, ok := block.(*types.ContentBlockMemberReasoningContent); ok {
 			if t, ok := r.Value.(*types.ReasoningContentBlockMemberReasoningText); ok && aws.ToString(t.Value.Text) != "" {
-				return aws.ToString(t.Value.Text), nil
+				return aws.ToString(t.Value.Text), usage, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("no text content in response from %s", b.model)
+	return "", usage, fmt.Errorf("no text content in response from %s", b.model)
 }
 
 func (b *BedrockGenerator) converseWithRetry(ctx context.Context, input *bedrockruntime.ConverseInput) (*bedrockruntime.ConverseOutput, error) {

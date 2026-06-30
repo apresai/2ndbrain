@@ -34,6 +34,10 @@ type AskResponse struct {
 	// where the rewrite differs from the question; additive, so existing
 	// envelope consumers are unaffected.
 	RewrittenQuery string `json:"rewritten_query,omitempty"`
+	// Token usage for the observatory: generation tokens (provider-actual when
+	// reported, else a chars/4 estimate) plus the query-embedding tokens.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 var askHistory string
@@ -121,12 +125,14 @@ func runAsk(cmd *cobra.Command, args []string) (err error) {
 	var resp AskResponse
 	defer func() {
 		recordMetric(v, metrics.Operation{
-			Operation:   metrics.OpAsk,
-			DurationMs:  time.Since(startTime).Milliseconds(),
-			OK:          err == nil,
-			Error:       errString(err),
-			ResultCount: len(resp.Sources),
-			Mode:        resp.Mode,
+			Operation:    metrics.OpAsk,
+			DurationMs:   time.Since(startTime).Milliseconds(),
+			OK:           err == nil,
+			Error:        errString(err),
+			ResultCount:  len(resp.Sources),
+			Mode:         resp.Mode,
+			InputTokens:  resp.InputTokens,
+			OutputTokens: resp.OutputTokens,
 		})
 	}()
 
@@ -323,11 +329,28 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 	if !usedHybrid {
 		mode = "keyword"
 	}
+
+	// Token usage: prefer the provider's actual generation usage (Bedrock reports
+	// it); estimate at chars/4 when it isn't reported. Add the query-embedding
+	// tokens (the retrieval embed call) to the input side.
+	inTokens, outTokens := result.InputTokens, result.OutputTokens
+	if inTokens == 0 && outTokens == 0 {
+		var ctxChars int
+		for _, c := range chunks {
+			ctxChars += len(c.Content)
+		}
+		inTokens = (ctxChars + len(question)) / 4
+		outTokens = len(result.Answer) / 4
+	}
+	inTokens += len(retrievalQuery) / 4
+
 	resp := AskResponse{
-		Mode:     mode,
-		Warnings: warnings,
-		Answer:   result.Answer,
-		Sources:  result.Sources,
+		Mode:         mode,
+		Warnings:     warnings,
+		Answer:       result.Answer,
+		Sources:      result.Sources,
+		InputTokens:  inTokens,
+		OutputTokens: outTokens,
 	}
 	if retrievalQuery != question {
 		resp.RewrittenQuery = retrievalQuery
