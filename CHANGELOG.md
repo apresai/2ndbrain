@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.12.3] - 2026-06-30
+
+### Changed
+- MCP `kb_index` now shares the CLI's concurrent embed pass (`vault.EmbedDocuments`), so agent-driven reindexes get the same bounded-worker-pool speedup, honor `ai.embed_concurrency`, and cooperatively cancel when the client disconnects (#129).
+- Bumped the `aws-sdk-go-v2` dependency family to the latest patch releases (#130).
+
+
 ## [0.12.2] - 2026-06-30
 
 ### Added
