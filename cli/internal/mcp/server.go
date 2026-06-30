@@ -168,25 +168,59 @@ func mcpMetricOp(tool string) string {
 	}
 }
 
+// mcpMetricDetail carries the token/count detail a metered handler knows but the
+// generic wrapper can't see (it would otherwise have to parse the serialized
+// tool result). wrapMCPMetric seeds an empty one into the context; the handler
+// fills what it has via recordMCPDetail, and the wrapper folds it into the row.
+type mcpMetricDetail struct {
+	InputTokens  int
+	OutputTokens int
+	ResultCount  int
+	DocsIndexed  int
+	Embedded     int
+	TotalChars   int
+	Mode         string
+}
+
+type mcpMetricDetailKey struct{}
+
+// recordMCPDetail mutates the in-flight metric detail for this tool call when the
+// context carries one (it does for the metered tools). It's a no-op otherwise,
+// so a handler may call it unconditionally without caring whether it's metered.
+func recordMCPDetail(ctx context.Context, f func(*mcpMetricDetail)) {
+	if d, ok := ctx.Value(mcpMetricDetailKey{}).(*mcpMetricDetail); ok && d != nil {
+		f(d)
+	}
+}
+
 // wrapMCPMetric records one operation row (best-effort) around a tool handler.
-// Latency/ok only: detailed counts (result_count, docs_indexed) aren't extracted
-// from the serialized tool result here — the CLI path carries those; MCP rows
-// give op + latency + source.
+// It seeds an mcpMetricDetail into the context so the handler can attach real
+// token usage + counts (recordMCPDetail) — matching the CLI path, so agent-driven
+// ask/search/index rows carry tokens and result/doc counts rather than zeros.
 func wrapMCPMetric(mdb *metrics.DB, op, version string, fn server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		start := time.Now()
+		detail := &mcpMetricDetail{}
+		ctx = context.WithValue(ctx, mcpMetricDetailKey{}, detail)
 		result, err := fn(ctx, req)
 		errMsg := ""
 		if err != nil {
 			errMsg = err.Error()
 		}
 		_ = mdb.Record(metrics.Operation{
-			Operation:  op,
-			Source:     "mcp",
-			DurationMs: time.Since(start).Milliseconds(),
-			OK:         err == nil,
-			Error:      errMsg,
-			CLIVersion: version,
+			Operation:    op,
+			Source:       "mcp",
+			DurationMs:   time.Since(start).Milliseconds(),
+			OK:           err == nil,
+			Error:        errMsg,
+			CLIVersion:   version,
+			InputTokens:  detail.InputTokens,
+			OutputTokens: detail.OutputTokens,
+			ResultCount:  detail.ResultCount,
+			DocsIndexed:  detail.DocsIndexed,
+			Embedded:     detail.Embedded,
+			TotalChars:   detail.TotalChars,
+			Mode:         detail.Mode,
 		})
 		return result, err
 	}
