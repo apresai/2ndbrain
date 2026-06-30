@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.12.2] - 2026-06-30
+
+### Added
+- MCP-driven operations now record token usage (input/output) and result/doc counts in the metrics observatory, so agent-driven `kb_ask`/`kb_search`/`kb_index` rows carry the same detail as the CLI path instead of all-zero values.
+
+### Changed
+- `kb_ask`, `kb_search`, and the reindexing write tools attach their actual usage and `result_count`/`docs_indexed`/`embedded`/`total_chars`/`mode` to each `metrics.db` row via the server's request context.
+
+
 ## [0.12.1] - 2026-06-29
 
 ### Added
