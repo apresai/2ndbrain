@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.12.1] - 2026-06-29
+
+### Added
+- `2nb ai embed-probe`: discovers a safe `ai.embed_concurrency` for your account by ramping concurrency over a discarded sample of vault chunks and recommending the lowest level reaching ≥90% of peak throughput before throttling (`--levels`, `--sample`, `--yes`, `--json`).
+- `ai.embed_concurrency` config setting (1–64) to cap the concurrent embed worker pool; defaults per provider (Bedrock 4, OpenRouter 3, Ollama 2).
+- Token-usage tracking (input/output) across `index`/`reembed`/`search`/`ask`, surfaced in `2nb metrics` (`total_input_tokens`/`total_output_tokens`, per-op `tokens_in`/`tokens_out`) and the macOS Metrics tab. `ask` records the provider's actual generation usage when reported (Bedrock Converse via `ai.UsageGenerator`); other paths estimate at chars/4.
+
+### Changed
+- The bulk embed/re-embed pass now runs concurrently via a bounded worker pool instead of a sequential per-doc throttle, measured ~5x faster reembed (64s→12s on a 30-doc vault at concurrency 4).
+- Bedrock embedding is self-correcting under load: retries now cover `ThrottlingException`, `ModelTimeoutException`, and `ServiceUnavailableException` with exponential backoff plus equal jitter (up to 5 attempts), so an over-set concurrency degrades to retries rather than failures.
+- `metrics.db` migrated to schema v2, adding token columns via an idempotent `ALTER TABLE ADD COLUMN`, preserving existing history (old rows default to 0).
+
+
 ## [0.12.0] - 2026-06-29
 
 ### Added
