@@ -7,13 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
-	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/embed"
 	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -325,118 +321,68 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embed
 	return embedDocumentsWithProvider(ctx, v, cfg, embedder)
 }
 
+// embedDocumentsWithProvider runs the shared concurrent embed pass
+// (vault.EmbedDocuments) and layers the CLI's stderr progress + cost estimate on
+// top. The worker-pool logic itself lives in internal/vault so the MCP kb_index
+// tool shares it; here we only translate the pass's events into the CLI's
+// !flagPorcelain output and convert the result into embeddingRunStats.
 func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, embedder ai.EmbeddingProvider) (embeddingRunStats, error) {
-	model := cfg.EmbeddingModel
-	docs, err := v.DB.DocumentsNeedingEmbedding(model)
-	if err != nil {
-		return embeddingRunStats{}, err
+	var onStart func(int, int)
+	var onEvent func(vault.EmbedEvent)
+	if !flagPorcelain {
+		onStart = func(count, concurrency int) {
+			fmt.Fprintf(os.Stderr, "  embedding %d documents (concurrency %d)...\n", count, concurrency)
+		}
+		onEvent = func(ev vault.EmbedEvent) {
+			switch ev.Kind {
+			case vault.EmbedParseFailed:
+				fmt.Fprintf(os.Stderr, "  skip %s: %v\n", ev.Path, ev.Err)
+			case vault.EmbedFailed:
+				fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", ev.Path, ev.Err)
+			case vault.EmbedSkipped:
+				fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", ev.Path)
+			case vault.EmbedEmbedded:
+				// Monotonic completion counter; the path order printed is
+				// non-deterministic under concurrency.
+				fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", ev.Done, ev.Total, ev.Path)
+			}
+		}
 	}
-	stats := embeddingRunStats{Attempted: len(docs), Model: model}
 
-	if len(docs) == 0 {
-		slog.Debug("all embeddings up to date", "model", model)
+	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, vault.EmbedOpts{OnStart: onStart, OnEvent: onEvent})
+	stats := embeddingRunStats{
+		Attempted:  es.Attempted,
+		Embedded:   es.Embedded,
+		Failed:     es.Failed,
+		Skipped:    es.Skipped,
+		DurationMs: es.DurationMs,
+		TotalChars: es.TotalChars,
+		Model:      es.Model,
+	}
+	if err != nil {
+		return stats, err
+	}
+
+	if es.Attempted == 0 {
 		if !flagPorcelain {
 			fmt.Fprintln(os.Stderr, "  all embeddings up to date")
 		}
 		return stats, nil
 	}
 
-	embedStart := time.Now()
-	concurrency := cfg.ResolveEmbedConcurrency(cfg.Provider)
-	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider, "concurrency", concurrency)
-	if !flagPorcelain {
-		fmt.Fprintf(os.Stderr, "  embedding %d documents (concurrency %d)...\n", len(docs), concurrency)
-	}
-
-	// Bounded worker pool: each doc is embedded concurrently, up to `concurrency`
-	// in flight (the sem + WaitGroup pattern from models.go). embed.Document is
-	// concurrency-safe per doc (distinct docID; the WAL store serializes writes),
-	// so the only per-doc state is each worker's own result slot — written by
-	// exactly one goroutine and summed after Wait, so no mutex is needed. The
-	// fixed inter-doc ThrottleDelay is gone: the concurrency cap plus the
-	// ThrottlingException backoff (isBedrockRetryable) replace fixed-rate pacing,
-	// and a throttled account self-corrects via retries rather than failing.
-	type docResult struct{ embedded, failed, skipped, chars int }
-	results := make([]docResult, len(docs))
-	var completed atomic.Int64
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-
-	for i := range docs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			doc := docs[i]
-			absPath := filepath.Join(v.Root, doc.Path)
-			parsed, err := document.ParseFile(absPath)
-			if err != nil {
-				results[i].failed = 1
-				slog.Warn("embedding skipped: parse failed", "path", doc.Path, "err", err)
-				if !flagPorcelain {
-					fmt.Fprintf(os.Stderr, "  skip %s: %v\n", doc.Path, err)
-				}
-				return
-			}
-
-			// Per-chunk embeddings via the shared embed path (also used by
-			// `create` and the MCP write tools): each heading-bounded chunk goes
-			// into vec_chunks (vec0) for chunk-level KNN, and documents.embedding
-			// is the mean of the chunk vectors. n==0 means an empty doc — skip,
-			// not fail.
-			n, err := embed.Document(ctx, v.DB, embedder, doc.ID, parsed, model)
-			if err != nil {
-				results[i].failed = 1
-				slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
-				if !flagPorcelain {
-					fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
-				}
-				return
-			}
-			if n == 0 {
-				results[i].skipped = 1
-				slog.Debug("embedding skipped: empty document", "path", doc.Path)
-				if !flagPorcelain {
-					fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", doc.Path)
-				}
-				return
-			}
-
-			results[i].embedded = 1
-			results[i].chars = len(parsed.Body)
-			if !flagPorcelain {
-				// Monotonic completion counter; the path order printed is
-				// non-deterministic under concurrency.
-				fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", completed.Add(1), len(docs), doc.Path)
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	var totalChars, embedded int
-	for _, r := range results {
-		stats.Embedded += r.embedded
-		stats.Failed += r.failed
-		stats.Skipped += r.skipped
-		totalChars += r.chars
-		embedded += r.embedded
-	}
-
-	// Show cost estimate for non-free providers
-	if !flagPorcelain && embedded > 0 {
+	// Show cost estimate for non-free providers (CLI-only UX, after the pass).
+	if !flagPorcelain && es.Embedded > 0 {
 		var modelInfo ai.ModelInfo
 		if models, err := loadVerifiedModelCatalog(ctx, cfg, v.Root); err == nil {
-			modelInfo, _ = lookupModelInfo(models, cfg.Provider, model)
+			modelInfo, _ = lookupModelInfo(models, cfg.Provider, es.Model)
 		} else {
 			slog.Debug("cost estimate skipped: catalog load failed", "err", err)
 		}
-		estimatedTokens := float64(totalChars) / 4.0 // rough chars→tokens estimate
+		estimatedTokens := float64(es.TotalChars) / 4.0 // rough chars→tokens estimate
 		if ai.IsExplicitlyFree(modelInfo) {
-			fmt.Fprintf(os.Stderr, "  cost: free (%s)\n", model)
-		} else if cost, ok := ai.EstimateInputCost(modelInfo, estimatedTokens, embedded); ok {
-			fmt.Fprintf(os.Stderr, "  cost estimate: $%.4f (%s)\n", cost, model)
+			fmt.Fprintf(os.Stderr, "  cost: free (%s)\n", es.Model)
+		} else if cost, ok := ai.EstimateInputCost(modelInfo, estimatedTokens, es.Embedded); ok {
+			fmt.Fprintf(os.Stderr, "  cost estimate: $%.4f (%s)\n", cost, es.Model)
 			monthlyCost := cost * 4 // assume ~4 re-indexes per month
 			if monthlyCost > 3.0 {
 				fmt.Fprintf(os.Stderr, "  estimated monthly cost: ~$%.2f\n", monthlyCost)
@@ -445,9 +391,6 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		}
 	}
 
-	stats.DurationMs = time.Since(embedStart).Milliseconds()
-	stats.TotalChars = totalChars
-	slog.Info("embedding complete", "embedded", embedded, "total", len(docs), "failed", stats.Failed, "skipped", stats.Skipped, "elapsed", time.Since(embedStart))
 	if !flagPorcelain && stats.Skipped > 0 {
 		fmt.Fprintf(os.Stderr, "  skipped %d empty document(s)\n", stats.Skipped)
 	}

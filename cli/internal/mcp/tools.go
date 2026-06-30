@@ -161,46 +161,40 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 	// Invalidate embedding cache so the next search picks up new vectors.
 	h.invalidateEmbeddings()
 
-	// Generate embeddings if a provider is available
+	// Generate embeddings if a provider is available, via the SAME concurrent
+	// pass the CLI `index` command uses (vault.EmbedDocuments) — a bounded worker
+	// pool sized by ai.embed_concurrency that self-corrects under throttling,
+	// instead of the old sequential per-document ThrottleDelay loop. The pass
+	// honors ctx cancellation (an MCP client timeout/disconnect): it stops
+	// launching work and reports the partial result via Cancelled.
 	embedded := 0
 	embeddedChars := 0
+	embeddingFailed := 0
 	embeddingCancelled := false
 	cfg := h.vault.Config.AI
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if embErr == nil && embedder.Available(ctx) {
-		model := cfg.EmbeddingModel
-		docs, _ := h.vault.DB.DocumentsNeedingEmbedding(model)
-		throttle := ai.ThrottleDelay(ai.ProviderRPSDefault(cfg.Provider))
-	embedLoop:
-		for i, doc := range docs {
-			if i > 0 && throttle > 0 {
-				select {
-				case <-ctx.Done():
-					// Caller (MCP client) timed out — stop embedding and
-					// return what we got so far rather than block further.
-					// Reassigning `i` doesn't exit a range loop; use a labeled
-					// break so the doc list stops being processed immediately.
-					embeddingCancelled = true
-					slog.Warn("kb_index embedding aborted by ctx",
-						"embedded", embedded,
-						"remaining", len(docs)-i,
-						"err", ctx.Err())
-					break embedLoop
-				case <-time.After(throttle):
-				}
-			}
-			absPath := h.vault.AbsPath(doc.Path)
-			content, err := os.ReadFile(absPath)
-			if err != nil {
-				continue
-			}
-			parsed, err := document.Parse(doc.Path, content)
-			if err != nil {
-				continue
-			}
-			if n, err := embed.Document(ctx, h.vault.DB, embedder, doc.ID, parsed, model); err == nil && n > 0 {
-				embedded++
-				embeddedChars += len(parsed.IndexableBody())
+		es, eerr := vault.EmbedDocuments(ctx, h.vault, cfg, embedder, vault.EmbedOpts{})
+		if eerr != nil {
+			slog.Warn("kb_index embedding failed", "err", eerr)
+		} else {
+			embedded = es.Embedded
+			embeddedChars = es.TotalChars
+			embeddingFailed = es.Failed
+			embeddingCancelled = es.Cancelled
+			// Surface a non-clean result the way the CLI path does: a client
+			// disconnect mid-index (Cancelled) or per-doc embed failures would
+			// otherwise be invisible — embeddings_updated would just be smaller
+			// with no signal. Dropping the throttle makes retry-exhaustion (and
+			// thus a non-zero Failed) more plausible, so log both.
+			switch {
+			case es.Cancelled:
+				slog.Warn("kb_index embedding cancelled by ctx",
+					"embedded", es.Embedded,
+					"remaining", es.Attempted-es.Embedded-es.Failed-es.Skipped)
+			case es.Failed > 0:
+				slog.Warn("kb_index embedding completed with failures",
+					"embedded", es.Embedded, "failed", es.Failed)
 			}
 		}
 		// Invalidate again after embedding to include newly generated vectors.
@@ -221,6 +215,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 		"chunks_created":      stats.ChunksCreated,
 		"links_found":         stats.LinksFound,
 		"embeddings_updated":  embedded,
+		"embeddings_failed":   embeddingFailed,
 		"embedding_cancelled": embeddingCancelled,
 	}
 
