@@ -163,6 +163,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 
 	// Generate embeddings if a provider is available
 	embedded := 0
+	embeddedChars := 0
 	embeddingCancelled := false
 	cfg := h.vault.Config.AI
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
@@ -199,11 +200,21 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 			}
 			if n, err := embed.Document(ctx, h.vault.DB, embedder, doc.ID, parsed, model); err == nil && n > 0 {
 				embedded++
+				embeddedChars += len(parsed.IndexableBody())
 			}
 		}
 		// Invalidate again after embedding to include newly generated vectors.
 		h.invalidateEmbeddings()
 	}
+
+	// Record doc/embedding counts + an embed-token estimate (Nova reports no
+	// usage, so chars/4 as on the CLI index path) into the observatory row.
+	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
+		d.DocsIndexed = stats.DocsIndexed
+		d.Embedded = embedded
+		d.TotalChars = embeddedChars
+		d.InputTokens = embeddedChars / 4
+	})
 
 	result := map[string]any{
 		"documents_indexed":   stats.DocsIndexed,
@@ -271,6 +282,16 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 		}
 		mode = search.ModeKeyword
 	}
+
+	// Record result count + the query-embedding token estimate (only the hybrid
+	// path embeds the query; chars/4, mirroring the CLI search row).
+	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
+		d.ResultCount = len(results)
+		d.Mode = string(mode)
+		if mode == search.ModeHybrid {
+			d.InputTokens = len(query) / 4
+		}
+	})
 
 	// Return array format (original MCP contract was an object wrapper; reverted to array per C2 fix)
 	// Add search_mode to each result as metadata
@@ -341,6 +362,12 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 			warnings = append(warnings, fmt.Sprintf("semantic retrieval disabled: embedder returned error (%v)", err))
 		}
 	}
+	// Hybrid succeeded iff it produced results before the keyword fallback below
+	// (mirrors the CLI ask `mode`).
+	mode := "keyword"
+	if results != nil {
+		mode = "hybrid"
+	}
 	if results == nil {
 		results, err = engine.Search(opts)
 		if err != nil {
@@ -364,6 +391,27 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("RAG failed: %v", err)), nil
 	}
+
+	// Token usage: prefer the provider's actual generation usage (Bedrock reports
+	// it via UsageGenerator); estimate at chars/4 when it isn't reported. Add the
+	// query-embedding tokens to the input side. Mirrors the CLI `ask` row so the
+	// observatory reads the same whether driven by the CLI or an MCP client.
+	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
+		inTokens, outTokens := result.InputTokens, result.OutputTokens
+		if inTokens == 0 && outTokens == 0 {
+			var ctxChars int
+			for _, c := range chunks {
+				ctxChars += len(c.Content)
+			}
+			inTokens = (ctxChars + len(question)) / 4
+			outTokens = len(result.Answer) / 4
+		}
+		inTokens += len(question) / 4
+		d.InputTokens = inTokens
+		d.OutputTokens = outTokens
+		d.ResultCount = len(result.Sources)
+		d.Mode = mode
+	})
 
 	type askResponse struct {
 		Warnings []string `json:"warnings,omitempty"`

@@ -85,3 +85,53 @@ func TestWrapMCPMetric_RecordsWithMCPSource(t *testing.T) {
 		t.Errorf("ask failure row not captured: %+v", ask)
 	}
 }
+
+// TestWrapMCPMetric_CapturesHandlerDetail locks the token/count capture: a
+// handler attaches usage + result count via recordMCPDetail, and the wrapper
+// folds it into the recorded row (so agent-driven ask/search/index rows are no
+// longer all-zero on tokens and counts).
+func TestWrapMCPMetric_CapturesHandlerDetail(t *testing.T) {
+	mdb, err := metrics.Open(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mdb.Close()
+
+	h := wrapMCPMetric(mdb, metrics.OpAsk, "v1", func(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		recordMCPDetail(ctx, func(d *mcpMetricDetail) {
+			d.InputTokens = 120
+			d.OutputTokens = 45
+			d.ResultCount = 3
+			d.Mode = "hybrid"
+			d.TotalChars = 800
+		})
+		return nil, nil
+	})
+	if _, err := h(context.Background(), mcplib.CallToolRequest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	ops, err := mdb.Recent(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("recorded %d ops, want 1", len(ops))
+	}
+	if o := ops[0]; o.InputTokens != 120 || o.OutputTokens != 45 || o.ResultCount != 3 ||
+		o.Mode != "hybrid" || o.TotalChars != 800 || o.Source != "mcp" {
+		t.Errorf("handler detail not captured: in=%d out=%d rc=%d mode=%q chars=%d src=%q (want 120/45/3/hybrid/800/mcp)",
+			o.InputTokens, o.OutputTokens, o.ResultCount, o.Mode, o.TotalChars, o.Source)
+	}
+}
+
+// TestRecordMCPDetail_NoSinkIsNoOp guards that a handler calling recordMCPDetail
+// outside the metric wrapper (no sink in context) is a safe no-op, not a panic —
+// so handlers can call it unconditionally.
+func TestRecordMCPDetail_NoSinkIsNoOp(t *testing.T) {
+	called := false
+	recordMCPDetail(context.Background(), func(d *mcpMetricDetail) { called = true; d.InputTokens = 1 })
+	if called {
+		t.Error("recordMCPDetail ran the callback with no sink in context; want no-op")
+	}
+}
