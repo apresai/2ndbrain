@@ -35,8 +35,9 @@ func ProviderRPSDefault(provider string) float64 {
 // defaults, so this starts LOW (4) and is self-correcting: the embed path
 // retries ThrottlingException with exponential backoff, so an over-set value
 // degrades to retries rather than failures. Raise it per-vault with
-// `2nb config set ai.embed_concurrency N` (or `2nb ai embed-probe`) once an
-// account's real ceiling is known. OpenRouter free tiers are tight; Ollama is a
+// `2nb config set ai.embed_concurrency N` once an account's real ceiling is
+// known (a `2nb ai embed-probe` tuner is planned to find it). OpenRouter free
+// tiers are tight; Ollama is a
 // local server that commonly serializes requests, so concurrency there is modest.
 func ProviderEmbedConcurrencyDefault(provider string) int {
 	switch provider {

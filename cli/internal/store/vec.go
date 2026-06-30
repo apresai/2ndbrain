@@ -116,13 +116,13 @@ func (db *DB) EnsureVecChunks(dim int) error {
 		return nil
 	}
 	if cur != 0 {
-		if _, err := db.conn.Exec(`DROP TABLE vec_chunks`); err != nil {
+		if _, err := db.execRetry(`DROP TABLE vec_chunks`); err != nil {
 			return fmt.Errorf("drop stale vec_chunks (dim %d->%d): %w", cur, dim, err)
 		}
 	}
 	// IF NOT EXISTS is belt-and-suspenders alongside the mutex: idempotent for a
 	// redundant call and harmless if another process created it concurrently.
-	_, err = db.conn.Exec(fmt.Sprintf(
+	_, err = db.execRetry(fmt.Sprintf(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(`+
 			`chunk_id TEXT PRIMARY KEY, `+
 			`embedding float[%d] distance_metric=cosine, `+
@@ -150,7 +150,7 @@ func (db *DB) SetDocChunkVectors(docID string, vectors []ChunkVector, model stri
 		keep[cv.ChunkID] = cv
 	}
 
-	if _, err := db.conn.Exec(`DELETE FROM vec_chunks WHERE doc_id = ?`, docID); err != nil {
+	if _, err := db.execRetry(`DELETE FROM vec_chunks WHERE doc_id = ?`, docID); err != nil {
 		return fmt.Errorf("clear doc chunk vectors: %w", err)
 	}
 	for _, id := range order {
@@ -160,7 +160,7 @@ func (db *DB) SetDocChunkVectors(docID string, vectors []ChunkVector, model stri
 		if !FiniteNonZero(cv.Vector) {
 			continue
 		}
-		if _, err := db.conn.Exec(
+		if _, err := db.execRetry(
 			`INSERT INTO vec_chunks(chunk_id, embedding, doc_id, content_hash, model) VALUES (?, ?, ?, ?, ?)`,
 			cv.ChunkID, vecLiteral(cv.Vector), cv.DocID, cv.ContentHash, model,
 		); err != nil {

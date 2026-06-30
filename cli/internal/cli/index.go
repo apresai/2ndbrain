@@ -338,12 +338,7 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		return stats, nil
 	}
 
-	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider)
-	if !flagPorcelain {
-		fmt.Fprintf(os.Stderr, "  embedding %d documents...\n", len(docs))
-	}
 	embedStart := time.Now()
-
 	concurrency := cfg.ResolveEmbedConcurrency(cfg.Provider)
 	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider, "concurrency", concurrency)
 	if !flagPorcelain {

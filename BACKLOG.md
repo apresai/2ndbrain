@@ -2,6 +2,15 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Parallel embedding — Phase 1 (PR #124) follow-ups
+
+Two-dimension chad-review found 0 CRITICAL/HIGH; the concurrency core, `EnsureVecChunks` mutex, retry logic, and behavioral invariants all passed adversarial review + `-race`. Fixed in-PR: the embed-path writes (`SetDocChunkVectors`/`SetEmbedding`/`EnsureVecChunks` DDL) now go through a new `db.execRetry` (RetryBusy wrapper) so a transient `SQLITE_BUSY` under N concurrent writers rides out instead of failing a doc (which, for force-reembed, would trigger a whole-run snapshot restore) — the MEDIUM; the duplicate progress-log line; a failure-tally `-race` test + a direct store-level `EnsureVecChunks` concurrency test; doc-wording nits. Residual LOW:
+
+- **LOW — the MCP `kb_index` embed path is still sequential.** `internal/mcp/tools.go:172` still uses the fixed `ai.ThrottleDelay`; only the CLI `2nb index` path was parallelized (the user's actual pain). Route the MCP embed through the same concurrent pool (factor the worker pool into a shared helper both call). `cli/internal/cli/index.go`, `cli/internal/mcp/tools.go`.
+- **LOW — goroutine fan-out is one-per-doc.** The pool spawns `len(docs)` goroutines all parked on the semaphore (the models.go pattern); a ~50k-doc sync embed parks ~50k goroutines (~100MB+). Fine at the current sync scale (50k+ routes to async batch, itself backlogged), but a worker-consuming-channel pattern would cap at N. `cli/internal/cli/index.go`.
+- **LOW — cross-process `vec_chunks` DROP race (pre-existing).** `ensureVecMu` is per-process and `IF NOT EXISTS` only fixes the cross-process CREATE; two simultaneous dim-changing reembeds (or app+CLI) could DROP while the other INSERTs → "no such table". Rare and predates this commit; a cross-process lock (or never-DROP, version-suffixed tables) would close it. `cli/internal/store/vec.go`.
+- **LOW — generation hot path inherits the widened retry.** `converseWithRetry` now also retries `ThrottlingException` (intended), so a throttled `ask`/`polish` adds up to ~3s of backoff before surfacing the error. Acceptable; note if generation latency complaints arise. `cli/internal/ai/bedrock.go`.
+
 ## Vault performance observatory — Phase 3 macOS Metrics tab (PR #123) follow-ups
 
 chad-review found one **CRITICAL** (fixed in-PR): the empty-vault `2nb metrics --json` emitted `"recent":null` (Go nil-slice marshals to null), and the Swift `recent` was a non-optional array, so the whole `VaultMetrics` decode threw and the tab blanked on any fresh/cleared vault. Fixed at both ends — the CLI now initializes `recent` to `[]` (with a Go test asserting `"recent":[]`), and the Swift structs make `recent`/`aggregates` optional and decode `null` leniently (with tests for both the `null` and `[]`/`{}` shapes). The masking test (which used `[]`, not the real `null`) was the HIGH and is now corrected. Residual LOW:

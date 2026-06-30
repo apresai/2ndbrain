@@ -86,3 +86,49 @@ func TestEmbedDocumentsWithProvider_ConcurrentAggregation(t *testing.T) {
 		t.Errorf("EmbeddingCount = %d (err %v), want %d", c, err, n)
 	}
 }
+
+// errEmbedder always fails, to exercise the failure-tally path under concurrency
+// (the results[i].failed summation that feeds the force-reembed completeness
+// guard — untested by the all-success path above).
+type errEmbedder struct{ dims int }
+
+func (e *errEmbedder) Name() string                       { return "err" }
+func (e *errEmbedder) Dimensions() int                    { return e.dims }
+func (e *errEmbedder) Available(ctx context.Context) bool { return true }
+func (e *errEmbedder) ListModels(ctx context.Context) ([]ai.ModelInfo, error) {
+	return nil, nil
+}
+func (e *errEmbedder) Embed(ctx context.Context, texts []string, _ ...ai.EmbedOption) ([][]float32, error) {
+	return nil, fmt.Errorf("simulated embed failure")
+}
+
+func TestEmbedDocumentsWithProvider_ConcurrentFailureTally(t *testing.T) {
+	flagPorcelain = true
+	t.Cleanup(func() { flagPorcelain = false })
+
+	v := testutil.NewTestVault(t)
+	const n = 12
+	for i := 0; i < n; i++ {
+		testutil.CreateAndIndex(t, v, fmt.Sprintf("Fail %d", i), "note", fmt.Sprintf("body %d with words", i))
+	}
+	cfg := v.Config.AI
+	cfg.Provider = "fake"
+	cfg.EmbeddingModel = "fake-model"
+	cfg.EmbedConcurrency = 6
+	emb := &errEmbedder{dims: 8}
+
+	// The function itself returns nil; per-doc failures are tallied into Failed.
+	stats, err := embedDocumentsWithProvider(context.Background(), v, cfg, emb)
+	if err != nil {
+		t.Fatalf("embedDocumentsWithProvider: %v", err)
+	}
+	if stats.Failed != n {
+		t.Errorf("Failed = %d, want %d (every doc fails under concurrency)", stats.Failed, n)
+	}
+	if stats.Embedded != 0 || stats.Skipped != 0 {
+		t.Errorf("Embedded=%d Skipped=%d, want 0/0", stats.Embedded, stats.Skipped)
+	}
+	if stats.Attempted != n {
+		t.Errorf("Attempted = %d, want %d", stats.Attempted, n)
+	}
+}

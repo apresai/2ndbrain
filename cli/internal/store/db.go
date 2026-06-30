@@ -41,6 +41,22 @@ type DB struct {
 	ensureVecMu sync.Mutex
 }
 
+// execRetry runs an Exec, retrying on SQLITE_BUSY via RetryBusy. The concurrent
+// embed worker pool writes on N pooled connections at once, so a writer can
+// briefly out-wait busy_timeout and surface a bare SQLITE_BUSY; wrapping the
+// embed-path writes makes them ride it out instead of failing the doc (which,
+// for a force-reembed, would trigger a whole-run snapshot restore). Mirrors how
+// indexFile is wrapped in RetryBusy.
+func (db *DB) execRetry(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := RetryBusy(func() error {
+		var e error
+		res, e = db.conn.Exec(query, args...)
+		return e
+	})
+	return res, err
+}
+
 func Open(dbPath string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
