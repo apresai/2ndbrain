@@ -26,11 +26,15 @@ type AIConfig struct {
 	// text `ask` feeds the generator (parent-document context). Runes ≈ chars
 	// (tokens ≈ runes/4). Each defaults when unset; resolved via
 	// ResolveRAGContextBudget / ResolveRAGNoteBudget.
-	RAGContextBudgetRunes int              `yaml:"rag_context_budget,omitempty" json:"rag_context_budget,omitempty"`
-	RAGNoteBudgetRunes    int              `yaml:"rag_note_budget,omitempty" json:"rag_note_budget,omitempty"`
-	Ollama                OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
-	Bedrock               BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
-	OpenRouter            OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
+	RAGContextBudgetRunes int `yaml:"rag_context_budget,omitempty" json:"rag_context_budget,omitempty"`
+	RAGNoteBudgetRunes    int `yaml:"rag_note_budget,omitempty" json:"rag_note_budget,omitempty"`
+	// EmbedConcurrency caps simultaneous in-flight embedding requests during a
+	// bulk embed / re-embed. 0 (unset) resolves to ProviderEmbedConcurrencyDefault
+	// for the active provider; resolved via ResolveEmbedConcurrency.
+	EmbedConcurrency int              `yaml:"embed_concurrency,omitempty" json:"embed_concurrency,omitempty"`
+	Ollama           OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
+	Bedrock          BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
+	OpenRouter       OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
 }
 
 // ResolveHybridWeights returns the BM25 and vector weights for RRF fusion, each
@@ -47,6 +51,20 @@ func normHybridWeight(w float64) float64 {
 		return 1.0
 	}
 	return w
+}
+
+// ResolveEmbedConcurrency returns the number of simultaneous embedding requests
+// for the bulk-embed worker pool: the configured value when > 0, else the
+// per-provider default. Always >= 1.
+func (c AIConfig) ResolveEmbedConcurrency(provider string) int {
+	n := c.EmbedConcurrency
+	if n <= 0 {
+		n = ProviderEmbedConcurrencyDefault(provider)
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
 // RAG context (parent-document) budget defaults — generous within Claude Haiku

@@ -175,6 +175,8 @@ func dummyConfigValue(key string) string {
 		return "1.5"
 	case "ai.rag_context_budget", "ai.rag_note_budget":
 		return "30000"
+	case "ai.embed_concurrency":
+		return "8"
 	}
 	if strings.HasSuffix(key, ".disabled") {
 		return "true"

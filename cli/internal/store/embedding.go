@@ -20,7 +20,9 @@ type EmbeddingSnapshot struct {
 // SetEmbedding stores a document's embedding vector.
 func (db *DB) SetEmbedding(docID string, embedding []float32, model string, contentHash string) error {
 	blob := float32sToBytes(embedding)
-	_, err := db.conn.Exec(
+	// execRetry: the concurrent embed pool writes on N connections at once, so
+	// ride out a transient SQLITE_BUSY rather than fail the doc.
+	_, err := db.execRetry(
 		`UPDATE documents SET embedding = ?, embedding_model = ?, embedding_hash = ? WHERE id = ?`,
 		blob, model, contentHash, docID,
 	)

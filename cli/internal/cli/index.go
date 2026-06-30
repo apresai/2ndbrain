@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -336,57 +338,87 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		return stats, nil
 	}
 
-	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider)
-	if !flagPorcelain {
-		fmt.Fprintf(os.Stderr, "  embedding %d documents...\n", len(docs))
-	}
 	embedStart := time.Now()
-	var totalChars int
-	embedded := 0
+	concurrency := cfg.ResolveEmbedConcurrency(cfg.Provider)
+	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider, "concurrency", concurrency)
+	if !flagPorcelain {
+		fmt.Fprintf(os.Stderr, "  embedding %d documents (concurrency %d)...\n", len(docs), concurrency)
+	}
 
-	throttle := ai.ThrottleDelay(ai.ProviderRPSDefault(cfg.Provider))
+	// Bounded worker pool: each doc is embedded concurrently, up to `concurrency`
+	// in flight (the sem + WaitGroup pattern from models.go). embed.Document is
+	// concurrency-safe per doc (distinct docID; the WAL store serializes writes),
+	// so the only per-doc state is each worker's own result slot — written by
+	// exactly one goroutine and summed after Wait, so no mutex is needed. The
+	// fixed inter-doc ThrottleDelay is gone: the concurrency cap plus the
+	// ThrottlingException backoff (isBedrockRetryable) replace fixed-rate pacing,
+	// and a throttled account self-corrects via retries rather than failing.
+	type docResult struct{ embedded, failed, skipped, chars int }
+	results := make([]docResult, len(docs))
+	var completed atomic.Int64
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
 
-	for i, doc := range docs {
-		if i > 0 && throttle > 0 {
-			time.Sleep(throttle)
-		}
+	for i := range docs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-		absPath := filepath.Join(v.Root, doc.Path)
-		parsed, err := document.ParseFile(absPath)
-		if err != nil {
-			stats.Failed++
-			slog.Warn("embedding skipped: parse failed", "path", doc.Path, "err", err)
-			fmt.Fprintf(os.Stderr, "  skip %s: %v\n", doc.Path, err)
-			continue
-		}
-
-		// Per-chunk embeddings via the shared embed path (also used by `create`
-		// and the MCP write tools): each heading-bounded chunk goes into
-		// vec_chunks (vec0) for chunk-level KNN, and documents.embedding is the
-		// mean of the chunk vectors. n==0 means an empty doc — skip, not fail.
-		n, err := embed.Document(ctx, v.DB, embedder, doc.ID, parsed, model)
-		if err != nil {
-			stats.Failed++
-			slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
-			fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
-			continue
-		}
-		if n == 0 {
-			stats.Skipped++
-			slog.Debug("embedding skipped: empty document", "path", doc.Path)
-			if !flagPorcelain {
-				fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", doc.Path)
+			doc := docs[i]
+			absPath := filepath.Join(v.Root, doc.Path)
+			parsed, err := document.ParseFile(absPath)
+			if err != nil {
+				results[i].failed = 1
+				slog.Warn("embedding skipped: parse failed", "path", doc.Path, "err", err)
+				if !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "  skip %s: %v\n", doc.Path, err)
+				}
+				return
 			}
-			continue
-		}
 
-		totalChars += len(parsed.Body)
-		embedded++
-		stats.Embedded++
+			// Per-chunk embeddings via the shared embed path (also used by
+			// `create` and the MCP write tools): each heading-bounded chunk goes
+			// into vec_chunks (vec0) for chunk-level KNN, and documents.embedding
+			// is the mean of the chunk vectors. n==0 means an empty doc — skip,
+			// not fail.
+			n, err := embed.Document(ctx, v.DB, embedder, doc.ID, parsed, model)
+			if err != nil {
+				results[i].failed = 1
+				slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
+				if !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", doc.Path, err)
+				}
+				return
+			}
+			if n == 0 {
+				results[i].skipped = 1
+				slog.Debug("embedding skipped: empty document", "path", doc.Path)
+				if !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", doc.Path)
+				}
+				return
+			}
 
-		if !flagPorcelain {
-			fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", i+1, len(docs), doc.Path)
-		}
+			results[i].embedded = 1
+			results[i].chars = len(parsed.Body)
+			if !flagPorcelain {
+				// Monotonic completion counter; the path order printed is
+				// non-deterministic under concurrency.
+				fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", completed.Add(1), len(docs), doc.Path)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	var totalChars, embedded int
+	for _, r := range results {
+		stats.Embedded += r.embedded
+		stats.Failed += r.failed
+		stats.Skipped += r.skipped
+		totalChars += r.chars
+		embedded += r.embedded
 	}
 
 	// Show cost estimate for non-free providers

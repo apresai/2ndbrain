@@ -304,7 +304,7 @@ func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]by
 		resp *bedrockruntime.InvokeModelOutput
 		err  error
 	)
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= maxBedrockAttempts; attempt++ {
 		resp, err = b.client.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
 			ModelId:     aws.String(b.model),
 			ContentType: aws.String("application/json"),
@@ -314,7 +314,7 @@ func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]by
 		if err == nil {
 			return resp.Body, nil
 		}
-		if !isBedrockRetryable(err) || attempt == 3 {
+		if !isBedrockRetryable(err) || attempt == maxBedrockAttempts {
 			break
 		}
 		time.Sleep(bedrockRetryDelay(attempt))
@@ -663,9 +663,9 @@ func (b *BedrockGenerator) Generate(ctx context.Context, prompt string, opts Gen
 func (b *BedrockGenerator) converseWithRetry(ctx context.Context, input *bedrockruntime.ConverseInput) (*bedrockruntime.ConverseOutput, error) {
 	var resp *bedrockruntime.ConverseOutput
 	var err error
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= maxBedrockAttempts; attempt++ {
 		resp, err = b.client.Converse(ctx, input)
-		if err == nil || !isBedrockRetryable(err) || attempt == 3 {
+		if err == nil || !isBedrockRetryable(err) || attempt == maxBedrockAttempts {
 			break
 		}
 		time.Sleep(bedrockRetryDelay(attempt))

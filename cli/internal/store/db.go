@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"     // pure-Go, CGO-free SQLite driver (registers "sqlite")
@@ -32,6 +33,28 @@ const MaxSchemaVersion = 3
 type DB struct {
 	conn *sql.DB
 	path string
+	// ensureVecMu serializes EnsureVecChunks so the concurrent embed worker pool
+	// can't race its check-then-(drop)-create of the vec_chunks vec0 table (two
+	// workers both seeing "no table" and both issuing CREATE → "table already
+	// exists"). The guarded section is a fast metadata check + at most one
+	// DDL, so contention is negligible.
+	ensureVecMu sync.Mutex
+}
+
+// execRetry runs an Exec, retrying on SQLITE_BUSY via RetryBusy. The concurrent
+// embed worker pool writes on N pooled connections at once, so a writer can
+// briefly out-wait busy_timeout and surface a bare SQLITE_BUSY; wrapping the
+// embed-path writes makes them ride it out instead of failing the doc (which,
+// for a force-reembed, would trigger a whole-run snapshot restore). Mirrors how
+// indexFile is wrapped in RetryBusy.
+func (db *DB) execRetry(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := RetryBusy(func() error {
+		var e error
+		res, e = db.conn.Exec(query, args...)
+		return e
+	})
+	return res, err
 }
 
 func Open(dbPath string) (*DB, error) {
