@@ -88,6 +88,9 @@ func indexOperation(force bool, start time.Time, ix vault.IndexStats, es embeddi
 		TotalChars:     es.TotalChars,
 		EmbeddingModel: es.Model,
 		EmbeddingDims:  cfg.Dimensions,
+		// Embeddings have no provider-reported usage; estimate input tokens at
+		// chars/4 (no output tokens). Same heuristic as the cost estimate.
+		InputTokens: es.TotalChars / 4,
 	}
 	if force {
 		op.Operation = metrics.OpReembed

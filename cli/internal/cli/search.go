@@ -122,6 +122,12 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 	// Record the query (best-effort) on every return path, including
 	// zero-result and error cases. mode is "hybrid" or "keyword".
 	defer func() {
+		// Token estimate: a hybrid search embeds the query once (chars/4); a
+		// BM25-only search makes no embedding call.
+		inTok := 0
+		if mode == search.ModeHybrid {
+			inTok = len(query) / 4
+		}
 		recordMetric(v, metrics.Operation{
 			Operation:   metrics.OpSearch,
 			DurationMs:  time.Since(startTime).Milliseconds(),
@@ -129,6 +135,7 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 			Error:       errString(err),
 			ResultCount: len(results),
 			Mode:        string(mode),
+			InputTokens: inTok,
 		})
 	}()
 

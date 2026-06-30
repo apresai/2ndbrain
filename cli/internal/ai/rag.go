@@ -10,6 +10,10 @@ import (
 type RAGResult struct {
 	Answer  string   `json:"answer"`
 	Sources []string `json:"sources"`
+	// Token usage of the generation, when the provider reports it (Bedrock does;
+	// others leave these 0 and the caller estimates). Additive, omitempty.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 // RAG executes a retrieval-augmented generation pipeline.
@@ -56,18 +60,34 @@ func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string
 		system += historySystemSuffix
 	}
 
-	answer, err := gen.Generate(ctx, prompt, GenOpts{
+	genOpts := GenOpts{
 		// 1024 so a fuller answer (now backed by full-note parent-document
 		// context) isn't itself truncated mid-thought.
 		MaxTokens:    1024,
 		Temperature:  Ptr(0.1),
 		SystemPrompt: system,
-	})
+	}
+	// Capture real token usage when the provider reports it (UsageGenerator —
+	// Bedrock), else fall back to the plain Generate (usage stays 0; the caller
+	// estimates from chars).
+	var answer string
+	var usage GenUsage
+	var err error
+	if ug, ok := gen.(UsageGenerator); ok {
+		answer, usage, err = ug.GenerateWithUsage(ctx, prompt, genOpts)
+	} else {
+		answer, err = gen.Generate(ctx, prompt, genOpts)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("generation: %w", err)
 	}
 
-	return &RAGResult{Answer: answer, Sources: sources}, nil
+	return &RAGResult{
+		Answer:       answer,
+		Sources:      sources,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+	}, nil
 }
 
 // buildRAGPrompt assembles the generation prompt. With empty history the

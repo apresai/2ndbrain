@@ -71,6 +71,10 @@ type MetricsReport struct {
 	Gauges     MetricsGauges                `json:"gauges"`
 	Recent     []metrics.Operation          `json:"recent"`
 	Aggregates map[string]metrics.Aggregate `json:"aggregates"`
+	// Token totals across the retained window (ask uses provider-actual usage;
+	// embed/search estimate at chars/4).
+	TokensIn  int `json:"total_input_tokens"`
+	TokensOut int `json:"total_output_tokens"`
 }
 
 func openMetricsDB(v *vault.Vault) (*metrics.DB, error) {
@@ -106,11 +110,18 @@ func buildMetricsReport(v *vault.Vault, limit int) (MetricsReport, error) {
 	if err != nil {
 		return MetricsReport{}, err
 	}
+	var tokIn, tokOut int
+	for _, a := range aggregates {
+		tokIn += a.TokensIn
+		tokOut += a.TokensOut
+	}
 	return MetricsReport{
 		LastBuild:  lastBuild,
 		Gauges:     vaultGauges(v, lastBuild),
 		Recent:     recent,
 		Aggregates: aggregates,
+		TokensIn:   tokIn,
+		TokensOut:  tokOut,
 	}, nil
 }
 
@@ -220,6 +231,9 @@ func printMetricsReport(r MetricsReport) {
 	if g.EmbeddingModel != "" {
 		fmt.Printf("  embedding:   %s  (%d dims)\n", g.EmbeddingModel, g.EmbeddingDims)
 	}
+	if r.TokensIn > 0 || r.TokensOut > 0 {
+		fmt.Printf("  tokens:      %d in / %d out  (recent window; ask actual, embed/search estimated)\n", r.TokensIn, r.TokensOut)
+	}
 
 	if len(r.Aggregates) > 0 {
 		fmt.Println("\nPer-operation (recent window):")
@@ -231,6 +245,9 @@ func printMetricsReport(r MetricsReport) {
 			line := fmt.Sprintf("  %-10s n=%-4d avg=%-8s p50=%s", op, a.Count, metricsDurationF(a.AvgMs), metricsDuration(a.P50Ms))
 			if a.AvgDocsPerSec > 0 {
 				line += fmt.Sprintf("  (%.1f docs/sec)", a.AvgDocsPerSec)
+			}
+			if a.TokensIn > 0 || a.TokensOut > 0 {
+				line += fmt.Sprintf("  %d/%d tok", a.TokensIn, a.TokensOut)
 			}
 			fmt.Println(line)
 		}

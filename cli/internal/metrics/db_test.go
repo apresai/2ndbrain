@@ -195,6 +195,24 @@ func TestClear(t *testing.T) {
 	}
 }
 
+func TestAggregatesTokens(t *testing.T) {
+	db := openTestDB(t)
+	mustRecord(t, db, Operation{Operation: OpAsk, DurationMs: 100, OK: true, InputTokens: 100, OutputTokens: 50})
+	mustRecord(t, db, Operation{Operation: OpAsk, DurationMs: 120, OK: true, InputTokens: 200, OutputTokens: 80})
+	mustRecord(t, db, Operation{Operation: OpIndex, DurationMs: 1000, DocsIndexed: 5, OK: true, InputTokens: 25})
+
+	agg, err := db.Aggregates()
+	if err != nil {
+		t.Fatalf("aggregates: %v", err)
+	}
+	if agg[OpAsk].TokensIn != 300 || agg[OpAsk].TokensOut != 130 {
+		t.Errorf("ask tokens = %d/%d, want 300/130", agg[OpAsk].TokensIn, agg[OpAsk].TokensOut)
+	}
+	if agg[OpIndex].TokensIn != 25 || agg[OpIndex].TokensOut != 0 {
+		t.Errorf("index tokens = %d/%d, want 25/0", agg[OpIndex].TokensIn, agg[OpIndex].TokensOut)
+	}
+}
+
 func mustRecord(t *testing.T, db *DB, op Operation) {
 	t.Helper()
 	if err := db.Record(op); err != nil {

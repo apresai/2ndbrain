@@ -70,6 +70,21 @@ type GenerationProvider interface {
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
 
+// GenUsage is the token usage of one generation, as reported by the provider.
+type GenUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+// UsageGenerator is an optional extension a GenerationProvider may implement to
+// report a generation's real token usage (e.g. Bedrock Converse returns it).
+// `ask`/RAG records it for the observatory; providers that don't implement it
+// fall back to a chars/4 estimate, so this is additive — not all providers need
+// it.
+type UsageGenerator interface {
+	GenerateWithUsage(ctx context.Context, prompt string, opts GenOpts) (string, GenUsage, error)
+}
+
 // Ptr returns a pointer to v. Use for optional GenOpts fields like Temperature.
 func Ptr[T any](v T) *T { return &v }
 
