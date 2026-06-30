@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/testutil"
 )
 
 func TestParseProbeLevels(t *testing.T) {
@@ -47,5 +50,38 @@ func TestRecommendConcurrency(t *testing.T) {
 	}
 	if got := recommendConcurrency(nil); got != 4 {
 		t.Errorf("empty: got %d, want 4", got)
+	}
+}
+
+func TestSampleChunkTexts(t *testing.T) {
+	v := testutil.NewTestVault(t)
+
+	// Zero chunks → empty (the caller turns this into "run 2nb index first").
+	if got, err := sampleChunkTexts(v, 64); err != nil || len(got) != 0 {
+		t.Fatalf("empty vault sample = %d (err %v), want 0", len(got), err)
+	}
+
+	for i := 0; i < 5; i++ {
+		testutil.CreateAndIndex(t, v, fmt.Sprintf("Doc %d", i), "note",
+			fmt.Sprintf("body content number %d with several words", i))
+	}
+
+	// Fewer-than-n → returns what's available (>= one chunk per doc).
+	got, err := sampleChunkTexts(v, 100)
+	if err != nil {
+		t.Fatalf("seeded sample: %v", err)
+	}
+	if len(got) < 5 {
+		t.Errorf("sample = %d, want >= 5 (one+ chunk per doc)", len(got))
+	}
+	for _, c := range got {
+		if c == "" {
+			t.Error("sampled an empty chunk (WHERE content != '' should exclude these)")
+		}
+	}
+
+	// LIMIT respected.
+	if got, err := sampleChunkTexts(v, 2); err != nil || len(got) > 2 {
+		t.Errorf("limit-2 sample = %d (err %v), want <= 2", len(got), err)
 	}
 }

@@ -2,6 +2,12 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Embed concurrency probe — Phase 2 (PR #125) follow-ups
+
+chad-review found 0 CRITICAL/HIGH. Fixed in-PR: a per-level `context.WithTimeout` (3m) so a hung provider call can't block the probe forever (surfaces as an error, not a hang); an "errors capped the recommendation" caveat printed when any level throttled; a `sampleChunkTexts` test (zero / fewer-than-n / limit). Residual LOW:
+
+- **LOW — `embed-probe` treats any per-level error as the throttling ceiling.** `recommendConcurrency` caps the scan at the first level with errors, so a single *transient* error (a non-throttle network blip, which `isBedrockRetryable` doesn't retry) at a low level under-recommends a capable account. Mitigated by the re-run caveat, but a real fix would retry a level once on a transient (non-throttle) error before treating it as the ceiling, or classify the error (throttle vs other) and only cap on throttle. `cli/internal/cli/ai_embed_probe.go`.
+
 ## Parallel embedding — Phase 1 (PR #124) follow-ups
 
 Two-dimension chad-review found 0 CRITICAL/HIGH; the concurrency core, `EnsureVecChunks` mutex, retry logic, and behavioral invariants all passed adversarial review + `-race`. Fixed in-PR: the embed-path writes (`SetDocChunkVectors`/`SetEmbedding`/`EnsureVecChunks` DDL) now go through a new `db.execRetry` (RetryBusy wrapper) so a transient `SQLITE_BUSY` under N concurrent writers rides out instead of failing a doc (which, for force-reembed, would trigger a whole-run snapshot restore) — the MEDIUM; the duplicate progress-log line; a failure-tally `-race` test + a direct store-level `EnsureVecChunks` concurrency test; doc-wording nits. Residual LOW:

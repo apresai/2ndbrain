@@ -122,6 +122,17 @@ func runAIEmbedProbe(cmd *cobra.Command, args []string) error {
 	if format != "" {
 		return output.Write(os.Stdout, format, result)
 	}
+	anyErr := false
+	for _, l := range result.Levels {
+		if l.Errors > 0 {
+			anyErr = true
+			break
+		}
+	}
+	if anyErr {
+		fmt.Fprintln(os.Stderr, "  note: a level showed errors (likely throttling) and capped the recommendation;")
+		fmt.Fprintln(os.Stderr, "        re-run if it may have been a transient blip, or treat this as your ceiling.")
+	}
 	fmt.Printf("\nRecommended concurrency: %d\n", result.Recommended)
 	fmt.Printf("  apply with: 2nb config set ai.embed_concurrency %d\n", result.Recommended)
 	return nil
@@ -178,6 +189,11 @@ func sampleChunkTexts(v *vault.Vault, n int) ([]string, error) {
 // `level` (each text discarded), timing the batch and counting hard failures
 // (errors that survived the provider's retry/backoff). Mirrors the embed pool.
 func probeOneLevel(ctx context.Context, embedder ai.EmbeddingProvider, sample []string, level int) ProbeLevel {
+	// Cap a level so a hung provider call can't block the probe forever; an embed
+	// that exceeds this surfaces as an error (counted), not a hang.
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+
 	var errs atomic.Int64
 	sem := make(chan struct{}, level)
 	var wg sync.WaitGroup
