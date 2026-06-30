@@ -2,6 +2,32 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Limitations roadmap — parallel-embed + probe + token-tracking, post-ship analysis (2026-06-30)
+
+A grounded analysis (4 opus readers over the real shipped code + synthesis) of where the Phase 1–3 system falls short. Full report with file:line root causes, effort tiers, and the fundamental-vs-fixable split is the vault note `resources/2ndbrain-parallel-embed-probe-and-token-tracking-limitations-roadmap.md`. The MCP token-capture quick win already shipped (PR #127). Remaining, by tier:
+
+**Quick wins (S/M)**
+- Implement `GenerateWithUsage` on OpenRouter + Ollama (their responses already carry `usage` / `prompt_eval_count`+`eval_count`, currently dropped) so both report real generation tokens instead of falling back to chars/4. `cli/internal/ai/openrouter.go`, `ollama.go`, `rag.go`.
+- Probe `--apply` (write `ai.embed_concurrency` via the `config set` path) + record an `OpEmbedProbe` metric row. `cli/internal/cli/ai_embed_probe.go`.
+- Surface **dollar cost**: add a `generation_model` column (schema v3), stamp it on ask/condense/polish rows, join to the catalog price (`ai.EstimateInputCost` already exists), print a `$` line + Swift gauge. `cli/internal/metrics/db.go`, `cli/internal/cli/metrics.go`, `app/.../MetricsView.swift`.
+- Make the probe trustworthy: throttle-classified errors (only throttles cap the ceiling, not a transient blip / `DeadlineExceeded`), `ORDER BY RANDOM()` sampling, median-of-R repeats. `cli/internal/cli/ai_embed_probe.go`.
+- Stop pruning metrics.db on every insert (probabilistic/threshold prune) to cut the FSEvents hot-path tax. `cli/internal/metrics/db.go`.
+- Per-doc `vec_chunks` writes in one transaction + `SetMaxOpenConns`; switch chars/4 estimates to rune-based. `cli/internal/store/vec.go`, `db.go`, `cli/internal/cli/{ask,search,index}.go`.
+- Count multi-turn `CondenseQuestion` generation tokens (currently dropped even on Bedrock). `cli/internal/ai/chat.go`, rag.go, `cli/internal/cli/ask.go`.
+
+**Strategic (L)**
+- Time-series retention + `AggregatesByBucket(period)` + Swift Charts sparklines + last-build-vs-baseline regression badge — so the parallelization speedup is chartable over time (today the ~200-row-per-type prune erases the trend). `cli/internal/metrics/db.go`, `cli/internal/cli/metrics.go`, `app/.../MetricsView.swift`.
+- Chunk-level concurrency: flatten to one `(doc, chunk)` job queue with N resident workers (also fixes the goroutine-per-doc fan-out and the unparallelized MCP `kb_index` — extract a shared `embed.BulkEmbed`). `cli/internal/cli/index.go`, `cli/internal/mcp/tools.go`, `cli/internal/ai/bedrock.go`.
+- Adaptive client-side rate limiting via the SDK `RetryModeAdaptive`, thinning the redundant manual retry loop. `cli/internal/ai/bedrock.go`, `bedrock_support.go`.
+- `2nb metrics export --format csv|json` + optional cross-vault rollup. `cli/internal/cli/metrics.go`.
+
+**Big bets (XL)**
+- Async/batch S3 inference for 50k+ vaults (submit→poll→ingest into `vec_chunks`); until it ships, document honest large-vault wall-time and drop the "routes to async batch" claim. `cli/internal/ai/`, `cli/internal/cli/index.go`.
+- Resumable/checkpointed force-reembed (per-doc commit + hash-gated resume) — also dissolves the in-memory snapshot durability gap and the `vec_chunks` rollback LOW below. `cli/internal/cli/index.go`, `cli/internal/store/embedding.go`.
+
+**Verified down from the analysis's lone HIGH (adversarial verification, 2026-06-30):**
+- **LOW — force-reembed snapshot/restore doesn't roll back `vec_chunks`.** The analysis flagged this as a HIGH "vault reports healthy while serving a partial chunk KNN," but verification REFUTED that: both cases that can leave `vec_chunks` partial are caught. A dimension change trips `VectorCompat`'s DIMENSION BREAK (forces BM25-only, loud warning — never silently healthy); any other under-coverage is caught by `vecChunkSearchByDoc`'s coverage check, which falls back to the complete brute-force over `documents.embedding` whenever `vec_chunks` under-covers (so partial chunk vectors are never served). The genuine residue is narrow: after a failed **same-model same-dim** force-reembed on a vault mid-migration to vec0, `vec_chunks` can stay under-covering and a plain `2nb index` won't complete it (hash+model match → nothing re-embeds) until another `--force-reembed`. Not a correctness bug (search stays correct via the fallback); only the per-chunk KNN precision upgrade is deferred. The proposed "clear `embedding_hash` on restore" minimal fix is counterproductive (forces a guaranteed full re-embed, defeating restore); the only true fix is the shadow-vec-table-swap, tracked under the resumable-reembed big bet above. `cli/internal/cli/index.go`, `cli/internal/store/{embedding,vec}.go`, `cli/internal/search/vecsearch.go`.
+
 ## Token tracking — Phase 3 (PR #126) follow-ups
 
 Three-dimension chad-review (migration correctness, usage-threading/silent-failures, Swift decode + docs drift) found 0 CRITICAL/HIGH/MEDIUM. Fixed in-PR: the `applyMigration` early-return branch set `committed=true` before COMMIT (a transient COMMIT failure would skip the deferred ROLLBACK and return the pooled conn with an open txn) — now mirrors the success path; wired up the unused `maxMetricsSchemaVersion` const as a real forward-compat ("DB too new") guard that degrades gracefully instead of dead code; strengthened the empty-payload Swift decode test to assert the token totals decode to `nil`; clarified the CLAUDE.md token-semantics docs to note the non-Bedrock (OpenRouter/Ollama) chars/4 output fallback. Residual LOW:
