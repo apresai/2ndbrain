@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.12.4] - 2026-07-01
+
+### Changed
+- Refreshed third-party SDK dependencies to their latest versions across the Go CLI (`go.mod`/`go.sum`), the macOS app (Swift Package dependencies), the Obsidian plugin (npm packages), and CI workflow tooling.
+
+
 ## [0.12.3] - 2026-06-30
 
 ### Changed
