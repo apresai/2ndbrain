@@ -8,7 +8,7 @@ Opening this repo in an agent (Warp, Claude Code, Cursor, ...) gives you the `2n
 
 ## Prerequisites
 
-- **Go 1.25+** (the CLI is pure-Go via `modernc.org/sqlite`; no CGO required)
+- **Go 1.26+** (the CLI is pure-Go via `modernc.org/sqlite`; no CGO required)
 - **macOS 14+** (Sonoma) for the Swift dashboard app
 - **Xcode Command Line Tools** (`xcode-select --install`)
 

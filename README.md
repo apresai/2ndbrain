@@ -557,7 +557,7 @@ make test-gui       # GUI tests (AppleScript automation)
 make test-all       # Go + battery + Swift + GUI
 ```
 
-Requires Go 1.25+ (the CLI is pure-Go, no CGO); macOS 14+ for the Swift app.
+Requires Go 1.26+ (the CLI is pure-Go, no CGO); macOS 14+ for the Swift app.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 

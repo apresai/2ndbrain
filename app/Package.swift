@@ -12,7 +12,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0"),
-        .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.0"),
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.5.0"),
     ],
     targets: [

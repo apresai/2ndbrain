@@ -14,7 +14,7 @@ jobs:
     environment: apresai    # Access HOMEBREW_TAP_TOKEN from this environment
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -72,7 +72,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24'
 
       # From 0.8.0 every product releases at the VERSION file's version.
       # `make bump-*` / `make set-version` sync the plugin manifest; this
