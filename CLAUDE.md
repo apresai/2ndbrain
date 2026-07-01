@@ -26,6 +26,8 @@ The canonical `2nb` agent skill lives in this repo, so any agent (Warp, Claude C
 - [`adr/0001-vector-search.md`](docs/adr/0001-vector-search.md) — Vector-search architecture decision: per-chunk sqlite-vec (exact in-DB SIMD KNN over `vec_chunks`) is now the primary vector path, with the Go brute-force over whole-doc embeddings as the fallback until a vault is fully re-embedded; true ANN/HNSW stays deferred — with measured latency/memory numbers and the revisit trigger
 - [`vault-structure.md`](docs/vault-structure.md) — On-disk vault layout reference (Superseded for 0.5.0, see [docs/obsidian/README.md](docs/obsidian/README.md))
 - [`obsidian/README.md`](docs/obsidian/README.md) — Obsidian-native pivot documentation and architectural model
+- [`multi-machine-setup.md`](docs/multi-machine-setup.md): what 2nb state ports across machines (the in-vault `.2ndbrain/` sidecar, and how git vs file-sync changes that) vs what stays machine-local (CLI, AI creds, MCP wiring, skill), the fresh-machine checklist, and the stale-calibration gotcha
+- [`claude-md-snippet.md`](docs/claude-md-snippet.md): copy-paste CLAUDE.md block explaining what 2nb is and when an agent should reach for it (a lightweight, always-loaded complement to the installable skill)
 
 ## Versioning
 
