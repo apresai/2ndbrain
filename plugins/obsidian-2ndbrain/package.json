@@ -12,12 +12,12 @@
   "author": "apresai",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^22.20.0",
-    "builtin-modules": "^3.3.0",
+    "@types/node": "^24.0.0",
+    "builtin-modules": "^5.0.0",
     "esbuild": "^0.28.1",
     "obsidian": "^1.1.1",
     "tslib": "^2.4.1",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.0",
     "vitest": "^4.1.8"
   }
 }
