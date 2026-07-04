@@ -53,6 +53,11 @@ interface AIStatus {
 	document_count?: number;
 	embedding_count?: number;
 	providers?: { name: string; reachable: boolean; reason?: string }[];
+	// portability_status carries the vault index health, incl. the
+	// upgrade_reindex_recommended / upgrade_reembed_recommended states a newer
+	// 2nb sets when it changed indexing/embedding logic (see the reindex nudge).
+	portability_status?: string;
+	portability_action?: string;
 }
 
 // InstallStatus mirrors one entry of `2nb skills list --json` (the Go
@@ -1650,11 +1655,41 @@ class BrainSettingTab extends PluginSettingTab {
 		const vaultSetting = new Setting(containerEl)
 			.setName('Vault')
 			.setDesc(`${vaultName} — ${vaultPath} · checking index…`);
+		// Holder positioned right after the Vault row so the async reindex nudge
+		// (below) lands next to it rather than at the end of the settings pane.
+		const reindexNudgeEl = containerEl.createDiv();
 		this.plugin.aiStatus().then(status => {
 			const state = status
 				? formatIndexState(status.document_count ?? 0, status.embedding_count ?? 0)
 				: 'index state unavailable (2nb CLI not reachable)';
 			vaultSetting.setDesc(`${vaultName} — ${vaultPath} · ${state}`);
+
+			// A newer 2nb changed indexing/embedding logic for this vault → prompt
+			// a reindex/re-embed (the CLI shows the same in `vault status`).
+			const ps = status?.portability_status;
+			if (ps === 'upgrade_reembed_recommended' || ps === 'upgrade_reindex_recommended') {
+				const forceReembed = ps === 'upgrade_reembed_recommended';
+				const label = forceReembed ? 'Re-embed' : 'Reindex';
+				new Setting(reindexNudgeEl)
+					.setName('Index update available')
+					.setDesc(forceReembed
+						? 'A newer 2nb improved chunking and embeddings for this vault. Re-embed to apply them.'
+						: 'A newer 2nb improved indexing for this vault. Reindex to apply it.')
+					.addButton(btn => btn
+						.setButtonText(label)
+						.setCta()
+						.onClick(async () => {
+							btn.setDisabled(true).setButtonText('Working…');
+							try {
+								await this.plugin.runCommand(forceReembed ? ['index', '--force-reembed'] : ['index']);
+								new Notice('2ndbrain: reindex complete.');
+								reindexNudgeEl.empty(); // clears once applied
+							} catch (e) {
+								new Notice(`2ndbrain: reindex failed — ${e}`);
+								btn.setDisabled(false).setButtonText(label);
+							}
+						}));
+			}
 		});
 
 		// AI client integrations: one sub-section per supported client (Claude
