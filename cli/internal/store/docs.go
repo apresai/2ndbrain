@@ -309,6 +309,38 @@ func (db *DB) DeleteDocument(docID string) error {
 	return err
 }
 
+// ChunkContentByID returns the body text of the given chunk IDs, keyed by chunk
+// id. It backfills the text a reranker needs: vector-only search results carry a
+// ChunkID but no Content (GetDocumentByID selects metadata only), so the rerank
+// stage reads each winning chunk's text here rather than re-reading notes from
+// disk. Unknown ids are simply absent from the map.
+func (db *DB) ChunkContentByID(ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := "SELECT id, content FROM chunks WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := db.conn.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("chunk content by id: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, content string
+		if err := rows.Scan(&id, &content); err != nil {
+			return nil, fmt.Errorf("scan chunk content: %w", err)
+		}
+		out[id] = content
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) DeleteChunksByDoc(docID string) error {
 	_, err := db.conn.Exec("DELETE FROM chunks WHERE doc_id = ?", docID)
 	return err

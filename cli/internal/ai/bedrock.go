@@ -924,6 +924,17 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	}
 	reg.RegisterGenerator("bedrock", generator)
 
+	// Register the reranker only when enabled: it's an optional stage on a
+	// distinct API (bedrockagentruntime.Rerank), so a disabled rerank config
+	// leaves the slot empty and retrieve keeps the RRF order.
+	if aiCfg.RerankEnabled() {
+		reranker, err := NewBedrockReranker(ctx, cfg, aiCfg.ResolveRerankModel())
+		if err != nil {
+			return fmt.Errorf("init bedrock reranker: %w", err)
+		}
+		reg.RegisterReranker("bedrock", reranker)
+	}
+
 	return nil
 }
 

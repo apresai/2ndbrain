@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.26
 	github.com/aws/aws-sdk-go-v2/service/bedrock v1.64.1
+	github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime v1.51.1
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.54.1
 	github.com/aws/smithy-go v1.27.3
 	github.com/google/uuid v1.6.0

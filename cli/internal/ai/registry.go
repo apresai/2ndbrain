@@ -11,6 +11,7 @@ type Registry struct {
 	mu         sync.RWMutex
 	embedders  map[string]EmbeddingProvider
 	generators map[string]GenerationProvider
+	rerankers  map[string]RerankProvider
 }
 
 // NewRegistry creates an empty provider registry.
@@ -18,6 +19,7 @@ func NewRegistry() *Registry {
 	return &Registry{
 		embedders:  make(map[string]EmbeddingProvider),
 		generators: make(map[string]GenerationProvider),
+		rerankers:  make(map[string]RerankProvider),
 	}
 }
 
@@ -33,6 +35,24 @@ func (r *Registry) RegisterGenerator(name string, p GenerationProvider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.generators[name] = p
+}
+
+// RegisterReranker adds a rerank provider.
+func (r *Registry) RegisterReranker(name string, p RerankProvider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rerankers[name] = p
+}
+
+// Reranker returns the named rerank provider.
+func (r *Registry) Reranker(name string) (RerankProvider, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.rerankers[name]
+	if !ok {
+		return nil, fmt.Errorf("rerank provider %q not registered", name)
+	}
+	return p, nil
 }
 
 // Embedder returns the named embedding provider.

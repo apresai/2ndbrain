@@ -177,6 +177,10 @@ func dummyConfigValue(key string) string {
 		return "30000"
 	case "ai.embed_concurrency":
 		return "8"
+	case "ai.rerank.enabled":
+		return "true"
+	case "ai.rerank.candidate_docs":
+		return "40"
 	}
 	if strings.HasSuffix(key, ".disabled") {
 		return "true"
