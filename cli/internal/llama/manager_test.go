@@ -137,13 +137,16 @@ func TestServeRejectsNoRoles(t *testing.T) {
 }
 
 func TestRenderAgentPlist(t *testing.T) {
-	plist := renderAgentPlist("/Applications/SecondBrain.app/Contents/Resources/2nb", "/tmp/2nb/engine.log")
+	plist := renderAgentPlist("/Applications/SecondBrain.app/Contents/Resources/2nb", "/tmp/2nb/engine.log",
+		[]string{"--gen-model", "gemma4-e4b"})
 	for _, want := range []string{
 		AgentLabel,
 		"/Applications/SecondBrain.app/Contents/Resources/2nb",
 		"<string>ai</string>",
 		"<string>engine</string>",
 		"<string>serve</string>",
+		"<string>--gen-model</string>",
+		"<string>gemma4-e4b</string>",
 		"/tmp/2nb/engine.log",
 		"<key>RunAtLoad</key>",
 		"<key>KeepAlive</key>",
@@ -166,7 +169,7 @@ func TestLaunchdNonDarwinInstallErrors(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("darwin: InstallAgent would modify the user's launchd; covered by manual verification")
 	}
-	if err := InstallAgent("/path/to/2nb"); err == nil {
+	if err := InstallAgent("/path/to/2nb", nil); err == nil {
 		t.Error("InstallAgent should error on non-darwin")
 	}
 	if AgentLoaded() {

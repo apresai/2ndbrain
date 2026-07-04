@@ -31,11 +31,13 @@ func engineLogPath() (string, error) {
 	return filepath.Join(home, "Library", "Logs", "2nb", "engine.log"), nil
 }
 
-// InstallAgent writes the launchd plist (running `<exePath> ai engine serve`)
-// and bootstraps it so the engine starts now and at every login. exePath should
-// be a STABLE absolute path to a 2nb binary (a brew/app upgrade that moves it
+// InstallAgent writes the launchd plist (running `<exePath> ai engine serve
+// <extraArgs...>`) and bootstraps it so the engine starts now and at every
+// login. extraArgs bakes the resolved model choices into the plist so serve is
+// deterministic at login without needing an open vault. exePath should be a
+// STABLE absolute path to a 2nb binary (a brew/app upgrade that moves it
 // requires re-running install). macOS only.
-func InstallAgent(exePath string) error {
+func InstallAgent(exePath string, extraArgs []string) error {
 	if runtime.GOOS != "darwin" {
 		return fmt.Errorf("the always-on engine agent uses launchd (macOS only); start it manually with `2nb ai engine serve` on this platform")
 	}
@@ -56,7 +58,7 @@ func InstallAgent(exePath string) error {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
 	}
-	plist := renderAgentPlist(exePath, logPath)
+	plist := renderAgentPlist(exePath, logPath, extraArgs)
 	if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
 		return fmt.Errorf("write plist: %w", err)
 	}
@@ -130,8 +132,15 @@ func runLaunchctl(args ...string) error {
 }
 
 // renderAgentPlist builds the LaunchAgent plist XML. RunAtLoad + KeepAlive make
-// the supervisor start at login and restart if it dies.
-func renderAgentPlist(exePath, logPath string) string {
+// the supervisor start at login and restart if it dies. extraArgs are appended
+// to `ai engine serve` (e.g. the resolved --gen-model/--embed-model choices).
+func renderAgentPlist(exePath, logPath string, extraArgs []string) string {
+	var args strings.Builder
+	for _, a := range extraArgs {
+		args.WriteString("\n\t\t<string>")
+		args.WriteString(xmlEscape(a))
+		args.WriteString("</string>")
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -143,7 +152,7 @@ func renderAgentPlist(exePath, logPath string) string {
 		<string>` + xmlEscape(exePath) + `</string>
 		<string>ai</string>
 		<string>engine</string>
-		<string>serve</string>
+		<string>serve</string>` + args.String() + `
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
