@@ -72,6 +72,30 @@ func TestInitLlamaRegisters(t *testing.T) {
 	}
 }
 
+func TestInitLlamaRerankerGating(t *testing.T) {
+	// Rerank disabled: no reranker registered.
+	reg := NewRegistry()
+	if err := InitLlama(context.Background(), reg, LlamaConfig{}, AIConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Reranker(llamaProviderName); err == nil {
+		t.Error("reranker should NOT be registered when ai.rerank.enabled is false")
+	}
+
+	// Rerank enabled: a RerankProvider is registered.
+	reg2 := NewRegistry()
+	if err := InitLlama(context.Background(), reg2, LlamaConfig{}, AIConfig{Rerank: RerankConfig{Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	rr, err := reg2.Reranker(llamaProviderName)
+	if err != nil {
+		t.Fatalf("reranker not registered when enabled: %v", err)
+	}
+	if rr.Name() != llamaProviderName {
+		t.Errorf("reranker name = %q, want %q", rr.Name(), llamaProviderName)
+	}
+}
+
 // requireLlamaEndpoint skips unless a real llama-server is reachable. Point the
 // env vars at a manually-started server:
 //
@@ -124,5 +148,37 @@ func TestLlamaEmbedAndGenerateLive(t *testing.T) {
 	}
 	if usage.OutputTokens == 0 {
 		t.Error("expected real token usage from llama-server")
+	}
+}
+
+func TestLlamaRerankLive(t *testing.T) {
+	ep := os.Getenv("2NB_TEST_LLAMA_RERANK_ENDPOINT")
+	if ep == "" {
+		t.Skip("set 2NB_TEST_LLAMA_RERANK_ENDPOINT to a llama-server started with --reranking --pooling rank")
+	}
+	ctx := context.Background()
+	r := NewLlamaReranker("bge-reranker-v2-m3", ep)
+	docs := []string{
+		"The mitochondrion is the powerhouse of the cell.",
+		"To reset your password, open Settings and click Security.",
+	}
+	hits, err := r.Rerank(ctx, "how do I change my account password?", docs, 0)
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	if len(hits) != len(docs) {
+		t.Fatalf("got %d hits for %d docs", len(hits), len(docs))
+	}
+	var s0, s1 float64
+	for _, h := range hits {
+		switch h.Index {
+		case 0:
+			s0 = h.Score
+		case 1:
+			s1 = h.Score
+		}
+	}
+	if s1 <= s0 {
+		t.Errorf("expected the relevant doc to score higher: password=%v biology=%v", s1, s0)
 	}
 }

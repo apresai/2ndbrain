@@ -240,6 +240,94 @@ func (g *LlamaGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
 	}}, nil
 }
 
+// LlamaReranker implements ai.RerankProvider against llama-server /v1/rerank (a
+// server started with --reranking --pooling rank). A cross-encoder scores the
+// query and each document jointly, so it consumes raw text (decoupled from the
+// embedder). It is the LOCAL counterpart to BedrockReranker; internal/retrieve
+// resolves it from the active provider, so it only runs when the vault is on the
+// llama-local provider with ai.rerank.enabled.
+type LlamaReranker struct {
+	model    string
+	endpoint string
+	client   *http.Client
+	avail    availableCache
+}
+
+// NewLlamaReranker builds the rerank client.
+func NewLlamaReranker(model, endpoint string) *LlamaReranker {
+	return &LlamaReranker{
+		model:    model,
+		endpoint: endpoint,
+		client:   &http.Client{Timeout: 120 * time.Second},
+	}
+}
+
+func (r *LlamaReranker) Name() string { return llamaProviderName }
+
+func (r *LlamaReranker) baseURL(ctx context.Context) (string, bool) {
+	if r.endpoint != "" {
+		return r.endpoint, true
+	}
+	return llama.EndpointFor(ctx, llama.RoleRerank)
+}
+
+func (r *LlamaReranker) Available(ctx context.Context) bool {
+	if v, hit := r.avail.get(); hit {
+		return v
+	}
+	_, ok := r.baseURL(ctx)
+	r.avail.set(ok)
+	return ok
+}
+
+type llamaRerankRequest struct {
+	Model     string   `json:"model"`
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+	TopN      int      `json:"top_n,omitempty"`
+}
+
+type llamaRerankResponse struct {
+	Results []struct {
+		Index          int     `json:"index"`
+		RelevanceScore float64 `json:"relevance_score"`
+	} `json:"results"`
+}
+
+// Rerank scores each document against the query with the cross-encoder and
+// returns the hits (topN <= 0 means all). Indices refer back into docs.
+func (r *LlamaReranker) Rerank(ctx context.Context, query string, docs []string, topN int) ([]RerankHit, error) {
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	base, ok := r.baseURL(ctx)
+	if !ok {
+		return nil, fmt.Errorf("llama-local rerank engine not running (start it: 2nb ai engine start)")
+	}
+	body, err := json.Marshal(llamaRerankRequest{Model: r.model, Query: query, Documents: docs, TopN: topN})
+	if err != nil {
+		return nil, fmt.Errorf("marshal rerank request: %w", err)
+	}
+	respBody, err := llamaPost(ctx, r.client, base+"/v1/rerank", body)
+	if err != nil {
+		return nil, err
+	}
+	var resp llamaRerankResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("unmarshal rerank response: %w", err)
+	}
+	hits := make([]RerankHit, 0, len(resp.Results))
+	for _, d := range resp.Results {
+		if d.Index < 0 || d.Index >= len(docs) {
+			return nil, fmt.Errorf("invalid rerank index %d", d.Index)
+		}
+		hits = append(hits, RerankHit{Index: d.Index, Score: d.RelevanceScore})
+	}
+	return hits, nil
+}
+
+var _ RerankProvider = (*LlamaReranker)(nil)
+
 // InitLlama creates and registers the llama-local providers.
 func InitLlama(_ context.Context, reg *Registry, cfg LlamaConfig, aiCfg AIConfig) error {
 	embedder := NewLlamaEmbedder(aiCfg.EmbeddingModel, aiCfg.Dimensions, cfg.EmbedEndpoint)
@@ -247,6 +335,13 @@ func InitLlama(_ context.Context, reg *Registry, cfg LlamaConfig, aiCfg AIConfig
 
 	generator := NewLlamaGenerator(aiCfg.GenerationModel, cfg.GenEndpoint)
 	reg.RegisterGenerator(llamaProviderName, generator)
+
+	// Register the local reranker only when reranking is enabled, mirroring
+	// InitBedrock — a disabled rerank config adds no reranker (and the retrieve
+	// pipeline resolves it only when RerankEnabled anyway).
+	if aiCfg.RerankEnabled() {
+		reg.RegisterReranker(llamaProviderName, NewLlamaReranker(aiCfg.ResolveRerankModel(), cfg.RerankEndpoint))
+	}
 
 	return nil
 }
