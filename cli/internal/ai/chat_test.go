@@ -114,11 +114,17 @@ func TestBuildRAGPrompt_WithHistory(t *testing.T) {
 		"User: tell me about auth",
 		"Assistant: Auth uses JWT.",
 		"answer this question: who owns it?",
+		"Answer based only on the provided documents", // the tuned wording (no "concisely")
 		"even if an earlier answer in the conversation suggested otherwise",
 	} {
 		if !strings.Contains(got, must) {
 			t.Errorf("history prompt missing %q in:\n%s", must, got)
 		}
+	}
+	// The prompt-tuning A/B removed "concisely" from both branches; keep the
+	// history branch in sync (it wasn't byte-pinned, only substring-checked).
+	if strings.Contains(got, "concisely") {
+		t.Errorf("history prompt still contains the removed \"concisely\" adverb:\n%s", got)
 	}
 	// History must sit between the question line and the document chunks.
 	if strings.Index(got, "Conversation so far") > strings.Index(got, "--- Doc A") {
