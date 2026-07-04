@@ -162,3 +162,78 @@ func TestSplitTextRanges_CoversAllBoundedTerminates(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitTextRanges_OverlapApplied(t *testing.T) {
+	text := []rune(strings.Repeat("alpha bravo charlie delta echo ", 800)) // ~24k runes, word boundaries
+	ranges := splitTextRanges(text, maxEmbedChunkChars, chunkOverlapChars)
+	sawOverlap := false
+	for i := 1; i < len(ranges); i++ {
+		gap := ranges[i][0] - ranges[i-1][1] // negative = overlap
+		if gap > 0 {
+			t.Fatalf("range %d leaves a gap of %d runes after range %d", i, gap, i-1)
+		}
+		if overlap := ranges[i-1][1] - ranges[i][0]; overlap > 0 {
+			sawOverlap = true
+			if overlap > chunkOverlapChars {
+				t.Errorf("overlap %d exceeds chunkOverlapChars %d", overlap, chunkOverlapChars)
+			}
+		}
+	}
+	if !sawOverlap {
+		t.Error("adjacent sub-chunks never overlapped — a boundary fact could be orphaned")
+	}
+}
+
+func TestSplitTextRanges_SingleLongTokenNoBoundary(t *testing.T) {
+	// One unbroken token (URL / base64 / log line) with no whitespace: findCut
+	// finds no boundary and must hard-cut, still covering everything and terminating.
+	text := []rune(strings.Repeat("x", maxEmbedChunkChars*3+17))
+	ranges := splitTextRanges(text, maxEmbedChunkChars, chunkOverlapChars)
+	if len(ranges) < 3 {
+		t.Fatalf("expected the long token to split, got %d ranges", len(ranges))
+	}
+	if ranges[0][0] != 0 || ranges[len(ranges)-1][1] != len(text) {
+		t.Fatalf("full coverage broken: [%d..%d), want [0..%d)", ranges[0][0], ranges[len(ranges)-1][1], len(text))
+	}
+	for i, r := range ranges {
+		if r[1]-r[0] > maxEmbedChunkChars || r[0] >= r[1] {
+			t.Errorf("range %d invalid/over cap: [%d,%d)", i, r[0], r[1])
+		}
+	}
+}
+
+func TestSplitLongChunks_MultibyteBoundedByRunes(t *testing.T) {
+	// Rune-based design: a CJK/emoji body must be bounded by RUNE count, not bytes,
+	// and no sub-chunk may exceed the rune cap even though each rune is 3-4 bytes.
+	body := strings.Repeat("日本語のテキスト。", 2000) // ~18k runes, ~54k bytes
+	got := SplitLongChunks([]Chunk{{ID: "u", DocID: "d", HeadingPath: "# 見出し", Content: body}}, maxEmbedChunkChars)
+	if len(got) < 2 {
+		t.Fatalf("expected multibyte body to split, got %d", len(got))
+	}
+	for i, c := range got {
+		if rc := utf8.RuneCountInString(c.Content); rc > maxEmbedChunkChars {
+			t.Errorf("sub-chunk %d has %d runes, over cap %d", i, rc, maxEmbedChunkChars)
+		}
+		if !utf8.ValidString(c.Content) {
+			t.Errorf("sub-chunk %d is not valid UTF-8 (a rune was split)", i)
+		}
+	}
+}
+
+func TestChunkForStorage_DeterministicIDs(t *testing.T) {
+	// The load-bearing invariant: the indexer (chunks table) and embed.Document
+	// (vec_chunks) each call ChunkForStorage independently, so it MUST be a pure
+	// deterministic function — same doc in, identical chunk ids out — or the vec
+	// search's vec_chunks.chunk_id -> chunks.id join breaks.
+	doc := &Document{ID: "d1", Body: "# H\n\n" + strings.Repeat("sentence of filler words here. ", 900)}
+	a := ChunkForStorage(doc)
+	b := ChunkForStorage(doc)
+	if len(a) != len(b) || len(a) < 2 {
+		t.Fatalf("nondeterministic chunk count: %d vs %d (want stable, >1)", len(a), len(b))
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Content != b[i].Content {
+			t.Errorf("chunk %d differs between calls: id %q vs %q", i, a[i].ID, b[i].ID)
+		}
+	}
+}

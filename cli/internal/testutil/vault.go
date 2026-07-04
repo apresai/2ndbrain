@@ -50,7 +50,11 @@ func CreateAndIndex(t *testing.T, v *vault.Vault, title, docType, body string) *
 		t.Fatalf("upsert document %q: %v", title, err)
 	}
 
-	chunks := document.ChunkDocument(doc)
+	// Mirror the production indexer: ChunkForStorage sub-splits oversized sections
+	// so this helper's chunks table matches embed.Document's vec_chunks (the vec
+	// search joins them by chunk_id). Using plain ChunkDocument here would diverge
+	// the two if a test ever used a body over the chunk-size cap.
+	chunks := document.ChunkForStorage(doc)
 	if err := v.DB.UpsertChunks(chunks); err != nil {
 		t.Fatalf("upsert chunks %q: %v", title, err)
 	}
