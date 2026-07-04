@@ -110,6 +110,12 @@ func (r *Retriever) ensureReady(ctx context.Context) (warn string) {
 	ready, msg := VectorCompat(ctx, r.v, r.embedder)
 	if !ready {
 		r.vecOK = false
+		if msg != "" {
+			// Also log to the persistent file log: the CLI surfaces msg on
+			// stderr and the --json envelope, but stderr isn't captured in
+			// .2ndbrain/logs/cli.log, and MCP kb_search drops it entirely.
+			slog.Warn("retrieve: vector channel unavailable, degrading to BM25", "reason", msg)
+		}
 		return msg // may be "" (a zero-embedding vault degrades silently)
 	}
 	ids, vecs, err := r.loadCorpus()
@@ -186,6 +192,9 @@ func (r *Retriever) hybrid(ctx context.Context, sopts search.Options, warnings [
 		return nil, "", append(warnings, fmt.Sprintf("semantic search disabled: embedder returned error (%v)", err))
 	}
 	if len(queryVecs) == 0 {
+		// Zero vectors without an error is a provider contract violation; log it
+		// so the otherwise-silent BM25 fallback is diagnosable.
+		slog.Warn("retrieve: embedder returned no query vectors, degrading to BM25")
 		return nil, "", warnings
 	}
 
