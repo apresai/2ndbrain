@@ -338,10 +338,14 @@ func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]by
 // asymmetric embedding purpose: a stored document uses GENERIC_INDEX, a
 // search query uses GENERIC_RETRIEVAL.
 func novaEmbeddingPurpose(purpose string) string {
-	if purpose == PurposeQuery {
+	switch purpose {
+	case PurposeQuery:
 		return "GENERIC_RETRIEVAL"
+	case PurposeQueryText:
+		return "TEXT_RETRIEVAL"
+	default:
+		return "GENERIC_INDEX"
 	}
-	return "GENERIC_INDEX"
 }
 
 // IsAsymmetricEmbeddingModel reports whether a model embeds queries and

@@ -48,12 +48,12 @@ type PurposeReport struct {
 // AsymmetricPurpose measures title-as-query retrieval over a vault's stored
 // document embeddings (produced with GENERIC_INDEX). Each titled document's
 // title is used as a query, embedded once per purpose (PurposeIndex = the old
-// symmetric behavior, PurposeQuery = Nova's GENERIC_RETRIEVAL), and the corpus
-// is ranked by cosine. It returns one report per purpose so the
-// asymmetric-purpose effect on MRR/Recall and on the cosine distributions can
-// be compared head to head.
+// symmetric behavior, PurposeQuery = Nova's GENERIC_RETRIEVAL, PurposeQueryText
+// = Nova's TEXT_RETRIEVAL for a text-only store), and the corpus is ranked by
+// cosine. It returns one report per purpose so the effect on MRR/Recall and on
+// the cosine distributions can be compared head to head.
 //
-// It issues 2*N real embedding calls (N titles x 2 purposes); callers gate it
+// It issues 3*N real embedding calls (N titles x 3 purposes); callers gate it
 // on credentials. The document corpus is read from the index (no API calls).
 func AsymmetricPurpose(ctx context.Context, db *store.DB, emb ai.EmbeddingProvider, k int) (map[string]PurposeReport, error) {
 	if k <= 0 {
@@ -90,8 +90,8 @@ func AsymmetricPurpose(ctx context.Context, db *store.DB, emb ai.EmbeddingProvid
 		norms[i] = l2(v)
 	}
 
-	out := make(map[string]PurposeReport, 2)
-	for _, purpose := range []string{ai.PurposeIndex, ai.PurposeQuery} {
+	out := make(map[string]PurposeReport, 3)
+	for _, purpose := range []string{ai.PurposeIndex, ai.PurposeQuery, ai.PurposeQueryText} {
 		qv, err := emb.Embed(ctx, titles, ai.WithPurpose(purpose))
 		if err != nil {
 			return nil, fmt.Errorf("embed query side (%s): %w", purpose, err)

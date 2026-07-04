@@ -24,6 +24,12 @@ func IsKnownProvider(name string) bool {
 const (
 	PurposeIndex = "index"
 	PurposeQuery = "query"
+	// PurposeQueryText is the query side for a TEXT-ONLY store: it maps to Nova's
+	// TEXT_RETRIEVAL, documented as optimal for "a repository containing only text
+	// embeddings", whereas PurposeQuery maps to GENERIC_RETRIEVAL (for a
+	// mixed-modality store). 2nb embeds only text, so the text-specific purpose is
+	// the closer match; the eval package measures the difference before any switch.
+	PurposeQueryText = "query_text"
 )
 
 // EmbedConfig is the resolved set of per-request embedding options.
