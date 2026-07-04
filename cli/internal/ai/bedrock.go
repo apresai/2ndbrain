@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -147,6 +148,11 @@ type novaEmbedResponse struct {
 	Embeddings []struct {
 		EmbeddingType string    `json:"embeddingType"`
 		Embedding     []float32 `json:"embedding"`
+		// TruncatedCharLength is set by Nova only when the tokenized input
+		// exceeded the model's context and was truncated (per truncationMode);
+		// it names the character after which the text was dropped. Absent on a
+		// normal response.
+		TruncatedCharLength *int `json:"truncatedCharLength,omitempty"`
 	} `json:"embeddings"`
 }
 
@@ -317,7 +323,13 @@ func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]by
 		if !isBedrockRetryable(err) || attempt == maxBedrockAttempts {
 			break
 		}
-		time.Sleep(bedrockRetryDelay(attempt))
+		// Wait the backoff, but honor cancellation: a client disconnect / timeout
+		// mid-backoff should abort promptly instead of sleeping out the full delay.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(bedrockRetryDelay(attempt)):
+		}
 	}
 	return nil, fmt.Errorf("invoke %s: %w", b.model, err)
 }
@@ -375,6 +387,17 @@ func (b *BedrockEmbedder) embedNova(ctx context.Context, texts []string, cfg Emb
 		}
 		if len(embedResp.Embeddings) == 0 {
 			return nil, fmt.Errorf("no embeddings in response for text %d", i)
+		}
+		// Nova truncates (per truncationMode END) when the tokenized input
+		// exceeds the model's 8192-token context, dropping the tail from the
+		// vector. It signals this via truncatedCharLength. Surface it: with
+		// chunk-size capping in place this should never fire, so a hit is a
+		// regression tripwire that an oversized chunk slipped through.
+		if tc := embedResp.Embeddings[0].TruncatedCharLength; tc != nil && *tc > 0 {
+			// input_chars is a rune count so it is directly comparable to Nova's
+			// truncated_at_char (the character position it cut at), not bytes.
+			slog.Warn("nova truncated an over-long input (tail dropped from the embedding); a chunk exceeded the 8192-token context",
+				"input_chars", utf8.RuneCountInString(text), "truncated_at_char", *tc, "model", b.model)
 		}
 		results[i] = embedResp.Embeddings[0].Embedding
 	}
@@ -544,7 +567,7 @@ func (b *BedrockEmbedder) ListModels(_ context.Context) ([]ModelInfo, error) {
 		Provider:    "bedrock",
 		Type:        "embedding",
 		Dimensions:  b.dims,
-		ContextLen:  2048,
+		ContextLen:  8192,
 		PriceIn:     0.135,
 		PriceOut:    0,
 		PriceSource: "builtin",
@@ -688,7 +711,12 @@ func (b *BedrockGenerator) converseWithRetry(ctx context.Context, input *bedrock
 		if err == nil || !isBedrockRetryable(err) || attempt == maxBedrockAttempts {
 			break
 		}
-		time.Sleep(bedrockRetryDelay(attempt))
+		// Honor cancellation during backoff (see invokeModel).
+		select {
+		case <-ctx.Done():
+			return resp, ctx.Err()
+		case <-time.After(bedrockRetryDelay(attempt)):
+		}
 	}
 	return resp, err
 }

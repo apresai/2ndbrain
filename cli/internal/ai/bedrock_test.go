@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -250,6 +251,56 @@ func TestParseTwelveLabsEmbedding(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Fatalf("got[%d] = %v, want %v", i, got[i], tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+// TestNovaEmbedResponseTruncation guards the decode of the truncatedCharLength
+// field that embedNova uses as its over-long-input tripwire: a JSON-tag or
+// shape regression would silently disable the truncation warning. Pure decode
+// test, no live call — mirrors TestParseTwelveLabsEmbedding.
+func TestNovaEmbedResponseTruncation(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		wantEmbedding []float32
+		wantTruncated *int
+	}{
+		{
+			name:          "normal response omits truncatedCharLength",
+			body:          `{"embeddings":[{"embeddingType":"TEXT","embedding":[0.1,0.2]}]}`,
+			wantEmbedding: []float32{0.1, 0.2},
+			wantTruncated: nil,
+		},
+		{
+			name:          "truncated response carries truncatedCharLength",
+			body:          `{"embeddings":[{"embeddingType":"TEXT","embedding":[0.3,0.4],"truncatedCharLength":12645}]}`,
+			wantEmbedding: []float32{0.3, 0.4},
+			wantTruncated: Ptr(12645),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var resp novaEmbedResponse
+			if err := json.Unmarshal([]byte(tt.body), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if len(resp.Embeddings) != 1 {
+				t.Fatalf("got %d embeddings, want 1", len(resp.Embeddings))
+			}
+			got := resp.Embeddings[0]
+			if len(got.Embedding) != len(tt.wantEmbedding) {
+				t.Fatalf("embedding len = %d, want %d", len(got.Embedding), len(tt.wantEmbedding))
+			}
+			switch {
+			case tt.wantTruncated == nil && got.TruncatedCharLength != nil:
+				t.Errorf("TruncatedCharLength = %d, want nil (no truncation)", *got.TruncatedCharLength)
+			case tt.wantTruncated != nil && got.TruncatedCharLength == nil:
+				t.Errorf("TruncatedCharLength = nil, want %d", *tt.wantTruncated)
+			case tt.wantTruncated != nil && *got.TruncatedCharLength != *tt.wantTruncated:
+				t.Errorf("TruncatedCharLength = %d, want %d", *got.TruncatedCharLength, *tt.wantTruncated)
 			}
 		})
 	}
