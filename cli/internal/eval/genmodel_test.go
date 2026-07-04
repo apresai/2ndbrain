@@ -20,7 +20,11 @@ var candidateGenerators = []struct{ name, id string }{
 }
 
 // genJury is a FIXED panel disjoint from candidateGenerators, so a generator is
-// never its own judge.
+// never its own judge. CAVEAT: opus4.6 is Anthropic, same family as two of the
+// candidates (haiku/sonnet), so a family-preference could inflate the
+// Anthropic-vs-{nova,gemma} gap; it affects haiku and sonnet symmetrically, so
+// the sonnet>haiku ordering is unaffected. Add a third non-Anthropic juror if
+// you need the cross-family gaps to be tighter.
 var genJury = []struct{ name, id string }{
 	{"opus4.6", "global.anthropic.claude-opus-4-6-v1"},
 	{"deepseek", "deepseek.v3.2"},

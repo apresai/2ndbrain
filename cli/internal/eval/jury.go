@@ -23,7 +23,9 @@ type Judgment struct {
 	Score int
 }
 
-var scoreRe = regexp.MustCompile(`[1-5]`)
+// scoreRe matches a 1-5 digit that is NOT part of a larger number, so "10" or a
+// year doesn't get misread as "1". Handles "4", "4/5", "Score: 5", "I'd say 3.".
+var scoreRe = regexp.MustCompile(`(?:^|[^0-9])([1-5])(?:[^0-9]|$)`)
 
 // ScoreAnswer asks each judge to grade the answer 1-5 for correctness and
 // faithfulness to the ground-truth source note, returning the mean of the
@@ -73,12 +75,12 @@ Respond with ONLY the single digit.`, question, sourceTitle, body, answer)
 	return sum / count, judgments
 }
 
-// parseScore extracts the first 1-5 digit from a judge's reply.
+// parseScore extracts a standalone 1-5 score from a judge's reply (0 = none).
 func parseScore(s string) int {
-	m := scoreRe.FindString(strings.TrimSpace(s))
-	if m == "" {
+	m := scoreRe.FindStringSubmatch(strings.TrimSpace(s))
+	if len(m) < 2 {
 		return 0
 	}
-	n, _ := strconv.Atoi(m)
+	n, _ := strconv.Atoi(m[1])
 	return n
 }
