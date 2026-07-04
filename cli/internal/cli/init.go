@@ -60,6 +60,7 @@ var vaultGitignoreEntries = []string{
 	".2ndbrain/logs/",
 	".2ndbrain/recovery/",
 	".2ndbrain/mcp/",
+	".2ndbrain/eval/",
 	".2ndbrain/*.bak",
 }
 
@@ -91,5 +92,34 @@ func writeVaultGitignore(root string) {
 	// Best-effort: if the write fails (e.g., permission issue), don't
 	// fail the init — the vault is still usable, the user just won't
 	// have a gitignore.
+	_ = os.WriteFile(path, []byte(buf.String()), 0o644)
+}
+
+// ensureVaultIgnores makes sure a single path is present in the vault's
+// .gitignore, appending it if missing. writeVaultGitignore only writes its block
+// once (at vault-create time), so a vault created before a new sidecar path was
+// added never picks it up. Commands that write a NEW kind of sidecar file whose
+// contents are sensitive — notably the eval QA cache, which embeds note bodies —
+// call this so the file can't be accidentally committed in an existing vault.
+// Best-effort (a git-shared vault benefits; a non-git dir just gets an inert file).
+func ensureVaultIgnores(root, entry string) {
+	path := filepath.Join(root, ".gitignore")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// No .gitignore yet: write the full 2nb block (which includes entry).
+		writeVaultGitignore(root)
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return // already ignored
+		}
+	}
+	var buf strings.Builder
+	buf.Write(data)
+	if !strings.HasSuffix(string(data), "\n") {
+		buf.WriteString("\n")
+	}
+	buf.WriteString(entry + "\n")
 	_ = os.WriteFile(path, []byte(buf.String()), 0o644)
 }
