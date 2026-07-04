@@ -295,3 +295,37 @@ func TestRetrieve_EmbedErrorDegradesToBM25(t *testing.T) {
 		t.Error("BM25 fallback should still return the matching doc")
 	}
 }
+
+// TestRetrieve_RerankOverFetchAndTrim: with rerank active, Retrieve over-fetches
+// the candidate pool (candidate_docs, >> the caller's limit), reranks it, then
+// trims to the caller's limit. Here Limit=1 must yield exactly the reranked #1.
+func TestRetrieve_RerankOverFetchAndTrim(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	testutil.CreateAndIndex(t, v, "Alpha", "note", "authentication tokens alpha")
+	testutil.CreateAndIndex(t, v, "Beta", "note", "authentication tokens beta")
+	testutil.CreateAndIndex(t, v, "Gamma", "note", "authentication tokens gamma")
+
+	// Baseline pool (RRF order) fetched at the same over-fetch size.
+	base, err := New(v).Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 50})
+	if err != nil {
+		t.Fatalf("base retrieve: %v", err)
+	}
+	if len(base.Results) < 2 {
+		t.Skipf("need >=2 candidates for this test, got %d", len(base.Results))
+	}
+
+	// fakeReranker reverses; Limit=1 must trim the over-fetched, reversed pool to
+	// exactly the base pool's LAST candidate.
+	got, err := New(v).WithReranker(&fakeReranker{}).
+		Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 1})
+	if err != nil {
+		t.Fatalf("reranked retrieve: %v", err)
+	}
+	if len(got.Results) != 1 {
+		t.Fatalf("over-fetch+rerank must trim to Limit=1, got %d results", len(got.Results))
+	}
+	want := base.Results[len(base.Results)-1].DocID
+	if got.Results[0].DocID != want {
+		t.Errorf("trimmed top-1 = %s, want the reranked #1 %s", got.Results[0].DocID, want)
+	}
+}

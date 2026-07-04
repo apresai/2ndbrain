@@ -130,7 +130,7 @@ $ 2nb search "authentication" --json
 }
 ```
 
-Agents should be taught to check `warnings[]` and `mode` before assuming hybrid search ran. Match on the stable prefix `"semantic search disabled:"` — the tail of the message includes provider/dim details that change.
+Agents should be taught to check `warnings[]` and `mode` before assuming hybrid search ran. Match on the stable prefix `"semantic search disabled:"` — the tail of the message includes provider/dim details that change. A second, structurally distinct class also lands in `warnings[]` when the optional rerank stage is enabled and its Bedrock call fails: `"rerank disabled: <error>"` (search still returns, just in the un-reranked hybrid order). Match that stable prefix too if you care whether reranking ran.
 
 ## Test battery design (Phase B)
 

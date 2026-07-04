@@ -240,6 +240,9 @@ func (r *Retriever) rerankResults(ctx context.Context, query string, results []s
 			reordered = append(reordered, res)
 		}
 	}
+	// A successful rerank otherwise leaves no trace (it's a per-query cloud call);
+	// log it at debug so its use is diagnosable without a metrics column.
+	slog.Debug("retrieve: reranked candidates", "candidates", len(results), "reordered", len(reordered))
 	return reordered, nil
 }
 
