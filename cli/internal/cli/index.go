@@ -180,7 +180,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	// never fail the index over it. StampAfterIndex advances the embed generation
 	// only when all stored embeddings are current-gen (a full re-embed, or a fresh/
 	// already-current vault with everything embedded).
-	if serr := vault.StampAfterIndex(v.DB, Version, cfg.EmbeddingModel, indexForceReembed, embedStats.Failed, embeddingCountBefore, priorEmbedGen); serr != nil {
+	if serr := vault.StampAfterIndex(v.DB, Version, indexForceReembed, embedStats.Failed, embeddingCountBefore, priorEmbedGen); serr != nil {
 		slog.Warn("stamp index generation failed", "err", serr)
 	}
 

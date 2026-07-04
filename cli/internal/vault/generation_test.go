@@ -56,3 +56,41 @@ func TestCheckIndexFreshness(t *testing.T) {
 		t.Fatalf("index_generation stamp = %d, want %d (force-reembed advances both)", got, IndexGeneration)
 	}
 }
+
+// TestStampAfterIndex_EmptyNoteDoesNotBlockStamp guards the empty-note footgun:
+// an empty/whitespace note keeps a NULL embedding forever (the embed pass skips
+// it), so StampAfterIndex must judge "all embedded" chunk-aware (via
+// EmbeddingCounts), not by DocumentsNeedingEmbedding — otherwise a fresh vault
+// holding a single blank note would nag a re-embed it can never clear.
+func TestStampAfterIndex_EmptyNoteDoesNotBlockStamp(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// d1: an embeddable, embedded doc. d2: an empty stub — NULL embedding, no
+	// chunks (never inserted), which EmbeddingCounts excludes but the old
+	// DocumentsNeedingEmbedding path would have counted.
+	if err := db.UpsertDocument(&document.Document{ID: "d1", Path: "a.md", Title: "A", Body: "real content"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetEmbedding("d1", []float32{0.1, 0.2, 0.3}, "m", "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertDocument(&document.Document{ID: "d2", Path: "empty.md", Title: "Empty", Body: ""}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fresh-vault path (embeddingCountBefore=0, not a force-reembed): must still
+	// stamp the embed generation despite the empty note.
+	if err := StampAfterIndex(db, "0.13.0", false, 0, 0, 0); err != nil {
+		t.Fatalf("stamp: %v", err)
+	}
+	if got := db.GetMetaInt(store.MetaEmbedGeneration, -1); got != EmbedGeneration {
+		t.Fatalf("embed_generation = %d, want %d — an empty note must not block the stamp", got, EmbedGeneration)
+	}
+	if CheckIndexFreshness(db).Stale() {
+		t.Fatal("vault should read fresh after stamping, despite the empty note")
+	}
+}

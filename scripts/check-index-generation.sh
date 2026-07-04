@@ -33,14 +33,16 @@ if [ -z "$touched_logic" ]; then
   exit 0
 fi
 
-# Logic changed. Did a generation constant get bumped in the diff?
-if git diff "$base"..HEAD -- "$GEN_FILE" | grep -qE '^\+[[:space:]]*(Index|Embed)Generation[[:space:]]*='; then
+# Logic changed. Did a generation constant get bumped in the diff? (Process
+# substitution, not a pipe, so grep -q exiting early can't SIGPIPE git under
+# `set -o pipefail` and read as a spurious "not bumped".)
+if grep -qE '^\+[[:space:]]*(Index|Embed)Generation[[:space:]]*=' < <(git diff "$base"..HEAD -- "$GEN_FILE"); then
   echo "check-index-generation: index/embed logic changed and a generation constant was bumped since $base — OK"
   exit 0
 fi
 
 # Escape hatch: explicit acknowledgment in a commit trailer.
-if git log "$base"..HEAD --format='%B' | grep -qiE '^Reindex-Not-Needed:'; then
+if grep -qiE '^Reindex-Not-Needed:' < <(git log "$base"..HEAD --format='%B'); then
   echo "check-index-generation: logic changed but a 'Reindex-Not-Needed:' trailer acknowledges no reindex is required — OK"
   exit 0
 fi

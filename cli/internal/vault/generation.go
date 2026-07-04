@@ -118,10 +118,15 @@ func PriorEmbedGeneration(db *store.DB) int {
 // the INDEX generation advances (which keeps prompting a --force-reembed until
 // the embeddings are actually regenerated). Best-effort; the caller logs errors.
 //
+// "all embedded" uses EmbeddingCounts().embeddableUnembedded (chunk-aware) NOT
+// DocumentsNeedingEmbedding: empty/whitespace notes carry a NULL embedding
+// forever (the embed pass skips them), so counting them would leave the stamp
+// unwritten and nag a re-embed on any vault holding a blank note.
+//
 // embeddingCountBefore and priorEmbedGen must be captured BEFORE the embed pass.
-func StampAfterIndex(db *store.DB, cliVersion, model string, forceReembed bool, embedFailures, embeddingCountBefore, priorEmbedGen int) error {
-	left, err := db.DocumentsNeedingEmbedding(model)
-	allEmbedded := err == nil && len(left) == 0
+func StampAfterIndex(db *store.DB, cliVersion string, forceReembed bool, embedFailures, embeddingCountBefore, priorEmbedGen int) error {
+	_, _, embeddableUnembedded, err := db.EmbeddingCounts()
+	allEmbedded := err == nil && embeddableUnembedded == 0
 	embedCurrent := forceReembed || priorEmbedGen >= EmbedGeneration || embeddingCountBefore == 0
 	if embedFailures == 0 && allEmbedded && embedCurrent {
 		return StampEmbedGeneration(db, cliVersion)
