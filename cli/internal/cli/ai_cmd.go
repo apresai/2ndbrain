@@ -49,8 +49,13 @@ type AIStatus struct {
 	Dimensions     int    `json:"dimensions"`
 	EmbedAvailable bool   `json:"embed_available"`
 	GenAvailable   bool   `json:"gen_available"`
-	EmbeddingCount int    `json:"embedding_count"`
-	DocumentCount  int    `json:"document_count"`
+	// Rerank stage (optional cross-encoder that reorders hybrid candidates;
+	// default off). RerankAvailable reflects a provider reachability probe.
+	RerankEnabled   bool   `json:"rerank_enabled"`
+	RerankModel     string `json:"rerank_model,omitempty"`
+	RerankAvailable bool   `json:"rerank_available"`
+	EmbeddingCount  int    `json:"embedding_count"`
+	DocumentCount   int    `json:"document_count"`
 
 	SimilarityThreshold       float64                    `json:"similarity_threshold"`
 	SimilarityThresholdSource ai.ResolvedThresholdSource `json:"similarity_threshold_source"`
@@ -112,6 +117,13 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	if gen, err := ai.DefaultRegistry.Generator(cfg.Provider); err == nil {
 		status.GenAvailable = gen.Available(ctx)
 	}
+	status.RerankEnabled = cfg.RerankEnabled()
+	if status.RerankEnabled {
+		status.RerankModel = cfg.ResolveRerankModel()
+		if rr, err := ai.DefaultRegistry.Reranker(cfg.Provider); err == nil {
+			status.RerankAvailable = rr.Available(ctx)
+		}
+	}
 
 	// Count embeddings and documents
 	status.EmbeddingCount, _ = v.DB.EmbeddingCount()
@@ -165,6 +177,11 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Dimensions:       %d\n", status.Dimensions)
 	fmt.Printf("Embed ready:      %v\n", status.EmbedAvailable)
 	fmt.Printf("Generation ready: %v\n", status.GenAvailable)
+	if status.RerankEnabled {
+		fmt.Printf("Rerank:           on — %s (ready: %v)\n", status.RerankModel, status.RerankAvailable)
+	} else {
+		fmt.Printf("Rerank:           off\n")
+	}
 	fmt.Printf("Documents:        %d\n", status.DocumentCount)
 	// Denominator is embeddable docs (content-bearing); empty notes are hidden
 	// so coverage reads cleanly against what can actually be embedded.

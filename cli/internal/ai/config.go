@@ -35,6 +35,41 @@ type AIConfig struct {
 	Ollama           OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
 	Bedrock          BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
 	OpenRouter       OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
+	// Rerank configures the optional cross-encoder rerank stage (default OFF);
+	// resolved via RerankEnabled / ResolveRerankModel / ResolveRerankCandidateDocs.
+	Rerank RerankConfig `yaml:"rerank,omitempty" json:"rerank,omitempty"`
+}
+
+// RerankConfig configures the optional Bedrock Cohere rerank stage that reorders
+// hybrid-search candidates by cross-encoder relevance. Default OFF: reranking
+// adds a per-query cloud call and its answer-quality lift is scale-dependent, so
+// it is opt-in. See internal/ai/rerank_bedrock.go and internal/retrieve.
+type RerankConfig struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Model is the rerank model id; empty resolves to DefaultRerankModel.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// CandidateDocs is the over-fetch pool size; <=0 resolves to
+	// DefaultRerankCandidateDocs.
+	CandidateDocs int `yaml:"candidate_docs,omitempty" json:"candidate_docs,omitempty"`
+}
+
+// RerankEnabled reports whether the rerank stage is on.
+func (c AIConfig) RerankEnabled() bool { return c.Rerank.Enabled }
+
+// ResolveRerankModel returns the configured rerank model or the default.
+func (c AIConfig) ResolveRerankModel() string {
+	if c.Rerank.Model != "" {
+		return c.Rerank.Model
+	}
+	return DefaultRerankModel
+}
+
+// ResolveRerankCandidateDocs returns the over-fetch pool size or the default.
+func (c AIConfig) ResolveRerankCandidateDocs() int {
+	if c.Rerank.CandidateDocs > 0 {
+		return c.Rerank.CandidateDocs
+	}
+	return DefaultRerankCandidateDocs
 }
 
 // ResolveHybridWeights returns the BM25 and vector weights for RRF fusion, each
@@ -76,6 +111,17 @@ const (
 	DefaultRAGNoteBudgetRunes    = 20000 // ~5k tokens per note
 	DefaultRAGCandidateDocs      = 12    // over-fetch; the budget + DefaultRAGMaxNotes decide how many fit
 	DefaultRAGMaxNotes           = 10    // hard cap on notes in the context, below the candidate over-fetch
+)
+
+const (
+	// DefaultRerankModel is the Bedrock Cohere Rerank model (us-east-1 in-region
+	// only, colocated with Nova-2 embeddings).
+	DefaultRerankModel = "cohere.rerank-v3-5:0"
+	// DefaultRerankCandidateDocs is the over-fetch pool the reranker reorders:
+	// retrieval returns this many candidates, the cross-encoder scores them, and
+	// the caller's limit decides how many survive. Bedrock Rerank bills per 100
+	// docs, so 50 is one billing unit.
+	DefaultRerankCandidateDocs = 50
 )
 
 // ResolveRAGContextBudget returns the total RAG context budget in runes,

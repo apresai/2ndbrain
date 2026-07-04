@@ -25,6 +25,106 @@ func (e *errEmbedder) ListModels(ctx context.Context) ([]ai.ModelInfo, error) { 
 
 var _ ai.EmbeddingProvider = (*errEmbedder)(nil)
 
+// fakeReranker reorders by a supplied index order (default: reverse input), to
+// prove the rerank stage reorders candidates. Interface fake, not a mock.
+type fakeReranker struct {
+	order []int
+	err   error
+}
+
+func (f *fakeReranker) Name() string                       { return "fake" }
+func (f *fakeReranker) Available(ctx context.Context) bool { return true }
+func (f *fakeReranker) Rerank(ctx context.Context, query string, docs []string, topN int) ([]ai.RerankHit, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	order := f.order
+	if order == nil {
+		order = make([]int, len(docs))
+		for i := range order {
+			order[i] = len(docs) - 1 - i // reverse
+		}
+	}
+	hits := make([]ai.RerankHit, 0, len(order))
+	score := float64(len(order))
+	for _, idx := range order {
+		if idx < 0 || idx >= len(docs) {
+			continue
+		}
+		hits = append(hits, ai.RerankHit{Index: idx, Score: score})
+		score--
+	}
+	return hits, nil
+}
+
+var _ ai.RerankProvider = (*fakeReranker)(nil)
+
+// TestRetrieve_RerankReordersResults: an active reranker reorders the candidate
+// set (here, reverses it) relative to the un-reranked hybrid order.
+func TestRetrieve_RerankReordersResults(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	testutil.CreateAndIndex(t, v, "Alpha", "note", "authentication tokens alpha")
+	testutil.CreateAndIndex(t, v, "Beta", "note", "authentication tokens beta")
+
+	base, err := New(v).Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 10})
+	if err != nil {
+		t.Fatalf("base retrieve: %v", err)
+	}
+	if len(base.Results) < 2 {
+		t.Fatalf("need >=2 candidates to test reordering, got %d", len(base.Results))
+	}
+
+	got, err := New(v).WithReranker(&fakeReranker{}).Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 10})
+	if err != nil {
+		t.Fatalf("reranked retrieve: %v", err)
+	}
+	if len(got.Results) != len(base.Results) {
+		t.Fatalf("result count changed: base=%d rerank=%d", len(base.Results), len(got.Results))
+	}
+	for i := range got.Results {
+		want := base.Results[len(base.Results)-1-i].DocID
+		if got.Results[i].DocID != want {
+			t.Errorf("position %d: rerank should reverse order (got %s, want %s)", i, got.Results[i].DocID, want)
+		}
+	}
+}
+
+// TestRetrieve_RerankErrorKeepsHybridOrder: a rerank failure preserves the
+// original hybrid order and surfaces a warning, so reranking can't make search
+// worse than not reranking.
+func TestRetrieve_RerankErrorKeepsHybridOrder(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	testutil.CreateAndIndex(t, v, "Alpha", "note", "authentication tokens alpha")
+	testutil.CreateAndIndex(t, v, "Beta", "note", "authentication tokens beta")
+
+	base, err := New(v).Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 10})
+	if err != nil {
+		t.Fatalf("base retrieve: %v", err)
+	}
+	got, err := New(v).WithReranker(&fakeReranker{err: errors.New("rerank boom")}).
+		Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 10})
+	if err != nil {
+		t.Fatalf("reranked retrieve: %v", err)
+	}
+	if len(got.Results) != len(base.Results) {
+		t.Fatalf("result count changed on rerank error")
+	}
+	for i := range got.Results {
+		if got.Results[i].DocID != base.Results[i].DocID {
+			t.Errorf("position %d: rerank error must preserve hybrid order", i)
+		}
+	}
+	found := false
+	for _, w := range got.Warnings {
+		if strings.Contains(w, "rerank disabled") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a rerank-disabled warning, got %v", got.Warnings)
+	}
+}
+
 // TestRetrieve_BM25Fallback: with no registered embedder and no embeddings,
 // VectorCompat fails and Retrieve degrades to BM25, still returning matches.
 func TestRetrieve_BM25Fallback(t *testing.T) {
@@ -193,5 +293,39 @@ func TestRetrieve_EmbedErrorDegradesToBM25(t *testing.T) {
 	}
 	if len(res.Results) == 0 {
 		t.Error("BM25 fallback should still return the matching doc")
+	}
+}
+
+// TestRetrieve_RerankOverFetchAndTrim: with rerank active, Retrieve over-fetches
+// the candidate pool (candidate_docs, >> the caller's limit), reranks it, then
+// trims to the caller's limit. Here Limit=1 must yield exactly the reranked #1.
+func TestRetrieve_RerankOverFetchAndTrim(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	testutil.CreateAndIndex(t, v, "Alpha", "note", "authentication tokens alpha")
+	testutil.CreateAndIndex(t, v, "Beta", "note", "authentication tokens beta")
+	testutil.CreateAndIndex(t, v, "Gamma", "note", "authentication tokens gamma")
+
+	// Baseline pool (RRF order) fetched at the same over-fetch size.
+	base, err := New(v).Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 50})
+	if err != nil {
+		t.Fatalf("base retrieve: %v", err)
+	}
+	if len(base.Results) < 2 {
+		t.Skipf("need >=2 candidates for this test, got %d", len(base.Results))
+	}
+
+	// fakeReranker reverses; Limit=1 must trim the over-fetched, reversed pool to
+	// exactly the base pool's LAST candidate.
+	got, err := New(v).WithReranker(&fakeReranker{}).
+		Retrieve(context.Background(), Options{Query: "authentication tokens", Limit: 1})
+	if err != nil {
+		t.Fatalf("reranked retrieve: %v", err)
+	}
+	if len(got.Results) != 1 {
+		t.Fatalf("over-fetch+rerank must trim to Limit=1, got %d results", len(got.Results))
+	}
+	want := base.Results[len(base.Results)-1].DocID
+	if got.Results[0].DocID != want {
+		t.Errorf("trimmed top-1 = %s, want the reranked #1 %s", got.Results[0].DocID, want)
 	}
 }

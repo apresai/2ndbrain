@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -58,6 +59,7 @@ type Retriever struct {
 	v            *vault.Vault
 	engine       *search.Engine
 	embedder     ai.EmbeddingProvider
+	reranker     ai.RerankProvider // nil unless ai.rerank.enabled and registered
 	loadCorpus   CorpusLoader
 	embedTimeout time.Duration
 
@@ -74,12 +76,25 @@ type Retriever struct {
 // WithEmbedTimeout.
 func New(v *vault.Vault) *Retriever {
 	embedder, _ := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
-	return &Retriever{
+	r := &Retriever{
 		v:          v,
 		engine:     search.NewEngine(v.DB.Conn()),
 		embedder:   embedder,
 		loadCorpus: v.DB.AllEmbeddings,
 	}
+	// The rerank stage is optional (default off): resolve it only when enabled,
+	// so a disabled config leaves the RRF order untouched and adds no cloud call.
+	if v.Config.AI.RerankEnabled() {
+		r.reranker, _ = ai.DefaultRegistry.Reranker(v.Config.AI.Provider)
+	}
+	return r
+}
+
+// WithReranker injects a rerank provider. The CLI/MCP resolve it from the
+// registry via New when ai.rerank.enabled; this is for tests and explicit use.
+func (r *Retriever) WithReranker(rr ai.RerankProvider) *Retriever {
+	r.reranker = rr
+	return r
 }
 
 // WithCorpusLoader overrides where the embedding corpus comes from (the MCP
@@ -141,12 +156,23 @@ func (r *Retriever) Retrieve(ctx context.Context, opts Options) (Result, error) 
 	if threshold == 0 {
 		threshold, _ = cfg.ResolveSimilarityThresholdFull(r.v.Root)
 	}
+
+	// When the rerank stage is active, over-fetch a larger candidate pool for the
+	// cross-encoder to reorder, then trim to the caller's limit after reranking.
+	rerankActive := r.reranker != nil && opts.Query != ""
+	fetchLimit := opts.Limit
+	if rerankActive {
+		if cand := cfg.ResolveRerankCandidateDocs(); cand > fetchLimit {
+			fetchLimit = cand
+		}
+	}
+
 	sopts := search.Options{
 		Query:          opts.Query,
 		Type:           opts.Type,
 		Status:         opts.Status,
 		Tag:            opts.Tag,
-		Limit:          opts.Limit,
+		Limit:          fetchLimit,
 		BM25Only:       opts.BM25Only,
 		MinVectorScore: threshold,
 	}
@@ -173,7 +199,80 @@ func (r *Retriever) Retrieve(ctx context.Context, opts Options) (Result, error) 
 		}
 		results, mode = res, search.ModeKeyword
 	}
+
+	// Optional cross-encoder rerank: reorder the candidate pool by relevance,
+	// then the caller's limit trims. Any rerank failure keeps the RRF order.
+	if rerankActive && len(results) > 1 {
+		var w []string
+		results, w = r.rerankResults(ctx, opts.Query, results)
+		warnings = append(warnings, w...)
+	}
+	if opts.Limit > 0 && len(results) > opts.Limit {
+		results = results[:opts.Limit]
+	}
 	return Result{Results: results, Mode: mode, Warnings: warnings}, nil
+}
+
+// rerankResults reorders results by cross-encoder relevance. On any failure it
+// returns the input unchanged (keeping the hybrid RRF order) plus a warning, so
+// reranking can never make search worse than not reranking.
+func (r *Retriever) rerankResults(ctx context.Context, query string, results []search.Result) ([]search.Result, []string) {
+	hits, err := r.reranker.Rerank(ctx, query, r.candidateTexts(results), len(results))
+	if err != nil {
+		slog.Warn("retrieve: rerank failed, keeping hybrid order", "err", err)
+		return results, []string{fmt.Sprintf("rerank disabled: %v", err)}
+	}
+	if len(hits) == 0 {
+		return results, nil // defensive: never drop a non-empty candidate set
+	}
+	reordered := make([]search.Result, 0, len(results))
+	seen := make([]bool, len(results))
+	for _, h := range hits {
+		if h.Index < 0 || h.Index >= len(results) || seen[h.Index] {
+			continue
+		}
+		seen[h.Index] = true
+		reordered = append(reordered, results[h.Index])
+	}
+	// Append any candidate the reranker omitted so nothing is silently dropped.
+	for i, res := range results {
+		if !seen[i] {
+			reordered = append(reordered, res)
+		}
+	}
+	// A successful rerank otherwise leaves no trace (it's a per-query cloud call);
+	// log it at debug so its use is diagnosable without a metrics column.
+	slog.Debug("retrieve: reranked candidates", "candidates", len(results), "reordered", len(reordered))
+	return reordered, nil
+}
+
+// candidateTexts returns the text the reranker scores per result: the winning
+// chunk's full body (fetched by ChunkID), title-prefixed for context. Vector-
+// only results carry no Content and BM25 results carry only a truncated FTS
+// snippet, so the full chunk body from the store is the right cross-encoder input.
+func (r *Retriever) candidateTexts(results []search.Result) []string {
+	ids := make([]string, 0, len(results))
+	for _, res := range results {
+		if res.ChunkID != "" {
+			ids = append(ids, res.ChunkID)
+		}
+	}
+	byChunk, err := r.v.DB.ChunkContentByID(ids)
+	if err != nil {
+		slog.Warn("retrieve: rerank chunk-text backfill failed", "err", err)
+	}
+	texts := make([]string, len(results))
+	for i, res := range results {
+		text := byChunk[res.ChunkID]
+		if strings.TrimSpace(text) == "" {
+			text = res.Content // fall back to the FTS snippet when no chunk body
+		}
+		if res.Title != "" {
+			text = res.Title + "\n\n" + text
+		}
+		texts[i] = text
+	}
+	return texts
 }
 
 // hybrid embeds the query and runs HybridSearch. On any failure it appends a

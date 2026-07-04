@@ -246,6 +246,9 @@ var settableConfigKeys = []string{
 	"ai.rag_context_budget",
 	"ai.rag_note_budget",
 	"ai.embed_concurrency",
+	"ai.rerank.enabled",
+	"ai.rerank.model",
+	"ai.rerank.candidate_docs",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
 	"ai.bedrock.disabled",
@@ -281,6 +284,12 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return strconv.Itoa(cfg.RAGNoteBudgetRunes), nil
 	case "ai.embed_concurrency":
 		return strconv.Itoa(cfg.EmbedConcurrency), nil
+	case "ai.rerank.enabled":
+		return strconv.FormatBool(cfg.Rerank.Enabled), nil
+	case "ai.rerank.model":
+		return cfg.Rerank.Model, nil
+	case "ai.rerank.candidate_docs":
+		return strconv.Itoa(cfg.Rerank.CandidateDocs), nil
 	case "ai.bedrock.profile":
 		return cfg.Bedrock.Profile, nil
 	case "ai.bedrock.region":
@@ -388,6 +397,20 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("embed_concurrency must be an integer between 1 and 64 (got %q); 0/unset resolves to the per-provider default", value)
 		}
 		cfg.EmbedConcurrency = n
+	case "ai.rerank.enabled":
+		b, err := parseConfigBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Rerank.Enabled = b
+	case "ai.rerank.model":
+		cfg.Rerank.Model = value
+	case "ai.rerank.candidate_docs":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 100 {
+			return fmt.Errorf("rerank.candidate_docs must be an integer between 0 and 100 (got %q); 0/unset resolves to the default %d, and Bedrock Rerank caps one query at 100 docs", value, ai.DefaultRerankCandidateDocs)
+		}
+		cfg.Rerank.CandidateDocs = n
 	case "ai.bedrock.profile":
 		cfg.Bedrock.Profile = value
 	case "ai.bedrock.region":

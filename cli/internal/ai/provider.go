@@ -76,6 +76,25 @@ type GenerationProvider interface {
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
 
+// RerankHit is one reranked candidate: the index into the input document slice
+// and the model's relevance score (Bedrock Cohere Rerank normalizes to 0..1),
+// best-first.
+type RerankHit struct {
+	Index int
+	Score float64
+}
+
+// RerankProvider reorders a candidate document set by relevance to a query with
+// a cross-encoder (query and doc scored jointly, so it catches negation and
+// paraphrase a bi-encoder's separate-vector cosine can't). Unlike
+// EmbeddingProvider it consumes raw TEXT, not vectors, so it is fully decoupled
+// from the embedder. topN bounds how many hits come back (0 = all).
+type RerankProvider interface {
+	Name() string
+	Rerank(ctx context.Context, query string, docs []string, topN int) ([]RerankHit, error)
+	Available(ctx context.Context) bool
+}
+
 // GenUsage is the token usage of one generation, as reported by the provider.
 type GenUsage struct {
 	InputTokens  int `json:"input_tokens"`
