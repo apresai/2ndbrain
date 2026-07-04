@@ -44,6 +44,13 @@ jobs:
       - name: Verify skill mirrors match the embedded source
         run: make check-skills-sync
 
+      # If this release changed indexing/embedding LOGIC without bumping a vault
+      # generation constant, existing users would keep a silently-stale index.
+      # Fail so the author consciously bumps the constant (which prompts a
+      # reindex/re-embed) or acknowledges no reindex is needed.
+      - name: Verify index-generation flag is bumped when index/embed logic changed
+        run: make check-index-generation
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

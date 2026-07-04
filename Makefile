@@ -29,6 +29,12 @@ sync-skills:
 check-skills-sync:
 	@scripts/sync-skill.sh --check
 
+# Fail if index/embed LOGIC changed since the last release tag without bumping a
+# vault generation constant (which is what prompts users to reindex/re-embed).
+# See cli/internal/vault/generation.go and scripts/check-index-generation.sh.
+check-index-generation:
+	@scripts/check-index-generation.sh
+
 # One-shot version set across every product: make set-version V=0.8.0
 set-version:
 	@test -n "$(V)" || { echo "usage: make set-version V=x.y.z"; exit 1; }

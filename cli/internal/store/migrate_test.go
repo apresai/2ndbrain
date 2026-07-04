@@ -33,17 +33,18 @@ func TestMigrate_V2toV3(t *testing.T) {
 	}
 	raw.Close()
 
-	// Open through the real path: migrate() should bump v2 -> v3.
+	// Open through the real path: migrate() should bump v2 -> v4.
 	db, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	assertVersion(t, db, 3)
+	assertVersion(t, db, 4)
 	assertTableExists(t, db, "aliases")
 	assertColumnExists(t, db, "chunks", "block_id")
 	assertColumnExists(t, db, "links", "block_id")
+	assertTableExists(t, db, "meta") // v4
 
 	// Pre-existing data must survive the migration unchanged.
 	var path string
@@ -54,14 +55,14 @@ func TestMigrate_V2toV3(t *testing.T) {
 		t.Errorf("document not preserved: path = %q", path)
 	}
 
-	// Re-opening an already-v3 DB is a no-op.
+	// Re-opening an already-v4 DB is a no-op.
 	db.Close()
 	db2, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("re-open: %v", err)
 	}
 	defer db2.Close()
-	assertVersion(t, db2, 3)
+	assertVersion(t, db2, 4)
 }
 
 func assertVersion(t *testing.T, db *DB, want int) {

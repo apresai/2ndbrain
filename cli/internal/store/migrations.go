@@ -112,3 +112,16 @@ var schemaV3Statements = []string{
 	`ALTER TABLE links ADD COLUMN block_id TEXT`,
 	`CREATE INDEX IF NOT EXISTS idx_links_block_id ON links(block_id)`,
 }
+
+// schemaV4Statements add a generic key/value meta table. It records the
+// indexing/embedding LOGIC generation an index was built with (see GetMeta /
+// SetMeta and vault.CheckIndexFreshness), so a release that changes chunking or
+// embedding logic at the same model+dimension can prompt users to reindex —
+// something schema_version (shape only) and the per-row content/model hashes
+// can't detect.
+var schemaV4Statements = []string{
+	`CREATE TABLE IF NOT EXISTS meta (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL DEFAULT ''
+	)`,
+}

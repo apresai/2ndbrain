@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/vault"
 )
 
 // TestDerivePortability covers every branch of the vault portability state
@@ -32,6 +33,7 @@ func TestDerivePortability(t *testing.T) {
 		// explicitly so empty notes (totalDocs-embeddedDocs-embeddableUnembedded)
 		// are not mistaken for work the user can fix with `2nb index`.
 		embeddableUnembedded int
+		freshness            vault.IndexFreshness
 		wantStatus           string
 		wantAction           string
 	}{
@@ -185,6 +187,34 @@ func TestDerivePortability(t *testing.T) {
 			wantAction:   "",
 		},
 		{
+			// A newer 2nb changed chunking/embedding logic (ReembedRecommended):
+			// a healthy, fully-embedded vault must surface the re-embed prompt.
+			name:         "upgrade_reembed_recommended",
+			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
+			embedder:     embedder768,
+			vaultDim:     768,
+			vaultModels:  []string{"nomic-embed-text"},
+			totalDocs:    2,
+			embeddedDocs: 2,
+			freshness:    vault.IndexFreshness{ReembedRecommended: true},
+			wantStatus:   "upgrade_reembed_recommended",
+			wantAction:   "--force-reembed",
+		},
+		{
+			// Index-only logic changed (ReindexRecommended): milder plain-reindex
+			// prompt, surfaced when embeddings are otherwise current.
+			name:         "upgrade_reindex_recommended",
+			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
+			embedder:     embedder768,
+			vaultDim:     768,
+			vaultModels:  []string{"nomic-embed-text"},
+			totalDocs:    2,
+			embeddedDocs: 2,
+			freshness:    vault.IndexFreshness{ReindexRecommended: true},
+			wantStatus:   "upgrade_reindex_recommended",
+			wantAction:   "2nb index",
+		},
+		{
 			// Second no_provider branch (ai_cmd.go:197-199) — distinct from the
 			// pre-embedding variant at line 192-194. This one triggers after
 			// someone has indexed, then stripped the provider config.
@@ -215,7 +245,7 @@ func TestDerivePortability(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotStatus, gotAction := derivePortability(context.Background(), tt.cfg, tt.embedder, tt.vaultDim, tt.vaultModels, tt.totalDocs, tt.embeddedDocs, tt.embeddableUnembedded)
+			gotStatus, gotAction := derivePortability(context.Background(), tt.cfg, tt.embedder, tt.vaultDim, tt.vaultModels, tt.totalDocs, tt.embeddedDocs, tt.embeddableUnembedded, tt.freshness)
 			if gotStatus != tt.wantStatus {
 				t.Errorf("status = %q, want %q", gotStatus, tt.wantStatus)
 			}
