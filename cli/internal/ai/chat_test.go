@@ -76,9 +76,11 @@ func TestSerializeHistory(t *testing.T) {
 }
 
 // TestBuildRAGPrompt_GoldenNoHistory pins the no-history prompt to the exact
-// bytes the pre-multi-turn RAG produced. If this fails, every existing
-// ask/kb_ask caller's generation behavior changed; do not update the
-// expectation without understanding that.
+// bytes ask/kb_ask send. If this fails, every existing ask/kb_ask caller's
+// generation behavior changed; do not update the expectation without
+// understanding that. The "concisely" adverb was removed deliberately in the
+// prompt-tuning A/B (see buildRAGPrompt's comment / internal/eval); this golden
+// value reflects that intended change.
 func TestBuildRAGPrompt_GoldenNoHistory(t *testing.T) {
 	parts := []string{
 		"--- Doc A (a.md) ---\nalpha content",
@@ -93,7 +95,7 @@ alpha content
 --- Doc B (b.md) ---
 beta content
 
-Answer concisely based only on the provided documents. If the documents don't contain the answer, say so.`
+Answer based only on the provided documents. If the documents don't contain the answer, say so.`
 	if got != want {
 		t.Errorf("no-history prompt drifted from the golden bytes:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
@@ -112,11 +114,17 @@ func TestBuildRAGPrompt_WithHistory(t *testing.T) {
 		"User: tell me about auth",
 		"Assistant: Auth uses JWT.",
 		"answer this question: who owns it?",
+		"Answer based only on the provided documents", // the tuned wording (no "concisely")
 		"even if an earlier answer in the conversation suggested otherwise",
 	} {
 		if !strings.Contains(got, must) {
 			t.Errorf("history prompt missing %q in:\n%s", must, got)
 		}
+	}
+	// The prompt-tuning A/B removed "concisely" from both branches; keep the
+	// history branch in sync (it wasn't byte-pinned, only substring-checked).
+	if strings.Contains(got, "concisely") {
+		t.Errorf("history prompt still contains the removed \"concisely\" adverb:\n%s", got)
 	}
 	// History must sit between the question line and the document chunks.
 	if strings.Index(got, "Conversation so far") > strings.Index(got, "--- Doc A") {
