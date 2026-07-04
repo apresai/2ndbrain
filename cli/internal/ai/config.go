@@ -38,6 +38,7 @@ type AIConfig struct {
 	// Rerank configures the optional cross-encoder rerank stage (default OFF);
 	// resolved via RerankEnabled / ResolveRerankModel / ResolveRerankCandidateDocs.
 	Rerank RerankConfig `yaml:"rerank,omitempty" json:"rerank,omitempty"`
+	Llama  LlamaConfig  `yaml:"llama,omitempty" json:"llama,omitempty"`
 }
 
 // RerankConfig configures the optional Bedrock Cohere rerank stage that reorders
@@ -167,6 +168,23 @@ type OpenRouterConfig struct {
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
+// LlamaConfig configures the bundled-engine provider ("llama-local"), which
+// drives a local llama.cpp llama-server managed by the internal/llama supervisor.
+type LlamaConfig struct {
+	// EnginePath overrides the resolved llama-server binary (normally found as a
+	// bundled sibling, in the cache, or on PATH).
+	EnginePath string `yaml:"engine_path,omitempty" json:"engine_path,omitempty"`
+	// GenEndpoint / EmbedEndpoint / RerankEndpoint pin a role's base URL instead
+	// of resolving it from the running engine's sidecar. Normally empty; set for
+	// a manually-started server or in tests.
+	GenEndpoint    string `yaml:"gen_endpoint,omitempty" json:"gen_endpoint,omitempty"`
+	EmbedEndpoint  string `yaml:"embed_endpoint,omitempty" json:"embed_endpoint,omitempty"`
+	RerankEndpoint string `yaml:"rerank_endpoint,omitempty" json:"rerank_endpoint,omitempty"`
+	// Disabled silences the provider in the catalog and GUI selection.
+	// Absent == enabled. Ships disabled (opt-in), like Ollama/OpenRouter.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+}
+
 // ProviderDisabled returns whether the named provider has been explicitly
 // disabled in cfg. Unknown provider names return false (enabled by default).
 func (cfg AIConfig) ProviderDisabled(name string) bool {
@@ -177,6 +195,8 @@ func (cfg AIConfig) ProviderDisabled(name string) bool {
 		return cfg.OpenRouter.Disabled
 	case "ollama":
 		return cfg.Ollama.Disabled
+	case "llama-local":
+		return cfg.Llama.Disabled
 	}
 	return false
 }
@@ -191,6 +211,8 @@ func (cfg *AIConfig) SetProviderDisabled(name string, disabled bool) {
 		cfg.OpenRouter.Disabled = disabled
 	case "ollama":
 		cfg.Ollama.Disabled = disabled
+	case "llama-local":
+		cfg.Llama.Disabled = disabled
 	}
 }
 
@@ -228,6 +250,9 @@ func DefaultAIConfig() AIConfig {
 		OpenRouter: OpenRouterConfig{
 			APIKeyEnv: "OPENROUTER_API_KEY",
 			Disabled:  true,
+		},
+		Llama: LlamaConfig{
+			Disabled: true,
 		},
 	}
 }

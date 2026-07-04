@@ -59,6 +59,16 @@ const (
 
 	// StrategyOllamaEmbeddings — localhost Ollama /api/embeddings.
 	StrategyOllamaEmbeddings = "ollama_embeddings"
+
+	// StrategyLlamaChat — localhost llama.cpp llama-server /v1/chat/completions.
+	StrategyLlamaChat = "llama_chat"
+
+	// StrategyLlamaEmbeddings — localhost llama-server /v1/embeddings.
+	StrategyLlamaEmbeddings = "llama_embeddings"
+
+	// StrategyLlamaRerank — localhost llama-server /v1/rerank (cross-encoder,
+	// --reranking --pooling rank).
+	StrategyLlamaRerank = "llama_rerank"
 )
 
 // KnownInvokeStrategies returns the full list of recognized strategies.
@@ -80,6 +90,9 @@ func KnownInvokeStrategies() []string {
 		StrategyOpenRouterEmbeddings,
 		StrategyOllamaGenerate,
 		StrategyOllamaEmbeddings,
+		StrategyLlamaChat,
+		StrategyLlamaEmbeddings,
+		StrategyLlamaRerank,
 	}
 }
 

@@ -5,7 +5,7 @@ import "context"
 // KnownProviders is the canonical list of AI providers 2nb supports.
 // Used by shell completion, wizard defaults, and test assertions — when
 // adding a new provider, append it here so every site stays in sync.
-var KnownProviders = []string{"bedrock", "openrouter", "ollama"}
+var KnownProviders = []string{"bedrock", "openrouter", "ollama", "llama-local"}
 
 // IsKnownProvider reports whether name is one of the providers 2nb supports.
 func IsKnownProvider(name string) bool {
