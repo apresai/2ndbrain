@@ -17,20 +17,44 @@ type Judge struct {
 	Gen  ai.GenerationProvider
 }
 
-// Judgment is one juror's grade of one answer (1..5; 0 = unparseable/failed).
+// Judgment is one juror's multi-axis grade of one answer (each 1..5; a value of
+// 0 means that judge's reply was unparseable and is excluded from the means).
 type Judgment struct {
-	Judge string
-	Score int
+	Judge        string
+	Correctness  int
+	Completeness int
+	Grounding    int
 }
 
-// scoreRe matches a 1-5 digit that is NOT part of a larger number, so "10" or a
-// year doesn't get misread as "1". Handles "4", "4/5", "Score: 5", "I'd say 3.".
-var scoreRe = regexp.MustCompile(`(?:^|[^0-9])([1-5])(?:[^0-9]|$)`)
+// ok reports whether all three axes parsed into the 1..5 range.
+func (j Judgment) ok() bool {
+	return j.Correctness >= 1 && j.Completeness >= 1 && j.Grounding >= 1
+}
 
-// ScoreAnswer asks each judge to grade the answer 1-5 for correctness and
-// faithfulness to the ground-truth source note, returning the mean of the
-// parseable scores and the per-judge breakdown.
-func ScoreAnswer(ctx context.Context, judges []Judge, question, answer, sourceTitle, sourceBody string) (float64, []Judgment) {
+// AnswerScore is the jury's aggregate grade of one answer: per-axis means across
+// the judges that returned a parseable verdict, plus a composite (mean of the
+// three axes). Separating the axes is the point — a "be thorough" prompt should
+// lift Completeness, but the risk is a Grounding (hallucination) regression, and
+// a blended single score would hide exactly that tradeoff.
+type AnswerScore struct {
+	Composite    float64
+	Correctness  float64
+	Completeness float64
+	Grounding    float64
+	NJudges      int
+	Judgments    []Judgment
+}
+
+var axisRes = map[string]*regexp.Regexp{
+	"correctness":  regexp.MustCompile(`(?i)correctness\s*[:=]\s*([1-5])`),
+	"completeness": regexp.MustCompile(`(?i)completeness\s*[:=]\s*([1-5])`),
+	"grounding":    regexp.MustCompile(`(?i)grounding\s*[:=]\s*([1-5])`),
+}
+
+// ScoreAnswer asks each judge to grade the answer on correctness, completeness,
+// and grounding (each 1-5) against the ground-truth source note, and returns the
+// per-axis means + composite across the judges that returned a parseable verdict.
+func ScoreAnswer(ctx context.Context, judges []Judge, question, answer, sourceTitle, sourceBody string) AnswerScore {
 	body := sourceBody
 	if len([]rune(body)) > 3000 {
 		body = string([]rune(body)[:3000])
@@ -46,36 +70,63 @@ GROUND-TRUTH SOURCE NOTE (titled %q) — the answer should be consistent with th
 ANSWER TO GRADE:
 %s
 
-Score the ANSWER from 1 to 5:
-5 = fully correct, complete, and grounded in the source note
-4 = correct and grounded, minor omission
-3 = partially correct or partially grounded
-2 = mostly wrong or largely ungrounded
-1 = wrong, irrelevant, hallucinated, or a non-answer when the source clearly answers it
+Grade the ANSWER on three axes, each an integer 1-5:
+- CORRECTNESS: is what it states accurate per the source note? (5 = fully correct, 1 = wrong)
+- COMPLETENESS: does it cover the relevant details the source provides for this question? (5 = complete, 1 = misses most)
+- GROUNDING: is every claim supported by the source, with no invented or hallucinated detail? (5 = fully grounded, 1 = largely fabricated)
 
-Respond with ONLY the single digit.`, question, sourceTitle, body, answer)
+Respond with EXACTLY three lines and nothing else:
+CORRECTNESS: <1-5>
+COMPLETENESS: <1-5>
+GROUNDING: <1-5>`, question, sourceTitle, body, answer)
 
-	var judgments []Judgment
-	var sum, count float64
+	var sc AnswerScore
+	var sumC, sumP, sumG float64
 	for _, j := range judges {
-		out, err := j.Gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 8, Temperature: ai.Ptr(0.0)})
-		score := 0
+		out, err := j.Gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 40, Temperature: ai.Ptr(0.0)})
+		jd := Judgment{Judge: j.Name}
 		if err == nil {
-			score = parseScore(out)
+			jd.Correctness, jd.Completeness, jd.Grounding = parseAxes(out)
 		}
-		judgments = append(judgments, Judgment{Judge: j.Name, Score: score})
-		if score >= 1 {
-			sum += float64(score)
-			count++
+		sc.Judgments = append(sc.Judgments, jd)
+		if jd.ok() {
+			sumC += float64(jd.Correctness)
+			sumP += float64(jd.Completeness)
+			sumG += float64(jd.Grounding)
+			sc.NJudges++
 		}
 	}
-	if count == 0 {
-		return 0, judgments
+	if sc.NJudges == 0 {
+		return sc
 	}
-	return sum / count, judgments
+	n := float64(sc.NJudges)
+	sc.Correctness = sumC / n
+	sc.Completeness = sumP / n
+	sc.Grounding = sumG / n
+	sc.Composite = (sc.Correctness + sc.Completeness + sc.Grounding) / 3
+	return sc
 }
 
-// parseScore extracts a standalone 1-5 score from a judge's reply (0 = none).
+// parseAxes extracts the three axis scores from a judge reply. A missing axis
+// stays 0, which makes Judgment.ok() false so the whole verdict is skipped
+// (a partial grade would bias the means).
+func parseAxes(s string) (correctness, completeness, grounding int) {
+	return axisScore(s, "correctness"), axisScore(s, "completeness"), axisScore(s, "grounding")
+}
+
+func axisScore(s, axis string) int {
+	m := axisRes[axis].FindStringSubmatch(s)
+	if len(m) < 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// scoreRe matches a standalone 1-5 digit (not part of a larger number like "10"
+// or a year). Retained for any single-axis parsing/tests.
+var scoreRe = regexp.MustCompile(`(?:^|[^0-9])([1-5])(?:[^0-9]|$)`)
+
 func parseScore(s string) int {
 	m := scoreRe.FindStringSubmatch(strings.TrimSpace(s))
 	if len(m) < 2 {

@@ -4,12 +4,89 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/ragctx"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
+
+// These mirror the hardcoded production RAG prompt (ai/rag.go) so a PromptVariant
+// with the default System+Instruction and no citation reproduces production
+// byte-for-byte — making the P0 baseline in the prompt A/B a faithful control.
+const (
+	defaultRAGSystem      = "You are a helpful assistant answering questions about a knowledge base. Use only the provided context to answer."
+	defaultRAGInstruction = "Answer concisely based only on the provided documents. If the documents don't contain the answer, say so."
+	citeInstruction       = " Cite the source note title(s) you drew each fact from in square brackets, e.g. [Note Title]."
+)
+
+// PromptVariant is an eval-only RAG prompt configuration for the answer-side A/B.
+// ai.RAGWithHistory has no prompt-injection hook (unexported const templates), so
+// this lets the harness measure a prompt-wording / citation / candidate-count
+// change WITHOUT touching production rag.go until a winner is chosen. Empty
+// System/Instruction fall back to the production defaults above.
+type PromptVariant struct {
+	Name        string
+	System      string
+	Instruction string
+	Cite        bool
+	Limit       int // RAG candidate docs; 0 = ai.DefaultRAGCandidateDocs
+}
+
+// GenerateAnswerVariant runs the ask pipeline for one prompt variant: production
+// retrieval (cfg) + ragctx.Build, then an eval-local generation that mirrors
+// ai.RAGWithHistory's chunk formatting + GenOpts (MaxTokens 1024, temp 0.1) but
+// with the variant's system prompt / answer instruction / citation clause /
+// candidate limit. Returns the answer text.
+func GenerateAnswerVariant(ctx context.Context, v *vault.Vault, c *corpus, gen ai.GenerationProvider, cfg SweepConfig, pv PromptVariant, qi int, question string) (string, error) {
+	limit := pv.Limit
+	if limit <= 0 {
+		limit = ai.DefaultRAGCandidateDocs
+	}
+	opts := search.Options{
+		Limit:          limit,
+		MinVectorScore: cfg.Threshold,
+		BM25Weight:     cfg.BM25Weight,
+		VectorWeight:   cfg.VectorWeight,
+		BM25Only:       cfg.BM25Only,
+	}
+	results := c.searchOpts(cfg, opts, qi)
+	if len(results) == 0 {
+		return "", fmt.Errorf("no results")
+	}
+	chunks, _ := ragctx.Build(results, v.Root, ragctx.Budget{
+		TotalRunes: v.Config.AI.ResolveRAGContextBudget(),
+		NoteRunes:  v.Config.AI.ResolveRAGNoteBudget(),
+	})
+	if len(chunks) == 0 {
+		return "", fmt.Errorf("no context")
+	}
+	system := pv.System
+	if system == "" {
+		system = defaultRAGSystem
+	}
+	prompt := buildVariantPrompt(question, chunks, pv)
+	return gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 1024, Temperature: ai.Ptr(0.1), SystemPrompt: system})
+}
+
+// buildVariantPrompt mirrors ai.buildRAGPrompt's no-history template (the eval
+// never uses conversation history) with the variant's closing instruction.
+func buildVariantPrompt(question string, chunks []ai.RAGChunk, pv PromptVariant) string {
+	parts := make([]string, len(chunks))
+	for i, ch := range chunks {
+		parts[i] = fmt.Sprintf("--- %s (%s) ---\n%s", ch.Title, ch.Path, ch.Content)
+	}
+	instr := pv.Instruction
+	if instr == "" {
+		instr = defaultRAGInstruction
+	}
+	if pv.Cite {
+		instr += citeInstruction
+	}
+	return fmt.Sprintf("Based on the following documents from the knowledge base, answer this question: %s\n\n%s\n\n%s",
+		question, strings.Join(parts, "\n\n"), instr)
+}
 
 // SweepConfig is one point in the retrieval config grid. QueryPurpose varies the
 // Nova query-side embedding (GENERIC_RETRIEVAL vs TEXT_RETRIEVAL); the weights and

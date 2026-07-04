@@ -103,11 +103,11 @@ func TestGenModelSweep_Bedrock(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			mean, _ := ScoreAnswer(ctx, judges, item.Question, ans, item.SourceTitle, item.SourceBody)
-			if mean == 0 {
+			sc := ScoreAnswer(ctx, judges, item.Question, ans, item.SourceTitle, item.SourceBody)
+			if sc.NJudges == 0 {
 				continue
 			}
-			sum += mean
+			sum += sc.Composite
 			count++
 		}
 		r := row{name: cg.name, n: count}

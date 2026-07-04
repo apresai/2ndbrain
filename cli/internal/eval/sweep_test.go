@@ -114,15 +114,15 @@ func TestConfigSweep_Bedrock(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			mean, judgments := ScoreAnswer(ctx, judges, item.Question, ans, item.SourceTitle, item.SourceBody)
-			if mean == 0 {
+			sc := ScoreAnswer(ctx, judges, item.Question, ans, item.SourceTitle, item.SourceBody)
+			if sc.NJudges == 0 {
 				continue
 			}
-			sum += mean
+			sum += sc.Composite
 			count++
-			for _, jd := range judgments {
-				if jd.Score >= 1 {
-					perJudge[jd.Judge] += float64(jd.Score)
+			for _, jd := range sc.Judgments {
+				if jd.ok() {
+					perJudge[jd.Judge] += float64(jd.Correctness+jd.Completeness+jd.Grounding) / 3
 					perJudgeN[jd.Judge]++
 				}
 			}
