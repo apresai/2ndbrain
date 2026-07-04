@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -393,8 +394,10 @@ func (b *BedrockEmbedder) embedNova(ctx context.Context, texts []string, cfg Emb
 		// chunk-size capping in place this should never fire, so a hit is a
 		// regression tripwire that an oversized chunk slipped through.
 		if tc := embedResp.Embeddings[0].TruncatedCharLength; tc != nil && *tc > 0 {
+			// input_chars is a rune count so it is directly comparable to Nova's
+			// truncated_at_char (the character position it cut at), not bytes.
 			slog.Warn("nova truncated an over-long input (tail dropped from the embedding); a chunk exceeded the 8192-token context",
-				"input_chars", len(text), "truncated_at_char", *tc, "model", b.model)
+				"input_chars", utf8.RuneCountInString(text), "truncated_at_char", *tc, "model", b.model)
 		}
 		results[i] = embedResp.Embeddings[0].Embedding
 	}
