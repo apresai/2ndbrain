@@ -185,8 +185,8 @@ func TestBattery_Migrate(t *testing.T) {
 		t.Fatalf("migrate: exit %d: %s", code, out)
 	}
 
-	if got := dbMaxVersion(t, idx); got != 3 {
-		t.Errorf("after migrate, schema version = %d, want 3", got)
+	if got := dbMaxVersion(t, idx); got != 4 {
+		t.Errorf("after migrate, schema version = %d, want 4", got)
 	}
 	after, _ := os.ReadFile(notePath)
 	if string(after) != noteContent {

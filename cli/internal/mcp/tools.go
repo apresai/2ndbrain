@@ -18,6 +18,7 @@ import (
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/ragctx"
+	"github.com/apresai/2ndbrain/internal/retrieve"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -233,50 +234,24 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 		limit = int(l)
 	}
 
-	engine := search.NewEngine(h.vault.DB.Conn())
-	cfg := h.vault.Config.AI
-	opts := search.Options{
-		Query:          query,
-		Type:           docType,
-		Status:         status,
-		Tag:            tag,
-		Limit:          limit,
-		MinVectorScore: h.threshold(),
+	// Shared retrieval pipeline (same as `2nb search`), pinned to the server's
+	// cross-request embedding cache and the 60s embed timeout so a stuck
+	// provider can't hang a client.
+	res, err := retrieve.New(h.vault).
+		WithCorpusLoader(h.getCachedEmbeddings).
+		WithEmbedTimeout(60 * time.Second).
+		Retrieve(ctx, retrieve.Options{
+			Query:     query,
+			Type:      docType,
+			Status:    status,
+			Tag:       tag,
+			Limit:     limit,
+			Threshold: h.threshold(),
+		})
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	opts.BM25Weight, opts.VectorWeight = cfg.ResolveHybridWeights()
-
-	// Try hybrid search if provider is available
-	var results []search.Result
-	var mode search.SearchMode
-
-	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
-	embCount, _ := h.vault.DB.EmbeddingCount()
-
-	if embErr == nil && embedder.Available(ctx) && embCount > 0 && query != "" {
-		// Apply timeout to embedding call to prevent indefinite hangs
-		embedCtx, embedCancel := context.WithTimeout(ctx, 60*time.Second)
-		defer embedCancel()
-		queryVecs, err := embedder.Embed(embedCtx, []string{query}, ai.WithPurpose(ai.PurposeQuery))
-		if err == nil && len(queryVecs) > 0 {
-			docIDs, embeddings, err := h.getCachedEmbeddings()
-			if err == nil {
-				results, mode, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
-				if err != nil {
-					return mcplib.NewToolResultError(fmt.Sprintf("hybrid search failed: %v", err)), nil
-				}
-			}
-		}
-	}
-
-	// Fall back to BM25
-	if results == nil {
-		var err error
-		results, err = engine.Search(opts)
-		if err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
-		}
-		mode = search.ModeKeyword
-	}
+	results, mode := res.Results, res.Mode
 
 	// Record result count + the query-embedding token estimate (only the hybrid
 	// path embeds the query; chars/4, mirroring the CLI search row).
@@ -319,55 +294,25 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		return mcplib.NewToolResultError("generation provider not available"), nil
 	}
 
-	// Search for relevant context
-	engine := search.NewEngine(h.vault.DB.Conn())
-	opts := search.Options{
-		Query:          question,
-		Limit:          ai.DefaultRAGCandidateDocs,
-		MinVectorScore: h.threshold(),
+	// Retrieve relevant context via the shared pipeline (the SAME path `2nb ask`
+	// uses, so the CLI and MCP ask surfaces can't diverge), pinned to the
+	// server's embedding cache and the 60s embed timeout.
+	rr, rerr := retrieve.New(h.vault).
+		WithCorpusLoader(h.getCachedEmbeddings).
+		WithEmbedTimeout(60 * time.Second).
+		Retrieve(ctx, retrieve.Options{
+			Query:     question,
+			Limit:     ai.DefaultRAGCandidateDocs,
+			Threshold: h.threshold(),
+		})
+	if rerr != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", rerr)), nil
 	}
-	opts.BM25Weight, opts.VectorWeight = h.vault.Config.AI.ResolveHybridWeights()
-
-	var results []search.Result
-	var warnings []string
-	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
-	embCount, countErr := h.vault.DB.EmbeddingCount()
-	if countErr != nil {
-		slog.Warn("mcp kb_ask embedding count failed", "err", countErr)
-		warnings = append(warnings, fmt.Sprintf("embedding count failed: %v", countErr))
-	}
-
-	if embErr == nil && countErr == nil && embedder.Available(ctx) && embCount > 0 {
-		// Apply timeout to embedding call
-		embedCtx, embedCancel := context.WithTimeout(ctx, 60*time.Second)
-		defer embedCancel()
-		queryVecs, err := embedder.Embed(embedCtx, []string{question}, ai.WithPurpose(ai.PurposeQuery))
-		if err == nil && len(queryVecs) > 0 {
-			docIDs, embeddings, err := h.getCachedEmbeddings()
-			if err != nil {
-				slog.Warn("mcp kb_ask embedding load failed", "err", err)
-				warnings = append(warnings, fmt.Sprintf("semantic retrieval disabled: failed to load embeddings (%v)", err))
-			} else if results, _, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings); err != nil {
-				slog.Warn("mcp kb_ask hybrid search failed", "err", err)
-				warnings = append(warnings, fmt.Sprintf("semantic retrieval disabled: hybrid search failed (%v)", err))
-				results = nil
-			}
-		} else if err != nil {
-			slog.Warn("mcp kb_ask query embedding failed", "err", err)
-			warnings = append(warnings, fmt.Sprintf("semantic retrieval disabled: embedder returned error (%v)", err))
-		}
-	}
-	// Hybrid succeeded iff it produced results before the keyword fallback below
-	// (mirrors the CLI ask `mode`).
+	results := rr.Results
+	warnings := rr.Warnings
 	mode := "keyword"
-	if results != nil {
+	if rr.Mode == search.ModeHybrid {
 		mode = "hybrid"
-	}
-	if results == nil {
-		results, err = engine.Search(opts)
-		if err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
-		}
 	}
 
 	// Build parent-document RAG context (the SAME assembler `2nb ask` uses, so
