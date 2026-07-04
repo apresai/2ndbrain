@@ -164,7 +164,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 	// Generate embeddings if a provider is available, via the SAME concurrent
 	// pass the CLI `index` command uses (vault.EmbedDocuments) — a bounded worker
 	// pool sized by ai.embed_concurrency that self-corrects under throttling,
-	// instead of the old sequential per-document ThrottleDelay loop. The pass
+	// instead of the old sequential per-document throttle loop. The pass
 	// honors ctx cancellation (an MCP client timeout/disconnect): it stops
 	// launching work and reports the partial result via Cancelled.
 	embedded := 0
