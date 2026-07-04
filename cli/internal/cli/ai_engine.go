@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/llama"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
@@ -109,6 +110,9 @@ func runAIEngineServe(cmd *cobra.Command, _ []string) error {
 			gen, embed = cfg.GenerationModel, cfg.EmbeddingModel
 			if cfg.Rerank.Enabled {
 				rerank = cfg.Rerank.Model
+				if rerank == "" {
+					rerank = ai.DefaultLlamaRerankModel
+				}
 			}
 			if enginePath == "" {
 				enginePath = cfg.Llama.EnginePath
@@ -165,6 +169,21 @@ func engineSpecsFor(gen, embed, rerank string) ([]llama.RoleSpec, []string) {
 	return specs, warnings
 }
 
+// anyLocalModelConfigured reports whether any of the given model ids is a known
+// local (manifest) model — used to keep `install` from wiring up an agent that
+// would have nothing to serve.
+func anyLocalModelConfigured(ids ...string) bool {
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := llama.ArtifactFor(id); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func runAIEngineInstall(cmd *cobra.Command, _ []string) error {
 	exe := engineInstallCmdOverride
 	if exe == "" {
@@ -178,24 +197,40 @@ func runAIEngineInstall(cmd *cobra.Command, _ []string) error {
 		exe = e
 	}
 
-	// Bake the vault's model choices into the plist so serve is deterministic at
-	// login without needing an open vault.
+	// Resolve the vault's model choices to bake into the plist so serve is
+	// deterministic at login without needing an open vault.
 	var extra []string
+	var gen, embed, rerank string
 	if v, err := openVault(); err == nil {
 		defer v.Close()
 		cfg := v.Config.AI
-		if cfg.GenerationModel != "" {
-			extra = append(extra, "--gen-model", cfg.GenerationModel)
-		}
-		if cfg.EmbeddingModel != "" {
-			extra = append(extra, "--embed-model", cfg.EmbeddingModel)
-		}
-		if cfg.Rerank.Enabled && cfg.Rerank.Model != "" {
-			extra = append(extra, "--rerank-model", cfg.Rerank.Model)
+		gen, embed = cfg.GenerationModel, cfg.EmbeddingModel
+		if cfg.Rerank.Enabled {
+			rerank = cfg.Rerank.Model
+			if rerank == "" {
+				rerank = ai.DefaultLlamaRerankModel
+			}
 		}
 		if cfg.Llama.EnginePath != "" {
 			extra = append(extra, "--engine-path", cfg.Llama.EnginePath)
 		}
+	}
+
+	// Refuse to install an agent with nothing local to serve: on a non-local
+	// vault serve would find no manifest models, exit non-zero, and launchd's
+	// KeepAlive would restart-loop it. (Not-yet-downloaded local models are OK —
+	// that's the install-then-`pull` flow.)
+	if !anyLocalModelConfigured(gen, embed, rerank) {
+		return fmt.Errorf("no local models configured for this vault; set ai.provider=llama-local and a local ai.embedding_model/ai.generation_model (e.g. embeddinggemma-300m / gemma4-e4b) before installing the engine agent")
+	}
+	if gen != "" {
+		extra = append(extra, "--gen-model", gen)
+	}
+	if embed != "" {
+		extra = append(extra, "--embed-model", embed)
+	}
+	if rerank != "" {
+		extra = append(extra, "--rerank-model", rerank)
 	}
 
 	if err := llama.InstallAgent(exe, extra); err != nil {

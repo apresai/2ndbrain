@@ -72,6 +72,20 @@ func TestInitLlamaRegisters(t *testing.T) {
 	}
 }
 
+func TestLlamaRerankModelDefault(t *testing.T) {
+	// Unset → the LOCAL default, not the Bedrock DefaultRerankModel.
+	if got := llamaRerankModel(AIConfig{}); got != DefaultLlamaRerankModel {
+		t.Errorf("unset rerank model = %q, want %q", got, DefaultLlamaRerankModel)
+	}
+	if DefaultLlamaRerankModel == DefaultRerankModel {
+		t.Error("local rerank default must differ from the Bedrock DefaultRerankModel")
+	}
+	// Explicit config wins.
+	if got := llamaRerankModel(AIConfig{Rerank: RerankConfig{Model: "custom-reranker"}}); got != "custom-reranker" {
+		t.Errorf("configured rerank model = %q, want custom-reranker", got)
+	}
+}
+
 func TestInitLlamaRerankerGating(t *testing.T) {
 	// Rerank disabled: no reranker registered.
 	reg := NewRegistry()

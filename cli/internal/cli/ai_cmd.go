@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/llama"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -366,8 +367,41 @@ func collectProviderStatus(ctx context.Context, cfg ai.AIConfig) []ProviderStatu
 		bedrockProviderStatus(ctx, cfg),
 		openrouterProviderStatus(cfg),
 		ollamaProviderStatus(ctx, cfg),
+		llamaProviderStatus(ctx, cfg),
 	}
 	return out
+}
+
+// llamaProviderStatus reports readiness of the bundled-engine "llama-local"
+// provider: whether the engine binary is locatable and whether any engine role
+// is answering /health.
+func llamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
+	s := ProviderStatus{
+		Name:     "llama-local",
+		Disabled: cfg.Llama.Disabled,
+	}
+	enginePath := llama.LocateEngine(cfg.Llama.EnginePath)
+	s.ConfigPresent = enginePath != ""
+	if enginePath == "" {
+		s.Detail = "engine not installed"
+		s.Reason = "llama-server not found (run: 2nb ai engine install)"
+		return s
+	}
+	s.Detail = enginePath
+	if s.Disabled {
+		s.Reason = "disabled in vault config"
+		return s
+	}
+	for _, r := range llama.Status(ctx).Roles {
+		if r.Healthy {
+			s.Reachable = true
+			break
+		}
+	}
+	if !s.Reachable {
+		s.Reason = "engine not running (run: 2nb ai engine start)"
+	}
+	return s
 }
 
 func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {

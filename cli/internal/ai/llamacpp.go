@@ -16,6 +16,11 @@ import (
 // llamaProviderName is the registry key for the bundled-engine provider.
 const llamaProviderName = "llama-local"
 
+// DefaultLlamaRerankModel is the local cross-encoder used when ai.rerank.model
+// is unset on the llama-local provider (the global DefaultRerankModel is the
+// Bedrock Cohere id, which llama-server cannot serve).
+const DefaultLlamaRerankModel = "bge-reranker-v2-m3"
+
 // The llama-local provider drives a local llama.cpp `llama-server` over its
 // OpenAI-compatible HTTP API. The server processes are supervised out-of-band by
 // the internal/llama manager (an always-on launchd agent); this provider only
@@ -96,6 +101,14 @@ func (e *LlamaEmbedder) Embed(ctx context.Context, texts []string, opts ...Embed
 			return nil, fmt.Errorf("invalid embedding index %d", d.Index)
 		}
 		results[d.Index] = d.Embedding
+	}
+	// A well-behaved server returns one vector per input; guard against a short
+	// or gappy response so we never store a nil/empty embedding (which would
+	// silently corrupt the index).
+	for i, v := range results {
+		if v == nil {
+			return nil, fmt.Errorf("embedding server returned %d vectors for %d inputs (missing index %d)", len(resp.Data), len(texts), i)
+		}
 	}
 
 	dim := cfg.Dimension
@@ -328,6 +341,16 @@ func (r *LlamaReranker) Rerank(ctx context.Context, query string, docs []string,
 
 var _ RerankProvider = (*LlamaReranker)(nil)
 
+// llamaRerankModel resolves the local rerank model: the configured id, else the
+// local default (never the Bedrock DefaultRerankModel, which llama-server can't
+// serve).
+func llamaRerankModel(aiCfg AIConfig) string {
+	if aiCfg.Rerank.Model != "" {
+		return aiCfg.Rerank.Model
+	}
+	return DefaultLlamaRerankModel
+}
+
 // InitLlama creates and registers the llama-local providers.
 func InitLlama(_ context.Context, reg *Registry, cfg LlamaConfig, aiCfg AIConfig) error {
 	embedder := NewLlamaEmbedder(aiCfg.EmbeddingModel, aiCfg.Dimensions, cfg.EmbedEndpoint)
@@ -338,9 +361,10 @@ func InitLlama(_ context.Context, reg *Registry, cfg LlamaConfig, aiCfg AIConfig
 
 	// Register the local reranker only when reranking is enabled, mirroring
 	// InitBedrock — a disabled rerank config adds no reranker (and the retrieve
-	// pipeline resolves it only when RerankEnabled anyway).
+	// pipeline resolves it only when RerankEnabled anyway). Default to the local
+	// cross-encoder, not the shared DefaultRerankModel (a Bedrock id).
 	if aiCfg.RerankEnabled() {
-		reg.RegisterReranker(llamaProviderName, NewLlamaReranker(aiCfg.ResolveRerankModel(), cfg.RerankEndpoint))
+		reg.RegisterReranker(llamaProviderName, NewLlamaReranker(llamaRerankModel(aiCfg), cfg.RerankEndpoint))
 	}
 
 	return nil

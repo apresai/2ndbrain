@@ -126,6 +126,11 @@ func (m *Manager) runRole(ctx context.Context, spec RoleSpec) error {
 	args := buildArgs(spec, port)
 
 	cmd := exec.CommandContext(ctx, m.enginePath, args...)
+	// Forward the child's stdout/stderr to ours so a crashing llama-server's
+	// diagnostics (bad GGUF, OOM, bad flag) reach the launchd log — otherwise
+	// os/exec routes them to /dev/null and only "exit status N" survives.
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	// Shut a child down with SIGTERM (graceful) rather than the default SIGKILL
 	// when ctx is cancelled, giving llama-server a moment to release the GPU.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -144,10 +149,15 @@ func (m *Manager) runRole(ctx context.Context, spec RoleSpec) error {
 		slog.Warn("llama sidecar write failed", "role", spec.Role, "err", err)
 	}
 
-	// Best-effort readiness log; the model may still be loading.
+	// Readiness watcher: log both outcomes so a role that starts but never
+	// becomes healthy (loads forever, wrong flags, port stolen) is visible in
+	// the log instead of silently sitting there while the sidecar says "running".
 	go func() {
 		if waitHealthy(ctx, port) {
 			slog.Info("llama role healthy", "role", spec.Role, "port", port, "model", spec.ModelPath)
+		} else if ctx.Err() == nil {
+			slog.Warn("llama role never became healthy within the load window",
+				"role", spec.Role, "port", port, "model", spec.ModelPath)
 		}
 	}()
 

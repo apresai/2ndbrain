@@ -44,3 +44,18 @@ func TestEngineSpecsForEmpty(t *testing.T) {
 		t.Errorf("empty ids should yield no specs and no warnings, got specs=%v warns=%v", specs, warnings)
 	}
 }
+
+func TestAnyLocalModelConfigured(t *testing.T) {
+	// A known manifest model id → true (this is the install guard's allowlist).
+	if !anyLocalModelConfigured("gemma4-e4b") {
+		t.Error("a manifest model should count as a local model")
+	}
+	// Non-manifest ids (a Bedrock/hosted vault) and empties → false, so install
+	// refuses to wire up an agent with nothing local to serve.
+	if anyLocalModelConfigured("us.anthropic.claude-haiku-4-5", "amazon.nova-2-multimodal-embeddings-v1:0", "") {
+		t.Error("hosted model ids should not count as local models")
+	}
+	if anyLocalModelConfigured("", "", "") {
+		t.Error("no models configured should be false")
+	}
+}
