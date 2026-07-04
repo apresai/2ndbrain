@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.12.5] - 2026-07-04
+
+### Added
+- Reindex-on-release detection: `2nb` now stamps the indexing/embedding logic generation into the index DB and detects when a release changed that logic (chunking, chunk→vector mapping) while keeping the same model/dimension, then prompts to reindex. Surfaced through `vault status`, `ai status`, and `config doctor`, plus a macOS app banner and an Obsidian plugin nudge. Always prompts, never auto-spends.
+- Multi-axis retrieval + generation evaluation harness (LLM-as-jury) under `internal/eval` — QA-set sweep, generation-model scoring, and prompt A/B comparison (credential-gated).
+- Embedding truncation observability so oversized-section drops are visible rather than silent.
+- Multi-machine setup guide (`docs/multi-machine-setup.md`) and a portable, copy-paste CLAUDE.md snippet (`docs/claude-md-snippet.md`).
+
+### Changed
+- RAG generation prompt drops the "concisely" instruction (measured improvement in answer quality).
+- Chunking now caps chunk size so oversized sections are split rather than truncated or rejected at embed time (Nova embeddings).
+
+### Fixed
+- Corrected the embedding `ContextLen` used for Nova, so chunk sizing matches the model's real context limit.
+- Retry backoff on Bedrock embedding now honors context cancellation, so an aborted index/re-embed returns promptly instead of sleeping through its backoff.
+
+### Removed
+- Dead code in the embedding rate-limit path.
+
+⚠ Reindex recommended after upgrading: `2nb index --force-reembed`
+
+
 ## [0.12.4] - 2026-07-01
 
 ### Changed
