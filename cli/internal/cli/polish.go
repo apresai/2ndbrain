@@ -12,6 +12,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/polish"
+	"github.com/apresai/2ndbrain/internal/retrieve"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
@@ -285,7 +286,7 @@ func preparePolishLinks(ctx context.Context, v *vault.Vault, parsed *document.Do
 	var docIDs []string
 	var embeddings [][]float32
 	warnMsg := ""
-	if ready, msg := VectorCompat(ctx, v, embedder); ready {
+	if ready, msg := retrieve.VectorCompat(ctx, v, embedder); ready {
 		docIDs, embeddings, _ = v.DB.AllEmbeddings()
 	} else {
 		warnMsg = msg // empty for a zero-embedding vault; substring matching still runs

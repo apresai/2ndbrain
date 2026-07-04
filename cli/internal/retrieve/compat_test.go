@@ -1,4 +1,4 @@
-package cli
+package retrieve
 
 import (
 	"context"
@@ -10,12 +10,11 @@ import (
 	"github.com/apresai/2ndbrain/internal/vault"
 )
 
-// fakeEmbedder is a local interface fake for VectorCompat unit tests.
-// It is NOT a provider mock — the CLAUDE.md "no mocks" policy forbids
-// stubbing real provider integrations (Bedrock/Ollama/OpenRouter), but
-// does not forbid a tiny test-local fake that implements an interface
-// purely for testing a compat-check function whose logic is independent
-// of the actual provider.
+// fakeEmbedder is a local interface fake for VectorCompat unit tests. It is NOT
+// a provider mock — the CLAUDE.md "no mocks" policy forbids stubbing real
+// provider integrations, but does not forbid a tiny test-local fake that
+// implements an interface purely for testing a compat-check function whose
+// logic is independent of the actual provider.
 type fakeEmbedder struct {
 	name      string
 	dims      int
@@ -134,10 +133,10 @@ func TestVectorCompat_MixedDimensions(t *testing.T) {
 	}
 }
 
-// seedEmbedding inserts a synthetic embedding of the given dim directly
-// into the vault's DB so VectorCompat has something to sample. Bypasses
-// the indexer/provider path — the point of these tests is to exercise
-// the compat check's logic, not real embedding generation.
+// seedEmbedding inserts a synthetic embedding of the given dim directly into the
+// vault's DB so VectorCompat has something to sample. Bypasses the
+// indexer/provider path — the point of these tests is the compat check's logic,
+// not real embedding generation.
 func seedEmbedding(t *testing.T, v *vault.Vault, docID string, dims int) {
 	t.Helper()
 	_, err := v.DB.Conn().Exec(

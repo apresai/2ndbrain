@@ -1,4 +1,4 @@
-package cli
+package retrieve
 
 import (
 	"context"
@@ -9,14 +9,16 @@ import (
 	"github.com/apresai/2ndbrain/internal/vault"
 )
 
-// VectorCompat reports whether the vault's stored embeddings are usable
-// by the given embedder right now. When not usable, it returns a single
-// human-readable message suitable for stderr. A zero-embedding vault
-// returns (false, "") — silent BM25 fallback is the correct UX there,
-// not an error state.
+// VectorCompat reports whether the vault's stored embeddings are usable by the
+// given embedder right now. When not usable, it returns a single human-readable
+// message suitable for stderr. A zero-embedding vault returns (false, "")
+// because silent BM25 fallback is the correct UX there, not an error state.
 //
-// Check order matters: fail fast on the highest-signal problem first so
-// the user sees one actionable line, not a chain of warnings.
+// It is the single decision point for "can we run hybrid?", shared by every
+// retrieval surface via Retriever.ensureReady (and called directly by the
+// polish link-suggestion path). Check order matters: fail fast on the
+// highest-signal problem first so the user sees one actionable line, not a
+// chain of warnings.
 func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProvider) (ready bool, message string) {
 	dim, err := v.DB.SampleEmbeddingDim()
 	if err != nil {
@@ -24,7 +26,7 @@ func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProv
 		return false, ""
 	}
 	if dim == 0 {
-		// No embeddings at all — hybrid search has nothing to work with.
+		// No embeddings at all: hybrid search has nothing to work with.
 		// Silent fallback; `ai status` is where the user learns about it.
 		return false, ""
 	}
@@ -46,7 +48,7 @@ func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProv
 	}
 
 	// Mixed-DIMENSION vaults (e.g. a partial re-embed after a Matryoshka
-	// dimension change — DocumentsNeedingEmbedding gates on content, not
+	// dimension change: DocumentsNeedingEmbedding gates on content, not
 	// dimension, so a bare reindex won't normalize widths) can't be cosine-
 	// compared reliably. Checked BEFORE the single-sample provider comparison
 	// so the accurate mixed-dim diagnosis wins: SampleEmbeddingDim returns one

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/retrieve"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -95,29 +95,17 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		searchTag = inlineTag
 	}
 
-	engine := search.NewEngine(v.DB.Conn())
 	threshold := searchThreshold
 	if threshold == 0 {
 		threshold, _ = v.Config.AI.ResolveSimilarityThresholdFull(v.Root)
 	}
-	opts := search.Options{
-		Query:          strings.TrimSpace(query),
-		Type:           searchType,
-		Status:         searchStatus,
-		Tag:            searchTag,
-		Limit:          searchLimit,
-		BM25Only:       searchBM25Only,
-		MinVectorScore: threshold,
-	}
-	opts.BM25Weight, opts.VectorWeight = v.Config.AI.ResolveHybridWeights()
 
-	// Try hybrid search if embeddings are available
+	// initAIProviders must run before retrieve.New resolves the active embedder.
 	initAIProviders(v)
 	var results []search.Result
 	var mode search.SearchMode
 	var warnings []string
 	ctx := context.Background()
-	cfg := v.Config.AI
 
 	// Record the query (best-effort) on every return path, including
 	// zero-result and error cases. mode is "hybrid" or "keyword".
@@ -139,52 +127,23 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		})
 	}()
 
-	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
-
-	// VectorCompat is the single decision point for "can we run hybrid?".
-	// It returns a human message when the vault's embeddings are
-	// incompatible with the current provider (dim break, model mismatch,
-	// provider unavailable) so the user sees the degradation instead of
-	// silently falling back to BM25.
-	if !opts.BM25Only && opts.Query != "" {
-		if ready, msg := VectorCompat(ctx, v, embedder); !ready {
-			if msg != "" {
-				fmt.Fprintln(os.Stderr, "  "+msg)
-				warnings = append(warnings, msg)
-			}
-			opts.BM25Only = true
-		}
+	res, rerr := retrieve.New(v).Retrieve(ctx, retrieve.Options{
+		Query:     strings.TrimSpace(query),
+		Type:      searchType,
+		Status:    searchStatus,
+		Tag:       searchTag,
+		Limit:     searchLimit,
+		BM25Only:  searchBM25Only,
+		Threshold: threshold,
+	})
+	if rerr != nil {
+		return rerr
 	}
-
-	if !opts.BM25Only && opts.Query != "" {
-		// VectorCompat passed — embedder is usable and dim matches.
-		queryVecs, err := embedder.Embed(ctx, []string{opts.Query}, ai.WithPurpose(ai.PurposeQuery))
-		if err == nil && len(queryVecs) > 0 {
-			docIDs, embeddings, err := v.DB.AllEmbeddings()
-			if err == nil {
-				results, mode, err = engine.HybridSearch(opts, queryVecs[0], docIDs, embeddings)
-				if err != nil {
-					return fmt.Errorf("hybrid search: %w", err)
-				}
-			}
-		} else if err != nil {
-			// Provider was Available() but Embed() failed — most common
-			// cause is Ollama's daemon up but model not pulled. Warn
-			// loudly and degrade to BM25 so the user can diagnose.
-			msg := fmt.Sprintf("semantic search disabled: embedder returned error (%v) — if using Ollama, verify the model is pulled", err)
-			fmt.Fprintln(os.Stderr, "  "+msg)
-			warnings = append(warnings, msg)
-		}
-	}
-
-	// Fall back to BM25 if hybrid didn't run
-	if results == nil {
-		var err error
-		results, err = engine.Search(opts)
-		if err != nil {
-			return fmt.Errorf("search: %w", err)
-		}
-		mode = search.ModeKeyword
+	results, mode, warnings = res.Results, res.Mode, res.Warnings
+	// Surface any degradation (compat / embed / hybrid failure) loudly, matching
+	// the prior inline stderr behavior; the warnings also ride the --json envelope.
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "  "+w)
 	}
 
 	slog.Info("search complete", "query", query, "results", len(results), "elapsed", time.Since(startTime))

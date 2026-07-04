@@ -66,7 +66,7 @@ Embed the matrix above in short form. Agents default to whichever tool they see 
 
 ### 2. "Error recovery playbook" section
 
-Derived from `VectorCompat` in `cli/internal/cli/helpers_vector.go:20-60` — that function produces the single actionable warning line that ends up in the `warnings[]` envelope or on stderr. The conceptual labels in the project `CLAUDE.md` decision table (`DIMENSION BREAK`, `MODEL MISMATCH`, etc.) do **not** appear in the actual strings; agents should match on the stable prefix `"semantic search disabled:"` and the phrases below.
+Derived from `VectorCompat` in `cli/internal/retrieve/compat.go` — that function produces the single actionable warning line that ends up in the `warnings[]` envelope or on stderr. The conceptual labels in the project `CLAUDE.md` decision table (`DIMENSION BREAK`, `MODEL MISMATCH`, etc.) do **not** appear in the actual strings; agents should match on the stable prefix `"semantic search disabled:"` and the phrases below.
 
 | Warning the agent sees | Underlying state | Fix |
 |---|---|---|
@@ -119,7 +119,7 @@ $ 2nb search "authentication" --json --limit 2
 }
 ```
 
-And under a degraded state (actual warning string from `helpers_vector.go`):
+And under a degraded state (actual warning string from `cli/internal/retrieve/compat.go`):
 
 ```bash
 $ 2nb search "authentication" --json
@@ -157,7 +157,7 @@ Add `test-battery` to `test-all` so CI runs it by default.
 | `TestBattery_DocumentCRUD` | `create --type note` → `read` → `meta --set status=complete` → `search` → `delete --force` | Doc appears on disk with valid frontmatter, `read` returns body, `meta` enforces status machine, `search` finds the doc by title, `delete` removes it from disk AND index (verify via `list`). |
 | `TestBattery_IndexRebuild` | `index` → edit → `index` → `index --force-reembed` | Delta indexing picks up content change. After `--force-reembed`, embedding count stable, content hashes updated, all docs have fresh embeddings (verify via `store.DB.AllEmbeddings`). |
 | `TestBattery_SearchThreshold` | Seed 3 docs with known similarity profiles → `search --threshold 0.2`, `--threshold 0.9`, `--bm25-only` | Low threshold returns all, high threshold returns none, `--bm25-only` bypasses threshold entirely. Verify `mode` field in JSON envelope reflects the choice. |
-| `TestBattery_HybridDegradation` | Stale embeddings (dim 1024) + current provider (dim 768) → `search --json` | `mode == "keyword"` and at least one warning starts with `"semantic search disabled:"` (the stable prefix from `helpers_vector.go`). Results still return (BM25 works). |
+| `TestBattery_HybridDegradation` | Stale embeddings (dim 1024) + current provider (dim 768) → `search --json` | `mode == "keyword"` and at least one warning starts with `"semantic search disabled:"` (the stable prefix from `cli/internal/retrieve/compat.go`). Results still return (BM25 works). |
 | `TestBattery_MCPLifecycle` | Spawn `2nb mcp-server` → invoke `kb_info` via stdio → read sidecar → kill → respawn | Sidecar at `.2ndbrain/mcp/<pid>.json` exists with invocation logged (tool name, timestamp, ok, duration_ms). `2nb mcp status --json` reports the live server. Stale sidecars cleaned on next spawn. |
 | `TestBattery_SkillsRoundtrip` | `skills install claude-code --user` → `skills list` → `skills uninstall` | File at `~/.claude/skills/2nb/SKILL.md` appears, `skills list` marks installed, uninstall removes the file. Don't clobber the user's real skill dir — the test should use a temp `HOME`. |
 
@@ -180,7 +180,7 @@ These aren't in the battery — they go in existing (or new) test files targeted
 
 | File | New tests | Why |
 |---|---|---|
-| `cli/internal/cli/vault_test.go` (existing) | `TestVaultSet`, `TestVaultList`, `TestVaultStatus_AllPortabilityStates` | The 8 portability states from the project `CLAUDE.md` table are tested for search warnings (`helpers_vector_test.go`) but not for how `vault status` renders them. |
+| `cli/internal/cli/vault_test.go` (existing) | `TestVaultSet`, `TestVaultList`, `TestVaultStatus_AllPortabilityStates` | The 8 portability states from the project `CLAUDE.md` table are tested for search warnings (`cli/internal/retrieve/compat_test.go`) but not for how `vault status` renders them. |
 | `cli/internal/cli/index_test.go` (existing) | `TestIndex_ForceReembed_ReplacesEmbeddings` | `--force-reembed` is only covered implicitly via the integration test. Add an explicit flag behavior test. |
 | `app/Tests/SecondBrainTests/AppStateCRUDTests.swift` (new) | Create / open / save / delete through `AppState`, not just JSON parsing | Swift tests currently stop at `FrontmatterParser` and `JSONDecoding`. The actual state transitions in `AppState` aren't tested. |
 | `app/Tests/SecondBrainTests/AutoSaveTests.swift` (new) | 15/30/60s interval picker; disabled-save preference; low-disk warning before save | Autosave is a core write-path feature with zero test coverage today. |
@@ -204,7 +204,7 @@ These aren't in the battery — they go in existing (or new) test files targeted
 |---|---|---|
 | `cli/internal/cli/search.go:31-35` | `SearchResponse` JSON envelope | Swift `AppState.swift`, any external agent parsing `search --json` |
 | `cli/internal/cli/ask.go:22-27` | `AskResponse` JSON envelope | Same |
-| `cli/internal/cli/helpers_vector.go` | `VectorCompat` state strings (`DIMENSION BREAK`, `MODEL MISMATCH`, etc.) | Skill playbook table, `vault status` rendering, search warnings |
+| `cli/internal/retrieve/compat.go` | `VectorCompat` state strings (`DIMENSION BREAK`, `MODEL MISMATCH`, etc.) | Skill playbook table, `vault status` rendering, search warnings |
 | `cli/internal/ai/config.go` | `ResolveSimilarityThresholdFull` resolution chain | Threshold resolution battery test, skill explanation of per-model thresholds |
 | `cli/internal/mcp/tools.go:34-82` | Embedding + threshold cache behavior | MCP vs CLI rationale in skill file |
 | `cli/internal/skills/content/2ndbrain-skill.md` | The agent-facing teaching document | All 8 supported agents after `skills install` |

@@ -14,6 +14,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/ragctx"
+	"github.com/apresai/2ndbrain/internal/retrieve"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -213,73 +214,26 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		fmt.Fprintf(os.Stderr, "Searching for relevant context...\n")
 	}
 
-	threshold, _ := cfg.ResolveSimilarityThresholdFull(v.Root)
-	engine := search.NewEngine(v.DB.Conn())
-	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
-
-	// Same compat gate as `2nb search`: if VectorCompat fails, warn once and
-	// fall back to BM25-only retrieval. The generator still runs against
-	// whatever BM25 returns, so ask still produces an answer; the user just
-	// knows the retrieval degraded.
-	vectorReady := true
-	if ready, msg := VectorCompat(ctx, v, embedder); !ready {
-		if msg != "" {
-			addWarning(msg)
-		}
-		vectorReady = false
-	}
-
-	// Load the embedding corpus once, up front. AllEmbeddings() reads and
-	// decodes every document vector, and a rewrite-fallback ask calls
-	// retrieve() twice — so loading inside the closure paid that cost
-	// twice for the same (identical) corpus. Hoisting it here makes ask
-	// load at most once; only the per-query vector still varies, so that
-	// stays inside the closure.
-	var corpusIDs []string
-	var corpusVecs [][]float32
-	if vectorReady {
-		ids, vecs, err := v.DB.AllEmbeddings()
+	// One shared retriever for the turn: the vector-readiness gate and the
+	// embedding-corpus load run once and are reused across the (up to two)
+	// retrieval passes below (rewrite, then raw-question fallback). Each pass
+	// degrades to BM25 with a warning on any compat/embed/hybrid failure.
+	r := retrieve.New(v)
+	runRetrieve := func(query string) ([]search.Result, bool, error) {
+		res, err := r.Retrieve(ctx, retrieve.Options{
+			Query: query,
+			Limit: ai.DefaultRAGCandidateDocs,
+		})
 		if err != nil {
-			msg := fmt.Sprintf("semantic retrieval disabled: failed to load embeddings (%v)", err)
-			slog.Warn("ask semantic retrieval disabled: load embeddings failed", "err", err)
-			addWarning(msg)
-			vectorReady = false
-		} else {
-			corpusIDs, corpusVecs = ids, vecs
+			return nil, false, err
 		}
+		for _, w := range res.Warnings {
+			addWarning(w)
+		}
+		return res.Results, res.Mode == search.ModeHybrid, nil
 	}
 
-	// retrieve runs one hybrid-with-fallback retrieval pass for a query.
-	// Returns the results and whether the hybrid (vector) channel was used.
-	retrieve := func(query string) ([]search.Result, bool, error) {
-		opts := search.Options{
-			Query:          query,
-			Limit:          ai.DefaultRAGCandidateDocs,
-			MinVectorScore: threshold,
-		}
-		opts.BM25Weight, opts.VectorWeight = cfg.ResolveHybridWeights()
-		if vectorReady {
-			queryVecs, err := embedder.Embed(ctx, []string{query}, ai.WithPurpose(ai.PurposeQuery))
-			if err != nil {
-				msg := fmt.Sprintf("semantic retrieval disabled: embedder returned error (%v)", err)
-				slog.Warn("ask semantic retrieval disabled: embedder failed", "err", err)
-				addWarning(msg)
-			} else if len(queryVecs) > 0 {
-				results, mode, err := engine.HybridSearch(opts, queryVecs[0], corpusIDs, corpusVecs)
-				if err != nil {
-					msg := fmt.Sprintf("semantic retrieval disabled: hybrid search failed (%v)", err)
-					slog.Warn("ask semantic retrieval disabled: hybrid search failed", "err", err)
-					addWarning(msg)
-				} else {
-					return results, mode == search.ModeHybrid, nil
-				}
-			}
-		}
-		results, err := engine.Search(opts)
-		return results, false, err
-	}
-
-	results, usedHybrid, err := retrieve(retrievalQuery)
+	results, usedHybrid, err := runRetrieve(retrievalQuery)
 	if err != nil {
 		return AskResponse{}, fmt.Errorf("search: %w", err)
 	}
@@ -288,7 +242,7 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 	if len(results) == 0 && retrievalQuery != question {
 		slog.Warn("ask rewritten query matched nothing, retrying with raw question", "rewritten", retrievalQuery)
 		addWarning("rewritten query matched nothing; retrying with the question as asked")
-		results, usedHybrid, err = retrieve(question)
+		results, usedHybrid, err = runRetrieve(question)
 		if err != nil {
 			return AskResponse{}, fmt.Errorf("search: %w", err)
 		}
