@@ -139,6 +139,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
+	// Capture pre-embed state so the stamping below can tell whether the vault's
+	// embeddings all end up at the current logic generation (see vault.StampAfterIndex).
+	embeddingCountBefore, _ := v.DB.EmbeddingCount()
+	priorEmbedGen := vault.PriorEmbedGeneration(v.DB)
+
 	var embedStats embeddingRunStats
 	if indexForceReembed {
 		embedStats, err = forceReembedDocuments(ctx, v, cfg)
@@ -168,6 +173,16 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	recordMetric(v, indexOperation(indexForceReembed, startTime, *stats, embedStats, cfg, nil))
+
+	// Stamp which indexing/embedding LOGIC generation this build achieved, so a
+	// future 2nb that changes that logic can detect this vault is stale and prompt
+	// a reindex/re-embed (vault status / ai status / config doctor). Best-effort —
+	// never fail the index over it. StampAfterIndex advances the embed generation
+	// only when all stored embeddings are current-gen (a full re-embed, or a fresh/
+	// already-current vault with everything embedded).
+	if serr := vault.StampAfterIndex(v.DB, Version, indexForceReembed, embedStats.Failed, embeddingCountBefore, priorEmbedGen); serr != nil {
+		slog.Warn("stamp index generation failed", "err", serr)
+	}
 
 	format := getFormat(cmd)
 	if format != "" {

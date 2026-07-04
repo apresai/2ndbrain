@@ -11,6 +11,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -138,6 +139,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	status.PortabilityStatus, status.PortabilityAction = derivePortability(
 		ctx, cfg, embedder,
 		status.VaultEmbeddingDim, status.VaultEmbeddingModels, totalDocs, embeddedDocs, embeddableUnembedded,
+		vault.CheckIndexFreshness(v.DB),
 	)
 
 	status.Providers = collectProviderStatus(ctx, cfg)
@@ -239,7 +241,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 // returns a status label plus a one-line action hint. The labels are the
 // stable public contract — Swift and automation consumers switch on
 // these strings, so renames are a breaking change.
-func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.EmbeddingProvider, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int) (status, action string) {
+func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.EmbeddingProvider, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int, freshness vault.IndexFreshness) (status, action string) {
 	// Empty notes (no chunk) can never be embedded, so they're excluded from
 	// every decision here and from the counts callers display (the embeddable
 	// total = embeddedDocs+embeddableUnembedded). A vault whose only gap is
@@ -283,11 +285,24 @@ func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.Embeddi
 	if len(vaultModels) == 1 && vaultModels[0] != cfg.EmbeddingModel {
 		return "model_mismatch", fmt.Sprintf("Vault was embedded with %q but config is %q (same dim, still usable). Run `2nb index` to re-embed on the next content change, or `--force-reembed` to refresh now.", vaultModels[0], cfg.EmbeddingModel)
 	}
+	// A newer 2nb changed chunking/embedding LOGIC at the same model+dimension —
+	// undetectable above (model/dim match), but the stored vectors are stale. A
+	// re-embed also re-chunks + catches up unembedded docs, so it takes precedence
+	// over the mild "stale" catch-up below.
+	if freshness.ReembedRecommended {
+		return "upgrade_reembed_recommended", "A newer 2nb improved chunking/embeddings for this vault. Run `2nb index --force-reembed` to apply it."
+	}
 	if embeddableUnembedded > 0 {
 		// Only count docs that *can* be embedded; empty notes are excluded so
 		// the denominator and the "catch up" advice are both actionable.
 		embeddable := embeddedDocs + embeddableUnembedded
 		return "stale", fmt.Sprintf("%d of %d docs are embedded. Run `2nb index` to catch up.", embeddedDocs, embeddable)
+	}
+	// A newer 2nb changed index-only logic (FTS/link/tag extraction). Milder than a
+	// re-embed and fixed by a plain reindex; surfaced after the embed-coverage
+	// catch-up above, before a clean OK.
+	if freshness.ReindexRecommended {
+		return "upgrade_reindex_recommended", "A newer 2nb improved indexing for this vault. Run `2nb index` to apply it."
 	}
 	// All content-bearing docs are embedded. Any remaining docs are empty notes,
 	// which are hidden from the status counts, so this reads as a clean OK.

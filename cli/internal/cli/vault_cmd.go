@@ -299,7 +299,7 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	}
 	wg.Wait()
 
-	portStatus, portAction := derivePortability(ctx, cfg, embedder, vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded)
+	portStatus, portAction := derivePortability(ctx, cfg, embedder, vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded, vault.CheckIndexFreshness(v.DB))
 
 	status := VaultStatus{
 		Path:                v.Root,

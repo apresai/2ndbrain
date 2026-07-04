@@ -28,7 +28,7 @@ const driverName = "sqlite"
 // newer 2nb and will be refused at open time with an upgrade hint — this
 // is cheaper than risking silent corruption if a future migration adds
 // required columns or behavior.
-const MaxSchemaVersion = 3
+const MaxSchemaVersion = 4
 
 type DB struct {
 	conn *sql.DB
@@ -184,6 +184,12 @@ func (db *DB) migrate() error {
 
 	if version < 3 {
 		if err := db.applyMigration(3, schemaV3Statements, isDuplicateColumnOrTable); err != nil {
+			return err
+		}
+	}
+
+	if version < 4 {
+		if err := db.applyMigration(4, schemaV4Statements, isDuplicateColumnOrTable); err != nil {
 			return err
 		}
 	}

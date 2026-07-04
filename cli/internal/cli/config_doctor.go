@@ -9,6 +9,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -89,6 +90,7 @@ func runConfigDoctor(cmd *cobra.Command, args []string) error {
 	st := doctorVaultState{
 		totalDocs: totalDocs, embeddedDocs: embeddedDocs, embeddableUnembedded: embeddableUnembedded,
 		vaultDim: vaultDim, vaultModels: vaultModels,
+		freshness: vault.CheckIndexFreshness(v.DB),
 	}
 
 	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
@@ -143,6 +145,7 @@ type doctorVaultState struct {
 	embeddableUnembedded int
 	vaultDim             int
 	vaultModels          []string
+	freshness            vault.IndexFreshness
 }
 
 // buildDoctorChecks runs every diagnostic and returns the results in display
@@ -221,9 +224,10 @@ func buildDoctorChecks(ctx context.Context, vaultRoot string, cfg ai.AIConfig, e
 	// 5. Stored embeddings match the current selection (dimension / model).
 	//    Reuse derivePortability so doctor and `ai status` never disagree.
 	status, action := derivePortability(ctx, cfg, embedder,
-		st.vaultDim, st.vaultModels, st.totalDocs, st.embeddedDocs, st.embeddableUnembedded)
+		st.vaultDim, st.vaultModels, st.totalDocs, st.embeddedDocs, st.embeddableUnembedded, st.freshness)
 	switch status {
-	case "ok", "unindexed", "empty_vault", "stale", "no_provider":
+	case "ok", "unindexed", "empty_vault", "stale", "no_provider",
+		"upgrade_reindex_recommended", "upgrade_reembed_recommended":
 		// These are healthy or merely "needs indexing" states, not config
 		// breakage; doctor reports them as OK with the status as detail.
 		checks = append(checks, DoctorCheck{Name: "embeddings match selection", OK: true, Detail: portabilityLabel(status)})
