@@ -150,7 +150,10 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 		return fmt.Errorf("delete old chunks: %w", err)
 	}
 
-	chunks := document.ChunkDocument(doc)
+	// ChunkForStorage sub-splits any oversized heading section so a chunk can't
+	// exceed Nova's embed limits; the vec search joins vec_chunks -> chunks by
+	// chunk_id, so this MUST match embed.Document's chunk set exactly.
+	chunks := document.ChunkForStorage(doc)
 	if err := db.UpsertChunksTx(tx, chunks); err != nil {
 		return fmt.Errorf("upsert chunks: %w", err)
 	}

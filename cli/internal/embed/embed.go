@@ -27,7 +27,10 @@ import (
 func Document(ctx context.Context, db *store.DB, embedder ai.EmbeddingProvider, docID string, parsed *document.Document, model string) (int, error) {
 	parsed.ID = docID
 
-	chunks := document.ChunkDocument(parsed)
+	// ChunkForStorage matches the indexer's chunk set (heading chunks with any
+	// oversized section sub-split), so the vec search's vec_chunks -> chunks
+	// chunk_id join stays valid and no chunk exceeds Nova's embed limits.
+	chunks := document.ChunkForStorage(parsed)
 	// Dedup the kept chunks by ID (last occurrence wins), mirroring the chunks
 	// table's INSERT ... ON CONFLICT(id) DO UPDATE collapse. Two sections that
 	// share a heading path (e.g. two `## Notes`, a repeated changelog date)
