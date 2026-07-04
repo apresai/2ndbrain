@@ -40,5 +40,11 @@ func initAIProviders(v *vault.Vault) {
 				fmt.Fprintf(os.Stderr, "warning: openrouter init: %v\n", err)
 			}
 		}
+	case "llama-local":
+		if err := ai.InitLlama(ctx, ai.DefaultRegistry, cfg.Llama, cfg); err != nil {
+			if !flagPorcelain {
+				fmt.Fprintf(os.Stderr, "warning: llama-local init: %v\n", err)
+			}
+		}
 	}
 }

@@ -256,6 +256,11 @@ var settableConfigKeys = []string{
 	"ai.openrouter.disabled",
 	"ai.ollama.endpoint",
 	"ai.ollama.disabled",
+	"ai.llama.disabled",
+	"ai.llama.engine_path",
+	"ai.llama.gen_endpoint",
+	"ai.llama.embed_endpoint",
+	"ai.llama.rerank_endpoint",
 }
 
 func unknownConfigKeyError(key string) error {
@@ -304,6 +309,16 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return cfg.Ollama.Endpoint, nil
 	case "ai.ollama.disabled":
 		return strconv.FormatBool(cfg.Ollama.Disabled), nil
+	case "ai.llama.disabled":
+		return strconv.FormatBool(cfg.Llama.Disabled), nil
+	case "ai.llama.engine_path":
+		return cfg.Llama.EnginePath, nil
+	case "ai.llama.gen_endpoint":
+		return cfg.Llama.GenEndpoint, nil
+	case "ai.llama.embed_endpoint":
+		return cfg.Llama.EmbedEndpoint, nil
+	case "ai.llama.rerank_endpoint":
+		return cfg.Llama.RerankEndpoint, nil
 	default:
 		return "", unknownConfigKeyError(key)
 	}
@@ -437,6 +452,20 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return err
 		}
 		cfg.Ollama.Disabled = b
+	case "ai.llama.disabled":
+		b, err := parseConfigBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Llama.Disabled = b
+	case "ai.llama.engine_path":
+		cfg.Llama.EnginePath = value
+	case "ai.llama.gen_endpoint":
+		cfg.Llama.GenEndpoint = value
+	case "ai.llama.embed_endpoint":
+		cfg.Llama.EmbedEndpoint = value
+	case "ai.llama.rerank_endpoint":
+		cfg.Llama.RerankEndpoint = value
 	default:
 		return unknownConfigKeyError(key)
 	}

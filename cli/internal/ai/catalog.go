@@ -236,6 +236,47 @@ func BuiltinCatalog() []ModelInfo {
 		})
 	}
 
+	// --- llama-local Embedding (bundled llama.cpp engine) ---
+	// EmbeddingGemma is a symmetric bi-encoder (unlike Nova's asymmetric
+	// query/index purpose), so its noise floor doesn't collapse — seed a
+	// mid-range threshold and let `2nb models calibrate` tune it per vault.
+	models = append(models, ModelInfo{
+		ID:                             "embeddinggemma-300m",
+		Name:                           "EmbeddingGemma 300M",
+		Provider:                       llamaProviderName,
+		Type:                           "embedding",
+		Dimensions:                     768,
+		SupportedDimensions:            []int{128, 256, 512, 768}, // Matryoshka
+		ContextLen:                     2048,
+		Local:                          true,
+		Tier:                           TierVerified,
+		ConfigHint:                     configHint(llamaProviderName, "embedding", "embeddinggemma-300m"),
+		RecommendedSimilarityThreshold: 0.55,
+		Notes:                          "768d Matryoshka (→512/256/128); 2K context; symmetric — run `2nb models calibrate`",
+		InvokeStrategy:                 StrategyLlamaEmbeddings,
+	})
+
+	// --- llama-local Generation (bundled llama.cpp engine) ---
+	for _, m := range []struct {
+		id, name string
+		ctxLen   int
+	}{
+		{"gemma4-e4b", "Gemma 4 E4B", 131072},
+		{"gemma4-e2b", "Gemma 4 E2B", 131072},
+	} {
+		models = append(models, ModelInfo{
+			ID:             m.id,
+			Name:           m.name,
+			Provider:       llamaProviderName,
+			Type:           "generation",
+			ContextLen:     m.ctxLen,
+			Local:          true,
+			Tier:           TierVerified,
+			ConfigHint:     configHint(llamaProviderName, "generation", m.id),
+			InvokeStrategy: StrategyLlamaChat,
+		})
+	}
+
 	for i := range models {
 		switch {
 		case models[i].Local:
