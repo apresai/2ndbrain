@@ -90,16 +90,20 @@ func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string
 	}, nil
 }
 
-// buildRAGPrompt assembles the generation prompt. With empty history the
-// output must remain byte-identical to the pre-multi-turn prompt so every
-// existing ask/kb_ask caller's behavior is unchanged; a golden test pins it.
+// buildRAGPrompt assembles the generation prompt. The closing instruction is
+// deliberately "Answer based only on..." with no "concisely" adverb: an LLM-jury
+// A/B (internal/eval TestPromptSweep, N=30 then N=60 on fresh questions) measured
+// that dropping "concisely" lifts correctness/completeness AND grounding by
+// ~+0.10 composite, while "answer thoroughly" and inline citations both REGRESSED
+// grounding (hallucination). A golden test pins the exact bytes so any future
+// wording change is a conscious act.
 func buildRAGPrompt(question string, history []ChatTurn, contextParts []string) string {
 	if len(history) == 0 {
 		return fmt.Sprintf(`Based on the following documents from the knowledge base, answer this question: %s
 
 %s
 
-Answer concisely based only on the provided documents. If the documents don't contain the answer, say so.`, question, strings.Join(contextParts, "\n\n"))
+Answer based only on the provided documents. If the documents don't contain the answer, say so.`, question, strings.Join(contextParts, "\n\n"))
 	}
 
 	return fmt.Sprintf(`Based on the following documents from the knowledge base, answer this question: %s
@@ -109,7 +113,7 @@ Conversation so far (for reference only; the documents below are the only source
 
 %s
 
-Answer concisely based only on the provided documents. Use the conversation only to understand what the user is referring to. If the documents don't contain the answer, say so, even if an earlier answer in the conversation suggested otherwise.`,
+Answer based only on the provided documents. Use the conversation only to understand what the user is referring to. If the documents don't contain the answer, say so, even if an earlier answer in the conversation suggested otherwise.`,
 		question, serializeHistory(history), strings.Join(contextParts, "\n\n"))
 }
 

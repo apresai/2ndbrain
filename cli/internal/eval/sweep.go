@@ -14,10 +14,12 @@ import (
 
 // These mirror the hardcoded production RAG prompt (ai/rag.go) so a PromptVariant
 // with the default System+Instruction and no citation reproduces production
-// byte-for-byte — making the P0 baseline in the prompt A/B a faithful control.
+// byte-for-byte. defaultRAGInstruction tracks the SHIPPED prompt (the prompt A/B
+// removed the "concisely" adverb — see TestPromptSweep); keep it in sync with
+// ai/rag.go's buildRAGPrompt.
 const (
 	defaultRAGSystem      = "You are a helpful assistant answering questions about a knowledge base. Use only the provided context to answer."
-	defaultRAGInstruction = "Answer concisely based only on the provided documents. If the documents don't contain the answer, say so."
+	defaultRAGInstruction = "Answer based only on the provided documents. If the documents don't contain the answer, say so."
 	citeInstruction       = " Cite the source note title(s) you drew each fact from in square brackets, e.g. [Note Title]."
 )
 

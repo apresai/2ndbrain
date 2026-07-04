@@ -14,12 +14,16 @@ import (
 // promptVariants isolate the two generation-side levers the config study pointed
 // at: the "concisely" wording (which may cap the completeness the jury grades)
 // and inline source citation. Retrieval + generator are held constant.
+// P0 pins the OLD "concisely" wording explicitly (not defaultRAGInstruction, which
+// now tracks the shipped neutral prompt) so this A/B stays a valid old-vs-shipped
+// comparison. P2 == the shipped default; P1/P3/P4 are the refuted alternatives
+// (thorough / citations both regressed grounding).
 var promptVariants = []PromptVariant{
-	{Name: "P0 concise (current)", Instruction: defaultRAGInstruction},
+	{Name: "P0 concise (was shipped)", Instruction: "Answer concisely based only on the provided documents. If the documents don't contain the answer, say so."},
 	{Name: "P1 thorough", Instruction: "Answer thoroughly and completely, including all relevant details from the documents. If the documents don't contain the answer, say so."},
-	{Name: "P2 neutral", Instruction: "Answer based only on the provided documents. If the documents don't contain the answer, say so."},
+	{Name: "P2 neutral (now shipped)", Instruction: defaultRAGInstruction},
 	{Name: "P3 thorough+cite", Instruction: "Answer thoroughly and completely, including all relevant details from the documents. If the documents don't contain the answer, say so.", Cite: true},
-	{Name: "P4 concise+cite", Instruction: defaultRAGInstruction, Cite: true},
+	{Name: "P4 concise+cite", Instruction: "Answer concisely based only on the provided documents. If the documents don't contain the answer, say so.", Cite: true},
 }
 
 // promptJury adds a non-Anthropic third juror (llama3-70b) to the opus4.6+deepseek
@@ -69,8 +73,14 @@ func TestPromptSweep_Bedrock(t *testing.T) {
 		meanLen                    float64
 		n                          int
 	}
+	variants := promptVariants
+	if os.Getenv("EVAL_PROMPT_CONFIRM") != "" {
+		// Confirmation run: only the baseline P0 and the front-runner P2, at a
+		// larger N on fresh questions, to tighten the borderline P2-vs-P0 margin.
+		variants = []PromptVariant{promptVariants[0], promptVariants[2]}
+	}
 	var rows []row
-	for _, pv := range promptVariants {
+	for _, pv := range variants {
 		var sc, scc, scp, scg, lenSum float64
 		var count int
 		for i, item := range qa {
