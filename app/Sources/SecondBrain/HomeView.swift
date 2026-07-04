@@ -35,6 +35,9 @@ struct HomeView: View {
                 if let warning = cliVersionWarning {
                     cliWarningBanner(warning)
                 }
+                if let stale = indexStaleWarning {
+                    indexStaleBanner(stale)
+                }
                 vaultCard
                 Divider()
                 aiCard
@@ -80,6 +83,40 @@ struct HomeView: View {
     private var cliVersionWarning: String? {
         guard CLIVersion.isOlder(cli: appState.cliVersion, thanApp: appVersion) else { return nil }
         return "Your 2nb CLI (\(appState.cliVersion ?? "unknown")) is older than this app (\(appVersion)). Some actions may fail until you update it."
+    }
+
+    /// A newer 2nb changed indexing/embedding logic, so this vault's index is
+    /// stale (mirrors the CLI's `upgrade_reindex/reembed_recommended` portability
+    /// states). The button runs the same reindex/re-embed the CLI would prompt.
+    private var indexStaleWarning: (message: String, forceReembed: Bool)? {
+        switch appState.aiStatus?.portabilityStatus {
+        case "upgrade_reembed_recommended":
+            return ("A newer 2nb improved chunking and embeddings for this vault. Re-embed to apply the improvements.", true)
+        case "upgrade_reindex_recommended":
+            return ("A newer 2nb improved indexing for this vault. Reindex to apply the improvements.", false)
+        default:
+            return nil
+        }
+    }
+
+    @ViewBuilder
+    private func indexStaleBanner(_ info: (message: String, forceReembed: Bool)) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(info.message)
+                .font(.callout)
+            Spacer()
+            Button(info.forceReembed ? "Re-embed" : "Reindex") {
+                actionMessage = nil
+                appState.rebuildIndex(forceReembed: info.forceReembed)
+            }
+            .controlSize(.small)
+            .disabled(appState.isIndexing)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
