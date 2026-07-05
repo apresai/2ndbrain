@@ -209,12 +209,20 @@ func EnsureModelProgress(ctx context.Context, id string, onProgress ProgressFunc
 // bound the fetch with the context.
 var downloadHTTPClient = &http.Client{Timeout: 0}
 
+// downloadStallTimeout bounds a STALLED transfer (a half-open socket delivering
+// no bytes) without capping the total time — a legitimately slow multi-GB pull
+// that keeps making progress is never aborted, but a dead connection can't hang
+// forever. A blanket http.Client.Timeout would wrongly kill slow downloads.
+const downloadStallTimeout = 60 * time.Second
+
 // downloadTo streams url into path and returns the lower-case hex sha256 of the
 // bytes written, computed on the fly (no second read of the file). When
 // onProgress is non-nil it is invoked ~5x/sec with (bytesDone, total); total
 // prefers the response Content-Length, falling back to the manifest's expected
 // size, or -1 when neither is known.
 func downloadTo(ctx context.Context, url, path string, total int64, onProgress ProgressFunc) (string, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
@@ -242,8 +250,15 @@ func downloadTo(ctx context.Context, url, path string, total int64, onProgress P
 	if onProgress != nil {
 		src = &progressReader{r: resp.Body, total: total, onProgress: onProgress}
 	}
+	// Idle watchdog: cancel the request if no bytes arrive for the stall timeout.
+	watchdog := time.AfterFunc(downloadStallTimeout, cancel)
+	defer watchdog.Stop()
+	src = &stallReader{r: src, reset: func() { watchdog.Reset(downloadStallTimeout) }}
 	if _, err := io.Copy(io.MultiWriter(f, h), src); err != nil {
 		f.Close()
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("download %s stalled: no data for %s", url, downloadStallTimeout)
+		}
 		return "", fmt.Errorf("write %s: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
@@ -267,6 +282,22 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	if now := time.Now(); err != nil || now.Sub(p.last) >= 200*time.Millisecond {
 		p.onProgress(p.done, p.total)
 		p.last = now
+	}
+	return n, err
+}
+
+// stallReader resets an idle watchdog on each non-empty read, so a transfer that
+// stops delivering bytes is cancelled by the watchdog rather than blocking the
+// io.Copy forever.
+type stallReader struct {
+	r     io.Reader
+	reset func()
+}
+
+func (s *stallReader) Read(b []byte) (int, error) {
+	n, err := s.r.Read(b)
+	if n > 0 {
+		s.reset()
 	}
 	return n, err
 }
