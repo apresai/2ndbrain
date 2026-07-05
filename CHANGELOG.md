@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.13.1] - 2026-07-05
+
+### Added
+- `ai engine rm` (aliases `remove`/`delete`) CLI command to delete cached local model weights and free disk, with `--json` reporting `{removed[], freed_bytes}`.
+
+### Changed
+- Hide the `llama-local` provider across the macOS GUI (provider card and Local models section in the AI Hub) behind a feature flag, since the `llama-server` engine binary is not yet provisioned; the CLI plumbing remains intact.
+- Document `llama-local` as experimental and CLI-only in the README to match the release-gated GUI state.
+
+
 ## [0.13.0] - 2026-07-05
 
 ### Added
