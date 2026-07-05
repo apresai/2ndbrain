@@ -271,7 +271,7 @@ func runAIEnginePull(cmd *cobra.Command, args []string) error {
 	var failed bool
 	for _, id := range args {
 		fmt.Printf("Pulling %s...\n", id)
-		path, err := llama.EnsureModel(ctx, id)
+		path, err := llama.EnsureModelProgress(ctx, id, enginePullProgress(id))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  %s: %v\n", id, err)
 			failed = true
@@ -283,4 +283,24 @@ func runAIEnginePull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("one or more models could not be pulled")
 	}
 	return nil
+}
+
+// enginePullProgress renders a single \r-updated download progress line to
+// stderr. Returns nil (no callback → no output) when stderr isn't a TTY, so
+// piped/CI logs stay clean.
+func enginePullProgress(id string) llama.ProgressFunc {
+	if !stderrIsTTY() {
+		return nil
+	}
+	return func(done, total int64) {
+		if total > 0 {
+			pct := float64(done) / float64(total) * 100
+			fmt.Fprintf(os.Stderr, "\r  %-22s %5.1f%%  (%.0f / %.0f MB)   ", id, pct, float64(done)/1e6, float64(total)/1e6)
+			if done >= total {
+				fmt.Fprintln(os.Stderr)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "\r  %-22s %.0f MB   ", id, float64(done)/1e6)
+		}
+	}
 }

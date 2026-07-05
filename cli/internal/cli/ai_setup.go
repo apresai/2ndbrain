@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/llama"
 	"github.com/spf13/cobra"
 )
 
@@ -65,18 +66,19 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		fmt.Println("  1) bedrock     — AWS Bedrock: Claude Haiku 4.5 + Nova embeddings (default, recommended)")
 		fmt.Println("  2) openrouter  — OpenRouter API (opt-in; many models, pay-per-token)")
 		fmt.Println("  3) ollama      — Local models via Ollama (opt-in; free + private, requires install)")
-		choice := promptChoice(scanner, "Choice", 3)
-		provider = []string{"bedrock", "openrouter", "ollama"}[choice-1]
+		fmt.Println("  4) llama-local — Bundled Gemma models via llama.cpp (opt-in; fully offline, no API key; downloads ~3-8 GB)")
+		choice := promptChoice(scanner, "Choice", 4)
+		provider = []string{"bedrock", "openrouter", "ollama", "llama-local"}[choice-1]
 	}
 
 	switch provider {
-	case "bedrock", "openrouter", "ollama":
+	case "bedrock", "openrouter", "ollama", "llama-local":
 	default:
-		return fmt.Errorf("invalid provider %q (use: bedrock, openrouter, ollama)", provider)
+		return fmt.Errorf("invalid provider %q (use: bedrock, openrouter, ollama, llama-local)", provider)
 	}
 	cfg.Provider = provider
-	// Enable the chosen provider: Ollama and OpenRouter ship disabled (opt-in),
-	// so selecting one here makes its models visible in selection UIs.
+	// Enable the chosen provider: the opt-in providers ship disabled, so
+	// selecting one here makes its models visible in selection UIs.
 	switch provider {
 	case "bedrock":
 		cfg.Bedrock.Disabled = false
@@ -84,6 +86,8 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		cfg.OpenRouter.Disabled = false
 	case "ollama":
 		cfg.Ollama.Disabled = false
+	case "llama-local":
+		cfg.Llama.Disabled = false
 	}
 	fmt.Printf("\nProvider: %s\n", provider)
 
@@ -101,6 +105,8 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		if err := setupOllama(ctx, &cfg); err != nil {
 			return err
 		}
+	case "llama-local":
+		fmt.Println("No API key needed — models run locally via the bundled llama.cpp engine (2nb ai engine).")
 	}
 
 	verifiedModels, err := loadVerifiedModelCatalog(ctx, cfg, v.Root)
@@ -129,6 +135,10 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 			if provider == "ollama" {
 				ollamaPullIfNeeded(scanner, embedID)
 				ollamaPullIfNeeded(scanner, genID)
+			}
+			if provider == "llama-local" {
+				llamaPullIfNeeded(scanner, embedID)
+				llamaPullIfNeeded(scanner, genID)
 			}
 		}
 	}
@@ -382,6 +392,28 @@ func ollamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 	}
 }
 
+// llamaPullIfNeeded downloads a bundled local model if it isn't already cached,
+// after an opt-in prompt (weights are 100s of MB to GB — never downloaded
+// silently, matching re:Gist's on-device flow). Verifies the SHA256 pinned in
+// the manifest and shows a progress bar via enginePullProgress.
+func llamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
+	art, ok := llama.ArtifactFor(modelID)
+	if !ok {
+		return // not a manifest model (e.g. a custom id) — nothing to pull
+	}
+	if llama.ModelStatus(modelID).Present {
+		return // already downloaded + on disk
+	}
+	fmt.Printf("\nModel %s is not downloaded (~%.1f GB).\n", modelID, float64(art.SizeBytes)/1e9)
+	if !promptYN(scanner, "Download now?", true) {
+		fmt.Printf("Skipped. Download later with: 2nb ai engine pull %s\n", modelID)
+		return
+	}
+	if _, err := llama.EnsureModelProgress(context.Background(), modelID, enginePullProgress(modelID)); err != nil {
+		fmt.Fprintf(os.Stderr, "  download failed: %v\n", err)
+	}
+}
+
 // --- Probe with retry ---
 
 // probeWithRetry tests the model, offering to pick a different one on failure.
@@ -485,6 +517,10 @@ func easyModeDefaults(provider string) (embedID, genID string, dims int) {
 		return "nvidia/llama-nemotron-embed-vl-1b-v2:free", "google/gemma-4-31b-it:free", 1024
 	case "ollama":
 		return "nomic-embed-text", "qwen2.5:0.5b", 768
+	case "llama-local":
+		// The bundled stack: EmbeddingGemma 300M + Gemma 4 E2B (the smaller,
+		// ~3.1 GB generation model). Users can switch to E4B for higher quality.
+		return "embeddinggemma-300m", "gemma4-e2b", 768
 	default:
 		return "", "", 0
 	}
