@@ -292,12 +292,17 @@ func enginePullProgress(id string) llama.ProgressFunc {
 	if !stderrIsTTY() {
 		return nil
 	}
+	var finished bool // latch so the terminating newline prints exactly once
 	return func(done, total int64) {
+		if finished {
+			return
+		}
 		if total > 0 {
 			pct := float64(done) / float64(total) * 100
 			fmt.Fprintf(os.Stderr, "\r  %-22s %5.1f%%  (%.0f / %.0f MB)   ", id, pct, float64(done)/1e6, float64(total)/1e6)
 			if done >= total {
 				fmt.Fprintln(os.Stderr)
+				finished = true
 			}
 		} else {
 			fmt.Fprintf(os.Stderr, "\r  %-22s %.0f MB   ", id, float64(done)/1e6)

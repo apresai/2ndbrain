@@ -136,10 +136,6 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 				ollamaPullIfNeeded(scanner, embedID)
 				ollamaPullIfNeeded(scanner, genID)
 			}
-			if provider == "llama-local" {
-				llamaPullIfNeeded(scanner, embedID)
-				llamaPullIfNeeded(scanner, genID)
-			}
 		}
 	}
 
@@ -177,10 +173,16 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		cfg.Dimensions = dims
 	}
 
-	// For Ollama, offer to pull models if not already pulled.
+	// For local providers, offer to pull the selected models if not present.
+	// This runs after model selection (not just in easy mode), so it covers the
+	// easy, custom, and --flag-driven paths uniformly with one prompt each.
 	if provider == "ollama" {
 		ollamaPullIfNeeded(scanner, embedID)
 		ollamaPullIfNeeded(scanner, genID)
+	}
+	if provider == "llama-local" {
+		llamaPullIfNeeded(scanner, embedID)
+		llamaPullIfNeeded(scanner, genID)
 	}
 
 	// Step 4: Probe models. A passing probe is persisted to the per-vault user
