@@ -28,6 +28,7 @@ The canonical `2nb` agent skill lives in this repo, so any agent (Warp, Claude C
 - [`obsidian/README.md`](docs/obsidian/README.md) — Obsidian-native pivot documentation and architectural model
 - [`multi-machine-setup.md`](docs/multi-machine-setup.md): what 2nb state ports across machines (the in-vault `.2ndbrain/` sidecar, and how git vs file-sync changes that) vs what stays machine-local (CLI, AI creds, MCP wiring, skill), the fresh-machine checklist, and the stale-calibration gotcha
 - [`claude-md-snippet.md`](docs/claude-md-snippet.md): copy-paste CLAUDE.md block explaining what 2nb is and when an agent should reach for it (a lightweight, always-loaded complement to the installable skill)
+- [`llama-local-engine.md`](docs/llama-local-engine.md): the llama.cpp local-engine build + status. Architecture (out-of-process `llama-server` subprocess, three roles), what's built vs the gap (the engine binary is never provisioned, so llama-local can't run and is hidden in the GUI behind `localEngineFeatureEnabled`), and the path forward (bundle the ggml-org macos-arm64 payload, signed with the app; download + brew as fallbacks)
 
 ## Versioning
 
