@@ -55,7 +55,9 @@ struct AIHubView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         providersSection
-                        localModelsSection
+                        if localEngineFeatureEnabled {
+                            localModelsSection
+                        }
                         activeSection
                         catalogSection
                     }
@@ -139,7 +141,7 @@ struct AIHubView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("Providers")
             HStack(spacing: 12) {
-                ForEach(aiStatus?.providers ?? fallbackProviders()) { p in
+                ForEach((aiStatus?.providers ?? fallbackProviders()).filter { localEngineFeatureEnabled || $0.name != "llama-local" }) { p in
                     providerCard(p)
                 }
             }
@@ -147,6 +149,15 @@ struct AIHubView: View {
     }
 
     // MARK: - Local models (download)
+
+    /// The llama-local (bundled Gemma) provider is NOT user-ready: the
+    /// `llama-server` engine binary is not provisioned (neither bundled in the
+    /// app nor downloaded), so nothing can run locally yet. Until it ships, hide
+    /// every llama-local GUI surface behind this one flag — the download /
+    /// activate / delete plumbing and the CLI `ai engine` commands stay, so
+    /// flipping this to `true` (once the engine is bundled) re-enables the whole
+    /// section and the provider card with no rewrite.
+    private let localEngineFeatureEnabled = false
 
     /// The one-click local stack: EmbeddingGemma (embed) + Gemma 4 E2B (gen) +
     /// BGE reranker (~4 GB). The larger Gemma 4 E4B stays a `2nb ai engine pull`
