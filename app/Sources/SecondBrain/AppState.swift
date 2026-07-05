@@ -1414,9 +1414,18 @@ final class AppState {
                     let d = handle.availableData
                     if d.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(d) }
                 }
-                process.terminationHandler = { proc in
+                process.terminationHandler = { [weak self] proc in
                     stdoutPipe.fileHandleForReading.readabilityHandler = nil
                     stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    // Drain any stdout buffered at exit: the readability source
+                    // can be cancelled by termination before the final "done"
+                    // line is delivered, which would under-count completed models.
+                    let tailEvents = stream.ingest(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+                    if !tailEvents.isEmpty {
+                        Task { @MainActor [weak self] in
+                            for ev in tailEvents { self?.applyPullEvent(ev) }
+                        }
+                    }
                     drain.appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
                     let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
                     continuation.resume(returning: (proc.terminationStatus, err))
@@ -2896,10 +2905,13 @@ struct PullEvent: Codable, Sendable {
 /// concurrently), so the internal buffer + decoder need no extra locking —
 /// mirroring `PipeDrain`.
 final class PullEventStream: @unchecked Sendable {
+    private let lock = NSLock()
     private var data = Data()
     private let decoder = JSONDecoder()
 
     func ingest(_ chunk: Data) -> [PullEvent] {
+        lock.lock()
+        defer { lock.unlock() }
         data.append(chunk)
         var events: [PullEvent] = []
         while let nl = data.firstIndex(of: 0x0A) {
