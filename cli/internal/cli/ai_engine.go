@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -266,18 +267,51 @@ func runAIEngineStatus(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// pullEvent is one line-delimited JSON progress record from `ai engine pull
+// --json` (consumed by the macOS app's download button). status is
+// "progress" (with done/total), "done" (with path), or "error" (with error).
+type pullEvent struct {
+	Model  string `json:"model"`
+	Status string `json:"status"`
+	Done   int64  `json:"done,omitempty"`
+	Total  int64  `json:"total,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 func runAIEnginePull(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+	jsonMode := getFormat(cmd) == output.FormatJSON
+	var enc *json.Encoder
+	if jsonMode {
+		enc = json.NewEncoder(os.Stdout) // JSONL: one event per line
+	}
 	var failed bool
 	for _, id := range args {
-		fmt.Printf("Pulling %s...\n", id)
-		path, err := llama.EnsureModelProgress(ctx, id, enginePullProgress(id))
+		var prog llama.ProgressFunc
+		if jsonMode {
+			prog = func(done, total int64) {
+				_ = enc.Encode(pullEvent{Model: id, Status: "progress", Done: done, Total: total})
+			}
+		} else {
+			fmt.Printf("Pulling %s...\n", id)
+			prog = enginePullProgress(id)
+		}
+		path, err := llama.EnsureModelProgress(ctx, id, prog)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  %s: %v\n", id, err)
+			if jsonMode {
+				_ = enc.Encode(pullEvent{Model: id, Status: "error", Error: err.Error()})
+			} else {
+				fmt.Fprintf(os.Stderr, "  %s: %v\n", id, err)
+			}
 			failed = true
 			continue
 		}
-		fmt.Printf("  %s → %s\n", id, path)
+		if jsonMode {
+			_ = enc.Encode(pullEvent{Model: id, Status: "done", Path: path})
+		} else {
+			fmt.Printf("  %s → %s\n", id, path)
+		}
 	}
 	if failed {
 		return fmt.Errorf("one or more models could not be pulled")

@@ -55,6 +55,7 @@ struct AIHubView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         providersSection
+                        localModelsSection
                         activeSection
                         catalogSection
                     }
@@ -142,6 +143,91 @@ struct AIHubView: View {
                     providerCard(p)
                 }
             }
+        }
+    }
+
+    // MARK: - Local models (download)
+
+    /// The one-click local stack: EmbeddingGemma + Gemma 4 E2B + BGE reranker
+    /// (~4 GB). The larger Gemma 4 E4B stays a `2nb ai engine pull` power option.
+    private var localStackIDs: [String] { ["embeddinggemma-300m", "gemma4-e2b", "bge-reranker-v2-m3"] }
+
+    private var localModelsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Local models")
+            if let dl = appState.localModelDownload {
+                if dl.finished {
+                    localModelsTerminal(dl)
+                } else {
+                    localModelsProgress(dl)
+                }
+            } else {
+                localModelsIdle
+            }
+        }
+    }
+
+    private var localModelsIdle: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Run Gemma generation, embeddings, and reranking fully offline via the bundled llama.cpp engine. Downloads about 4 GB.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Download local models") { confirmAndDownload() }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+        }
+    }
+
+    private func localModelsProgress(_ dl: LocalModelDownload) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Downloading \(dl.currentModel.isEmpty ? "…" : dl.currentModel)")
+                    .font(.callout)
+                Spacer()
+                Text("\(dl.completed.count)/\(dl.models.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: dl.fraction)
+            if dl.total > 0 {
+                Text("\(byteString(dl.done)) / \(byteString(dl.total))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func localModelsTerminal(_ dl: LocalModelDownload) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if dl.failed {
+                Label(dl.error ?? "Download failed", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            } else {
+                Label("Downloaded \(dl.completed.count) local model\(dl.completed.count == 1 ? "" : "s")", systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.green)
+            }
+            Button(dl.failed ? "Retry download" : "Download local models") { confirmAndDownload() }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+        }
+    }
+
+    private func byteString(_ n: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+    }
+
+    private func confirmAndDownload() {
+        let alert = NSAlert()
+        alert.messageText = "Download local models?"
+        alert.informativeText = "Downloads about 4 GB (EmbeddingGemma, Gemma 4 E2B, and the BGE reranker) into ~/Library/Caches/2nb so you can run AI fully offline. This can take several minutes."
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            Task { await appState.downloadLocalModels(localStackIDs) }
         }
     }
 

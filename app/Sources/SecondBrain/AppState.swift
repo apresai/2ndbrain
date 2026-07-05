@@ -154,6 +154,10 @@ final class AppState {
     var indexProgress: IndexProgress?
     var showIndexProgress = false
 
+    // Local model download (`ai engine pull --json`) progress, driven by the
+    // AI Hub "Download local models" button. nil when no download is running.
+    var localModelDownload: LocalModelDownload?
+
     // Vault Status panel
     var showVaultStatus: Bool = false
 
@@ -1373,6 +1377,83 @@ final class AppState {
         } catch {
             log.warning("AI status unavailable: \(error.localizedDescription)")
             self.aiStatus = nil
+        }
+    }
+
+    /// Downloads the bundled local model weights via `ai engine pull --json`,
+    /// streaming JSONL progress into `localModelDownload` for a progress bar.
+    /// The models cache is global (not vault-specific); the vault is passed only
+    /// when present, for consistency. Never throws — failures land on the state.
+    func downloadLocalModels(_ ids: [String]) async {
+        guard !ids.isEmpty, localModelDownload?.finished != false else { return }
+        localModelDownload = LocalModelDownload(models: ids)
+        log.info("Local model download started: \(ids.joined(separator: ","), privacy: .public)")
+        do {
+            let result: (exitCode: Int32, stderr: String) = try await withCheckedThrowingContinuation { continuation in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+                let sub = ["ai", "engine", "pull", "--json"] + ids
+                process.arguments = vault.map { CLIPath.args(sub, vault: $0.rootURL) } ?? sub
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
+                let drain = PipeDrain()
+                let stream = PullEventStream() // buffers partial JSONL lines across chunks
+
+                stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { handle.readabilityHandler = nil; return }
+                    let events = stream.ingest(chunk)
+                    guard !events.isEmpty else { return }
+                    Task { @MainActor [weak self] in
+                        for ev in events { self?.applyPullEvent(ev) }
+                    }
+                }
+                stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let d = handle.availableData
+                    if d.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(d) }
+                }
+                process.terminationHandler = { proc in
+                    stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                    stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    drain.appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                    let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
+                    continuation.resume(returning: (proc.terminationStatus, err))
+                }
+                do { try process.run() } catch { continuation.resume(throwing: error) }
+            }
+
+            localModelDownload?.finished = true
+            if result.exitCode != 0 {
+                localModelDownload?.failed = true
+                if localModelDownload?.error == nil {
+                    let trimmed = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    localModelDownload?.error = trimmed.isEmpty ? "download failed (exit \(result.exitCode))" : trimmed
+                }
+            }
+            await refreshAIStatus()
+        } catch {
+            localModelDownload?.finished = true
+            localModelDownload?.failed = true
+            localModelDownload?.error = error.localizedDescription
+        }
+    }
+
+    private func applyPullEvent(_ ev: PullEvent) {
+        guard localModelDownload != nil else { return }
+        localModelDownload?.currentModel = ev.model
+        switch ev.status {
+        case "progress":
+            localModelDownload?.done = ev.done ?? 0
+            localModelDownload?.total = ev.total ?? 0
+        case "done":
+            localModelDownload?.completed.append(ev.model)
+        case "error":
+            localModelDownload?.failed = true
+            localModelDownload?.error = ev.error
+        default:
+            break
         }
     }
 
@@ -2783,6 +2864,53 @@ enum IndexPhase: String {
     case embedding = "Generating embeddings"
     case complete = "Complete"
     case failed = "Failed"
+}
+
+/// Progress state for a local-model download (`ai engine pull --json`).
+struct LocalModelDownload {
+    let models: [String]
+    var currentModel: String = ""
+    var done: Int64 = 0
+    var total: Int64 = 0
+    var completed: [String] = []
+    var failed = false
+    var error: String?
+    var finished = false
+    /// Fraction of the CURRENT model (the CLI reports per-file, not aggregate).
+    var fraction: Double { total > 0 ? min(1, Double(done) / Double(total)) : 0 }
+}
+
+/// One line-delimited event from `ai engine pull --json`.
+struct PullEvent: Codable, Sendable {
+    let model: String
+    let status: String
+    let done: Int64?
+    let total: Int64?
+    let path: String?
+    let error: String?
+}
+
+/// Buffers a byte stream and yields decoded `PullEvent`s per complete JSONL
+/// line, holding any trailing partial line across chunks. `@unchecked Sendable`
+/// because a Pipe's `readabilityHandler` invokes `ingest` serially (never
+/// concurrently), so the internal buffer + decoder need no extra locking —
+/// mirroring `PipeDrain`.
+final class PullEventStream: @unchecked Sendable {
+    private var data = Data()
+    private let decoder = JSONDecoder()
+
+    func ingest(_ chunk: Data) -> [PullEvent] {
+        data.append(chunk)
+        var events: [PullEvent] = []
+        while let nl = data.firstIndex(of: 0x0A) {
+            let line = data.subdata(in: data.startIndex..<nl)
+            data.removeSubrange(data.startIndex...nl)
+            if let ev = try? decoder.decode(PullEvent.self, from: line) {
+                events.append(ev)
+            }
+        }
+        return events
+    }
 }
 
 struct IndexProgress {
