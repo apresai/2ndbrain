@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // ModelArtifact is one downloadable GGUF weight file, pinned by URL + sha256.
@@ -25,49 +26,51 @@ type ModelArtifact struct {
 	License   string // SPDX-ish tag, for the readiness report ("apache-2.0", "mit", ...)
 }
 
-// ModelManifest pins the local Gemma-family models. GGUF weights are
-// arch-independent, so there is no GOARCH key here (only the engine binary is
-// arch-specific — see the engine manifest, added with the download flow in the
-// packaging phase).
-//
-// SHA256 values are intentionally empty until the hosting decision is made
-// (mirror on the 2ndbrain GitHub releases vs. Hugging Face direct) and the real
-// hashes are pinned. EnsureModel FAILS CLOSED on an empty SHA256 rather than
-// accepting an unverified multi-GB download, so `2nb ai engine pull` will report
-// "not yet pinned" for these until the hashes land.
+// ModelManifest pins the local Gemma-family models to UNGATED Hugging Face GGUF
+// repos — the same source re:Gist's iOS app uses (Unsloth's Gemma GGUF
+// conversions are ungated even though the base Gemma weights are license-gated
+// on HF). GGUF weights are arch-independent, so there is no GOARCH key here (only
+// the engine binary is arch-specific). Each SHA256 is the file's Hugging Face LFS
+// oid; EnsureModel streams + hashes the download and FAILS CLOSED on a mismatch.
+// The Gemma models are governed by the Gemma Terms of Use
+// (https://ai.google.dev/gemma/terms) — see THIRD_PARTY_NOTICES.
 var ModelManifest = map[string]ModelArtifact{
 	"embeddinggemma-300m": {
-		ID:      "embeddinggemma-300m",
-		Role:    RoleEmbed,
-		File:    "embeddinggemma-300m-Q8_0.gguf",
-		URL:     "", // TODO(pin): host + sha256 (UNKNOWN 3)
-		SHA256:  "",
-		Dims:    768,
-		License: "apache-2.0",
+		ID:        "embeddinggemma-300m",
+		Role:      RoleEmbed,
+		File:      "embeddinggemma-300m-Q8_0.gguf",
+		URL:       "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf",
+		SHA256:    "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+		SizeBytes: 333590944,
+		Dims:      768,
+		License:   "gemma", // Gemma Terms of Use
 	},
 	"gemma4-e4b": {
-		ID:      "gemma4-e4b",
-		Role:    RoleGen,
-		File:    "gemma-4-e4b-it-Q4_K_M.gguf",
-		URL:     "", // TODO(pin)
-		SHA256:  "",
-		License: "apache-2.0",
+		ID:        "gemma4-e4b",
+		Role:      RoleGen,
+		File:      "gemma-4-e4b-it-Q4_K_M.gguf",
+		URL:       "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+		SHA256:    "519b9793ed6ce0ff530f1b7c96e848e08e49e7af4d57bb97f76215963a54146d",
+		SizeBytes: 4977169568,
+		License:   "gemma",
 	},
 	"gemma4-e2b": {
-		ID:      "gemma4-e2b",
-		Role:    RoleGen,
-		File:    "gemma-4-e2b-it-Q4_K_M.gguf",
-		URL:     "", // TODO(pin)
-		SHA256:  "",
-		License: "apache-2.0",
+		ID:        "gemma4-e2b",
+		Role:      RoleGen,
+		File:      "gemma-4-e2b-it-Q4_K_M.gguf",
+		URL:       "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+		SHA256:    "9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d",
+		SizeBytes: 3106736256,
+		License:   "gemma",
 	},
 	"bge-reranker-v2-m3": {
-		ID:      "bge-reranker-v2-m3",
-		Role:    RoleRerank,
-		File:    "bge-reranker-v2-m3-Q8_0.gguf",
-		URL:     "", // TODO(pin): confirm reranker license permits redistribution (UNKNOWN 3)
-		SHA256:  "",
-		License: "", // TODO(pin): verify
+		ID:        "bge-reranker-v2-m3",
+		Role:      RoleRerank,
+		File:      "bge-reranker-v2-m3-Q8_0.gguf",
+		URL:       "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-Q8_0.gguf",
+		SHA256:    "a43c7c9b11a4c1517e5bf95151960e1621d1b72f7a493364b01e386cf1aaa1d3",
+		SizeBytes: 635676416,
+		License:   "apache-2.0",
 	},
 }
 
@@ -149,6 +152,16 @@ func VerifyModel(id string) (bool, error) {
 // instead of accepting an unverified download) and when the manifest has no
 // URL.
 func EnsureModel(ctx context.Context, id string) (string, error) {
+	return EnsureModelProgress(ctx, id, nil)
+}
+
+// ProgressFunc reports download progress: bytes done and the total (or -1 when
+// the server doesn't report a Content-Length).
+type ProgressFunc func(done, total int64)
+
+// EnsureModelProgress is EnsureModel with a progress callback, invoked a few
+// times per second during the (multi-GB) download so the CLI/GUI can render a bar.
+func EnsureModelProgress(ctx context.Context, id string, onProgress ProgressFunc) (string, error) {
 	art, ok := ArtifactFor(id)
 	if !ok {
 		return "", fmt.Errorf("unknown model %q (not in the manifest)", id)
@@ -176,7 +189,7 @@ func EnsureModel(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	tmp := dest + ".part"
-	sum, err := downloadTo(ctx, art.URL, tmp)
+	sum, err := downloadTo(ctx, art.URL, tmp, art.SizeBytes, onProgress)
 	if err != nil {
 		_ = os.Remove(tmp)
 		return "", err
@@ -197,8 +210,11 @@ func EnsureModel(ctx context.Context, id string) (string, error) {
 var downloadHTTPClient = &http.Client{Timeout: 0}
 
 // downloadTo streams url into path and returns the lower-case hex sha256 of the
-// bytes written, computed on the fly (no second read of the file).
-func downloadTo(ctx context.Context, url, path string) (string, error) {
+// bytes written, computed on the fly (no second read of the file). When
+// onProgress is non-nil it is invoked ~5x/sec with (bytesDone, total); total
+// prefers the response Content-Length, falling back to the manifest's expected
+// size, or -1 when neither is known.
+func downloadTo(ctx context.Context, url, path string, total int64, onProgress ProgressFunc) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
@@ -211,13 +227,22 @@ func downloadTo(ctx context.Context, url, path string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s: status %d", url, resp.StatusCode)
 	}
+	if resp.ContentLength > 0 {
+		total = resp.ContentLength
+	} else if total <= 0 {
+		total = -1
+	}
 
 	f, err := os.Create(path)
 	if err != nil {
 		return "", err
 	}
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
+	var src io.Reader = resp.Body
+	if onProgress != nil {
+		src = &progressReader{r: resp.Body, total: total, onProgress: onProgress}
+	}
+	if _, err := io.Copy(io.MultiWriter(f, h), src); err != nil {
 		f.Close()
 		return "", fmt.Errorf("write %s: %w", path, err)
 	}
@@ -225,6 +250,25 @@ func downloadTo(ctx context.Context, url, path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// progressReader wraps the download body, reporting cumulative bytes (throttled
+// to ~5x/sec, plus a final report on EOF/error) to onProgress as it is read.
+type progressReader struct {
+	r          io.Reader
+	done, total int64
+	onProgress ProgressFunc
+	last       time.Time
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.done += int64(n)
+	if now := time.Now(); err != nil || now.Sub(p.last) >= 200*time.Millisecond {
+		p.onProgress(p.done, p.total)
+		p.last = now
+	}
+	return n, err
 }
 
 // fileSHA256 streams a file and returns its lower-case hex sha256.
