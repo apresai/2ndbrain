@@ -46,6 +46,10 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 	switch modelType {
 	case "embedding":
 		err = probeEmbedding(ctx, cfg, provider, modelID)
+	case "rerank":
+		// No rerank probe exists; don't generation-probe a reranker (which would
+		// fail confusingly). Enable a reranker with `2nb config set ai.rerank.enabled true`.
+		err = fmt.Errorf("rerank models aren't testable via `2nb models test` yet")
 	default:
 		var snippet string
 		snippet, err = probeGeneration(ctx, cfg, provider, modelID)

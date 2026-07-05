@@ -126,3 +126,14 @@ func TestDefaultProbeSpec_UnknownKindIsZero(t *testing.T) {
 		t.Errorf("unknown kind should yield zero-valued spec, got %+v", spec)
 	}
 }
+
+// TestProbeAppliesToModel_Rerank: a rerank model has no dedicated probe, so it
+// is excluded from every probe's cost preview (not treated as generation).
+func TestProbeAppliesToModel_Rerank(t *testing.T) {
+	rr := ModelInfo{ID: "cohere.rerank-v3-5:0", Type: "rerank"}
+	for _, p := range []ProbeKind{ProbeBenchGen, ProbeBenchEmbed, ProbeBenchRAG, ProbeTest} {
+		if probeAppliesToModel(rr, DefaultProbeSpec(p)) {
+			t.Errorf("rerank model should not apply to probe %q", p)
+		}
+	}
+}

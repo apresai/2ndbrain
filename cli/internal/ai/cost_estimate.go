@@ -135,6 +135,10 @@ func probeAppliesToModel(m ModelInfo, spec ProbeSpec) bool {
 		return spec.AppliesToEmbedding
 	case "generation":
 		return spec.AppliesToGeneration
+	case "rerank":
+		// Rerank models have no dedicated probe (embed/gen/rag), so they don't
+		// belong in any probe's cost preview.
+		return false
 	}
 	// Unknown model type: apply the probe so the user sees the entry
 	// rather than silently dropping it.

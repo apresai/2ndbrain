@@ -277,6 +277,34 @@ func BuiltinCatalog() []ModelInfo {
 		})
 	}
 
+	// --- Rerank (cross-encoder; optional stage, default OFF — see internal/retrieve) ---
+	// Surfaced so the CLI/GUI can list + select a reranker. Measured to HURT
+	// retrieval at small-vault scale (Recall@10 already ~1.0), so it ships
+	// default-off; listing it does not recommend enabling it.
+	models = append(models, ModelInfo{
+		ID:           "cohere.rerank-v3-5:0",
+		Name:         "Cohere Rerank 3.5",
+		Provider:     "bedrock",
+		Type:         "rerank",
+		ContextLen:   4096,
+		PriceRequest: 0.002, // ~$2 / 1,000 rerank queries (up to 100 docs each); us-east-1 in-region only
+		Local:        false,
+		Tier:         TierVerified,
+		ConfigHint:   configHint("bedrock", "rerank", "cohere.rerank-v3-5:0"),
+		Notes:        "cross-encoder reranker; us-east-1 only; default OFF (measured to hurt at small scale)",
+	})
+	models = append(models, ModelInfo{
+		ID:         "bge-reranker-v2-m3",
+		Name:       "BGE Reranker v2 m3",
+		Provider:   llamaProviderName,
+		Type:       "rerank",
+		ContextLen: 8192,
+		Local:      true,
+		Tier:       TierVerified,
+		ConfigHint: configHint(llamaProviderName, "rerank", "bge-reranker-v2-m3"),
+		Notes:      "local cross-encoder reranker (bundled llama.cpp); default OFF",
+	})
+
 	for i := range models {
 		switch {
 		case models[i].Local:
@@ -293,11 +321,16 @@ func BuiltinCatalog() []ModelInfo {
 
 // configHint returns a human-readable command to switch to a model.
 func configHint(provider, modelType, modelID string) string {
-	field := "ai.generation_model"
-	if modelType == "embedding" {
-		field = "ai.embedding_model"
+	switch modelType {
+	case "embedding":
+		return fmt.Sprintf("2nb config set ai.provider %s && 2nb config set ai.embedding_model %s", provider, modelID)
+	case "rerank":
+		// The reranker resolves from the active provider; enabling it + naming the
+		// model is the actionable step (rerank ships default OFF).
+		return fmt.Sprintf("2nb config set ai.rerank.model %s && 2nb config set ai.rerank.enabled true", modelID)
+	default: // generation
+		return fmt.Sprintf("2nb config set ai.provider %s && 2nb config set ai.generation_model %s", provider, modelID)
 	}
-	return fmt.Sprintf("2nb config set ai.provider %s && 2nb config set %s %s", provider, field, modelID)
 }
 
 // catalogKey is the composite identity key for a ModelInfo: provider + id

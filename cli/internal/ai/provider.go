@@ -141,7 +141,7 @@ type ModelInfo struct {
 	ID       string `json:"id" yaml:"id"`
 	Name     string `json:"name" yaml:"name,omitempty"`
 	Provider string `json:"provider" yaml:"provider"`
-	Type     string `json:"type" yaml:"type"` // "embedding" or "generation"
+	Type     string `json:"type" yaml:"type"` // "embedding", "generation", or "rerank"
 	// UI identity fields are derived at catalog-list time from ID+Provider.
 	// They are JSON-only so user catalogs keep the canonical minimal schema.
 	Vendor         string `json:"vendor,omitempty" yaml:"-"`

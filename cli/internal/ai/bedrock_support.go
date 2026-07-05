@@ -80,6 +80,13 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 		default:
 			return false, "2nb doesn't support this Bedrock embedding invoke format yet"
 		}
+	case "rerank":
+		switch {
+		case strings.HasPrefix(lower, "cohere.rerank"):
+			return true, "" // Cohere Rerank via the Bedrock Rerank API (bedrockagentruntime.Rerank)
+		default:
+			return false, "2nb supports only Cohere Rerank on Bedrock"
+		}
 	default:
 		switch {
 		case strings.HasPrefix(lower, "amazon.nova-canvas"):
@@ -91,7 +98,7 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 		case strings.HasPrefix(lower, "amazon.titan-image-generator"):
 			return false, "2nb doesn't support Bedrock image-generation models"
 		case strings.HasPrefix(lower, "cohere.rerank"):
-			return false, "2nb doesn't support Bedrock reranking models"
+			return false, "cohere.rerank is a reranker (set it via ai.rerank.model), not a generation model"
 		case strings.Contains(lower, ".pegasus-") || strings.HasPrefix(lower, "twelvelabs.pegasus-"):
 			return false, "2nb doesn't support Bedrock video-understanding models"
 		case strings.HasPrefix(lower, "writer.palmyra-vision-7b"):
