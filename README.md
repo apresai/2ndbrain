@@ -88,7 +88,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 | **AWS Bedrock** | Nova Embeddings v2 | Nova Micro, Claude, Llama, any model | Uses existing AWS SSO — zero new keys |
 | **OpenRouter** | Nemotron Embed (free) | Gemma 4 31B (free), GPT-4o, Claude, etc. | `OPENROUTER_API_KEY` env var |
 | **Ollama** | nomic-embed-text | qwen2.5, gemma3, llama3 | `brew install ollama` — fully local |
-| **llama-local** | EmbeddingGemma 300M | Gemma 4 E2B / E4B | bundled llama.cpp, fully offline — `2nb ai engine pull` or the app's Download button |
+| **llama-local** _(experimental, CLI-only)_ | EmbeddingGemma 300M | Gemma 4 E2B / E4B | fully offline via llama.cpp; needs `llama-server` on PATH (`brew install llama.cpp`) since the engine isn't bundled yet. Hidden in the app until it is. |
 
 ### Quick Setup (Any Provider)
 
