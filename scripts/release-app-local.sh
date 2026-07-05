@@ -136,13 +136,56 @@ if ! grep -qE 'flags=[^ ]*runtime' <<<"$cli_codesign"; then
   exit 1
 fi
 
-echo "==> Notarizing (uploads to Apple's notary service and waits)"
+# notarize <artifact>: submit to Apple's notary service and poll to completion,
+# surviving the intermittent notarytool SIGBUS. `xcrun notarytool submit --wait`
+# reliably CRASHES (Bus error 10) mid-poll on the Xcode 26.x toolchain — a bug in
+# Apple's tool (SIGBUS in String(format:) on a worker thread), NOT in our build:
+# signing + upload succeed, only the wait crashes. So we submit WITHOUT --wait,
+# capture the submission id, and poll `notarytool info` on that existing
+# submission — a crashed poll returns empty and we simply poll again, with NO
+# re-upload. Fails (returns 1) only if the final status is not Accepted.
+notarize() {
+  local artifact="$1"
+  echo "  submitting $(basename "$artifact") to the notary service ..."
+  local submit_json sub_id
+  submit_json="$(xcrun notarytool submit "$artifact" \
+    --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+    --output-format json 2>/dev/null || true)"
+  sub_id="$(printf '%s' "$submit_json" | jq -r '.id // empty' 2>/dev/null || true)"
+  if [ -z "$sub_id" ]; then
+    echo "  ERROR: notarytool submit returned no id: $submit_json" >&2
+    return 1
+  fi
+  echo "  submission $sub_id — polling to completion (retries through any notarytool crash, no re-upload) ..."
+  local status=""
+  for _ in $(seq 1 80); do   # up to ~20 min at 15s
+    status="$(xcrun notarytool info "$sub_id" \
+      --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+      --output-format json 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)"
+    case "$status" in
+      Accepted)
+        echo "  notarized: $sub_id (Accepted)"
+        return 0 ;;
+      Invalid|Rejected)
+        echo "  ERROR: notarization $status for $artifact" >&2
+        xcrun notarytool log "$sub_id" \
+          --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" 2>/dev/null | head -60 >&2 || true
+        return 1 ;;
+      *)
+        # "In Progress", or empty from a crashed/failed poll — keep polling.
+        sleep 15 ;;
+    esac
+  done
+  echo "  ERROR: timed out waiting for notarization of $artifact (last status: ${status:-unknown})" >&2
+  return 1
+}
+
+echo "==> Notarizing the app (self-healing poll; survives the notarytool SIGBUS)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 NOTARY_ZIP="$TMP/notarize.zip"
 ditto -c -k --keepParent "$BUNDLE" "$NOTARY_ZIP"
-xcrun notarytool submit "$NOTARY_ZIP" \
-  --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait
+notarize "$NOTARY_ZIP"
 
 echo "==> Stapling the notarization ticket"
 xcrun stapler staple "$BUNDLE"
@@ -160,9 +203,8 @@ rm -f SecondBrain-*.dmg
 echo "==> Building the branded installer DMG"
 bash scripts/make-dmg.sh "$BUNDLE" "$DMG"   # builds + Developer ID-signs the DMG
 
-echo "==> Notarizing the DMG (uploads to Apple's notary service and waits)"
-xcrun notarytool submit "$DMG" \
-  --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait
+echo "==> Notarizing the DMG (self-healing poll)"
+notarize "$DMG"
 
 echo "==> Stapling the DMG"
 xcrun stapler staple "$DMG"
