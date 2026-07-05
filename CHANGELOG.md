@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.13.0] - 2026-07-05
+
+### Added
+- **llama-local provider**: fully offline embeddings and generation via a bundled llama.cpp engine running Gemma weights, with GGUF weights downloaded and sha256-verified on demand (never bundled)
+- **Local reranker** (bge-reranker-v2-m3 over the bundled engine) and an optional **Cohere Rerank 3.5** stage on Bedrock, both default OFF (measured to not help at current vault scale)
+- **`2nb eval`**: user-facing vault search-quality scorecard reporting Recall@10 / R@1 / MRR@10 over a Q&A set generated from your own notes, gated by a cost preview and `--cost-cap`
+- **`2nb ai engine`**: manage the bundled llama.cpp engine (`pull`/`serve`/`install`/`bootout`), with `--json` line-delimited download progress and a 60s idle watchdog
+- Rerank model type and catalog entries, surfaced in `models list` and across the macOS AI Hub (Reranking group, Active rerank slot with on/off toggle)
+- macOS AI Hub **"Download local models"** button that streams `ai engine pull --json` progress into the GUI
+- `ai setup` llama-local branch with an opt-in prompt to download missing Gemma models
+
+### Changed
+- Extracted a shared `internal/retrieve` pipeline backing `search`, `ask`, and MCP, so hybrid fusion and the optional rerank stage stay consistent across every query path
+
+
 ## [0.12.5] - 2026-07-04
 
 ### Added
