@@ -45,6 +45,7 @@ func init() {
 		aiEngineStopCmd,
 		aiEngineStatusCmd,
 		aiEnginePullCmd,
+		aiEngineRmCmd,
 	)
 	aiEngineServeCmd.Flags().StringVar(&engineServeGen, "gen-model", "", "generation model id to serve")
 	aiEngineServeCmd.Flags().StringVar(&engineServeEmbed, "embed-model", "", "embedding model id to serve")
@@ -96,6 +97,14 @@ var aiEnginePullCmd = &cobra.Command{
 	Short: "Download and sha256-verify local model weights into the cache",
 	Args:  cobra.MinimumNArgs(1),
 	RunE:  runAIEnginePull,
+}
+
+var aiEngineRmCmd = &cobra.Command{
+	Use:     "rm <model-id>...",
+	Aliases: []string{"remove", "delete"},
+	Short:   "Delete cached local model weights to free disk space",
+	Args:    cobra.MinimumNArgs(1),
+	RunE:    runAIEngineRm,
 }
 
 func runAIEngineServe(cmd *cobra.Command, _ []string) error {
@@ -277,6 +286,48 @@ type pullEvent struct {
 	Total  int64  `json:"total,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+// rmEvent is one entry in `ai engine rm --json`'s `removed` array.
+type rmEvent struct {
+	Model string `json:"model"`
+	Freed int64  `json:"freed_bytes"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+func runAIEngineRm(cmd *cobra.Command, args []string) error {
+	jsonMode := getFormat(cmd) == output.FormatJSON
+	var results []rmEvent
+	var failed bool
+	var totalFreed int64
+	for _, id := range args {
+		freed, err := llama.RemoveModel(id)
+		ev := rmEvent{Model: id, Freed: freed, OK: err == nil}
+		if err != nil {
+			ev.Error = err.Error()
+			failed = true
+		} else {
+			totalFreed += freed
+		}
+		results = append(results, ev)
+		if !jsonMode {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: %v\n", id, err)
+			} else {
+				fmt.Printf("  removed %s (freed %.0f MB)\n", id, float64(freed)/1e6)
+			}
+		}
+	}
+	if jsonMode {
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"removed": results, "freed_bytes": totalFreed})
+	} else {
+		fmt.Printf("Freed %.0f MB total.\n", float64(totalFreed)/1e6)
+	}
+	if failed {
+		return fmt.Errorf("one or more models could not be removed")
+	}
+	return nil
 }
 
 func runAIEnginePull(cmd *cobra.Command, args []string) error {

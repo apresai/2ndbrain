@@ -55,7 +55,9 @@ struct AIHubView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         providersSection
-                        localModelsSection
+                        if localEngineFeatureEnabled {
+                            localModelsSection
+                        }
                         activeSection
                         catalogSection
                     }
@@ -139,7 +141,7 @@ struct AIHubView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("Providers")
             HStack(spacing: 12) {
-                ForEach(aiStatus?.providers ?? fallbackProviders()) { p in
+                ForEach((aiStatus?.providers ?? fallbackProviders()).filter { localEngineFeatureEnabled || $0.name != "llama-local" }) { p in
                     providerCard(p)
                 }
             }
@@ -148,33 +150,78 @@ struct AIHubView: View {
 
     // MARK: - Local models (download)
 
-    /// The one-click local stack: EmbeddingGemma + Gemma 4 E2B + BGE reranker
-    /// (~4 GB). The larger Gemma 4 E4B stays a `2nb ai engine pull` power option.
+    /// The llama-local (bundled Gemma) provider is NOT user-ready: the
+    /// `llama-server` engine binary is not provisioned (neither bundled in the
+    /// app nor downloaded), so nothing can run locally yet. Until it ships, hide
+    /// every llama-local GUI surface behind this one flag — the download /
+    /// activate / delete plumbing and the CLI `ai engine` commands stay, so
+    /// flipping this to `true` (once the engine is bundled) re-enables the whole
+    /// section and the provider card with no rewrite.
+    private let localEngineFeatureEnabled = false
+
+    /// The one-click local stack: EmbeddingGemma (embed) + Gemma 4 E2B (gen) +
+    /// BGE reranker (~4 GB). The larger Gemma 4 E4B stays a `2nb ai engine pull`
+    /// power option.
     private var localStackIDs: [String] { ["embeddinggemma-300m", "gemma4-e2b", "bge-reranker-v2-m3"] }
+    private var localEmbedID: String { "embeddinggemma-300m" }
+    private var localGenID: String { "gemma4-e2b" }
+    private var localDims: Int { 768 }
 
     private var localModelsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("Local models")
-            if let dl = appState.localModelDownload {
-                if dl.finished {
-                    localModelsTerminal(dl)
-                } else {
-                    localModelsProgress(dl)
-                }
+            if let dl = appState.localModelDownload, !dl.finished {
+                localModelsProgress(dl)
             } else {
-                localModelsIdle
+                localModelsControls
             }
         }
     }
 
-    private var localModelsIdle: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    @ViewBuilder
+    private var localModelsStatusLine: some View {
+        if aiStatus?.provider == "llama-local" {
+            Label("Running Gemma locally (fully offline). Pick a Bedrock model in Active to switch back.", systemImage: "checkmark.seal.fill")
+                .font(.callout)
+                .foregroundStyle(.green)
+        } else if let dl = appState.localModelDownload, dl.finished {
+            if dl.failed {
+                Label(dl.error ?? "Download failed", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            } else {
+                Label("Downloaded \(dl.completed.count) local model\(dl.completed.count == 1 ? "" : "s"). Choose \"Use these models\" to run them.", systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.green)
+            }
+        } else {
             Text("Run Gemma generation, embeddings, and reranking fully offline via the bundled llama.cpp engine. Downloads about 4 GB.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button("Download local models") { confirmAndDownload() }
+        }
+    }
+
+    private var localModelsControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            localModelsStatusLine
+            HStack {
+                Button((appState.localModelDownload?.failed ?? false) ? "Retry download" : "Download local models") {
+                    confirmAndDownload()
+                }
                 .controlSize(.small)
                 .buttonStyle(.bordered)
+                if aiStatus?.provider != "llama-local" {
+                    Button("Use these models") { confirmAndActivate() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(appState.isIndexing)
+                }
+                Spacer()
+                Button("Delete local models") { confirmAndDelete() }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .disabled(appState.isIndexing)
+            }
         }
     }
 
@@ -198,24 +245,6 @@ struct AIHubView: View {
         }
     }
 
-    @ViewBuilder
-    private func localModelsTerminal(_ dl: LocalModelDownload) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if dl.failed {
-                Label(dl.error ?? "Download failed", systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-            } else {
-                Label("Downloaded \(dl.completed.count) local model\(dl.completed.count == 1 ? "" : "s")", systemImage: "checkmark.circle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.green)
-            }
-            Button(dl.failed ? "Retry download" : "Download local models") { confirmAndDownload() }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
-        }
-    }
-
     private func byteString(_ n: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
     }
@@ -228,6 +257,43 @@ struct AIHubView: View {
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {
             Task { await appState.downloadLocalModels(localStackIDs) }
+        }
+    }
+
+    private func confirmAndActivate() {
+        let alert = NSAlert()
+        alert.messageText = "Use the local Gemma models?"
+        alert.informativeText = "Switches BOTH embeddings and generation to the local models (one provider drives both) and re-embeds your whole vault with 768-dim EmbeddingGemma. That runs on CPU and is measurably lower retrieval quality than Nova, so it is best for fully-offline or private use. Download the models first if you haven't. You can switch back any time by picking a Bedrock model in Active."
+        alert.addButton(withTitle: "Use Local + Re-embed")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            Task {
+                do {
+                    try await appState.activateLocalStack(embedID: localEmbedID, genID: localGenID, dimensions: localDims)
+                } catch {
+                    recordActionFailure("Switch to local models failed", error: error)
+                }
+            }
+        }
+    }
+
+    private func confirmAndDelete() {
+        let active = aiStatus?.provider == "llama-local"
+        let alert = NSAlert()
+        alert.messageText = "Delete the local models?"
+        alert.informativeText = active
+            ? "You are currently using local models. Deleting them frees about 4 GB but disables local AI until you switch back to Bedrock or re-download."
+            : "Frees about 4 GB from ~/Library/Caches/2nb/models. You can re-download any time."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            Task {
+                do {
+                    _ = try await appState.deleteLocalModels(localStackIDs)
+                } catch {
+                    recordActionFailure("Delete local models failed", error: error)
+                }
+            }
         }
     }
 
