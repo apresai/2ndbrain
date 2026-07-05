@@ -38,6 +38,35 @@ func writeVaultDoc(t *testing.T, vaultRoot, rel, content string) {
 	}
 }
 
+// TestMetaArgs_StaleVerbFormHint checks the Args validator fallback: the
+// preprocessor rewrites the well-formed stale `meta set/get/remove` shapes, but
+// anything it can't rewrite (e.g. a missing value) reaches metaCmd.Args, which
+// must return a flag-form hint (ExitValidation), not cobra's terse count error.
+func TestMetaArgs_StaleVerbFormHint(t *testing.T) {
+	err := metaCmd.Args(metaCmd, []string{"set", "Note Name", "status"})
+	if code := exitCode(t, err); code != ExitValidation {
+		t.Fatalf("stale `meta set` (missing value): want ExitValidation(%d), got %d (err=%v)", ExitValidation, code, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "--set") {
+		t.Errorf("hint should name the --set flag; got: %v", err)
+	}
+
+	// A legit single-arg view of a note literally named "set" must still pass.
+	if err := metaCmd.Args(metaCmd, []string{"set"}); err != nil {
+		t.Errorf("single-arg meta should pass Args, got %v", err)
+	}
+
+	// A non-verb wrong-count falls to the general usage message, not the
+	// verb-specific "no subcommand" hint.
+	genErr := metaCmd.Args(metaCmd, []string{"a", "b"})
+	if code := exitCode(t, genErr); code != ExitValidation {
+		t.Fatalf("generic wrong-count: want ExitValidation(%d), got %d (err=%v)", ExitValidation, code, genErr)
+	}
+	if genErr == nil || !strings.Contains(genErr.Error(), "exactly one") {
+		t.Errorf("generic hint should say 'exactly one'; got: %v", genErr)
+	}
+}
+
 // TestMetaGetRemove_RoundTrip walks the full set/get/remove/get cycle a script
 // or the GUI would drive: set a custom key, read it back, remove it, confirm a
 // follow-up get reports ExitNotFound.

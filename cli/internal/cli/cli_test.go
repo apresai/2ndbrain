@@ -106,6 +106,43 @@ func TestPreprocessArgs(t *testing.T) {
 			[]string{"2nb", "meta", "--resolve", "fuzzy", "projects/gimage.md", "--remove", "status"},
 		},
 		{
+			// Stale pre-flag positional form: rewritten to the flag form so an old
+			// agent/config invocation still works (see rewriteStaleMetaArgs).
+			"stale meta set rewritten to flag form",
+			[]string{"2nb", "meta", "set", "note.md", "status", "done"},
+			[]string{"2nb", "meta", "note.md", "--set", "status=done"},
+		},
+		{
+			"stale meta get rewritten to flag form",
+			[]string{"2nb", "meta", "get", "note.md", "status"},
+			[]string{"2nb", "meta", "note.md", "--get", "status"},
+		},
+		{
+			"stale meta remove rewritten to flag form",
+			[]string{"2nb", "meta", "remove", "note.md", "draft"},
+			[]string{"2nb", "meta", "note.md", "--remove", "draft"},
+		},
+		{
+			"stale meta set preserves trailing flags",
+			[]string{"2nb", "meta", "set", "note.md", "status", "done", "--json"},
+			[]string{"2nb", "meta", "note.md", "--set", "status=done", "--json"},
+		},
+		{
+			// Regression: a leading global flag (--vault, which agents/MCP always
+			// pass) precedes the command, so `meta` is not at index 1. The rewrite
+			// must still fire and preserve the leading flag.
+			"stale meta set with leading --vault rewritten",
+			[]string{"2nb", "--vault", "/v", "meta", "set", "note.md", "status", "done"},
+			[]string{"2nb", "--vault", "/v", "meta", "note.md", "--set", "status=done"},
+		},
+		{
+			// `meta set` alone views a note literally named "set": operand count
+			// too low to be the stale form, so it must pass through untouched.
+			"meta viewing a note named set is untouched",
+			[]string{"2nb", "meta", "set"},
+			[]string{"2nb", "meta", "set"},
+		},
+		{
 			"unresolved links list",
 			[]string{"2nb", "unresolved"},
 			[]string{"2nb", "unresolved"},

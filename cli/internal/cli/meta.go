@@ -34,9 +34,34 @@ removed.`,
   2nb meta note.md --get status           # read one field (exit 1 if absent)
   2nb meta note.md --set status=complete  # write one field
   2nb meta note.md --remove draft         # delete one field in place`,
-	Args:              cobra.ExactArgs(1),
+	Args:              exactArgsHint(1, metaArgsHint),
 	ValidArgsFunction: completeDocPaths,
 	RunE:              runMeta,
+}
+
+// metaArgsHint builds the error for a malformed `meta` invocation. When the
+// first positional is a stale verb (set/get/remove) that the preprocessor did
+// not rewrite (e.g. a missing value), it points at the exact flag form;
+// otherwise it prints the general usage. cobra prepends "Error: ", so the
+// message carries no prefix of its own.
+func metaArgsHint(args []string) string {
+	var b strings.Builder
+	if len(args) > 1 {
+		switch args[0] {
+		case "set", "get", "remove":
+			fmt.Fprintf(&b, "`meta` has no `%s` subcommand — use the flag form:\n", args[0])
+			b.WriteString("  2nb meta <path> --set key=value    # write a field\n")
+			b.WriteString("  2nb meta <path> --get key          # read a field\n")
+			b.WriteString("  2nb meta <path> --remove key       # delete a field")
+			return b.String()
+		}
+	}
+	fmt.Fprintf(&b, "meta takes exactly one <path> argument (got %d)\n", len(args))
+	b.WriteString("  2nb meta <path>                    # view frontmatter\n")
+	b.WriteString("  2nb meta <path> --set key=value    # write a field\n")
+	b.WriteString("  2nb meta <path> --get key          # read a field\n")
+	b.WriteString("  2nb meta <path> --remove key       # delete a field")
+	return b.String()
 }
 
 func init() {

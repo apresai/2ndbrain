@@ -67,6 +67,126 @@ func TestContract_CoreDocumentCommandPaths(t *testing.T) {
 	}
 }
 
+// TestCreate_HumanOutputShowsTitle verifies the human-mode create line surfaces
+// the title -> filename slug mapping, and that --porcelain stays machine-clean.
+func TestCreate_HumanOutputShowsTitle(t *testing.T) {
+	v, root := newContractVault(t)
+	v.Config.AI.Provider = "no-provider"
+	if err := v.Config.Save(v.DotDir); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	out, err := runCLIArgs(t, root, "create", "Test Space Naming Probe")
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, out)
+	}
+	s := string(out)
+	if !strings.Contains(s, "test-space-naming-probe.md") {
+		t.Errorf("human output missing slug filename:\n%s", s)
+	}
+	if !strings.Contains(s, `(title: "Test Space Naming Probe")`) {
+		t.Errorf("human output missing title suffix:\n%s", s)
+	}
+
+	// Porcelain must not carry the title suffix (a script parses "Created <type>: <path>").
+	out2, err := runCLIArgs(t, root, "create", "Another Probe", "--porcelain")
+	if err != nil {
+		t.Fatalf("create --porcelain: %v\n%s", err, out2)
+	}
+	if strings.Contains(string(out2), "(title:") {
+		t.Errorf("porcelain output must omit the title suffix:\n%s", out2)
+	}
+}
+
+// TestDelete_NonInteractiveReportsNotRemoved verifies a delete with no --force
+// and a non-interactive stdin errors loudly (ExitValidation) and leaves the file
+// on disk, instead of the old silent cancel or a hang.
+func TestDelete_NonInteractiveReportsNotRemoved(t *testing.T) {
+	v, root := newContractVault(t)
+	v.Config.AI.Provider = "no-provider"
+	if err := v.Config.Save(v.DotDir); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	created, err := runCLIArgs(t, root, "create", "Doomed Note", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, created)
+	}
+	var doc struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(created, &doc); err != nil {
+		t.Fatalf("create JSON: %v\n%s", err, created)
+	}
+
+	// Point stdin at /dev/null so the confirm read hits EOF immediately (n=0)
+	// rather than blocking on the 60s timeout.
+	oldStdin := os.Stdin
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open /dev/null: %v", err)
+	}
+	os.Stdin = devnull
+	t.Cleanup(func() { os.Stdin = oldStdin; devnull.Close() })
+
+	_, err = runCLIArgs(t, root, "delete", doc.Path) // no --force, no --porcelain
+	if code := exitCode(t, err); code != ExitValidation {
+		t.Fatalf("non-interactive delete: want ExitValidation(%d), got %d (err=%v)", ExitValidation, code, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, doc.Path)); statErr != nil {
+		t.Errorf("file must survive a refused delete: %v", statErr)
+	}
+}
+
+// stdinFromString points os.Stdin at a temp file holding s, restoring it on
+// cleanup, so a test can drive an interactive prompt read deterministically.
+func stdinFromString(t *testing.T, s string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatalf("temp stdin: %v", err)
+	}
+	if _, err := f.WriteString(s); err != nil {
+		t.Fatalf("write stdin: %v", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatalf("seek stdin: %v", err)
+	}
+	old := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() { os.Stdin = old; f.Close() })
+}
+
+// TestConfirmDelete_Answers covers the interactive answer branches: an explicit
+// yes approves, and a deliberate "no" (or any non-y answer) declines without an
+// error (exit 0, "Cancelled"). The no-answer/timeout path is covered by
+// TestDelete_NonInteractiveReportsNotRemoved.
+func TestConfirmDelete_Answers(t *testing.T) {
+	cases := []struct {
+		name    string
+		stdin   string
+		wantOK  bool
+		wantErr bool
+	}{
+		{"yes lowercase", "y\n", true, false},
+		{"yes uppercase", "Y\n", true, false},
+		{"deliberate no", "n\n", false, false},
+		{"other answer declines", "maybe\n", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdinFromString(t, tc.stdin)
+			ok, err := confirmDelete("Title", "note.md")
+			if ok != tc.wantOK {
+				t.Errorf("confirmed = %v, want %v", ok, tc.wantOK)
+			}
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestContract_CreateWithPath(t *testing.T) {
 	v, root := newContractVault(t)
 	v.Config.AI.Provider = "no-provider"

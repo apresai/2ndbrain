@@ -45,7 +45,8 @@ var (
 var createCmd = &cobra.Command{
 	Use:   "create [title]",
 	Short: "Create a new document from a template",
-	Long:  "Create a new document. Title can be a positional argument or --title flag. Document types come from the vault's schemas.yaml — the built-in types are adr, runbook, note, postmortem, prd, prfaq.",
+	Long: "Create a new document. Title can be a positional argument or --title flag. Document types come from the vault's schemas.yaml — the built-in types are adr, runbook, note, postmortem, prd, prfaq.\n\n" +
+		"The filename is a slug of the title: lowercased ASCII, accents stripped, spaces/underscores/hyphens collapsed to a single dash, and other characters (punctuation, symbols, slashes, emoji) dropped. So \"My Report: v2!\" becomes my-report-v2.md; a title with no ASCII letters or digits falls back to the document UUID. Prefer 2nb create over hand-writing a file so the slug and title stay consistent.",
 	Example: `  2nb create "My New Note"                         # default type: note
   2nb create --type adr "Use JWT for Auth"         # architecture decision record
   2nb create --type runbook "Deploy Rotation"      # ops runbook
@@ -179,8 +180,14 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	slog.Info("document created", "type", doc.Type, "path", doc.Path, "title", doc.Title)
-	fmt.Printf("Created %s: %s\n", doc.Type, doc.Path)
-	if !flagPorcelain {
+	if flagPorcelain {
+		// Keep porcelain machine-clean: a script parses "Created <type>: <path>".
+		fmt.Printf("Created %s: %s\n", doc.Type, doc.Path)
+	} else {
+		// Surface the title -> filename slug mapping so it's clear the on-disk name
+		// is a slug of the title, not the literal string (see the create --help
+		// Long text). The title is also in --json's `title` field.
+		fmt.Printf("Created %s: %s (title: %q)\n", doc.Type, doc.Path, doc.Title)
 		fmt.Fprintf(os.Stderr, "  Edit: open %s\n", filepath.Join(v.Root, doc.Path))
 		fmt.Fprintf(os.Stderr, "  Read: 2nb read %s\n", doc.Path)
 	}

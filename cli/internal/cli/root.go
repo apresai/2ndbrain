@@ -585,6 +585,119 @@ func exitWithError(code int, msg string) error {
 	return &ExitError{Code: code, Message: msg}
 }
 
+// exactArgsHint enforces exactly n positional args (like cobra.ExactArgs) but on
+// a count mismatch returns an ExitValidation error whose message is produced by
+// hint — a copy-pasteable pointer at the correct form, instead of cobra's terse
+// "accepts N arg(s), received M". SilenceUsage suppresses the flag dump, so the
+// hint is the whole message the user sees. Reuse for any command that wants a
+// self-correcting error (the repo had no such helper before this).
+func exactArgsHint(n int, hint func(args []string) string) cobra.PositionalArgs {
+	return func(_ *cobra.Command, args []string) error {
+		if len(args) == n {
+			return nil
+		}
+		return exitWithError(ExitValidation, hint(args))
+	}
+}
+
+// knownCommands is the set of command roots (plus obsidian-CLI compatibility
+// verbs/aliases) that preprocessArgs recognizes when locating the command token
+// in an argv that may be preceded by global flags. See docs/obsidian-cli-mapping.md.
+var knownCommands = map[string]bool{
+	"read": true, "create": true, "append": true, "prepend": true, "delete": true,
+	"move": true, "rename": true, "daily": true, "unresolved": true, "orphans": true,
+	"deadends": true, "outline": true, "aliases": true, "search": true, "task": true,
+	"tasks": true, "tags": true, "tag": true, "links": true, "backlinks": true, "folders": true,
+	"version": true, "help": true, "property": true, "properties": true, "link": true,
+	"vault": true, "init": true, "index": true, "ai": true, "models": true, "polish": true,
+	"suggest-links": true, "graph": true, "related": true, "stale": true, "wordcount": true,
+	"mcp": true, "mcp-server": true, "mcp-setup": true, "plugin": true, "skills": true,
+	"export-context": true, "git": true, "import-obsidian": true, "export-obsidian": true,
+	"migrate": true, "completion": true, "config": true, "ask": true, "chat": true,
+	// Obsidian-CLI compatibility verbs + aliases (see docs/obsidian-cli-mapping.md).
+	"meta": true, "list": true, "files": true, "print": true, "frontmatter": true,
+	"fm": true, "search-content": true, "list-vaults": true, "set-default-vault": true,
+	"add-vault": true,
+}
+
+// isKnownCommand reports whether arg is a known command root, tolerating the
+// obsidian colon form (e.g. "daily:read" -> "daily").
+func isKnownCommand(arg string) bool {
+	if strings.Contains(arg, ":") {
+		return knownCommands[strings.SplitN(arg, ":", 2)[0]]
+	}
+	return knownCommands[arg]
+}
+
+// commandIndex returns the index of the command token in args (argv with the
+// program name at index 0), skipping leading global flags and any non-command
+// barewords (e.g. a --vault <path> value). Returns -1 if none is found. Shared by
+// preprocessArgs and rewriteStaleMetaArgs so both locate the command identically.
+func commandIndex(args []string) int {
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+			continue
+		}
+		if isKnownCommand(arg) {
+			return i
+		}
+	}
+	return -1
+}
+
+// rewriteStaleMetaArgs recognizes the obsolete positional `meta` subcommand form
+// (which predates the current flag form) and rewrites it to the flag form,
+// preserving any leading global flags (e.g. --vault <path>, which agents/MCP
+// always pass) and any trailing arguments (e.g. --json):
+//
+//	meta set <path> <key> <value> [tail...] -> meta <path> --set <key>=<value> [tail...]
+//	meta get <path> <key>         [tail...] -> meta <path> --get <key>         [tail...]
+//	meta remove <path> <key>      [tail...] -> meta <path> --remove <key>      [tail...]
+//
+// It fires only at the exact operand count for each verb, so `meta set` alone
+// (viewing a note literally named "set") is left untouched and shorter malformed
+// forms fall through to metaArgsHint. The bare <path> resolves via the default
+// auto mode (exact-on-disk then fuzzy), which is correct for a title-ish argument.
+func rewriteStaleMetaArgs(args []string) ([]string, bool) {
+	i := commandIndex(args)
+	if i == -1 || args[i] != "meta" {
+		return nil, false
+	}
+	rest := args[i+1:] // tokens after `meta`
+	if len(rest) == 0 {
+		return nil, false
+	}
+
+	var flag, val string
+	var consumed int // operand tokens consumed after the verb
+	switch rest[0] {
+	case "set":
+		if len(rest) < 4 { // verb + <path> <key> <value>
+			return nil, false
+		}
+		flag, val, consumed = "--set", rest[2]+"="+rest[3], 3
+	case "get":
+		if len(rest) < 3 { // verb + <path> <key>
+			return nil, false
+		}
+		flag, val, consumed = "--get", rest[2], 2
+	case "remove":
+		if len(rest) < 3 {
+			return nil, false
+		}
+		flag, val, consumed = "--remove", rest[2], 2
+	default:
+		return nil, false
+	}
+
+	out := make([]string, 0, len(args))
+	out = append(out, args[:i+1]...) // program, leading flags, and "meta"
+	out = append(out, rest[1], flag, val)
+	out = append(out, rest[1+consumed:]...) // preserve any trailing flags
+	return out, true
+}
+
 // ExitCode maps an error returned by Execute to a process exit code. An
 // *ExitError carries its own code (ExitValidation=2, ExitNotFound=1,
 // ExitStaleRef=3) so scripts can distinguish "bad input" from "not found"; any
@@ -606,6 +719,15 @@ func preprocessArgs(args []string) []string {
 		return args
 	}
 
+	// Back-compat recovery: the pre-flag positional form `meta set/get/remove
+	// <path> ...` predates the current flag form. Rewrite the unambiguous shapes
+	// to the flag form so a stale agent/config invocation still works. Anything
+	// that doesn't match falls through to metaCmd's Args validator, which prints
+	// a flag-form hint (see metaArgsHint in meta.go). See docs/obsidian-cli-mapping.md.
+	if rewritten, ok := rewriteStaleMetaArgs(args); ok {
+		return rewritten
+	}
+
 	var newArgs []string
 	newArgs = append(newArgs, args[0])
 
@@ -613,23 +735,6 @@ func preprocessArgs(args []string) []string {
 	var subCmdName string
 	var hasColonCmd bool
 	var colonParts []string
-
-	var knownCommands = map[string]bool{
-		"read": true, "create": true, "append": true, "prepend": true, "delete": true,
-		"move": true, "rename": true, "daily": true, "unresolved": true, "orphans": true,
-		"deadends": true, "outline": true, "aliases": true, "search": true, "task": true,
-		"tasks": true, "tags": true, "tag": true, "links": true, "backlinks": true, "folders": true,
-		"version": true, "help": true, "property": true, "properties": true, "link": true,
-		"vault": true, "init": true, "index": true, "ai": true, "models": true, "polish": true,
-		"suggest-links": true, "graph": true, "related": true, "stale": true, "wordcount": true,
-		"mcp": true, "mcp-server": true, "mcp-setup": true, "plugin": true, "skills": true,
-		"export-context": true, "git": true, "import-obsidian": true, "export-obsidian": true,
-		"migrate": true, "completion": true, "config": true, "ask": true, "chat": true,
-		// Obsidian-CLI compatibility verbs + aliases (see docs/obsidian-cli-mapping.md).
-		"meta": true, "list": true, "files": true, "print": true, "frontmatter": true,
-		"fm": true, "search-content": true, "list-vaults": true, "set-default-vault": true,
-		"add-vault": true,
-	}
 
 	// freeTextCommands take an arbitrary free-text positional (a query / a
 	// question) that must NEVER be parsed as a key=value parameter, or the user
@@ -639,26 +744,8 @@ func preprocessArgs(args []string) []string {
 	// through verbatim as the positional.
 	freeTextCommands := map[string]bool{"search": true, "ask": true, "chat": true, "search-content": true}
 
-	isCommand := func(arg string) bool {
-		if strings.Contains(arg, ":") {
-			part := strings.SplitN(arg, ":", 2)[0]
-			return knownCommands[part]
-		}
-		return knownCommands[arg]
-	}
-
-	// Find the command name by checking against known command roots
-	var cmdIdx = -1
-	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		if strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
-			continue
-		}
-		if isCommand(arg) {
-			cmdIdx = i
-			break
-		}
-	}
+	// Find the command token (skips leading global flags and non-command barewords).
+	cmdIdx := commandIndex(args)
 
 	if cmdIdx != -1 {
 		cmdName = args[cmdIdx]
