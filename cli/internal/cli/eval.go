@@ -51,9 +51,9 @@ generated from your OWN notes, under your current AI config: Recall@10, R@1
 (ranked #1), and MRR@10.
 
 It generates a ground-truth Q&A set once (cached in .2ndbrain/eval/, gitignored),
-so re-running the scorecard afterward is free. The QA questions are derived from
-your notes and never leave your machine except via the same AI calls indexing
-already makes.`,
+so re-running the scorecard afterward skips QA generation (only the query embeds
+cost cents). The QA questions are derived from your notes and never leave your
+machine except via the same AI calls indexing already makes.`,
 	Example: `  2nb eval                    # scorecard for your current config
   2nb eval --n 40             # a larger QA set (more cost, more stable)
   2nb eval --regenerate       # refresh the QA set after big vault changes
@@ -77,15 +77,23 @@ func evalQAPath(v *vault.Vault) string {
 	return filepath.Join(v.Root, ".2ndbrain", "eval", "qa.json")
 }
 
-// qaCacheHas reports whether the cache holds at least n usable QA items (the
-// same condition LoadOrGenerateQASet reuses vs regenerates on).
-func qaCacheHas(path string, n int) bool {
+// loadQACache reads and parses the cached QA set, returning nil when the cache
+// is absent or unreadable.
+func loadQACache(path string) []eval.QAItem {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return nil
 	}
 	var items []eval.QAItem
-	return json.Unmarshal(data, &items) == nil && len(items) >= n
+	if json.Unmarshal(data, &items) != nil {
+		return nil
+	}
+	return items
+}
+
+// qaCacheHas reports whether the cache holds at least n usable QA items.
+func qaCacheHas(path string, n int) bool {
+	return len(loadQACache(path)) >= n
 }
 
 func runEval(cmd *cobra.Command, args []string) error {
@@ -99,17 +107,19 @@ func runEval(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	// Retrieval scoring needs embeddings; QA generation needs a generator.
-	if embCount, _ := v.DB.EmbeddingCount(); embCount == 0 {
+	// Retrieval scoring always needs the embedder; QA GENERATION additionally
+	// needs the generator, so that check is deferred to the cache-miss branch.
+	if embCount, cerr := v.DB.EmbeddingCount(); cerr != nil {
+		return fmt.Errorf("check embeddings: %w", cerr)
+	} else if embCount == 0 {
 		return fmt.Errorf("no embeddings yet — run `2nb index` first so search has vectors to score")
 	}
-	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
-	if err != nil || !embedder.Available(ctx) {
-		return fmt.Errorf("embedding provider %q is not available — check `2nb ai status`", cfg.Provider)
+	embedder, eerr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	if eerr != nil {
+		return fmt.Errorf("embedding provider not available: %w", eerr)
 	}
-	generator, gerr := ai.DefaultRegistry.Generator(cfg.Provider)
-	if gerr != nil || !generator.Available(ctx) {
-		return fmt.Errorf("a generation provider is required to write the QA set — check `2nb ai status`")
+	if !embedder.Available(ctx) {
+		return fmt.Errorf("embedding provider %q is not available — check `2nb ai status`", cfg.Provider)
 	}
 
 	if evalN < 1 {
@@ -119,35 +129,51 @@ func runEval(cmd *cobra.Command, args []string) error {
 	if evalRegen {
 		_ = os.Remove(qaPath)
 	}
-	cached := qaCacheHas(qaPath, evalN)
 
-	// Cost preview + confirm only when we'd actually generate (a cached QA set
-	// is free to reuse). The cap aborts identically whether interactive or piped.
-	if !cached {
+	// The cache is authoritative: any usable cached set (>= 2 items) is reused
+	// regardless of --n. A vault that can't produce the full --n (small vault, or
+	// generation skips) therefore does NOT re-pay for generation on every run —
+	// use --regenerate to rebuild (e.g. after growing --n or changing the vault).
+	cachedItems := loadQACache(qaPath)
+	cached := len(cachedItems) >= 2
+
+	var qa []eval.QAItem
+	if cached {
+		qa = cachedItems
+		if len(qa) > evalN {
+			qa = qa[:evalN]
+		}
+		if !flagPorcelain {
+			fmt.Fprintf(os.Stderr, "Using cached QA set of %d questions (%s)\n", len(qa), qaPath)
+		}
+	} else {
+		generator, gerr := ai.DefaultRegistry.Generator(cfg.Provider)
+		if gerr != nil {
+			return fmt.Errorf("a generation provider is required to build the QA set: %w", gerr)
+		}
+		if !generator.Available(ctx) {
+			return fmt.Errorf("generation provider %q is not available — check `2nb ai status`", cfg.Provider)
+		}
+		// Cost preview + confirm (the cap aborts identically interactive or piped).
 		if err := evalConfirmCost(ctx, cmd, cfg, v.Root, evalN); err != nil {
 			return err
 		}
-	}
-	if err := os.MkdirAll(filepath.Dir(qaPath), 0o755); err != nil {
-		return fmt.Errorf("create eval cache dir: %w", err)
-	}
-	// The QA cache embeds note bodies; ensure it's gitignored even in a vault
-	// created before .2ndbrain/eval/ was added to the default ignore list.
-	ensureVaultIgnores(v.Root, ".2ndbrain/eval/")
-
-	if !flagPorcelain {
-		if cached {
-			fmt.Fprintf(os.Stderr, "Using cached QA set (%s)\n", qaPath)
-		} else {
+		if err := os.MkdirAll(filepath.Dir(qaPath), 0o755); err != nil {
+			return fmt.Errorf("create eval cache dir: %w", err)
+		}
+		// The QA cache embeds note bodies; ensure it's gitignored (even in a vault
+		// created before .2ndbrain/eval/ was in the default list) BEFORE writing it.
+		ensureVaultIgnores(v.Root, ".2ndbrain/eval/")
+		if !flagPorcelain {
 			fmt.Fprintf(os.Stderr, "Generating a %d-question QA set from your notes...\n", evalN)
 		}
-	}
-	qa, err := eval.LoadOrGenerateQASet(ctx, v, generator, evalN, evalSeed, qaPath)
-	if err != nil {
-		return fmt.Errorf("build QA set: %w", err)
+		qa, err = eval.LoadOrGenerateQASet(ctx, v, generator, evalN, evalSeed, qaPath)
+		if err != nil {
+			return fmt.Errorf("build QA set: %w", err)
+		}
 	}
 	if len(qa) == 0 {
-		return fmt.Errorf("could not build a QA set — the vault needs some substantial notes to generate questions from")
+		return fmt.Errorf("could not build a QA set — the vault needs some substantial notes (500+ chars) to generate questions from")
 	}
 
 	// Score the user's CURRENT config so the scorecard reflects their real setup.
@@ -216,27 +242,40 @@ func evalConfirmCost(ctx context.Context, cmd *cobra.Command, cfg ai.AIConfig, r
 	}
 	genM, _ := lookupModelInfo(models, cfg.Provider, cfg.GenerationModel)
 	embM, _ := lookupModelInfo(models, cfg.Provider, cfg.EmbeddingModel)
-
-	// QA generation: read a note (~1500 tok) + write a question (~80 tok) per item.
-	genEst := ai.EstimateCostWithSpec(genM, ai.ProbeBenchGen,
-		ai.ProbeSpec{InputTokens: 1500 * n, OutputTokens: 80 * n, Requests: n})
-	// Query embeds: one short (~20 tok) embed per question during scoring.
-	embEst := ai.EstimateCostWithSpec(embM, ai.ProbeBenchEmbed,
-		ai.ProbeSpec{InputTokens: 20 * n, Requests: n})
-	total := genEst.USD + embEst.USD
+	total, genUSD, embUSD := estimateEvalCostUSD(genM, embM, n)
 
 	if getFormat(cmd) != output.FormatJSON && !flagPorcelain {
 		fmt.Fprintf(os.Stderr,
-			"Estimated cost to build a %d-question QA set: ~$%.4f (generation ~$%.4f + embeds ~$%.4f). Re-runs are free (cached).\n",
-			n, total, genEst.USD, embEst.USD)
+			"Estimated one-time cost to build a %d-question QA set: ~$%.4f (generation ~$%.4f + embeds ~$%.4f). Later runs reuse the cache and only re-embed the queries (cents).\n",
+			n, total, genUSD, embUSD)
 	}
-	if total > evalCostCap {
-		return fmt.Errorf("estimated cost $%.4f exceeds --cost-cap $%.2f; raise --cost-cap or lower --n", total, evalCostCap)
+	if err := evalCostGate(total, evalCostCap); err != nil {
+		return err
 	}
 	if !evalYes && stderrIsTTY() && getFormat(cmd) != output.FormatJSON {
 		if !promptYesNo(os.Stderr, "Generate the QA set now?", true) {
 			return fmt.Errorf("aborted")
 		}
+	}
+	return nil
+}
+
+// estimateEvalCostUSD projects the one-time cost of building an n-question QA set
+// (read a note ~1500 tok + write a question ~80 tok per item on the generation
+// model) plus the n short query-embeds scoring makes each run.
+func estimateEvalCostUSD(genM, embM ai.ModelInfo, n int) (total, gen, emb float64) {
+	g := ai.EstimateCostWithSpec(genM, ai.ProbeBenchGen,
+		ai.ProbeSpec{InputTokens: 1500 * n, OutputTokens: 80 * n, Requests: n})
+	e := ai.EstimateCostWithSpec(embM, ai.ProbeBenchEmbed,
+		ai.ProbeSpec{InputTokens: 20 * n, Requests: n})
+	return g.USD + e.USD, g.USD, e.USD
+}
+
+// evalCostGate returns an error when the estimate exceeds the cap. Split out so
+// the abort is unit-testable without a live catalog fetch.
+func evalCostGate(total, cap float64) error {
+	if total > cap {
+		return fmt.Errorf("estimated cost $%.4f exceeds --cost-cap $%.2f; raise --cost-cap or lower --n", total, cap)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/eval"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
@@ -122,5 +123,48 @@ func TestEval_E2E_Bedrock(t *testing.T) {
 	}
 	if rep.RecallAtK < 0 || rep.RecallAtK > 1 || rep.RecallAt1 < 0 || rep.RecallAt1 > 1 {
 		t.Errorf("metrics out of [0,1]: %+v", rep)
+	}
+
+	// Second run reuses the cached QA set (no regeneration) — qa_cached=true.
+	out2, err := runCLIArgs(t, root, "eval", "--json", "--n", "3", "--yes")
+	if err != nil {
+		t.Fatalf("eval re-run: %v", err)
+	}
+	var rep2 EvalReport
+	if err := json.Unmarshal(out2, &rep2); err != nil {
+		t.Fatalf("decode re-run EvalReport: %v\noutput: %s", err, out2)
+	}
+	if !rep2.QACached {
+		t.Errorf("second run should reuse the cached QA set (qa_cached=true), got %+v", rep2)
+	}
+}
+
+// TestEval_NoEmbeddings covers the guard path with no credentials: an
+// un-embedded vault errors before any API call.
+func TestEval_NoEmbeddings(t *testing.T) {
+	_, root := newContractVault(t)
+	out, err := runCLIArgs(t, root, "eval", "--json", "--yes")
+	if err == nil {
+		t.Fatalf("eval on an un-embedded vault should error, got output: %s", out)
+	}
+	if !strings.Contains(err.Error(), "no embeddings") {
+		t.Errorf("expected a 'no embeddings' hint, got: %v", err)
+	}
+}
+
+// TestEvalCostGate covers the cost math + the --cost-cap abort without a live
+// catalog: a pricey generation model must cross a tight cap.
+func TestEvalCostGate(t *testing.T) {
+	genM := ai.ModelInfo{ID: "g", Provider: "bedrock", PriceIn: 10, PriceOut: 30} // $/M tokens
+	embM := ai.ModelInfo{ID: "e", Provider: "bedrock", PriceIn: 0.1}
+	total, gen, emb := estimateEvalCostUSD(genM, embM, 20)
+	if gen <= 0 || emb < 0 || total < gen {
+		t.Fatalf("cost math looks wrong: total=%.5f gen=%.5f emb=%.5f", total, gen, emb)
+	}
+	if err := evalCostGate(total, 1.0); err != nil {
+		t.Errorf("under a $1.00 cap the ~$0.35 estimate should pass, got: %v", err)
+	}
+	if err := evalCostGate(total, 0.10); err == nil {
+		t.Errorf("over a $0.10 cap the ~$%.4f estimate should abort", total)
 	}
 }

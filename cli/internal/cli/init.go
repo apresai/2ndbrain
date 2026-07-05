@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,5 +122,9 @@ func ensureVaultIgnores(root, entry string) {
 		buf.WriteString("\n")
 	}
 	buf.WriteString(entry + "\n")
-	_ = os.WriteFile(path, []byte(buf.String()), 0o644)
+	if err := os.WriteFile(path, []byte(buf.String()), 0o644); err != nil {
+		// This is the privacy self-heal; a silent failure would leave the
+		// content-bearing cache un-ignored, so surface it.
+		slog.Warn("could not update vault .gitignore", "path", path, "entry", entry, "err", err)
+	}
 }
