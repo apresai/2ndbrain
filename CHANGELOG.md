@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Changed
+- `meta`: recover from the obsolete positional form. `2nb meta set <path> <key> <value>` (and `get`/`remove`) is rewritten to the `--set`/`--get`/`--remove` flag form; a form that can't be rewritten (e.g. a missing value) now errors with a copy-pasteable flag-form hint instead of cobra's terse "accepts 1 arg(s), received N". A malformed `meta` now exits 2 (validation) rather than 1.
+- `create`: human output echoes the resulting slug filename and the title (`Created note: my-note.md (title: "My Note")`), and `create --help` documents the title-to-filename slug behavior so the mapping is discoverable. `--porcelain` output is unchanged; `--json` still returns `path`/`title`.
+- `delete`: the confirmation prompt no longer hangs a non-interactive caller. It times out after 60s (and errors immediately on a closed stdin), reporting the note was NOT removed and pointing at `--force`. `--force`/`--porcelain` still skip the prompt.
 
 ## [0.13.1] - 2026-07-05
 
