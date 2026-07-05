@@ -151,6 +151,7 @@ struct AIHubView: View {
             ProviderStatusInfo(name: "bedrock", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
             ProviderStatusInfo(name: "openrouter", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
             ProviderStatusInfo(name: "ollama", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
+            ProviderStatusInfo(name: "llama-local", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
         ]
     }
 
@@ -191,6 +192,7 @@ struct AIHubView: View {
         case "bedrock": return "AWS Bedrock"
         case "openrouter": return "OpenRouter"
         case "ollama": return "Ollama (local)"
+        case "llama-local": return "Local (llama.cpp)"
         default: return name.capitalized
         }
     }
@@ -220,6 +222,7 @@ struct AIHubView: View {
                 }
                 activeRow(type: "embedding", modelID: status.embeddingModel, provider: status.provider)
                 activeRow(type: "generation", modelID: status.genModel, provider: status.provider)
+                rerankActiveRow(status)
             } else {
                 Text("Loading…").foregroundStyle(.secondary)
             }
@@ -265,6 +268,53 @@ struct AIHubView: View {
             .buttonStyle(.bordered)
         }
         .padding(.vertical, 4)
+    }
+
+    /// The rerank slot: a model + an on/off toggle. Rerank ships OFF and is
+    /// measured to not help at this scale, so the caption says so and the toggle
+    /// makes turning it off first-class.
+    private func rerankActiveRow(_ status: AIStatusInfo) -> some View {
+        let enabled = status.rerankEnabled ?? false
+        let modelID = status.rerankModel ?? ""
+        let entry = models.first(where: { $0.modelType == "rerank" && $0.modelID == modelID })
+        return HStack(alignment: .top, spacing: 12) {
+            Text("Rerank:")
+                .font(.callout)
+                .frame(width: 96, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(enabled ? (modelID.isEmpty ? "(not set)" : modelID) : "Off")
+                    .font(.body.monospaced())
+                Text(rerankMeta(enabled: enabled, available: status.rerankAvailable, entry: entry))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { enabled },
+                set: { newValue in Task { await toggleRerank(newValue) } }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            Button {
+                pickerContext = ModelCatalogPickerContext(typeScope: "rerank", modelID: entry?.modelID)
+            } label: {
+                Label("Change", systemImage: "chevron.down")
+            }
+            .controlSize(.small)
+            .buttonStyle(.bordered)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func rerankMeta(enabled: Bool, available: Bool?, entry: CatalogModelInfo?) -> String {
+        if !enabled {
+            return "optional cross-encoder stage · off by default (measured to not help at this scale)"
+        }
+        if available == false {
+            return "enabled but unavailable on the active provider"
+        }
+        return activeMeta(for: entry)
     }
 
     private func activeMeta(for entry: CatalogModelInfo?) -> String {
@@ -336,6 +386,7 @@ struct AIHubView: View {
             // Embeddings first — higher-stakes pick, smaller set.
             catalogTypeSection(type: "embedding", title: "Embedding Models")
             catalogTypeSection(type: "generation", title: "Generation Models")
+            catalogTypeSection(type: "rerank", title: "Reranking Models")
 
             if filteredModels().isEmpty {
                 Text("No models match the current filter.")
@@ -654,6 +705,15 @@ struct AIHubView: View {
             await reload()
         } catch {
             recordActionFailure("Toggle \(p.name) failed", error: error)
+        }
+    }
+
+    private func toggleRerank(_ enabled: Bool) async {
+        do {
+            try await appState.setRerankEnabled(enabled)
+            await reload()
+        } catch {
+            recordActionFailure("Toggle rerank failed", error: error)
         }
     }
 
