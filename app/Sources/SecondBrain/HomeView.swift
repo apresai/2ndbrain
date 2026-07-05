@@ -238,10 +238,21 @@ struct HomeView: View {
     private var aiCard: some View {
         let status = appState.aiStatus
         let ready = (status?.embedAvailable ?? false) && (status?.genAvailable ?? false)
+        // Rerank is an optional, default-OFF stage; show its state but keep it out
+        // of the core ready dot (embed+gen), so an unavailable reranker doesn't
+        // read as a core-AI failure.
+        let rerankValue: String
+        if status?.rerankEnabled == true {
+            let model = HomeAI.friendlyModel(status?.rerankModel) ?? status?.rerankModel ?? "on"
+            rerankValue = (status?.rerankAvailable == false) ? "\(model) (unavailable)" : model
+        } else {
+            rerankValue = "Off"
+        }
         return VStack(alignment: .leading, spacing: 8) {
             SheetSectionHeader(title: "AI — AWS Bedrock", systemImage: "bolt.horizontal")
             LabeledContent("Generation", value: HomeAI.friendlyModel(status?.genModel) ?? "Claude Haiku 4.5")
             LabeledContent("Embeddings", value: HomeAI.friendlyModel(status?.embeddingModel) ?? "Amazon Nova-2")
+            LabeledContent("Rerank", value: rerankValue)
             HStack(spacing: 6) {
                 Circle().fill(ready ? Color.green : Color.red).frame(width: 8, height: 8)
                 Text(HomeAI.statusLine(status))

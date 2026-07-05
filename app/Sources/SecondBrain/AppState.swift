@@ -2217,6 +2217,17 @@ final class AppState {
     func setActiveModel(type: String, modelID: String, provider: String) async throws {
         guard let vault else { throw CLIError.noVault }
         if isIndexing { throw CLIError.indexRebuildInProgress }
+
+        // Rerank is a separate slot (ai.rerank.*) resolved from the active
+        // provider. Set its model + enable it without touching ai.provider or
+        // the embed/gen model, which would disrupt those slots.
+        if type == "rerank" {
+            log.info("AI Hub action: set ai.rerank.model=\(modelID, privacy: .public) and enable rerank")
+            _ = try await runCLI(["config", "set", "ai.rerank.model", modelID], cwd: vault.rootURL)
+            _ = try await runCLI(["config", "set", "ai.rerank.enabled", "true"], cwd: vault.rootURL)
+            return
+        }
+
         let key: String
         switch type {
         case "embedding": key = "ai.embedding_model"
@@ -2256,6 +2267,18 @@ final class AppState {
             }
             throw error
         }
+    }
+
+    /// Enable or disable the optional rerank stage via `ai.rerank.enabled`.
+    /// The rerank stage ships OFF and is measured to hurt retrieval at this
+    /// scale, so the GUI exposes turning it off as first-class.
+    func setRerankEnabled(_ enabled: Bool) async throws {
+        guard let vault else { throw CLIError.noVault }
+        log.info("AI Hub action: set ai.rerank.enabled = \(enabled, privacy: .public)")
+        _ = try await runCLI(
+            ["config", "set", "ai.rerank.enabled", String(enabled)],
+            cwd: vault.rootURL
+        )
     }
 
     /// Flips ai.<provider>.disabled via `2nb config set`. The GUI uses
@@ -2609,6 +2632,12 @@ struct AIStatusInfo: Codable {
     // binaries before 0.3.0 don't emit this field.
     let providers: [ProviderStatusInfo]?
 
+    // Rerank slot: an optional cross-encoder stage that ships default OFF.
+    // Optional because binaries before the rerank-status fields don't emit them.
+    let rerankEnabled: Bool?
+    let rerankModel: String?
+    let rerankAvailable: Bool?
+
     /// Denominator for embedding-coverage displays: the embeddable doc count
     /// when the CLI reports it, else the raw document count (older CLI).
     var embeddableDenominator: Int { vaultEmbeddableDocs ?? documentCount }
@@ -2632,6 +2661,9 @@ struct AIStatusInfo: Codable {
         case portabilityStatus = "portability_status"
         case portabilityAction = "portability_action"
         case providers
+        case rerankEnabled = "rerank_enabled"
+        case rerankModel = "rerank_model"
+        case rerankAvailable = "rerank_available"
     }
 }
 

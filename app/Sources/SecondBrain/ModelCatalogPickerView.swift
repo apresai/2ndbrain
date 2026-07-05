@@ -129,6 +129,7 @@ struct ModelCatalogPickerView: View {
                     Text("All").tag("all")
                     Text("Embedding").tag("embedding")
                     Text("Generation").tag("generation")
+                    Text("Rerank").tag("rerank")
                 }
                 Picker("Sort", selection: $sortMode) {
                     ForEach(PickerSort.allCases) { sort in
@@ -560,6 +561,7 @@ struct ModelCatalogPickerView: View {
         var kinds: [String] = []
         if aiStatus?.embeddingModel == model.modelID { kinds.append("embedding") }
         if aiStatus?.genModel == model.modelID { kinds.append("generation") }
+        if aiStatus?.rerankModel == model.modelID { kinds.append("rerank") }
         return kinds
     }
 
