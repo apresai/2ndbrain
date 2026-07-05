@@ -18,6 +18,7 @@ struct AIHubView: View {
     @State private var testResults: [String: TestOutcome] = [:]
     @State private var loading = true
     @State private var isDiscovering = false
+    @State private var togglingRerank = false
     @State private var errorMessage: String?
     @State private var filter = CatalogFilter()
     @State private var searchText: String = ""
@@ -296,6 +297,7 @@ struct AIHubView: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.small)
+            .disabled(togglingRerank)
             Button {
                 pickerContext = ModelCatalogPickerContext(typeScope: "rerank", modelID: entry?.modelID)
             } label: {
@@ -709,6 +711,8 @@ struct AIHubView: View {
     }
 
     private func toggleRerank(_ enabled: Bool) async {
+        togglingRerank = true
+        defer { togglingRerank = false }
         do {
             try await appState.setRerankEnabled(enabled)
             await reload()
