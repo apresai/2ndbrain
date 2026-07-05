@@ -114,7 +114,12 @@ From the terminal:
 
 # Interactive multi-turn chat
 2nb chat
+
+# Score how good search is on YOUR vault (Recall@10 / R@1 / MRR)
+2nb eval
 ```
+
+`2nb eval` builds a small ground-truth Q&A set from your own notes (cached, so re-runs are free) and reports how often hybrid search puts the right note first. It previews the one-time generation cost and asks before spending.
 
 Inside Obsidian: click the 2ndbrain ribbon icon to open the chat panel for multi-turn Q&A over your vault, or use the command palette commands prefixed **"2ndbrain AI:"** (Open chat, Semantic Search, Ask AI, Find Similar Notes, Rebuild AI Index).
 
