@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -78,6 +79,41 @@ var ModelManifest = map[string]ModelArtifact{
 func ArtifactFor(id string) (ModelArtifact, bool) {
 	a, ok := ModelManifest[id]
 	return a, ok
+}
+
+// RemoveModel deletes a cached model's directory (<models>/<id>) and returns the
+// bytes freed. It refuses an id containing a path separator (or `.`/`..`) so it
+// can never escape the models cache. A not-present model is a no-op (freed 0).
+func RemoveModel(id string) (int64, error) {
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
+		return 0, fmt.Errorf("invalid model id %q", id)
+	}
+	dir, err := ModelsCacheDir()
+	if err != nil {
+		return 0, err
+	}
+	target := filepath.Join(dir, id)
+	freed := modelDirSize(target)
+	if err := os.RemoveAll(target); err != nil {
+		return 0, err
+	}
+	return freed, nil
+}
+
+// modelDirSize sums the sizes of the files directly in a model dir (which is
+// flat: <id>/<file.gguf>). Returns 0 if the dir is absent or unreadable.
+func modelDirSize(path string) int64 {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
 }
 
 // ModelStatusInfo is a cheap (no full-hash) status of a cached model.

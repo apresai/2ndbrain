@@ -156,3 +156,42 @@ func TestFileSHA256(t *testing.T) {
 		t.Errorf("fileSHA256 = %q, want %q", got, hex.EncodeToString(want[:]))
 	}
 }
+
+func TestRemoveModel(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, err := ModelsCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mdir := filepath.Join(dir, "fixture-rm")
+	if err := os.MkdirAll(mdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := make([]byte, 4096)
+	if err := os.WriteFile(filepath.Join(mdir, "w.gguf"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	freed, err := RemoveModel("fixture-rm")
+	if err != nil {
+		t.Fatalf("RemoveModel: %v", err)
+	}
+	if freed != int64(len(body)) {
+		t.Errorf("freed = %d, want %d", freed, len(body))
+	}
+	if _, err := os.Stat(mdir); !os.IsNotExist(err) {
+		t.Error("model dir should be gone after RemoveModel")
+	}
+
+	// Absent model is a no-op (freed 0, no error).
+	if f, err := RemoveModel("does-not-exist"); err != nil || f != 0 {
+		t.Errorf("absent RemoveModel = (%d, %v), want (0, nil)", f, err)
+	}
+
+	// Path-traversal / separator ids are refused (can't escape the models cache).
+	for _, bad := range []string{"../etc", "a/b", `a\b`, "..", "."} {
+		if _, err := RemoveModel(bad); err == nil {
+			t.Errorf("RemoveModel(%q) should be refused", bad)
+		}
+	}
+}

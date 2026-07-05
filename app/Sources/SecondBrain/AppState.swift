@@ -2371,6 +2371,40 @@ final class AppState {
         )
     }
 
+    /// Atomically switch the vault to the local Gemma stack: provider=llama-local
+    /// + the local embedding + generation models + their dimension, then re-embed
+    /// (the embedding model + dimension change invalidate the stored vectors). One
+    /// `ai.provider` drives both slots, so this is all-or-nothing by design; the
+    /// whole slot set is written before any resolution so there is never a
+    /// transient mixed state (llama-local provider against a Bedrock embedder).
+    func activateLocalStack(embedID: String, genID: String, dimensions: Int) async throws {
+        guard let vault else { throw CLIError.noVault }
+        if isIndexing { throw CLIError.indexRebuildInProgress }
+        log.info("AI Hub action: activate llama-local stack embed=\(embedID, privacy: .public) gen=\(genID, privacy: .public) dims=\(dimensions)")
+        _ = try await runCLI(["config", "set", "ai.provider", "llama-local"], cwd: vault.rootURL)
+        _ = try await runCLI(["config", "set", "ai.embedding_model", embedID], cwd: vault.rootURL)
+        _ = try await runCLI(["config", "set", "ai.dimensions", String(dimensions)], cwd: vault.rootURL)
+        _ = try await runCLI(["config", "set", "ai.generation_model", genID], cwd: vault.rootURL)
+        await refreshAIStatus()
+        // Re-embed with the new (768-dim) local embedding model.
+        rebuildIndex(forceReembed: true)
+    }
+
+    /// Deletes cached local model weights via `ai engine rm --json` and returns
+    /// the bytes freed. Clears the download banner so the section returns to idle.
+    func deleteLocalModels(_ ids: [String]) async throws -> Int64 {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["ai", "engine", "rm", "--json"] + ids, cwd: vault.rootURL)
+        struct RmResp: Decodable {
+            let freedBytes: Int64
+            enum CodingKeys: String, CodingKey { case freedBytes = "freed_bytes" }
+        }
+        let resp = try JSONDecoder().decode(RmResp.self, from: data)
+        localModelDownload = nil
+        await refreshAIStatus()
+        return resp.freedBytes
+    }
+
     /// Flips ai.<provider>.disabled via `2nb config set`. The GUI uses
     /// this to silence a provider without removing credentials.
     func setProviderDisabled(_ provider: String, disabled: Bool) async throws {
