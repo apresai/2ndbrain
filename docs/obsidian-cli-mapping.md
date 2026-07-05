@@ -86,6 +86,7 @@ For other commands (`search`/`search-content`, `unresolved`, `list`/`files`),
 | `property:read` | `2nb property:read name=K file=…` → `2nb meta --get K` | |
 | `property:set` | `2nb property:set name=K value=V file=…` → `2nb meta --set K=V` | Schema-validated. Array fields (`tags`, `aliases`, schema `list`/`tags` fields) are coerced to a YAML list, comma-split, replace semantics (`--set tags=a,b`); use `tag add`/`tag remove` for incremental tag edits. |
 | `property:remove` | `2nb property:remove name=K file=…` → `2nb meta --remove K` | |
+| stale `meta set/get/remove` | `2nb meta set <path> K V` → `2nb meta <path> --set K=V` (also `get <path> K` → `--get K`, `remove <path> K` → `--remove K`) | Back-compat recovery for the obsolete positional form. Rewritten only at the exact operand count, so `2nb meta set` (viewing a note named `set`) is untouched; a malformed form (e.g. missing value) instead errors with a flag-form hint. |
 | list notes | `2nb list` / `2nb files` | `--type --status --tag --sort --limit`; `total`, `format=paths|tree`. |
 | `daily:path` | `2nb daily` / `2nb daily path` | Resolves + creates today's note, prints the path. |
 | `daily:read` | `2nb daily read` | |
