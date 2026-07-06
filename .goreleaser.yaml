@@ -177,5 +177,15 @@ brews:
       Shell completions are installed automatically. Restart your shell
       (or `source ~/.zshrc`) to pick them up.
 
+      Teach your AI coding agent about 2nb (installs the skill, the MCP server,
+      and a small always-loaded block in the agent's global memory file):
+
+        # every supported client (Claude Code, Warp, Claude Desktop, Codex):
+        2nb setup --all
+
+        # or just one client, and preview the skill without installing:
+        2nb skills install claude-code
+        2nb skills show claude-code
+
       For full documentation:
       https://github.com/apresai/2ndbrain
