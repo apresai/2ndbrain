@@ -22,8 +22,11 @@ node_modules/
 cli/bin/
 *.exe
 dist/
-# Packaged macOS app artifacts (built by package-app / notarize-app at repo root).
-# (.zip kept so leftover artifacts from pre-0.9.x releases stay ignored.)
+# Packaged macOS app artifacts (built by package-app / notarize-app into build/).
+# build/ is the current home; the bare SecondBrain-* patterns also cover the
+# legacy repo-root location and the retired pre-0.9.x .zip format so any leftover
+# stays ignored.
+/build/
 SecondBrain-*-arm64.zip
 SecondBrain-*-arm64.dmg
 *.dmg
