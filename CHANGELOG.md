@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.13.2] - 2026-07-05
+
 ### Added
-- `2nb instructions` — write, check, or remove a small managed "2ndbrain" reference block in an AI client's global agent memory file (`~/.claude/CLAUDE.md`). It is an always-loaded, lightweight complement to the installable skill, delimited by HTML-comment markers and version/content-sha stamped so it updates in place, is idempotent (no `.bak` churn on unchanged content), preserves surrounding user content, and can be removed cleanly. Subcommands `install` / `configured` (alias `status`) / `uninstall`; supported clients `claude-code` and `claude-desktop` (both `~/.claude/CLAUDE.md`; warp/codex/agents are a follow-up). `2nb setup` now installs this block alongside the skill and MCP server, and the Homebrew formula caveats point brew users at `2nb setup --all`. The macOS app's Home "AI Clients" card and the Obsidian plugin's AI-client settings show a per-client "Global instructions" status row (installed / hand-edited / out of date), refreshed after Configure.
+- `2nb instructions` command (`install`/`configured`/`uninstall`) — manages a sentinel-delimited, version/sha-stamped "2ndbrain" reference block in an AI client's global agent memory file (`~/.claude/CLAUDE.md`). Idempotent, backup-safe, preserves surrounding user content, and is run by `2nb setup`. Supports `claude-code` and `claude-desktop`.
+- Per-client **Global instructions** status in the macOS app and Obsidian plugin (from `2nb instructions configured --all --json`), shown per AI client and refreshed after Configure.
 
 ### Changed
-- `meta`: recover from the obsolete positional form. `2nb meta set <path> <key> <value>` (and `get`/`remove`) is rewritten to the `--set`/`--get`/`--remove` flag form; a form that can't be rewritten (e.g. a missing value) now errors with a copy-pasteable flag-form hint instead of cobra's terse "accepts 1 arg(s), received N". A malformed `meta` now exits 2 (validation) rather than 1.
-- `create`: human output echoes the resulting slug filename and the title (`Created note: my-note.md (title: "My Note")`), and `create --help` documents the title-to-filename slug behavior so the mapping is discoverable. `--porcelain` output is unchanged; `--json` still returns `path`/`title`.
-- `delete`: the confirmation prompt no longer hangs a non-interactive caller. It times out after 60s (and errors immediately on a closed stdin), reporting the note was NOT removed and pointing at `--force`. `--force`/`--porcelain` still skip the prompt.
+- Release writes the local `SecondBrain-<VERSION>-arm64.dmg` to the gitignored `build/` directory and broadens the pre-release artifact sweep to also clear the legacy repo-root location and the retired `.zip` format.
+- `create` now echoes the resulting slug and title; `2nb create --json` returns `path` and `title`.
+
+### Fixed
+- `meta` recovers the obsolete positional `meta set/get/remove <path>` form by rewriting it to the flag form (or erroring with a copy-pasteable hint) instead of Cobra's terse arg-count message.
+- `delete` no longer hangs a non-interactive/agent session: the confirm prompt times out after 60s (or errors on a closed stdin) and reports the note was NOT removed.
+- Release self-heals the intermittent `notarytool` SIGBUS (Bus error 10) by submitting without `--wait` and polling `notarytool info`, so a crashed status poll retries instead of aborting the release.
+
 
 ## [0.13.1] - 2026-07-05
 
