@@ -52,6 +52,17 @@ private func setupResult(
     )
 }
 
+private func globalInstr(client: String, installed: Bool, upToDate: Bool = true, modified: Bool = false) -> GlobalInstructionsInfo {
+    GlobalInstructionsInfo(
+        client: client,
+        filePath: "~/.claude/CLAUDE.md",
+        installed: installed,
+        upToDate: upToDate,
+        modified: modified,
+        installedVersion: installed ? "0.13.2" : nil
+    )
+}
+
 // MARK: - ClientDescriptor catalog
 
 @Test("ClientDescriptor.all lists the four clients in display order")
@@ -123,6 +134,51 @@ func clientConfigMCPRow() {
     let noScope = ClientConfig.mcpRow(mcp(client: "codex", configured: true, scope: nil, configPath: "~/.codex/config.toml"))
     #expect(noScope.label == "configured")
     #expect(noScope.ok)
+}
+
+@Test("ClientConfig.globalInstructionsRow: nil, not-installed, installed, hand-edited, out-of-date")
+func clientConfigGlobalInstructionsRow() {
+    let unknown = ClientConfig.globalInstructionsRow(nil)
+    #expect(unknown.label == "not installed")
+    #expect(!unknown.ok)
+
+    let notInstalled = ClientConfig.globalInstructionsRow(globalInstr(client: "claude-code", installed: false))
+    #expect(notInstalled.label == "not installed")
+    #expect(!notInstalled.ok)
+
+    let installed = ClientConfig.globalInstructionsRow(globalInstr(client: "claude-code", installed: true))
+    #expect(installed.label == "installed")
+    #expect(installed.ok)
+
+    let handEdited = ClientConfig.globalInstructionsRow(globalInstr(client: "claude-code", installed: true, upToDate: true, modified: true))
+    #expect(handEdited.label == "installed (hand-edited)")
+    #expect(!handEdited.ok)
+
+    let outOfDate = ClientConfig.globalInstructionsRow(globalInstr(client: "claude-code", installed: true, upToDate: false))
+    #expect(outOfDate.label == "installed (out of date)")
+    #expect(!outOfDate.ok)
+}
+
+@Test("[GlobalInstructionsInfo] decodes the --all array and globalInstructions(forClient:) selects correctly")
+@MainActor
+func globalInstructionsAllDecodeAndSelect() throws {
+    // The `2nb instructions configured --all --json` contract: one entry per
+    // client that has a memory file (claude-code + claude-desktop share the file).
+    let json = """
+    [
+      {"client":"claude-code","file_path":"~/.claude/CLAUDE.md","installed":true,"up_to_date":true,"modified":false,"installed_version":"0.13.2"},
+      {"client":"claude-desktop","file_path":"~/.claude/CLAUDE.md","installed":true,"up_to_date":true,"modified":false,"installed_version":"0.13.2"}
+    ]
+    """
+    let decoded = try JSONDecoder().decode([GlobalInstructionsInfo].self, from: Data(json.utf8))
+    #expect(decoded.count == 2)
+
+    let state = AppState()
+    state.globalInstructionsAll = decoded
+    #expect(state.globalInstructions(forClient: "claude-code")?.installed == true)
+    #expect(state.globalInstructions(forClient: "claude-desktop")?.filePath == "~/.claude/CLAUDE.md")
+    // A client with no memory file selects nothing (row is hidden).
+    #expect(state.globalInstructions(forClient: "warp") == nil)
 }
 
 // MARK: - ClientConfig.configureConfirm / successMessage

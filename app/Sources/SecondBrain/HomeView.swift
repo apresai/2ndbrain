@@ -68,6 +68,7 @@ struct HomeView: View {
             await appState.refreshAIStatus()
             await appState.refreshSkillStatus()
             await appState.refreshMCPConfigured()
+            await appState.refreshGlobalInstructions()
         }
     }
 
@@ -360,6 +361,13 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
+            // Global-instructions row: only for clients with a memory file
+            // (claude-code, claude-desktop), which are the only ones the CLI
+            // returns from `instructions configured --all`.
+            if let gi = appState.globalInstructions(forClient: client.mcpClientKey) {
+                let giState = ClientConfig.globalInstructionsRow(gi)
+                statusLine(ok: giState.ok, text: "Global instructions: \(giState.label)")
+            }
             if let note = client.note, !note.isEmpty {
                 Text(note)
                     .font(.caption)
@@ -425,6 +433,7 @@ struct HomeView: View {
             let results = try await appState.setupClient(client.mcpClientKey)
             await appState.refreshSkillStatus()
             await appState.refreshMCPConfigured()
+            await appState.refreshGlobalInstructions()
             // `2nb setup` always exits 0, so trust the per-client result, not the
             // exit code: surface a real error or a still-needed manual step
             // instead of a false "Configured" (e.g. Codex with no `codex` CLI).

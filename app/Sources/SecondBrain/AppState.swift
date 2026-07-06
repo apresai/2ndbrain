@@ -177,11 +177,18 @@ final class AppState {
     // too old.
     var skillStatuses: [SkillStatusInfo] = []
     var mcpConfiguredAll: [MCPConfiguredInfo] = []
+    var globalInstructionsAll: [GlobalInstructionsInfo] = []
 
     /// MCP-configured status for a specific client (claude-code, warp,
     /// claude-desktop, codex), or nil if that client isn't in the last refresh.
     func mcpConfigured(forClient key: String) -> MCPConfiguredInfo? {
         mcpConfiguredAll.first { $0.client == key }
+    }
+
+    /// Global-instructions status for a specific client, or nil if that client
+    /// has no known memory file (warp/codex) or isn't in the last refresh.
+    func globalInstructions(forClient key: String) -> GlobalInstructionsInfo? {
+        globalInstructionsAll.first { $0.client == key }
     }
 
     /// Back-compat accessor: the Claude Code entry, the historical meaning of
@@ -1626,6 +1633,28 @@ final class AppState {
         }
     }
 
+    /// Refreshes whether the always-loaded 2nb block is present in each client's
+    /// global memory file via `2nb instructions configured --all --json`.
+    /// Best-effort, same as `refreshMCPConfigured`: empty/unparseable/older-CLI
+    /// (no `instructions` command) → empty → the Global-instructions row is hidden.
+    func refreshGlobalInstructions() async {
+        guard let vault else {
+            globalInstructionsAll = []
+            return
+        }
+        do {
+            let data = try await runCLI(["instructions", "configured", "--all", "--json"], cwd: vault.rootURL)
+            if data.isEmpty {
+                globalInstructionsAll = []
+                return
+            }
+            globalInstructionsAll = try JSONDecoder().decode([GlobalInstructionsInfo].self, from: data)
+        } catch {
+            log.warning("instructions configured unavailable: \(error.localizedDescription)")
+            globalInstructionsAll = []
+        }
+    }
+
     // MARK: - Claude Code health (Verify) + one-click MCP setup
 
     /// Run the real end-to-end self-test: fan out the doctors + a real model test
@@ -2853,6 +2882,29 @@ struct MCPConfiguredInfo: Codable, Identifiable {
         case scope
         case serverKey = "server_key"
         case vaultPath = "vault_path"
+    }
+}
+
+/// One entry of `2nb instructions configured --all --json`, mirroring the Go
+/// `instructions.Status`. Reports whether the always-loaded 2nb reference block
+/// is present in the client's global agent memory file (`~/.claude/CLAUDE.md`).
+/// Only clients with a known memory file (claude-code, claude-desktop) appear.
+struct GlobalInstructionsInfo: Codable, Identifiable {
+    var id: String { client }
+    let client: String
+    let filePath: String
+    let installed: Bool
+    let upToDate: Bool
+    let modified: Bool
+    let installedVersion: String?
+
+    enum CodingKeys: String, CodingKey {
+        case client
+        case filePath = "file_path"
+        case installed
+        case upToDate = "up_to_date"
+        case modified
+        case installedVersion = "installed_version"
     }
 }
 

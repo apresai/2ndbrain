@@ -108,6 +108,11 @@ struct SetupClientResult: Codable {
     let instructions: String?
     let error: String?
 
+    // Note: `2nb setup` also emits instructions_file_path/instructions_written/
+    // instructions_error, but the Home "Global instructions" row reads the durable
+    // `instructions configured` query (GlobalInstructionsInfo) instead, so those
+    // setup fields are intentionally not decoded here (JSONDecoder ignores them).
+
     enum CodingKeys: String, CodingKey {
         case client, configured, instructions, error
         case skillSlug = "skill_slug"

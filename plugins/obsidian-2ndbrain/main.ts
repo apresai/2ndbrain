@@ -85,6 +85,19 @@ interface ConfiguredStatus {
 	vault_path: string;
 }
 
+// GlobalInstructionsStatus mirrors one entry of `2nb instructions configured
+// --all --json` (the Go instructions.Status). Reports whether the always-loaded
+// 2nb reference block is present in the client's global agent memory file
+// (~/.claude/CLAUDE.md). Only clients with a known memory file appear.
+interface GlobalInstructionsStatus {
+	client: string;
+	file_path: string;
+	installed: boolean;
+	up_to_date: boolean;
+	modified: boolean;
+	installed_version?: string;
+}
+
 // ClientDef describes one AI client the plugin can set up (skill where
 // applicable + MCP server). `key` is the `--client` value the CLI understands
 // (`2nb setup --client <key>`, `2nb mcp configured --client <key>`); `skillSlug`
@@ -98,18 +111,22 @@ export interface ClientDef {
 	skillSlug?: string;
 	note?: string;
 	absoluteCliPath?: boolean;
+	// True for a client with a known global memory file (~/.claude/CLAUDE.md),
+	// where `2nb setup` also installs the always-loaded 2nb reference block.
+	globalInstructions?: boolean;
 }
 
 // MCP_CLIENTS is the set of AI clients the settings UI offers a per-client
 // Configure row for. Mirrors the CLI's mcp.SupportedClients() that ship a
 // plugin-relevant setup path (the cross-tool `.agents` target is CLI-only).
 export const MCP_CLIENTS: ClientDef[] = [
-	{ key: 'claude-code', name: 'Claude Code', skillSlug: 'claude-code' },
+	{ key: 'claude-code', name: 'Claude Code', skillSlug: 'claude-code', globalInstructions: true },
 	{ key: 'warp', name: 'Warp', skillSlug: 'warp' },
 	{
 		key: 'claude-desktop',
 		name: 'Claude Desktop',
 		absoluteCliPath: true,
+		globalInstructions: true,
 		note: 'MCP only (Claude Desktop shares Claude Code’s skill). After configuring, quit and reopen Claude Desktop.',
 	},
 	{ key: 'codex', name: 'Codex', skillSlug: 'codex', note: 'MCP registered via `codex mcp add`.' },
@@ -1028,6 +1045,21 @@ export default class BrainPlugin extends Plugin {
 		}
 	}
 
+	// globalInstructionsMap parses `2nb instructions configured --all --json` once
+	// and keys it by client, so the settings UI can show each client's
+	// global-instructions status in one CLI call. Returns null when the CLI isn't
+	// reachable / lacks the `instructions` command (pre-0.13.2 CLI).
+	async globalInstructionsMap(): Promise<Record<string, GlobalInstructionsStatus> | null> {
+		try {
+			const arr = JSON.parse(await this.runCommand(['instructions', 'configured', '--all', '--json'])) as GlobalInstructionsStatus[];
+			const map: Record<string, GlobalInstructionsStatus> = {};
+			for (const s of arr) map[s.client] = s;
+			return map;
+		} catch {
+			return null;
+		}
+	}
+
 	// skillInstalled reports whether the Claude Code skill is installed (user
 	// or project scope). Delegates to skillsListMap. Returns null when the
 	// status is unknown (CLI unreachable / pre-skills), so the caller can
@@ -1706,6 +1738,7 @@ class BrainSettingTab extends PluginSettingTab {
 		containerEl.createEl('h3', { text: 'AI client integrations' });
 		const mcpMapPromise = this.plugin.mcpConfiguredMap();
 		const skillsMapPromise = this.plugin.skillsListMap();
+		const giMapPromise = this.plugin.globalInstructionsMap();
 
 		for (const c of MCP_CLIENTS) {
 			containerEl.createEl('h4', { text: c.name });
@@ -1773,6 +1806,29 @@ class BrainSettingTab extends PluginSettingTab {
 					mcpRow.setDesc(`Not configured. Click Configure to wire ${c.name} to this vault.${noteSuffix}`);
 				}
 			});
+
+			// Global-instructions row for clients with a global memory file: the
+			// always-loaded 2nb reference block Configure also installs (via setup).
+			if (c.globalInstructions) {
+				const giRow = new Setting(containerEl).setName('Global instructions').setDesc('Checking…');
+				void giMapPromise.then(map => {
+					if (map === null) {
+						giRow.setDesc('Status unavailable (2nb CLI not reachable, or too old for `instructions`).');
+						return;
+					}
+					const st = map[c.key];
+					const file = st?.file_path ?? '~/.claude/CLAUDE.md';
+					if (st && st.installed && st.up_to_date && !st.modified) {
+						giRow.setDesc(`Installed in ${file}. ${c.name} loads the 2nb reference on every session.`);
+					} else if (st && st.installed) {
+						giRow.setDesc(st.modified
+							? `Installed but hand-edited in ${file}. Configure to refresh (backs up first).`
+							: `Installed but out of date in ${file}. Configure to refresh.`);
+					} else {
+						giRow.setDesc(`Not installed. Click Configure to add the 2nb block to ${file}.`);
+					}
+				});
+			}
 		}
 
 		// Components: are the CLI, macOS app, and Obsidian plugin all installed
