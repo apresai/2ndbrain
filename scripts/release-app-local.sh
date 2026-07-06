@@ -60,7 +60,14 @@ fi
 
 VERSION="$(tr -d '\n' < VERSION)"
 BUNDLE="app/.build/arm64-apple-macosx/release/SecondBrain.app"
-DMG="SecondBrain-${VERSION}-arm64.dmg"
+# Local installer artifacts go under build/ (gitignored), not the repo root where
+# they used to accumulate. NOT dist/: `make release-local` runs
+# `goreleaser release --clean`, which wipes dist/. Keep in sync with the
+# Makefile ARTIFACT_DIR. The uploaded GitHub asset name is still the basename
+# (SecondBrain-<version>-arm64.dmg), so the cask URL and release-all verify are
+# unaffected by the local path.
+ARTIFACT_DIR="build"
+DMG="${ARTIFACT_DIR}/SecondBrain-${VERSION}-arm64.dmg"
 
 # When publishing, verify the release exists up front — BEFORE the slow
 # build+sign+notarize — so running too early (CI/GoReleaser hasn't created
@@ -191,14 +198,17 @@ echo "==> Stapling the notarization ticket"
 xcrun stapler staple "$BUNDLE"
 xcrun stapler validate "$BUNDLE"
 
-# Sweep prior local DMGs before building this one. Each release leaves a
-# gitignored SecondBrain-<version>-arm64.dmg in the repo root; every one is
-# already uploaded to its GitHub release, so the local copies just pile up
-# (13 stale DMGs / ~150 MB had accumulated by v0.11.0). create-dmg only clears
-# the current version's output, so older versions linger — clear them all here;
-# the current version's DMG is rebuilt immediately below.
-echo "==> Removing prior local DMGs"
-rm -f SecondBrain-*.dmg
+# Sweep prior local installer artifacts before building this one. Each release
+# leaves a gitignored SecondBrain-<version>-arm64.dmg; every one is already
+# uploaded to its GitHub release, so the local copies just pile up (13 stale DMGs
+# / ~150 MB had accumulated by v0.11.0). create-dmg only clears the current
+# version's output, so older versions linger — clear them all here (both the
+# current build/ dir and the legacy repo-root location, plus the retired .zip
+# format); the current version's DMG is rebuilt immediately below.
+echo "==> Removing prior local installer artifacts"
+mkdir -p "$ARTIFACT_DIR"
+rm -f "$ARTIFACT_DIR"/SecondBrain-*.dmg "$ARTIFACT_DIR"/SecondBrain-*.zip \
+      SecondBrain-*.dmg SecondBrain-*.zip
 
 echo "==> Building the branded installer DMG"
 bash scripts/make-dmg.sh "$BUNDLE" "$DMG"   # builds + Developer ID-signs the DMG

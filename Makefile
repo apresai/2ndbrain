@@ -5,6 +5,12 @@ MAJOR := $(word 1,$(subst ., ,$(VERSION)))
 MINOR := $(word 2,$(subst ., ,$(VERSION)))
 BUILD := $(word 3,$(subst ., ,$(VERSION)))
 
+# Where local macOS installer artifacts (the branded DMG) are written. A
+# dedicated gitignored dir keeps them out of the repo root, where they used to
+# accumulate one-per-release. NOT dist/: `make release-local` runs
+# `goreleaser release --clean`, which wipes dist/ and would delete the DMG.
+ARTIFACT_DIR := build
+
 version-swift:
 	@echo '// Auto-generated from VERSION file - do not edit manually.' > app/Sources/SecondBrain/Version.swift
 	@echo 'let appVersion = "$(VERSION)"' >> app/Sources/SecondBrain/Version.swift
@@ -89,8 +95,9 @@ build-app-release: version-swift build-cli
 	@codesign -s - --deep --force $(APP_BUNDLE_RELEASE) 2>/dev/null || true
 
 package-app: build-app-release
-	@bash scripts/make-dmg.sh $(APP_BUNDLE_RELEASE) SecondBrain-$(VERSION)-arm64.dmg
-	@shasum -a 256 SecondBrain-$(VERSION)-arm64.dmg
+	@mkdir -p $(ARTIFACT_DIR)
+	@bash scripts/make-dmg.sh $(APP_BUNDLE_RELEASE) $(ARTIFACT_DIR)/SecondBrain-$(VERSION)-arm64.dmg
+	@shasum -a 256 $(ARTIFACT_DIR)/SecondBrain-$(VERSION)-arm64.dmg
 
 # Local Developer ID signing + Apple notarization (keys stay on this machine).
 # Reads scripts/sign.env (gitignored). notarize-app produces a notarized,
@@ -128,13 +135,17 @@ clean: clean-dmg
 	$(MAKE) -C cli clean
 	cd app && swift package clean
 
-# Sweep the local installer DMGs (one per release) that package-app /
-# release-app-local.sh leave in the repo root. They are gitignored build
-# artifacts already uploaded to their GitHub release, so the local copies are
-# redundant and otherwise accumulate (e.g. 13 stale DMGs / ~150 MB by v0.11.0).
+# Sweep the local installer artifacts (one per release) that package-app /
+# release-app-local.sh produce. They are gitignored, already uploaded to their
+# GitHub release, so the local copies are redundant and otherwise accumulate
+# (e.g. 13 stale DMGs / ~150 MB by v0.11.0). Sweeps BOTH the current $(ARTIFACT_DIR)
+# and the legacy repo-root location, and the retired pre-0.9.x .zip format (whose
+# sweep the old .dmg-only rule missed, so 17 zips / ~83 MB had piled up).
 # release-app-local.sh runs this automatically before building a fresh DMG.
 clean-dmg:
-	@rm -f SecondBrain-*.dmg && echo "Removed local SecondBrain-*.dmg artifacts"
+	@rm -f SecondBrain-*.dmg SecondBrain-*.zip \
+	       $(ARTIFACT_DIR)/SecondBrain-*.dmg $(ARTIFACT_DIR)/SecondBrain-*.zip \
+	  && echo "Removed local SecondBrain-* installer artifacts (.dmg/.zip)"
 
 test:
 	$(MAKE) -C cli test
