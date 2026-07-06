@@ -648,6 +648,16 @@ describe('MCP_CLIENTS', () => {
 		expect(byKey['claude-desktop'].skillSlug).toBeUndefined();
 		expect(byKey['claude-desktop'].absoluteCliPath).toBe(true);
 	});
+
+	it('marks the clients with a global memory file (claude-code, claude-desktop)', () => {
+		const byKey = Object.fromEntries(MCP_CLIENTS.map((c) => [c.key, c]));
+		// claude-code + claude-desktop share ~/.claude/CLAUDE.md, so `2nb setup`
+		// installs the always-loaded instructions block for both; warp/codex do not.
+		expect(byKey['claude-code'].globalInstructions).toBe(true);
+		expect(byKey['claude-desktop'].globalInstructions).toBe(true);
+		expect(byKey['warp'].globalInstructions).toBeUndefined();
+		expect(byKey['codex'].globalInstructions).toBeUndefined();
+	});
 });
 
 describe('computeLineDiff', () => {

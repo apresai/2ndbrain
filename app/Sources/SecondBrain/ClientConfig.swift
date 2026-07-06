@@ -93,6 +93,23 @@ enum ClientConfig {
         return (label, ok)
     }
 
+    /// The global-instructions row's label and whether the always-loaded 2nb
+    /// block is present and current (green) in the client's memory file. A
+    /// hand-edited or out-of-date block reads as installed-but-not-green; a nil
+    /// status (client has no memory file, or not refreshed) is not-ok.
+    static func globalInstructionsRow(_ status: GlobalInstructionsInfo?) -> (label: String, ok: Bool) {
+        guard let status, status.installed else {
+            return ("not installed", false)
+        }
+        if status.modified {
+            return ("installed (hand-edited)", false)
+        }
+        if !status.upToDate {
+            return ("installed (out of date)", false)
+        }
+        return ("installed", true)
+    }
+
     /// The confirmation copy shown before `2nb setup --client <key>` runs (it
     /// edits an external config; a backup is saved). Claude Desktop's variant
     /// calls out that it writes an absolute path to `2nb` and that you must quit
