@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/apresai/2ndbrain/internal/instructions"
 	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/skills"
@@ -24,7 +25,13 @@ type SetupClientResult struct {
 	MCPChanged    bool   `json:"mcp_changed"`
 	Configured    bool   `json:"configured"`
 	Instructions  string `json:"instructions,omitempty"`
-	Error         string `json:"error,omitempty"`
+	// Global-instructions block in the client's memory file (e.g. ~/.claude/CLAUDE.md).
+	// InstructionsPath is empty for a client with no known memory file.
+	InstructionsPath    string `json:"instructions_file_path,omitempty"`
+	InstructionsBackup  string `json:"instructions_backup,omitempty"`
+	InstructionsWritten bool   `json:"instructions_written"`
+	InstructionsError   string `json:"instructions_error,omitempty"`
+	Error               string `json:"error,omitempty"`
 }
 
 // setupSkillSlug maps a client to the skill slug it should install, if any.
@@ -106,6 +113,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		res := SetupClientResult{Client: c}
 		setupSkill(&res, c, skillBase, user, repoMirrorGuard, skillDone)
 		setupMCP(&res, v, c)
+		setupInstructions(&res, c)
 		results = append(results, res)
 	}
 
@@ -177,6 +185,24 @@ func setupMCP(res *SetupClientResult, v *vault.Vault, client string) {
 	}
 }
 
+// setupInstructions writes the always-loaded 2nb block into the client's global
+// memory file (e.g. ~/.claude/CLAUDE.md). A client with no known memory file
+// (warp/codex/agents) is silently skipped — it has no InstructionsPath.
+func setupInstructions(res *SetupClientResult, client string) {
+	path, ok := memoryFilePath(client)
+	if !ok {
+		return
+	}
+	r, err := instructions.Install(path, setupForce, setupDryRun)
+	if err != nil {
+		res.InstructionsError = err.Error()
+		return
+	}
+	res.InstructionsPath = r.Path
+	res.InstructionsBackup = r.Backup
+	res.InstructionsWritten = r.Changed
+}
+
 func printSetupResults(results []SetupClientResult, dryRun bool) {
 	for _, r := range results {
 		fmt.Printf("%s:\n", clientDisplayName(r.Client))
@@ -218,6 +244,23 @@ func printSetupResults(results []SetupClientResult, dryRun bool) {
 			if r.MCPChanged && r.Client == "codex" {
 				fmt.Println("    (restart your Codex session to apply)")
 			}
+		}
+
+		if r.InstructionsPath != "" {
+			verb := "up to date in"
+			switch {
+			case dryRun && r.InstructionsWritten:
+				verb = "would write to"
+			case r.InstructionsWritten:
+				verb = "wrote to"
+			}
+			fmt.Printf("  instructions: %s %s\n", verb, r.InstructionsPath)
+			if r.InstructionsBackup != "" {
+				fmt.Printf("    backed up previous to %s\n", r.InstructionsBackup)
+			}
+		}
+		if r.InstructionsError != "" {
+			fmt.Fprintf(os.Stderr, "  instructions error: %s\n", r.InstructionsError)
 		}
 
 		if r.Error != "" {

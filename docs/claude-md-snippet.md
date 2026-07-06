@@ -5,6 +5,14 @@ any machine so an agent knows 2ndbrain exists and reaches for it instead of `gre
 file edits. It is a lightweight, always-loaded complement to the installable skill (`2nb setup
 --all`, or `2nb skills install claude-code`), which carries the fuller guidance.
 
+> **Automated:** `2nb setup --all` (or `2nb instructions install --client claude-code`) now
+> writes this block into `~/.claude/CLAUDE.md` for you, delimited by managed HTML-comment
+> markers so it updates in place on upgrade and can be removed with `2nb instructions
+> uninstall` — without touching your surrounding content. `2nb instructions configured` reports
+> whether it is present. The canonical block lives in the CLI at
+> `cli/internal/instructions/content/instructions.md`; the fenced copy below is the
+> manual-paste fallback, kept in sync with that file.
+
 Copy the fenced block below:
 
 ```markdown

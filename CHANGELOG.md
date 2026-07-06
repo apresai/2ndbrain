@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `2nb instructions` — write, check, or remove a small managed "2ndbrain" reference block in an AI client's global agent memory file (`~/.claude/CLAUDE.md`). It is an always-loaded, lightweight complement to the installable skill, delimited by HTML-comment markers and version/content-sha stamped so it updates in place, is idempotent (no `.bak` churn on unchanged content), preserves surrounding user content, and can be removed cleanly. Subcommands `install` / `configured` (alias `status`) / `uninstall`; supported clients `claude-code` and `claude-desktop` (both `~/.claude/CLAUDE.md`; warp/codex/agents are a follow-up). `2nb setup` now installs this block alongside the skill and MCP server, and the Homebrew formula caveats point brew users at `2nb setup --all`.
+
 ### Changed
 - `meta`: recover from the obsolete positional form. `2nb meta set <path> <key> <value>` (and `get`/`remove`) is rewritten to the `--set`/`--get`/`--remove` flag form; a form that can't be rewritten (e.g. a missing value) now errors with a copy-pasteable flag-form hint instead of cobra's terse "accepts 1 arg(s), received N". A malformed `meta` now exits 2 (validation) rather than 1.
 - `create`: human output echoes the resulting slug filename and the title (`Created note: my-note.md (title: "My Note")`), and `create --help` documents the title-to-filename slug behavior so the mapping is discoverable. `--porcelain` output is unchanged; `--json` still returns `path`/`title`.
