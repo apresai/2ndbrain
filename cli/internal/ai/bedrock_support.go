@@ -265,3 +265,56 @@ func bedrockRetryDelay(attempt int) time.Duration {
 	half := base / 2
 	return half + time.Duration(rand.Int63n(int64(half)+1))
 }
+
+// bedrockContextLenHint returns a static context-window hint (in tokens) for
+// a discovered Bedrock model, keyed by model family. Bedrock's control-plane
+// APIs (ListFoundationModels / GetFoundationModel) do not expose the context
+// window, so this map is the only offline source for discovered entries.
+// Conservative by design: only families with well-known values are listed,
+// and 0 ("unknown", rendered as "-") is the honest default for the rest.
+func bedrockContextLenHint(modelID string) int {
+	lower := strings.ToLower(inferenceProfileBaseID(modelID))
+	switch {
+	// Anthropic. 200K: Haiku 4.5, the Claude 3.x line, and the pre-4.6
+	// versions (Sonnet 4/4.5 via their date-suffixed IDs, e.g.
+	// claude-sonnet-4-20250514 matches the "sonnet-4-2" prefix; Opus
+	// 4.1/4.5). 1M: Sonnet 4.6+, Sonnet 5, Opus 4.6+, Fable 5 — matched by
+	// the broader prefixes below AFTER the specific pre-4.6 cases.
+	case strings.HasPrefix(lower, "anthropic.claude-haiku-4-5"),
+		strings.HasPrefix(lower, "anthropic.claude-3"):
+		return 200_000
+	case strings.HasPrefix(lower, "anthropic.claude-sonnet-4-5"),
+		strings.HasPrefix(lower, "anthropic.claude-sonnet-4-2"),
+		strings.HasPrefix(lower, "anthropic.claude-opus-4-1"),
+		strings.HasPrefix(lower, "anthropic.claude-opus-4-5"),
+		strings.HasPrefix(lower, "anthropic.claude-opus-4-2"):
+		return 200_000
+	case strings.HasPrefix(lower, "anthropic.claude-sonnet"),
+		strings.HasPrefix(lower, "anthropic.claude-opus"),
+		strings.HasPrefix(lower, "anthropic.claude-fable"):
+		return 1_000_000
+	case strings.HasPrefix(lower, "amazon.nova-micro"):
+		return 128_000
+	case strings.HasPrefix(lower, "amazon.nova-lite"),
+		strings.HasPrefix(lower, "amazon.nova-pro"):
+		return 300_000
+	case strings.HasPrefix(lower, "amazon.nova-premier"):
+		return 1_000_000
+	case strings.HasPrefix(lower, "amazon.titan-embed"):
+		return 8192
+	case strings.HasPrefix(lower, "amazon.nova-2-multimodal-embeddings"):
+		return 8192
+	case strings.HasPrefix(lower, "cohere.embed"):
+		return 512
+	case strings.HasPrefix(lower, "meta.llama4"),
+		strings.HasPrefix(lower, "meta.llama3-3"),
+		strings.HasPrefix(lower, "meta.llama3-2"),
+		strings.HasPrefix(lower, "meta.llama3-1"):
+		return 128_000
+	case strings.HasPrefix(lower, "mistral.mistral-large"),
+		strings.HasPrefix(lower, "mistral.pixtral"):
+		return 128_000
+	default:
+		return 0
+	}
+}
