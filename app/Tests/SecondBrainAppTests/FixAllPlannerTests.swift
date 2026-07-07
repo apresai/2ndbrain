@@ -126,6 +126,19 @@ func planMixedSubset() async {
     #expect(plan[1].action == .relink(chosenPath: "resources/auth", chosenDisplay: "Auth"))
 }
 
+@Test("duplicate occurrences of the same broken link plan a single rewrite")
+func planDedupsDuplicateOccurrences() async {
+    // lint emits one finding per link occurrence; a note that references the
+    // same broken target twice must plan ONE rewrite (repair-links/relink are
+    // whole-file), or SwiftUI sees duplicate ids and apply() double-runs it.
+    let first = BrokenFinding(path: "n.md", target: "ghostty", fix: "drift", driftTarget: "Ghostty Config")
+    let second = BrokenFinding(path: "n.md", target: "ghostty", fix: "drift", driftTarget: "Ghostty Config")
+    let plan = await FixAllPlanner.plan(findings: [first, second]) { _ in [] }
+    #expect(plan.count == 1)
+    #expect(plan[0].id == "n.md|ghostty")
+    #expect(Set(plan.map(\.id)).count == plan.count) // no duplicate Identifiable ids
+}
+
 @Test("plan(from:) projects classifications without a lookup")
 func planFromClassifications() {
     let f1 = BrokenFinding(path: "1.md", target: "a", fix: "drift", driftTarget: "Alpha")

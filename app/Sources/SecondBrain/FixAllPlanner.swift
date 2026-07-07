@@ -127,19 +127,31 @@ enum FixAllPlanner {
     /// classes become rewrites, decision classes are excluded.
     static func plan(from classified: [(BrokenFinding, LinkFixClass)]) -> [PlannedRewrite] {
         var plans: [PlannedRewrite] = []
+        // lint emits one finding per link OCCURRENCE, so a note that references
+        // the same broken target twice yields two findings with an identical
+        // (path, target) id. repair-links/relink are whole-file by target, so a
+        // single rewrite already fixes every occurrence; keep only the first per
+        // id. Without this the plan carries duplicate Identifiable ids (SwiftUI
+        // ForEach is undefined) and apply() runs the same rewrite twice, the
+        // second a no-op that would inflate the failure count.
+        var seen = Set<String>()
         for (finding, cls) in classified {
+            let rewrite: PlannedRewrite
             switch cls {
             case .repairable(let driftTarget):
-                plans.append(PlannedRewrite(
+                rewrite = PlannedRewrite(
                     path: finding.path, target: finding.target,
-                    action: .repair(driftTarget: driftTarget ?? finding.target)))
+                    action: .repair(driftTarget: driftTarget ?? finding.target))
             case .didYouMean(let cand):
                 let to = (cand.path as NSString).deletingPathExtension
-                plans.append(PlannedRewrite(
+                rewrite = PlannedRewrite(
                     path: finding.path, target: finding.target,
-                    action: .relink(chosenPath: to, chosenDisplay: cand.displayTitle)))
+                    action: .relink(chosenPath: to, chosenDisplay: cand.displayTitle))
             case .ambiguous, .missing:
                 continue
+            }
+            if seen.insert(rewrite.id).inserted {
+                plans.append(rewrite)
             }
         }
         return plans

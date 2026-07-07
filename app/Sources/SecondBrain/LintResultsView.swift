@@ -445,7 +445,7 @@ private struct FixAllSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Fix \(rewrites.count) link\(rewrites.count == 1 ? "" : "s")")
                 .font(.headline)
-            Text("Each rewrite points a broken link at an existing note. Uncheck any you want to skip. Every change is reversible in Obsidian with 2nb polish --undo.")
+            Text("Each rewrite points a broken link at an existing note. Uncheck any you want to skip. Each edited note can be reverted with 2nb polish --undo (which restores its most recent change); to roll back a whole batch, use Obsidian's file history or git.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
