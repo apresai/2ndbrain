@@ -12,17 +12,20 @@ import (
 )
 
 // memoryFileRel maps a client to its user-global agent memory file, relative to
-// the home dir. Only clients whose global-memory-file convention is known are
-// listed; warp/codex/agents are a documented fast-follow (their global-rules
-// file locations are not yet settled). claude-desktop shares Claude Code's
-// ~/.claude/CLAUDE.md.
+// the home dir. Only clients whose global-memory-file convention is settled are
+// listed: claude-desktop shares Claude Code's ~/.claude/CLAUDE.md, and the
+// Codex CLI merges ~/.codex/AGENTS.md ahead of repo-level AGENTS.md files.
+// warp and agents remain documented deferrals: Warp's rules live in cloud-
+// synced Warp Drive (no on-disk global rules file), and the cross-tool
+// AGENTS.md standard is project-scoped with no user-global path.
 var memoryFileRel = map[string]string{
 	"claude-code":    filepath.Join(".claude", "CLAUDE.md"),
 	"claude-desktop": filepath.Join(".claude", "CLAUDE.md"),
+	"codex":          filepath.Join(".codex", "AGENTS.md"),
 }
 
 // memoryFileClients is the ordered set that `--all` iterates.
-var memoryFileClients = []string{"claude-code", "claude-desktop"}
+var memoryFileClients = []string{"claude-code", "claude-desktop", "codex"}
 
 // memoryFilePath resolves a client's absolute global memory file, if it has one.
 func memoryFilePath(client string) (string, bool) {
@@ -54,8 +57,9 @@ installable skill (see 'skills'). It is delimited by HTML-comment markers and
 version-stamped, so it updates in place and can be removed without touching your
 surrounding content; writes back up the file first (<file>.bak).
 
-Supported clients: claude-code, claude-desktop (both share ~/.claude/CLAUDE.md).
-'2nb setup' installs this block alongside the skill and MCP server.
+Supported clients: claude-code, claude-desktop (both share ~/.claude/CLAUDE.md)
+and codex (~/.codex/AGENTS.md). '2nb setup' installs this block alongside the
+skill and MCP server.
 
 Bare 'instructions' reports status (like 'instructions configured').`,
 	RunE: runInstructionsConfigured,
@@ -84,7 +88,7 @@ func init() {
 	// Stamp installs with this binary's version (mirrors skills.Version).
 	instructions.Version = Version
 
-	instructionsInstallCmd.Flags().StringVar(&instrClient, "client", "claude-code", "AI client (claude-code, claude-desktop)")
+	instructionsInstallCmd.Flags().StringVar(&instrClient, "client", "claude-code", "AI client (claude-code, claude-desktop, codex)")
 	instructionsInstallCmd.Flags().BoolVar(&instrDryRun, "dry-run", false, "Print the plan without writing")
 	instructionsInstallCmd.Flags().BoolVar(&instrForce, "force", false, "Overwrite a hand-edited block")
 	instructionsConfiguredCmd.Flags().StringVar(&instrClient, "client", "claude-code", "AI client to check")

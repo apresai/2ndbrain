@@ -8,8 +8,9 @@ file edits. It is a lightweight, always-loaded complement to the installable ski
 > **Automated:** `2nb setup --all` (or `2nb instructions install --client claude-code`) now
 > writes this block into `~/.claude/CLAUDE.md` for you, delimited by managed HTML-comment
 > markers so it updates in place on upgrade and can be removed with `2nb instructions
-> uninstall` — without touching your surrounding content. `2nb instructions configured` reports
-> whether it is present. The canonical block lives in the CLI at
+> uninstall` — without touching your surrounding content. The Codex CLI is supported too:
+> `--client codex` targets `~/.codex/AGENTS.md`, Codex's global memory file. `2nb instructions
+> configured` reports whether it is present. The canonical block lives in the CLI at
 > `cli/internal/instructions/content/instructions.md`; the fenced copy below is the
 > manual-paste fallback, kept in sync with that file.
 

@@ -129,7 +129,7 @@ export const MCP_CLIENTS: ClientDef[] = [
 		globalInstructions: true,
 		note: 'MCP only (Claude Desktop shares Claude Code’s skill). After configuring, quit and reopen Claude Desktop.',
 	},
-	{ key: 'codex', name: 'Codex', skillSlug: 'codex', note: 'MCP registered via `codex mcp add`.' },
+	{ key: 'codex', name: 'Codex', skillSlug: 'codex', globalInstructions: true, note: 'MCP registered via `codex mcp add`.' },
 ];
 
 // ProductState mirrors one component of `2nb doctor --json` (the Go
@@ -1817,7 +1817,7 @@ class BrainSettingTab extends PluginSettingTab {
 						return;
 					}
 					const st = map[c.key];
-					const file = st?.file_path ?? '~/.claude/CLAUDE.md';
+					const file = st?.file_path ?? (c.key === 'codex' ? '~/.codex/AGENTS.md' : '~/.claude/CLAUDE.md');
 					if (st && st.installed && st.up_to_date && !st.modified) {
 						giRow.setDesc(`Installed in ${file}. ${c.name} loads the 2nb reference on every session.`);
 					} else if (st && st.installed) {
