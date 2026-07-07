@@ -396,3 +396,74 @@ func TestContract_AIStatusActiveProviderDisabled(t *testing.T) {
 		t.Fatal("re-selecting the provider should have cleared the disabled flag")
 	}
 }
+
+// PR #180 review gap: the per-probe "result" event is the line a GUI progress
+// bar renders, so its streamed shape must be verified, not just the empty
+// stream. A dead Ollama endpoint drives a real probe to a deterministic
+// offline failure through the full events pipeline.
+func TestContract_ModelsVerifyEventsStreamsResult(t *testing.T) {
+	_, root := newContractVault(t)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.ollama.endpoint", "http://127.0.0.1:9"); err != nil {
+		t.Fatalf("set endpoint: %v", err)
+	}
+
+	got, err := runCLIArgs(t, root,
+		"models", "verify", "all-minilm",
+		"--provider", "ollama", "--yes", "--events")
+	if err != nil {
+		t.Fatalf("models verify --events: %v (out=%s)", err, truncate(got, 500))
+	}
+	lines := bytes.Split(bytes.TrimSpace(got), []byte("\n"))
+	if len(lines) != 3 {
+		t.Fatalf("expected start+result+done, got %d lines:\n%s", len(lines), got)
+	}
+	var start struct {
+		Event string  `json:"event"`
+		Total int     `json:"total"`
+		USD   float64 `json:"estimated_usd"`
+	}
+	if err := json.Unmarshal(lines[0], &start); err != nil || start.Event != "start" || start.Total != 1 {
+		t.Fatalf("bad start event %s (err=%v)", lines[0], err)
+	}
+	var result struct {
+		Event  string `json:"event"`
+		N      int    `json:"n"`
+		Total  int    `json:"total"`
+		Result struct {
+			ModelID string `json:"model_id"`
+			OK      bool   `json:"ok"`
+			Code    string `json:"code"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(lines[1], &result); err != nil {
+		t.Fatalf("bad result event %s (err=%v)", lines[1], err)
+	}
+	if result.Event != "result" || result.N != 1 || result.Total != 1 {
+		t.Fatalf("result event envelope wrong: %s", lines[1])
+	}
+	if result.Result.OK || result.Result.ModelID != "all-minilm" {
+		t.Fatalf("expected a failed all-minilm probe, got %+v", result.Result)
+	}
+	if result.Result.Code != string(ai.TestErrProviderUnreachable) && result.Result.Code != string(ai.TestErrTimeout) {
+		t.Fatalf("expected provider_unreachable/timeout, got %q", result.Result.Code)
+	}
+	var done struct {
+		Event      string         `json:"event"`
+		Total      int            `json:"total"`
+		Summary    map[string]int `json:"summary"`
+		SavedScope string         `json:"saved_scope"`
+	}
+	if err := json.Unmarshal(lines[2], &done); err != nil || done.Event != "done" {
+		t.Fatalf("bad done event %s (err=%v)", lines[2], err)
+	}
+	if done.Total != 1 || done.SavedScope != "vault" {
+		t.Fatalf("done envelope wrong: %s", lines[2])
+	}
+	total := 0
+	for _, n := range done.Summary {
+		total += n
+	}
+	if total != 1 {
+		t.Fatalf("done summary should count the one probe, got %s", lines[2])
+	}
+}
