@@ -321,6 +321,7 @@ func BuiltinCatalog() []ModelInfo {
 		PriceRequest: 0.002, // ~$2 / 1,000 rerank queries (up to 100 docs each); us-east-1 in-region only
 		Local:        false,
 		Tier:         TierVerified,
+		Region:       "us-east-1", // in-region only; BedrockReranker prefers this pin over ai.bedrock.region
 		ConfigHint:   configHint("bedrock", "rerank", "cohere.rerank-v3-5:0"),
 		Notes:        "cross-encoder reranker; us-east-1 only; default OFF (measured to hurt at small scale)",
 	})

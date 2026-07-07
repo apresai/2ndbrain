@@ -38,6 +38,14 @@ const (
 	// ({"inputType":"text","text":{"inputText":"..."}}).
 	StrategyBedrockInvokeMarengo30 = "bedrock_invoke_marengo_3_0"
 
+	// StrategyBedrockMantleResponses names the AWS Bedrock "mantle" invocation
+	// plane: the OpenAI Responses dialect over REST at
+	// https://bedrock-mantle.<region>.api.aws with bearer-token auth. Models
+	// on this plane (e.g. openai.gpt-5.5, xai.grok-4.3) are region-pinned per
+	// model (ModelInfo.Region) and invisible to the classic control plane
+	// (list-foundation-models / GetFoundationModel).
+	StrategyBedrockMantleResponses = "bedrock_mantle_responses"
+
 	// StrategyAnthropicMessages — api.anthropic.com/v1/messages (direct,
 	// not via Bedrock). Auth: x-api-key header.
 	StrategyAnthropicMessages = "anthropic_messages"
@@ -83,6 +91,7 @@ func KnownInvokeStrategies() []string {
 		StrategyBedrockInvokeCohereEmbed,
 		StrategyBedrockInvokeMarengo27,
 		StrategyBedrockInvokeMarengo30,
+		StrategyBedrockMantleResponses,
 		StrategyAnthropicMessages,
 		StrategyOpenAIChat,
 		StrategyOpenAIEmbeddings,

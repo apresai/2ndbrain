@@ -15,33 +15,51 @@ import "strings"
 // but wasteful: BuiltinCatalog is a static slice and LoadUserCatalog
 // re-reads YAML files from disk.
 func ResolveInvokeStrategy(provider, modelID, vaultRoot string) string {
+	return resolveCatalogString(provider, modelID, vaultRoot, func(m ModelInfo) string {
+		return m.InvokeStrategy
+	})
+}
+
+// ResolveModelRegion returns the per-model AWS region pin for (provider,
+// modelID), resolved through the same user-catalog-over-builtin chain as
+// ResolveInvokeStrategy. Returns "" when no catalog entry pins a region,
+// meaning "use the provider default (ai.bedrock.region)".
+func ResolveModelRegion(provider, modelID, vaultRoot string) string {
+	return resolveCatalogString(provider, modelID, vaultRoot, func(m ModelInfo) string {
+		return m.Region
+	})
+}
+
+// resolveCatalogString resolves one string-valued catalog field for
+// (provider, modelID): builtin is the base layer, overlaid with the user
+// catalog so a user override can correct a builtin that's wrong or
+// newly-supported. Returns "" when no catalog entry declares the field.
+func resolveCatalogString(provider, modelID, vaultRoot string, field func(ModelInfo) string) string {
 	if modelID == "" {
 		return ""
 	}
 	normalized := strings.ToLower(inferenceProfileBaseID(modelID))
-	if s := findStrategy(BuiltinCatalog(), provider, modelID, normalized); s != "" {
-		// Builtin is the base layer — overlay with user catalog so a user
-		// override can correct a builtin that's wrong or newly-supported.
-		if user := findStrategy(LoadUserCatalog(vaultRoot), provider, modelID, normalized); user != "" {
+	if s := findCatalogString(BuiltinCatalog(), provider, modelID, normalized, field); s != "" {
+		if user := findCatalogString(LoadUserCatalog(vaultRoot), provider, modelID, normalized, field); user != "" {
 			return user
 		}
 		return s
 	}
-	return findStrategy(LoadUserCatalog(vaultRoot), provider, modelID, normalized)
+	return findCatalogString(LoadUserCatalog(vaultRoot), provider, modelID, normalized, field)
 }
 
-func findStrategy(catalog []ModelInfo, provider, modelID, normalizedLower string) string {
+func findCatalogString(catalog []ModelInfo, provider, modelID, normalizedLower string, field func(ModelInfo) string) string {
 	for _, m := range catalog {
 		if m.Provider != provider {
 			continue
 		}
 		if m.ID == modelID {
-			return m.InvokeStrategy
+			return field(m)
 		}
 		// Match inference-profile-stripped form so "us.anthropic.claude..."
 		// resolves against the base "anthropic.claude..." entry.
 		if strings.ToLower(inferenceProfileBaseID(m.ID)) == normalizedLower {
-			return m.InvokeStrategy
+			return field(m)
 		}
 	}
 	return ""

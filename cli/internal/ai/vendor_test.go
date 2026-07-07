@@ -33,6 +33,8 @@ func TestVendorOf_Bedrock(t *testing.T) {
 		{"moonshot.kimi-k2-thinking", "moonshot", "Moonshot", "Kimi"},
 		// twelvelabs
 		{"us.twelvelabs.marengo-embed-3-0-v1:0", "twelvelabs", "TwelveLabs", "Marengo"},
+		// mantle-plane vendors
+		{"xai.grok-4.3", "xai", "xAI", ""},
 		// unknown
 		{"mystery.v1", "mystery", "Mystery", ""},
 	}

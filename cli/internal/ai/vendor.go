@@ -85,6 +85,7 @@ var bedrockVendorDisplay = map[string]string{
 	"minimax":    "MiniMax",
 	"nvidia":     "NVIDIA",
 	"openai":     "OpenAI",
+	"xai":        "xAI",
 	"twelvelabs": "TwelveLabs",
 	"google":     "Google",
 	"stability":  "Stability AI",

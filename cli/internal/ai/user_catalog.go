@@ -348,6 +348,12 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 	if top.InvokeStrategy != "" {
 		out.InvokeStrategy = top.InvokeStrategy
 	}
+	if top.Region != "" {
+		out.Region = top.Region
+	}
+	if top.Endpoint != "" {
+		out.Endpoint = top.Endpoint
+	}
 	if top.Benchmark != nil {
 		b := *top.Benchmark
 		out.Benchmark = &b

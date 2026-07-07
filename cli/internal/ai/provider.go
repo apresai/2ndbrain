@@ -210,6 +210,19 @@ type ModelInfo struct {
 	// field existed.
 	InvokeStrategy string `json:"invoke_strategy,omitempty" yaml:"invoke_strategy,omitempty"`
 
+	// Region pins the AWS region for this model's invocations when it
+	// differs from the provider default (ai.bedrock.region). Some Bedrock
+	// models are region-locked: Cohere Rerank 3.5 is us-east-1 in-region
+	// only, and mantle-plane models are pinned per model (e.g.
+	// openai.gpt-5.5 in us-east-2, xai.grok-4.3 in us-west-2). Empty means
+	// "use the provider default".
+	Region string `json:"region,omitempty" yaml:"region,omitempty"`
+
+	// Endpoint is a full endpoint URL override for forward-compat with
+	// invocation planes whose host isn't derivable from Region alone.
+	// Normally empty: clients derive the endpoint from Region.
+	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+
 	// TestLatencyMs is the latency of the last passing test probe, in
 	// milliseconds. Paired with TestedAt; 0 when no test has succeeded.
 	TestLatencyMs int64 `json:"test_latency_ms,omitempty" yaml:"test_latency_ms,omitempty"`
