@@ -278,10 +278,11 @@ struct ModelCatalogPickerView: View {
                 }
                 statusLine("Compatible", value: model.compatible == false ? "No" : "Yes", detail: model.compatibilityReason)
                 if let testedAt = model.testedAt, !testedAt.isEmpty {
-                    statusLine("Tested", value: testedAt, detail: model.testError)
+                    statusLine("Tested", value: testedAt, detail: nil)
                 } else {
                     statusLine("Tested", value: "Untested", detail: nil)
                 }
+                accessCallout(model)
                 statusLine("Test latency", value: model.testLatencyMs.map { "\($0)ms" } ?? "-", detail: nil)
                 if let benchmark = model.benchmark {
                     statusLine("Benchmark", value: benchmark.avgLatencyMs.map { "\($0)ms avg" } ?? "available", detail: benchmark.ranAt)
@@ -289,6 +290,36 @@ struct ModelCatalogPickerView: View {
                     statusLine("Benchmark", value: "Not run", detail: nil)
                 }
             }
+        }
+    }
+
+    /// The failure panel that replaced the buried tooltip: title, guidance,
+    /// an action link where one exists (e.g. the Bedrock Model-access page),
+    /// and the raw error selectable underneath.
+    @ViewBuilder
+    private func accessCallout(_ model: CatalogModelInfo) -> some View {
+        if let err = model.testError, !err.isEmpty {
+            let guidance = ModelAccessPresentation.guidance(code: model.testErrorCode, provider: model.provider)
+            VStack(alignment: .leading, spacing: 6) {
+                Label(guidance?.title ?? "Last test failed", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.red)
+                if let advice = guidance?.advice, !advice.isEmpty {
+                    Text(advice).font(.callout)
+                }
+                if let label = guidance?.actionLabel, let url = guidance?.actionURL {
+                    Link(label, destination: url).font(.callout)
+                }
+                Text(err)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(4)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.red.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 
@@ -494,8 +525,16 @@ struct ModelCatalogPickerView: View {
         defer { isTesting = false }
         do {
             let result = try await appState.testAndSave(modelID: model.modelID, provider: model.provider, type: model.modelType, scope: "vault")
-            statusText = result.ok ? "Test passed: \(result.latency)" : "Test failed"
-            pickerLog.info("Picker test result model=\(model.modelID, privacy: .public) ok=\(result.ok)")
+            if result.ok {
+                statusText = "Test passed: \(result.latency)"
+            } else {
+                let guidance = ModelAccessPresentation.guidance(code: result.errorCode, provider: model.provider, remediation: result.remediation)
+                var line = "Test failed"
+                if let badge = guidance?.badge { line += " [\(badge)]" }
+                if let advice = guidance?.advice, !advice.isEmpty { line += ": \(advice)" }
+                errorText = line
+            }
+            pickerLog.info("Picker test result model=\(model.modelID, privacy: .public) ok=\(result.ok) code=\(result.errorCode ?? "", privacy: .public)")
             await onReload()
         } catch {
             errorText = "Test failed: \(error.localizedDescription)"
@@ -597,8 +636,8 @@ struct ModelCatalogPickerView: View {
     }
 
     private func testBadge(_ model: CatalogModelInfo) -> some View {
-        if let err = model.testError, !err.isEmpty {
-            return Badge(text: "failed", color: .red, help: err)
+        if let label = ModelAccessPresentation.badgeLabel(testError: model.testError, testErrorCode: model.testErrorCode, provider: model.provider) {
+            return Badge(text: label, color: .red, help: model.testError ?? label)
         }
         if let testedAt = model.testedAt, !testedAt.isEmpty {
             return Badge(text: "tested", color: .green, help: testedAt)

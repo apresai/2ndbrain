@@ -339,15 +339,20 @@ struct HomeView: View {
         do {
             var failures: [String] = []
             var tested = 0
+            func failureLine(_ r: AIProbeResult, model: String) -> String {
+                let guidance = ModelAccessPresentation.guidance(code: r.errorCode, provider: status.provider, remediation: r.remediation)
+                if let g = guidance { return "\(model) [\(g.badge)]: \(g.advice)" }
+                return "\(model): \(r.detail ?? "failed")"
+            }
             if !status.embeddingModel.isEmpty {
                 tested += 1
                 let r = try await appState.testAndSave(modelID: status.embeddingModel, provider: status.provider, type: "embedding", scope: "vault")
-                if !r.ok { failures.append("\(status.embeddingModel): \(r.detail ?? "failed")") }
+                if !r.ok { failures.append(failureLine(r, model: status.embeddingModel)) }
             }
             if !status.genModel.isEmpty {
                 tested += 1
                 let r = try await appState.testAndSave(modelID: status.genModel, provider: status.provider, type: "generation", scope: "vault")
-                if !r.ok { failures.append("\(status.genModel): \(r.detail ?? "failed")") }
+                if !r.ok { failures.append(failureLine(r, model: status.genModel)) }
             }
             await appState.refreshAIStatus()
             if tested == 0 {
