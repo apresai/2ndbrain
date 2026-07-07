@@ -7,21 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- Unified the two divergent "has known pricing" definitions into one exported `ai.HasKnownPricing` (local, non-zero price, or explicit price source): a priced entry with no recorded source now renders its price instead of "—".
-- Live pricing enrichment no longer clears a model's price when the vendor feed is reachable but the model doesn't match (Bedrock's alias matching is heuristic; a stale-but-labeled price beats "unknown"). Previously a promoted user entry could silently flip to unknown pricing on a later `models list`.
-- `ai status` now warns loudly (and reports additive `active_provider_disabled` in `--json`) when the ACTIVE provider is disabled, a contradictory hand-edited state where the CLI still executes it but the GUI hides all of its models.
+(empty - ready for next release)
+
+## [0.14.0] - 2026-07-07
 
 ### Added
-- Skill-usage eval (opt-in, test-only): `make test-skill-eval` feeds the canonical SKILL.md to a real model and scores whether it selects the taught command for ~12 natural tasks (search not grep, move not mv, meta not sed, JSON-envelope parsing, degraded-mode reading). Gated on credentials plus `2NB_SKILL_EVAL=1`, never part of `test-all`; loose 70% floor so model drift logs rather than flakes. First live run: 12/12 with Haiku 4.5.
-- `2nb eval answers`: the LLM-jury answer scorecard. Generates a real RAG answer per cached ground-truth question via the production ask pipeline and grades each 1-5 on correctness, completeness, and grounding against the source note. Self-judged by the configured generation model by default (cheap; labeled as a relative signal) or a real panel via `--judges <model-id,...>`; the whole run (answers + gradings) is estimated and gated by the shared `--cost-cap`. `--json` emits `AnswersReport`.
-- `2nb eval tune` (the "coming soon" is gone): sweeps 25 similarity-threshold x hybrid-weight combinations plus a BM25-only baseline over the same cached QA set `2nb eval` uses, ranks them best-first, and prints the exact `config set` commands when a configuration beats the current one by a real margin (suggest-only; nothing is written; marginal wins and a BM25-only winner never suggest, and a small QA set prints an overfit caveat). Near-zero cost: one query-embed batch, scored locally against stored embeddings.
-- `models list` surfaces benchmark evidence: a BENCH column renders each model's latest summary (`q=0.87 412ms`; retrieval quality exists only for embedding models, latency for the rest) with a tip when empty, and the opt-in `--sort best` ranks by measured evidence (bench quality, then tested-passing, recommended, tier, latency; the default order is unchanged and JSON follows the sort). Bench results finally influence visible ranking without changing default-model selection.
-- Global instructions for the Codex CLI: `2nb instructions --client codex` (and `2nb setup --client codex`) manages the sentinel-delimited 2ndbrain block in `~/.codex/AGENTS.md`, Codex's global memory file, with the same idempotent, backup-safe, user-content-preserving writer as `~/.claude/CLAUDE.md`. The macOS app and Obsidian plugin show the per-client Global instructions row for Codex automatically. Warp and the cross-tool `agents` target remain deferred (no settled on-disk global-rules file).
-- Discovered Bedrock models now carry a context-window hint in `models list` (static per-family map; Bedrock's control-plane APIs don't expose the window). Unknown families honestly render `-`.
-- `2nb models verify` — batch-probe models to verify YOUR account can invoke them, persisting every result (pass and fail) with its classified code so `models list`'s STATE column and the new `ai status` "Model access" summary (`model_access` in `--json`) reflect the account's real access. Defaults to the recommended + active models on providers whose credentials resolve; narrow with `--provider`/`--vendor`/`--recommended`, broaden with `--all`, or name explicit IDs. Cost-gated (`--cost-cap`, default $0.05, plus a y/N confirm; a declined confirm exits non-zero) and grouped by vendor with one remediation line per distinct failure code. This is the check for AWS's staged frontier rollout: on a gated account the Anthropic line reports `access_denied` for Sonnet 5/Opus 4.8 while a provisioned account passes.
-- Curated model recommendations: a `recommended` flag on catalog entries marks the short list 2nb suggests per provider (`2nb models list --recommended`; ★ in the new STATE column, which also shows each model's last per-account test outcome, e.g. `ok 3d` or `access_denied`). The builtin Bedrock Anthropic line is refreshed to Haiku 4.5 (tested default, pinned price corrected 0.80/4.00 → 1.00/5.00 to match the live AWS offer file), Sonnet 4.6 (pinned 3.00/15.00), and Sonnet 5, Opus 4.6, Opus 4.8 all unpinned (live offer-file pricing; the old pinned Opus 15.00/75.00 was stale, actual is 5.00/25.00) — Sonnet 5 and Opus 4.8 verified live via Converse, with a staged-rollout note since AWS can gate them per account. Opus 4.7 and Fable 5 are intentionally not curated (still discoverable). Two release guards keep the catalog honest: a cred-gated test asserting every builtin Anthropic ID still appears in the live Bedrock listing, and a network test asserting the offer-file alias machinery resolves prices for every unpinned entry.
-- Model test probes now classify failures into a stable `test_error_code` vocabulary (`access_denied`, `bad_credentials`, `throttled`, `not_found`, `provider_unreachable`, `invalid_request`, `incompatible`, `timeout`, `unknown`) with a user-actionable remediation hint. An AWS Bedrock 403 from the staged frontier-model rollout gate (a model the console lists as available but the account cannot invoke) is now distinguishable from bad credentials or throttling. Surfaced in `models test` output (`cause:`/`fix:` lines), `models test --json` (`code`/`remediation`), the persisted user catalog (`test_error_code`), `models list --discover --promote` failure lines, and the wizard's `test_result` events (`code`).
+- `eval answers`: LLM-jury answer-quality scorecard grading real RAG answers 1-5 on correctness, completeness, and grounding, cost-gated with an optional judge panel (#172)
+- `eval tune`: retrieval auto-tuning sweep over the cached QA set that suggests `config set` improvements when a config beats the current one beyond noise (#171)
+- `models verify`: per-account batch access probe that persists pass/fail (with classified error codes) for the recommended and active models, surfaced in `models list` and `ai status` (#159)
+- Structured taxonomy for model test-probe failures (`access_denied`, `throttled`, `bad_credentials`, etc.) with remediation hints in CLI output and `--json` (#157)
+- Context-window hints for discovered Bedrock models (#160)
+- Global instructions support for the Codex CLI (`~/.codex/AGENTS.md`) via `2nb instructions` and `2nb setup`, plus per-client status in the app and Obsidian plugin (#169)
+- macOS app: Advanced settings panel exposing previously invisible AI config (similarity threshold, hybrid weights, RAG budgets, embed concurrency, dimensions, calibration, embed-probe) (#165)
+- macOS app: benchmark run history in the model picker (#167)
+- macOS app: cost-estimate confirmation before paid Test and Benchmark runs (#164)
+- Opt-in skill-usage eval benchmarking whether agents actually invoke the 2nb skill (#173)
+
+### Changed
+- `models list` surfaces benchmark evidence in a BENCH column and ranks by measured quality with `--sort best` (#170)
+- Refreshed the builtin Bedrock Anthropic catalog (adds Sonnet 5 and Opus 4.8) with curated recommendations and a `--recommended` filter (#158)
+- macOS app: AI Hub catalog is curated by default, with the untested long tail behind "Show all models" (#163)
+- macOS app: model rows show classified access states (no access, throttled, bad credentials) with actionable guidance (#166)
+- Documentation reconciled against shipped behavior (#174)
+
+### Fixed
+- Home AI card now reflects the actual configured provider and models instead of assuming Bedrock defaults, and the reset button only appears when config drifts from defaults (#162)
+- Unified pricing knowledge across commands, stopped clearing cached pricing on a lookup miss, and flagged a disabled active provider in `config doctor` (#161)
+
 
 ## [0.13.2] - 2026-07-05
 
