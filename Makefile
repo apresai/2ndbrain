@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
+.PHONY: test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -163,6 +163,9 @@ test-battery:
 # skips reindex). AI-gated steps skip without provider credentials.
 test-usage:
 	$(MAKE) -C cli test-usage
+
+test-skill-eval:
+	$(MAKE) -C cli test-skill-eval
 
 # 2NB_TEST makes the 2nb subprocesses the Swift tests spawn (vault create /
 # vault set) skip writing the real ~/.2ndbrain-vaults recents and skip reading

@@ -39,5 +39,10 @@ test-battery:
 test-usage:
 	go test -race -v -run TestUsage -timeout 300s ./...
 
+# Skill-usage eval: feeds the canonical SKILL.md to a real model and scores
+# command selection (~$0.01/run). Opt-in only, never part of test-all.
+test-skill-eval:
+	env 2NB_SKILL_EVAL=1 go test -v -run TestSkillUsageSelection -timeout 600s ./internal/eval/
+
 dev: build
 	./$(BUILD_DIR)/$(BINARY) --help

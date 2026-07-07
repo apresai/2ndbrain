@@ -234,3 +234,10 @@ func ListStatuses(projectDir, homeDir string) []InstallStatus {
 	}
 	return out
 }
+
+// CanonicalContent returns the embedded skill body: the single source of
+// truth every agent install renders. Exported for the skill-usage eval,
+// which feeds it to a real model and scores command selection.
+func CanonicalContent() string {
+	return coreContent
+}
