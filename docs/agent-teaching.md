@@ -134,7 +134,14 @@ Agents should be taught to check `warnings[]` and `mode` before assuming hybrid 
 
 ## Test battery design (Phase B)
 
-Two tiers: a **golden-path battery** curated for CI readability, and targeted **gap-filler tests** that close coverage holes identified during exploration.
+Four tiers now exist, from cheapest to most expensive; the first three are built, the fourth is deliberately future:
+
+1. **Golden-path battery** (`cli/battery_test.go`, `make test-battery`) — curated end-to-end scenarios proving the documented workflows work. Shipped.
+2. **Usage battery** (`cli/battery_usage_test.go`, `make test-usage`) — drives the REAL binary and the real MCP server over stdio through the workflows this doc teaches (write→query index round-trips, obsidian-compat forms). Shipped.
+3. **Skill-selection eval** (`cli/internal/eval/skillusage_test.go`, `make test-skill-eval`) — feeds the canonical SKILL.md to a real model as its system prompt and scores whether it picks the taught command for ~12 natural tasks (search-not-grep, move-not-mv, meta-not-sed, envelope parsing, degraded-mode reading). Opt-in twice over (real tokens + `2NB_SKILL_EVAL=1`), never in `test-all`; asserts a loose 70% floor so model drift logs rather than flakes. First live run: 12/12 with Haiku 4.5. Shipped.
+4. **Full agent-loop benchmark** (an LLM actually executing tools against a seeded vault, scored on task completion) — explicitly future: high build cost and non-deterministic scoring for marginal signal over tiers 2+3, which already separate "the commands work" from "the skill teaches the right commands".
+
+The original two-tier design below describes tier 1 plus targeted **gap-filler tests** that close coverage holes identified during exploration.
 
 ### Golden-path battery — `cli/internal/cli/battery_test.go`
 
