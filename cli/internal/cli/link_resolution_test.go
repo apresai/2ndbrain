@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -214,4 +215,51 @@ func containsPath(rs []SuggestLinkResult, path string) bool {
 		}
 	}
 	return false
+}
+
+// PR #179 regression pair: relink's --to advisory check resolves against the
+// LIVE filesystem, so both stale-DB directions behave correctly.
+func TestRelink_UnindexedOnDiskTargetDoesNotWarn(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "src.md", "Src", "See [[go-modules]].")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	// Created AFTER the index: the DB does not know it, the disk does.
+	writeNote(t, root, "fresh-note.md", "Fresh Note", "Just created in Obsidian.")
+	out, err := runCLIArgs(t, root, "relink", "src.md", "--from", "go-modules", "--to", "fresh-note", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("relink: %v\n%s", err, out)
+	}
+	var res PolishResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if strings.Contains(res.Warning, "does not resolve") {
+		t.Errorf("an unindexed on-disk --to target must not warn (live resolution): %q", res.Warning)
+	}
+}
+
+func TestRelink_DBGhostTargetWarns(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "src.md", "Src", "See [[go-modules]].")
+	ghost := writeNote(t, root, "ghost.md", "Ghost", "About to be deleted.")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	// Deleted from disk AFTER the index: the DB still has it, the disk does not.
+	if err := os.Remove(ghost); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIArgs(t, root, "relink", "src.md", "--from", "go-modules", "--to", "ghost", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("relink: %v\n%s", err, out)
+	}
+	var res PolishResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(res.Warning, "does not resolve") {
+		t.Errorf("a --to target deleted from disk must warn even though the DB still has it: %q", res.Warning)
+	}
 }

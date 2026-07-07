@@ -94,75 +94,14 @@ func runLint(cmd *cobra.Command, args []string) error {
 	report := &LintReport{}
 
 	// First pass: build the SAME tiered lookup the rest of 2nb uses
-	// (store.NewResolver -> the canonical buildLookupIndex), sourced from the live
-	// filesystem so lint never depends on a fresh index.db. For each note we
-	// register its vault-relative path and, by parsing it, its frontmatter title
-	// and aliases — exactly the inputs the indexer feeds the DB — so a link that
-	// resolves only by title or alias resolves here just as `2nb links` resolves
-	// it via the DB. Resolving by filename alone (the old behavior) falsely
-	// flagged title/alias-only links as broken. The walk mirrors the indexer's
-	// prune rules (dot-directories, node_modules, IsIgnored files; see
-	// internal/vault/indexer.go) so the resolver's document set EQUALS what the
-	// indexer puts in the DB — otherwise lint could resolve a link to a
-	// trashed/.obsidian note that `2nb links` reports broken, and it would
-	// needlessly ParseFile thousands of plugin node_modules files. Parsing is
-	// best-effort: a file that fails to parse (e.g. an Obsidian {{placeholder}}
-	// template) is still registered by path, so links to it resolve; only its
-	// title/aliases are skipped.
-	var docs []store.DocInfo
-	aliasIndex := make(map[string][]string)
-	if werr := filepath.Walk(v.Root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			if path != v.Root {
-				base := filepath.Base(path)
-				if strings.HasPrefix(base, ".") || base == "node_modules" {
-					return filepath.SkipDir
-				}
-			}
-			return nil
-		}
-		lower := strings.ToLower(path)
-		isMD := strings.HasSuffix(lower, ".md")
-		isCanvasOrBase := strings.HasSuffix(lower, ".canvas") || strings.HasSuffix(lower, ".base")
-		if !isMD && !isCanvasOrBase {
-			return nil
-		}
-		rel := v.RelPath(path)
-		if vault.IsIgnored(rel) {
-			return nil
-		}
-		// The canonical index strips only the .md extension. Register the
-		// extension-stripped basename AND rel-path of .canvas/.base files as
-		// aliases so both a bare [[board]] and a path-qualified [[sub/board]]
-		// still resolve to board.canvas (as the old lint and Obsidian both do);
-		// [[board.canvas]] with the extension resolves via the path tier.
-		if isCanvasOrBase {
-			base := strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
-			aliasIndex[base] = append(aliasIndex[base], rel)
-			if relNoExt := strings.TrimSuffix(rel, filepath.Ext(rel)); relNoExt != base {
-				aliasIndex[relNoExt] = append(aliasIndex[relNoExt], rel)
-			}
-		}
-		title := ""
-		if isMD {
-			if d, perr := document.ParseFile(path); perr == nil {
-				title = d.Title
-				for _, a := range document.ExtractAliases(d.Frontmatter) {
-					aliasIndex[a] = append(aliasIndex[a], rel)
-				}
-			} else {
-				// The note still contributes its path, but its title/aliases are
-				// unavailable, so a link resolvable only by them may be flagged.
-				// Leave a breadcrumb (mirrors the template-skip debug below).
-				slog.Debug("lint resolver: skipping unparseable note (title/aliases unavailable)", "path", rel, "err", perr)
-			}
-		}
-		docs = append(docs, store.DocInfo{ID: rel, Path: rel, Title: title}) // path is the unique id
-		return nil
-	}); werr != nil {
+	// (store.NewResolver -> the canonical buildLookupIndex), sourced from the
+	// live filesystem via vault.CollectLiveDocs so lint never depends on a fresh
+	// index.db. Resolving by filename alone (the old behavior) falsely flagged
+	// title/alias-only links as broken. The same walk feeds the repair tools
+	// (repair-links, suggest-target, relink), so lint and repair can never
+	// disagree about which links are broken.
+	docs, aliasIndex, werr := vault.CollectLiveDocs(v.Root)
+	if werr != nil {
 		return fmt.Errorf("walk for resolver index: %w", werr)
 	}
 	resolver := store.NewResolver(docs, aliasIndex)

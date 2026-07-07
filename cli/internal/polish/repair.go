@@ -63,10 +63,18 @@ func RepairBrokenLinks(v *vault.Vault, body string) (RepairResult, error) {
 func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (RepairResult, error) {
 	res := RepairResult{Body: body}
 
-	idx, err := buildRepairIndex(v.DB)
+	// Resolve against the LIVE FILESYSTEM (the same walk lint reports from),
+	// not the index DB, so lint and repair can never disagree on a stale DB:
+	// a note created in Obsidian but not yet indexed is repairable immediately
+	// (the DB-backed index used to report it no_match), and a note deleted on
+	// disk but still in the DB is never offered as a repair target (the
+	// DB-backed index used to "fix" a link to that ghost).
+	docs, aliases, err := vault.CollectLiveDocs(v.Root)
 	if err != nil {
 		return res, err
 	}
+	idx := buildRepairIndex(docs, aliases)
+	resolver := store.NewResolver(docs, aliases)
 
 	var filter map[string]bool
 	if len(only) > 0 {
@@ -92,7 +100,7 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 		// Only attempt repair on a genuinely unresolvable target. A target that
 		// resolves (possibly to one note) is fine; an already-ambiguous one is
 		// the author's to disambiguate, not ours to guess.
-		if _, rerr := v.DB.ResolveTarget(target); rerr == nil || !errors.Is(rerr, store.ErrTargetNotFound) {
+		if _, rerr := resolver.Resolve(target); rerr == nil || !errors.Is(rerr, store.ErrTargetNotFound) {
 			continue
 		}
 		handled[target] = true
@@ -145,28 +153,23 @@ func (r *repairIndex) lookup(authored string) []string {
 }
 
 // buildRepairIndex builds the normalized-name -> resolvable-target index from
-// the vault's documents and aliases. The resolvable target chosen per note is
-// the prettiest form that is UNAMBIGUOUS on its own: a unique title, else a
-// unique basename. A note whose title and basename are both shared is omitted
-// (a bare [[name]] could not be rewritten to it without staying ambiguous), so
-// repairs never produce a still-broken link.
-func buildRepairIndex(db *store.DB) (*repairIndex, error) {
-	titles, err := db.AllDocTitles()
-	if err != nil {
-		return nil, err
-	}
-	aliases, err := db.AllAliases()
-	if err != nil {
-		return nil, err
-	}
-
+// the live filesystem's documents and aliases (vault.CollectLiveDocs, the same
+// walk lint resolves against, so repair sees exactly the notes lint sees). The
+// resolvable target chosen per note is the prettiest form that is UNAMBIGUOUS
+// on its own: a unique title, else a unique basename. A note whose title and
+// basename are both shared is omitted (a bare [[name]] could not be rewritten
+// to it without staying ambiguous), so repairs never produce a still-broken
+// link.
+func buildRepairIndex(docs []store.DocInfo, aliases map[string][]string) *repairIndex {
 	titleCount := make(map[string]int)
 	baseCount := make(map[string]int)
-	for _, t := range titles {
-		if t.Title != "" {
-			titleCount[normalizeName(t.Title)]++
+	titleByPath := make(map[string]string, len(docs))
+	for _, d := range docs {
+		titleByPath[d.Path] = d.Title
+		if d.Title != "" {
+			titleCount[normalizeName(d.Title)]++
 		}
-		baseCount[normalizeName(basenameNoExt(t.Path))]++
+		baseCount[normalizeName(basenameNoExt(d.Path))]++
 	}
 
 	// canonicalFor picks the unambiguous bare target for a note, or "" when none
@@ -195,35 +198,36 @@ func buildRepairIndex(db *store.DB) (*repairIndex, error) {
 		set[target] = struct{}{}
 	}
 
-	for _, t := range titles {
-		canonical := canonicalFor(t.Path, t.Title)
+	for _, d := range docs {
+		canonical := canonicalFor(d.Path, d.Title)
 		if canonical == "" {
 			continue
 		}
-		add(normalizeName(basenameNoExt(t.Path)), canonical)
-		if t.Title != "" {
-			add(normalizeName(t.Title), canonical)
+		add(normalizeName(basenameNoExt(d.Path)), canonical)
+		if d.Title != "" {
+			add(normalizeName(d.Title), canonical)
 		}
 	}
-	for _, a := range aliases {
-		add(normalizeName(a.Alias), canonicalFor(a.Path, a.Title))
+	for alias, paths := range aliases {
+		for _, p := range paths {
+			add(normalizeName(alias), canonicalFor(p, titleByPath[p]))
+		}
 	}
-	return idx, nil
+	return idx
 }
 
 // SuggestRepairTargets returns the distinct existing-note targets a broken bare
 // name fuzzily maps to via the SAME normalized-name index repair uses (case,
-// hyphen/underscore, and whitespace folded). Unlike RepairBrokenLinks it does
-// NOT require a unique match: it returns 0, 1, or many candidates, so a "did you
-// mean?" picker can surface the ambiguous matches repair itself refuses to guess.
-// Each returned value is a canonical bare target (a unique title or basename)
-// that the caller resolves to a path with store.ResolveTarget.
-func SuggestRepairTargets(db *store.DB, target string) ([]string, error) {
-	idx, err := buildRepairIndex(db)
-	if err != nil {
-		return nil, err
-	}
-	return idx.lookup(target), nil
+// hyphen/underscore, and whitespace folded). It takes the live-filesystem doc
+// set + alias index from vault.CollectLiveDocs, so callers suggest from the
+// same universe lint reports on (and can reuse the one walk for a resolver).
+// Unlike RepairBrokenLinks it does NOT require a unique match: it returns 0, 1,
+// or many candidates, so a "did you mean?" picker can surface the ambiguous
+// matches repair itself refuses to guess. Each returned value is a canonical
+// bare target (a unique title or basename) that the caller resolves to a path
+// with store.Resolver.Resolve.
+func SuggestRepairTargets(docs []store.DocInfo, aliases map[string][]string, target string) []string {
+	return buildRepairIndex(docs, aliases).lookup(target)
 }
 
 // normalizeName lower-cases, folds '-'/'_' to spaces, and collapses internal
