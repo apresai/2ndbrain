@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,26 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 )
+
+// neutralizeAWSCredentials scrubs every AWS credential source the SDK's
+// default chain consults (env keys, shared config files, container and IMDS
+// providers), so CheckBedrockCredentials deterministically fails even on a
+// developer machine with live credentials. Contract tests that exercise the
+// verify default set stay spend-free with it.
+func neutralizeAWSCredentials(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+		"AWS_PROFILE", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	} {
+		t.Setenv(k, "")
+	}
+	missing := t.TempDir()
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(missing, "nonexistent-config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(missing, "nonexistent-credentials"))
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+}
 
 // TestContract_ModelsVerifyOfflineOllama drives the full verify pipeline
 // against a dead Ollama endpoint: real command path, deterministic offline
@@ -155,6 +177,135 @@ func TestVerifyCandidates_DefaultSetRespectsFilters(t *testing.T) {
 		if m.Type == "rerank" {
 			t.Errorf("rerank model %s must be skipped (no probe exists)", m.ID)
 		}
+	}
+}
+
+// TestContract_ModelsVerifyEventsZeroCandidates asserts the streamed empty
+// outcome: with credentials neutralized the bedrock cred gate empties the
+// default candidate set, and --events must emit exactly start(total=0) plus
+// done (exit 0) instead of the non-events "no candidate models" error.
+func TestContract_ModelsVerifyEventsZeroCandidates(t *testing.T) {
+	_, root := newContractVault(t)
+	neutralizeAWSCredentials(t)
+
+	got, err := runCLIArgs(t, root,
+		"models", "verify", "--provider", "bedrock", "--yes", "--events")
+	if err != nil {
+		t.Fatalf("models verify --events with zero candidates: %v (out=%s)", err, truncate(got, 300))
+	}
+	lines := bytes.Split(bytes.TrimSpace(got), []byte("\n"))
+	if len(lines) != 2 {
+		t.Fatalf("expected exactly start+done, got %d lines:\n%s", len(lines), got)
+	}
+	var events []struct {
+		Event      string         `json:"event"`
+		Total      int            `json:"total"`
+		Summary    map[string]int `json:"summary"`
+		SavedScope string         `json:"saved_scope"`
+	}
+	for _, line := range lines {
+		var e struct {
+			Event      string         `json:"event"`
+			Total      int            `json:"total"`
+			Summary    map[string]int `json:"summary"`
+			SavedScope string         `json:"saved_scope"`
+		}
+		if err := json.Unmarshal(line, &e); err != nil {
+			t.Fatalf("event parse: %v (line=%s)", err, line)
+		}
+		events = append(events, e)
+	}
+	if events[0].Event != "start" || events[0].Total != 0 {
+		t.Fatalf("first event = %+v, want start with total=0", events[0])
+	}
+	if events[1].Event != "done" || events[1].SavedScope != "vault" {
+		t.Fatalf("second event = %+v, want done with saved_scope=vault", events[1])
+	}
+}
+
+// TestContract_ModelsVerifyEventsRequireYes asserts the non-interactive spend
+// gate: --events without --yes is refused with ExitValidation before any
+// vault or network work.
+func TestContract_ModelsVerifyEventsRequireYes(t *testing.T) {
+	_, root := newContractVault(t)
+
+	_, err := runCLIArgs(t, root,
+		"models", "verify", "--provider", "bedrock", "--events")
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("expected refusal mentioning --yes, got %v", err)
+	}
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitValidation {
+		t.Fatalf("expected ExitValidation, got %v", err)
+	}
+}
+
+// TestContract_ModelsVerifyEventsJSONMutuallyExclusive asserts --events and
+// the --json envelope cannot be combined: two JSON dialects on one stdout
+// would be undecodable.
+func TestContract_ModelsVerifyEventsJSONMutuallyExclusive(t *testing.T) {
+	_, root := newContractVault(t)
+
+	_, err := runCLIArgs(t, root,
+		"models", "verify", "--provider", "bedrock", "--yes", "--events", "--json")
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitValidation {
+		t.Fatalf("expected ExitValidation, got %v", err)
+	}
+}
+
+// TestVerifyCandidates_EnabledOnlyFiltersDisabled seeds an explicit
+// Enabled=false user-catalog entry for a recommended bedrock model and checks
+// --enabled-only drops it from the candidate set while the default keeps it.
+func TestVerifyCandidates_EnabledOnlyFiltersDisabled(t *testing.T) {
+	_, root := newContractVault(t)
+	const disabledID = "us.anthropic.claude-sonnet-4-6"
+
+	// Seed the explicit disable through the real CLI path.
+	if _, err := runCLIArgs(t, root,
+		"models", "disable", disabledID, "--provider", "bedrock", "--scope", "vault"); err != nil {
+		t.Fatalf("models disable: %v", err)
+	}
+
+	cfg := ai.DefaultAIConfig()
+	verifyProvider, verifyRecommended = "bedrock", true
+	defer func() {
+		verifyProvider, verifyRecommended, verifyEnabledOnly = "", false, false
+	}()
+
+	contains := func(models []ai.ModelInfo, id string) bool {
+		for _, m := range models {
+			if m.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Without --enabled-only the disabled model is still a candidate.
+	verifyEnabledOnly = false
+	got, err := verifyCandidates(t.Context(), cfg, root, nil)
+	if err != nil {
+		t.Fatalf("verifyCandidates: %v", err)
+	}
+	if !contains(got, disabledID) {
+		t.Fatalf("disabled model %s should remain a candidate without --enabled-only", disabledID)
+	}
+
+	// With --enabled-only it drops; the rest of the set survives.
+	verifyEnabledOnly = true
+	got, err = verifyCandidates(t.Context(), cfg, root, nil)
+	if err != nil {
+		t.Fatalf("verifyCandidates enabled-only: %v", err)
+	}
+	if contains(got, disabledID) {
+		t.Fatalf("--enabled-only leaked disabled model %s into candidates", disabledID)
+	}
+	if len(got) == 0 {
+		t.Fatal("enabled-only candidate set must keep the still-enabled recommended models")
 	}
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -21,6 +22,8 @@ var (
 	verifyScope       string
 	verifyCostCap     float64
 	verifyYes         bool
+	verifyEnabledOnly bool
+	verifyEvents      bool
 )
 
 var modelsVerifyCmd = &cobra.Command{
@@ -52,6 +55,8 @@ func init() {
 	modelsVerifyCmd.Flags().StringVar(&verifyScope, "scope", "vault", "Catalog scope for saved results: vault or global")
 	modelsVerifyCmd.Flags().Float64Var(&verifyCostCap, "cost-cap", 0.05, "Abort if the estimated probe cost exceeds this many USD")
 	modelsVerifyCmd.Flags().BoolVar(&verifyYes, "yes", false, "Skip the interactive confirmation")
+	modelsVerifyCmd.Flags().BoolVar(&verifyEnabledOnly, "enabled-only", false, "Restrict candidates to effectively-enabled models (post-policy; explicit model IDs still win)")
+	modelsVerifyCmd.Flags().BoolVar(&verifyEvents, "events", false, "Stream line-delimited JSON progress events to stdout (requires --yes; mutually exclusive with --json)")
 	_ = modelsVerifyCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsVerifyCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 	modelsCmd.AddCommand(modelsVerifyCmd)
@@ -65,7 +70,40 @@ type verifyReport struct {
 	SavedScope string                `json:"saved_scope"`
 }
 
+// verifyEvent is one line-delimited JSON progress event on stdout in
+// --events mode (same NDJSON pattern as benchEvent): a "start" header with
+// the candidate count and cost estimate, one "result" per completed probe,
+// and a final "done" carrying the outcome summary. The GUI streams these to
+// render a live validation pass; the --json verifyReport envelope stays
+// byte-compatible and mutually exclusive with this mode.
+type verifyEvent struct {
+	Event        string              `json:"event"`
+	N            int                 `json:"n,omitempty"`
+	Total        int                 `json:"total"`
+	EstimatedUSD float64             `json:"estimated_usd,omitempty"`
+	Result       *ai.TestProbeResult `json:"result,omitempty"`
+	Summary      map[string]int      `json:"summary,omitempty"`
+	SavedScope   string              `json:"saved_scope,omitempty"`
+}
+
+func emitVerifyEvent(enc *json.Encoder, e verifyEvent) {
+	if enc != nil {
+		_ = enc.Encode(e)
+	}
+}
+
 func runModelsVerify(cmd *cobra.Command, args []string) error {
+	jsonMode := getFormat(cmd) != ""
+	if verifyEvents && jsonMode {
+		return exitWithError(ExitValidation, "--events and --json are mutually exclusive: --events already streams line-delimited JSON")
+	}
+	if verifyEvents && !verifyYes {
+		// --events is a machine-streaming mode with no TTY to confirm on, so
+		// the spend must be pre-authorized (same refusal convention as the
+		// non-interactive-stdin gate below).
+		return exitWithError(ExitValidation, "refusing to spend without confirmation: --events is non-interactive, pass --yes")
+	}
+
 	v, err := openVault()
 	if err != nil {
 		return err
@@ -79,11 +117,25 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	var enc *json.Encoder
+	if verifyEvents {
+		enc = json.NewEncoder(os.Stdout)
+	}
+
 	candidates, err := verifyCandidates(ctx, v.Config.AI, v.Root, args)
 	if err != nil {
 		return err
 	}
 	if len(candidates) == 0 {
+		if verifyEvents {
+			// A zero-candidate set is a legitimate streamed outcome (e.g.
+			// --enabled-only with everything disabled, or no resolvable
+			// credentials), not an error: the GUI still gets a decodable
+			// start+done pair and spends nothing.
+			emitVerifyEvent(enc, verifyEvent{Event: "start", Total: 0})
+			emitVerifyEvent(enc, verifyEvent{Event: "done", Total: 0, Summary: map[string]int{}, SavedScope: string(scope)})
+			return nil
+		}
 		return fmt.Errorf("no candidate models to verify (check --provider/--vendor filters, or name model IDs)")
 	}
 
@@ -99,14 +151,14 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("estimated probe cost $%.4f exceeds --cost-cap $%.4f (%d models); narrow the set or raise the cap",
 			totalUSD, verifyCostCap, len(candidates))
 	}
-	jsonMode := getFormat(cmd) != ""
-	if !jsonMode {
+	humanMode := !jsonMode && !verifyEvents
+	if humanMode {
 		fmt.Printf("Verifying %d model(s) against your account — estimated cost $%.4f\n", len(candidates), totalUSD)
 		if unknownPricing > 0 {
 			fmt.Printf("  note: %d model(s) have unknown pricing and are excluded from the estimate (probes are ~50 tokens each)\n", unknownPricing)
 		}
 	}
-	if !verifyYes && !jsonMode {
+	if !verifyYes && humanMode {
 		// A declined or unanswerable confirm exits non-zero (same convention
 		// as the delete prompt) so scripts and agents can't misread an
 		// aborted spend as success. Note /dev/null IS a char device, so the
@@ -126,6 +178,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 	// records this account's real access state.
 	results := make([]*ai.TestProbeResult, 0, len(candidates))
 	total := len(candidates)
+	emitVerifyEvent(enc, verifyEvent{Event: "start", Total: total, EstimatedUSD: totalUSD})
 	probeModelsConcurrently(ctx, v.Config.AI, candidates, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
 		if err != nil {
 			// Hard errors (cannot infer provider etc.) become synthetic failed
@@ -138,11 +191,14 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Recommended = m.Recommended // preserve curation on the saved entry
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
-		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && !jsonMode {
+		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && humanMode {
 			fmt.Printf("[%d/%d] warning: save %s failed: %v\n", n, total, m.ID, saveErr)
 		}
 		results = append(results, result)
-		if !jsonMode {
+		// onResult runs under the probe pool's mutex, so the encoder never
+		// interleaves partial lines.
+		emitVerifyEvent(enc, verifyEvent{Event: "result", N: n, Total: total, Result: result})
+		if humanMode {
 			if result.OK {
 				fmt.Printf("[%d/%d] PASS  %s  (%s)\n", n, total, result.ModelID, result.Latency)
 			} else {
@@ -162,6 +218,10 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		SavedScope: string(scope),
 	}
 
+	if verifyEvents {
+		emitVerifyEvent(enc, verifyEvent{Event: "done", Total: total, Summary: report.Summary, SavedScope: report.SavedScope})
+		return nil
+	}
 	if jsonMode {
 		return output.Write(os.Stdout, getFormat(cmd), report)
 	}
@@ -173,9 +233,12 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 // verifyCandidates builds the probe set. Explicit IDs win; otherwise filter
 // the merged catalog by --all / --recommended / --vendor / --provider, and
 // with no selector at all default to recommended + active models restricted
-// to providers whose credentials resolve.
+// to providers whose credentials resolve. --enabled-only narrows the merged
+// catalog to effectively-enabled models (post vendor policy, the same filter
+// `models list --enabled-only` applies), so "validate what I just enabled"
+// probes exactly the dropdown set; an explicitly named ID still wins.
 func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, args []string) ([]ai.ModelInfo, error) {
-	merged, err := ai.BuildModelList(ctx, ai.MergedListOptions{Config: cfg, VaultRoot: vaultRoot})
+	merged, err := ai.BuildModelList(ctx, ai.MergedListOptions{Config: cfg, VaultRoot: vaultRoot, EnabledOnly: verifyEnabledOnly})
 	if err != nil {
 		return nil, err
 	}
