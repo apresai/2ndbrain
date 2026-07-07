@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Classifies the `PolishResult` of a link-fix action (repair, relink, unlink)
 /// into what the resolution sheet should do next. "Nothing repaired" is not one
@@ -24,22 +25,65 @@ enum LinkFixOutcome: Equatable {
         if let repaired = result.linksRepaired, !repaired.isEmpty {
             return .success
         }
-        if let skipped = result.linksSkipped?.first(where: { $0.raw == target }) {
+        // lint emits the target untrimmed while repair-links trims links_skipped
+        // raw values, so a hand-authored padded link like [[ Auth Flow ]] would
+        // otherwise miss the skip entry and misroute to .stale.
+        let needle = target.trimmingCharacters(in: .whitespaces)
+        if let skipped = result.linksSkipped?.first(where: { $0.raw == needle }) {
             switch skipped.reason {
             case "no_match":
-                return .actionable("No existing note matches [[\(target)]]. Pick a suggestion below, create it, or unlink.")
+                return .actionable("No existing note matches [[\(needle)]]. Pick a suggestion below, create it, or unlink.")
             case "ambiguous":
-                return .actionable("[[\(target)]] matches more than one note. Pick the right one below.")
+                return .actionable("[[\(needle)]] matches more than one note. Pick the right one below.")
             default:
                 // An unrecognized skip reason still means the link was found,
                 // so the finding is not stale. Keep the sheet open rather than
                 // falsely dismissing it.
-                return .actionable("[[\(target)]] could not be fixed automatically. Pick an option below.")
+                return .actionable("[[\(needle)]] could not be fixed automatically. Pick an option below.")
             }
         }
         // No repair and no skip entry for this target: relink/unlink matched
         // nothing, or repair-links found no such link. The note changed since
         // the lint report was produced.
-        return .stale("No [[\(target)]] link found to \(verb). The note changed since the last check.")
+        return .stale("No [[\(needle)]] link found to \(verb). The note changed since the last check.")
+    }
+
+    /// Banner for the bulk drift-repair pass: error tint only when nothing
+    /// succeeded; a partial success stays green with the failure count
+    /// appended. Pure so the three-way tone selection is unit-testable.
+    static func bulkRepairBanner(repaired: Int, failed: Int) -> (tone: BannerTone, message: String) {
+        let tone: BannerTone = failed > 0 && repaired == 0 ? .error : .success
+        var msg = repaired > 0
+            ? "Repaired \(repaired) drift link\(repaired == 1 ? "" : "s")."
+            : "No confident drift links to repair — the rest need a per-finding fix."
+        if failed > 0 {
+            msg += " \(failed) file\(failed == 1 ? "" : "s") couldn’t be processed."
+        }
+        return (tone, msg)
+    }
+}
+
+/// Visual tone of the inline result banner: green success, orange
+/// informational (a stale finding that was cleaned up), or orange error.
+/// Lives beside LinkFixOutcome (not in the view) so tone selection stays
+/// unit-testable.
+enum BannerTone {
+    case success
+    case info
+    case error
+
+    var icon: String {
+        switch self {
+        case .success: "checkmark.circle.fill"
+        case .info: "info.circle.fill"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .success: .green
+        case .info, .error: .orange
+        }
     }
 }

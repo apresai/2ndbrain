@@ -242,45 +242,15 @@ struct LintResultsView: View {
             do {
                 let (repaired, failed) = try await appState.repairAllDrift(paths: paths)
                 bulkBusy = false
-                // Error tint only when nothing succeeded; a partial success stays
-                // informational.
-                actionTone = failed > 0 && repaired == 0 ? .error : .success
-                var msg = repaired > 0
-                    ? "Repaired \(repaired) drift link\(repaired == 1 ? "" : "s")."
-                    : "No confident drift links to repair — the rest need a per-finding fix."
-                if failed > 0 {
-                    msg += " \(failed) file\(failed == 1 ? "" : "s") couldn’t be processed."
-                }
-                actionMessage = msg + " Re-checking…"
+                let banner = LinkFixOutcome.bulkRepairBanner(repaired: repaired, failed: failed)
+                actionTone = banner.tone
+                actionMessage = banner.message + " Re-checking…"
                 await appState.runLint()
             } catch {
                 bulkBusy = false
                 actionTone = .error
                 actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
             }
-        }
-    }
-}
-
-/// Visual tone of the inline result banner: green success, orange
-/// informational (a stale finding that was cleaned up), or orange error.
-private enum BannerTone {
-    case success
-    case info
-    case error
-
-    var icon: String {
-        switch self {
-        case .success: "checkmark.circle.fill"
-        case .info: "info.circle.fill"
-        case .error: "exclamationmark.triangle.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .success: .green
-        case .info, .error: .orange
         }
     }
 }

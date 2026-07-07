@@ -119,3 +119,37 @@ func classifyUnknownReasonIsActionable() throws {
             == .actionable("[[weird]] could not be fixed automatically. Pick an option below.")
     )
 }
+
+@Test("classify trims a padded lint target before matching links_skipped raw")
+func classifyTrimsPaddedTarget() throws {
+    let json = """
+    {"path":"a.md","original":"x","polished":"x","provider":"repair-links",
+     "links_skipped":[{"raw":"Auth Flow","reason":"no_match"}]}
+    """
+    let result = try JSONDecoder().decode(PolishResult.self, from: Data(json.utf8))
+    let outcome = LinkFixOutcome.classify(result: result, target: " Auth Flow ", verb: "repair")
+    #expect(outcome == .actionable("No existing note matches [[Auth Flow]]. Pick a suggestion below, create it, or unlink."))
+}
+
+@Test("bulkRepairBanner picks the three tones and pluralizes correctly")
+func bulkRepairBannerTones() {
+    let ok = LinkFixOutcome.bulkRepairBanner(repaired: 3, failed: 0)
+    #expect(ok.tone == .success)
+    #expect(ok.message == "Repaired 3 drift links.")
+
+    let one = LinkFixOutcome.bulkRepairBanner(repaired: 1, failed: 0)
+    #expect(one.tone == .success)
+    #expect(one.message == "Repaired 1 drift link.")
+
+    let none = LinkFixOutcome.bulkRepairBanner(repaired: 0, failed: 0)
+    #expect(none.tone == .success)
+    #expect(none.message == "No confident drift links to repair — the rest need a per-finding fix.")
+
+    let allFailed = LinkFixOutcome.bulkRepairBanner(repaired: 0, failed: 2)
+    #expect(allFailed.tone == .error)
+    #expect(allFailed.message.hasSuffix("2 files couldn’t be processed."))
+
+    let partial = LinkFixOutcome.bulkRepairBanner(repaired: 2, failed: 1)
+    #expect(partial.tone == .success)
+    #expect(partial.message == "Repaired 2 drift links. 1 file couldn’t be processed.")
+}
