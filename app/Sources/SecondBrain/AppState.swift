@@ -1811,12 +1811,15 @@ final class AppState {
 
     /// Ranked "did you mean?" existing-note candidates for one broken wikilink
     /// `target`, via `2nb suggest-target` (drift / semantic / keyword tiers).
+    /// `sourcePath` is the note containing the broken link; the CLI excludes it
+    /// from candidates (a note is never a fix for its own broken link).
     /// Read-only. Returns [] rather than throwing on a CLI miss so the
     /// resolution sheet still offers Create/Unlink — no dead end.
-    func suggestTarget(target: String) async throws -> [SuggestTargetResult] {
+    func suggestTarget(target: String, sourcePath: String? = nil) async throws -> [SuggestTargetResult] {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLIAllowingNonZero(
-            ["suggest-target", target, "--limit", "6", "--json", "--porcelain"], cwd: vault.rootURL)
+        var args = ["suggest-target", target, "--limit", "6", "--json", "--porcelain"]
+        if let sourcePath { args += ["--source", sourcePath] }
+        let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
         return (try? JSONDecoder().decode([SuggestTargetResult].self, from: data)) ?? []
     }
 
