@@ -56,6 +56,15 @@ struct AIHubView: View {
                         }
                         activeSection
                         catalogSection
+                        DisclosureGroup("Advanced settings") {
+                            AIAdvancedSettingsView(
+                                aiStatus: aiStatus,
+                                models: models,
+                                onReload: { await reload() }
+                            )
+                            .padding(.top, 8)
+                        }
+                        .font(.subheadline.bold())
                     }
                     .padding()
                 }
