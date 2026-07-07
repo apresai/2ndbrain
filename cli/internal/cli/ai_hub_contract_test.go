@@ -73,6 +73,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "vault"
 	modelsDiscover, modelsFreeOnly, modelsPromote = false, false, false
 	modelsCheckStatus, modelsEnabledOnly, modelsRecommended = false, false, false
+	modelsSort = ""
 	testProvider, testModelType, testSaveScope = "", "", "vault"
 	testSave = false
 	verifyProvider, verifyVendor, verifyScope = "", "", "vault"

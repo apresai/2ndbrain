@@ -26,6 +26,7 @@ var (
 	modelsPromoteScope string
 	modelsEnabledOnly  bool
 	modelsRecommended  bool
+	modelsSort         string
 )
 
 var (
@@ -139,6 +140,7 @@ func init() {
 	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "vault", "Catalog scope for --promote: vault or global")
 	modelsListCmd.Flags().BoolVar(&modelsEnabledOnly, "enabled-only", false, "Exclude models explicitly disabled by the user (use for GUI dropdowns)")
 	modelsListCmd.Flags().BoolVar(&modelsRecommended, "recommended", false, "Show only the curated recommended models")
+	modelsListCmd.Flags().StringVar(&modelsSort, "sort", "", "Sort order: best (bench quality, then tested, recommended, tier, latency). Default keeps provider/type/ID order")
 	_ = modelsListCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
@@ -234,6 +236,17 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	merged.Verified = filterModels(merged.Verified)
 	merged.Unverified = filterModels(merged.Unverified)
 
+	// Opt-in presentation sort; JSON follows it so GUI callers can reuse
+	// the same ranking. Default order (provider/type/ID) is unchanged.
+	switch modelsSort {
+	case "":
+	case "best":
+		ai.SortModelsBest(merged.Verified)
+		ai.SortModelsBest(merged.Unverified)
+	default:
+		return fmt.Errorf("unknown --sort %q (supported: best)", modelsSort)
+	}
+
 	format := getFormat(cmd)
 	if format != "" {
 		// Without --discover, emit flat array for backward compat.
@@ -273,6 +286,9 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	// Tips.
 	fmt.Println()
 	fmt.Println("Tip: switch models with: 2nb config set ai.generation_model <model-id>")
+	if !anyBenchmarked(merged.Verified) {
+		fmt.Println("     Run '2nb models bench' to add quality/latency data to the BENCH column.")
+	}
 	if len(merged.Unverified) > 0 && !modelsPromote {
 		fmt.Println("     Models in UNVERIFIED may not work — 2nb hasn't built a harness for them yet.")
 		fmt.Println("     Run with --promote to test and auto-add the ones that work.")
@@ -372,9 +388,9 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 
 func printModelHeader(w *tabwriter.Writer, showStatus bool) {
 	if showStatus {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tSTATE\tSTATUS")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE\tSTATUS")
 	} else {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tSTATE")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE")
 	}
 }
 
@@ -394,12 +410,44 @@ func printModelRow(w *tabwriter.Writer, m ai.ModelInfo, showStatus bool) {
 
 	if showStatus {
 		status := statusLabel(m)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold, stateLabel(m), status)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, price, ctxLen, threshold, benchLabel(m), stateLabel(m), status)
 	} else {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold, stateLabel(m))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, price, ctxLen, threshold, benchLabel(m), stateLabel(m))
 	}
+}
+
+// benchLabel renders the latest benchmark summary compactly: retrieval
+// quality (embedding models only produce one) plus average latency, latency
+// alone, or "-" for never-benchmarked. Bench history lives in bench.db; this
+// is the inline summary the catalog carries.
+func benchLabel(m ai.ModelInfo) string {
+	b := m.Benchmark
+	if b == nil {
+		return "-"
+	}
+	switch {
+	case b.QualityScore > 0 && b.AvgLatencyMs > 0:
+		return fmt.Sprintf("q=%.2f %dms", b.QualityScore, b.AvgLatencyMs)
+	case b.QualityScore > 0:
+		return fmt.Sprintf("q=%.2f", b.QualityScore)
+	case b.AvgLatencyMs > 0:
+		return fmt.Sprintf("%dms", b.AvgLatencyMs)
+	default:
+		return "-"
+	}
+}
+
+// anyBenchmarked reports whether at least one model carries bench data, so
+// the empty BENCH column can carry an honest how-to-fill-it tip.
+func anyBenchmarked(models []ai.ModelInfo) bool {
+	for _, m := range models {
+		if m.Benchmark != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // stateLabel renders curation + per-account test state compactly: a leading
