@@ -847,7 +847,12 @@ struct AIHubView: View {
     /// Cost-preview → confirm → stream `models verify --events`, rendering live
     /// progress and refreshing the catalog + access summary on completion.
     private func runValidateModels(provider: String, vendorIDs: [String]) async {
+        // Claim the guard at entry, BEFORE the async costPreview + confirm, so a
+        // rapid double-tap can't launch two validate tasks (each would otherwise
+        // pass the guard while the other awaits the preview).
         guard !verifying else { return }
+        verifying = true
+        defer { verifying = false }
         let isVendorScoped = !vendorIDs.isEmpty
         // Candidates for the cost estimate: the explicit vendor IDs, else the
         // active provider's enabled models. rerank / incompatible entries are
@@ -865,9 +870,9 @@ struct AIHubView: View {
         guard confirmPaidOperation(preview: preview, operation: operation) else { return }
         let cap = VerifyFlow.costCap(preview: preview)
 
-        verifying = true
         lastVerifySummary = nil
         verifyProgress = VerifyProgress(current: 0, total: candidateIDs.count)
+        defer { verifyProgress = nil }
         do {
             // Default path streams --enabled-only (post-policy enabled set);
             // the vendor path passes explicit IDs so it targets exactly the group.
@@ -879,11 +884,7 @@ struct AIHubView: View {
                 applyVerifyEvent(event)
             }
             await reload()
-            verifying = false
-            verifyProgress = nil
         } catch {
-            verifying = false
-            verifyProgress = nil
             recordActionFailure("Validate models failed", error: error)
         }
     }
