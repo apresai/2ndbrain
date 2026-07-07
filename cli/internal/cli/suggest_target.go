@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -28,17 +30,25 @@ sheet. Candidates come from three tiers, surfaced best-first:
   3. keyword — BM25 over the target words, so word-reorder/typo misses like
                "models-apresai" -> apresai-* notes still surface offline.
 
+Pass --source <path> (the note containing the broken link) to exclude that note
+from the candidates: a note is never a fix for its own broken link.
+
 Read-only. Pair with "2nb relink <path> --from <target> --to <pick>" to apply a
 chosen candidate.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSuggestTarget,
 }
 
-var suggestTargetLimit int
+var (
+	suggestTargetLimit  int
+	suggestTargetSource string
+)
 
 func init() {
 	suggestTargetCmd.GroupID = "ai"
 	suggestTargetCmd.Flags().IntVar(&suggestTargetLimit, "limit", 6, "Maximum number of candidates")
+	suggestTargetCmd.Flags().StringVar(&suggestTargetSource, "source", "",
+		"Vault-relative path of the note containing the broken link; it is excluded from candidates")
 	rootCmd.AddCommand(suggestTargetCmd)
 }
 
@@ -55,11 +65,29 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 		return exitWithError(ExitValidation, "error: suggest-target requires a non-empty target")
 	}
 
+	// The note containing the broken link is never a candidate for its own
+	// fix. Resolution is lenient and best-effort: a missing --source still
+	// resolves to its vault-relative path (auto mode returns it without an
+	// error), while an ambiguous or otherwise unresolvable one falls back to
+	// the cleaned raw path so the command still runs; that fallback excludes
+	// only an exact vault-relative match, so exclusion can no-op there.
+	sourcePath := strings.TrimSpace(suggestTargetSource)
+	if sourcePath != "" {
+		if _, rel, rerr := resolveTargetArg(v, sourcePath); rerr == nil && rel != "" {
+			sourcePath = rel
+		} else {
+			slog.Debug("suggest-target: --source did not resolve, excluding by cleaned raw path",
+				"source", suggestTargetSource, "err", rerr)
+			sourcePath = filepath.Clean(sourcePath)
+		}
+	}
+
 	engine := search.NewEngine(v.DB.Conn())
 	results := make([]SuggestLinkResult, 0, suggestTargetLimit)
 	seen := make(map[string]bool)
+	// Every tier funnels through add, so no tier can leak the source note.
 	add := func(path, title string, score float64) {
-		if path == "" || seen[path] || len(results) >= suggestTargetLimit {
+		if path == "" || path == sourcePath || seen[path] || len(results) >= suggestTargetLimit {
 			return
 		}
 		seen[path] = true

@@ -596,12 +596,18 @@ private struct LinkResolutionSheet: View {
 
     // MARK: Logic
 
-    /// Drop a suggestion that duplicates the confident repair target (compared by
-    /// the note's bare name) so it isn't offered twice.
+    /// Drop the finding's own note (a note is never a fix for its own broken
+    /// link). The CLI's --source exclusion already guarantees this; the local
+    /// filter is defense-in-depth for a CLI whose exclusion no-ops (an older
+    /// CLI without the flag returns no suggestions at all, so there is nothing
+    /// to filter here). Also drop any suggestion that duplicates the confident
+    /// repair target (compared by the note's bare name) so it isn't offered
+    /// twice.
     private var filteredSuggestions: [SuggestTargetResult] {
-        guard let n = confidentRepair?.newTarget, !n.isEmpty else { return suggestions }
+        let withoutSource = suggestions.filter { $0.path != fix.path }
+        guard let n = confidentRepair?.newTarget, !n.isEmpty else { return withoutSource }
         let repairName = (n as NSString).lastPathComponent.lowercased()
-        return suggestions.filter {
+        return withoutSource.filter {
             (($0.path as NSString).deletingPathExtension as NSString).lastPathComponent.lowercased() != repairName
         }
     }
@@ -612,7 +618,7 @@ private struct LinkResolutionSheet: View {
         // Repair preview and suggestions are independent — fetch concurrently.
         // repair-links can error (e.g. read-only file); suggestions never do.
         async let repairResult: PolishResult? = try? await appState.repairLinks(path: fix.path, target: fix.target, preview: true)
-        async let suggestResult: [SuggestTargetResult] = (try? await appState.suggestTarget(target: fix.target)) ?? []
+        async let suggestResult: [SuggestTargetResult] = (try? await appState.suggestTarget(target: fix.target, sourcePath: fix.path)) ?? []
         repairPreview = await repairResult
         suggestions = await suggestResult
         loading = false
