@@ -137,6 +137,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		}
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Recommended = m.Recommended // preserve curation on the saved entry
+		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && !jsonMode {
 			fmt.Printf("[%d/%d] warning: save %s failed: %v\n", n, total, m.ID, saveErr)
 		}

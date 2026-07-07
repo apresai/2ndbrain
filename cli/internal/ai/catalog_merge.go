@@ -63,6 +63,16 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 		catalog[i].Active = isActiveModel(catalog[i], opts.Config)
 	}
 
+	// Vendor policy: give every nil-Enabled model on a policied provider an
+	// explicit tri-state (enable-only vendors stay visible, everything else
+	// is disabled) BEFORE filterEnabled runs, so dropdowns, the Hub catalog,
+	// and every other consumer honor the policy through this one hook.
+	// Explicit per-model Enabled from the user catalog wins; the active
+	// embedding/generation/rerank models are never policy-disabled.
+	policies := LoadVendorPolicies(opts.VaultRoot)
+	policyGuard := VendorPolicyActiveGuard(opts.Config)
+	result.Warnings = append(result.Warnings, applyVendorPolicy(catalog, policies, policyGuard)...)
+
 	// Status checks: probe credentials and reachability per provider.
 	if opts.CheckStatus {
 		applyStatusChecks(ctx, catalog, opts.Config)
@@ -93,6 +103,9 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 				result.Unverified = append(result.Unverified, m)
 			}
 		}
+		// Freshly discovered entries get the same policy verdict as the
+		// merged catalog: models from non-chosen vendors arrive pre-disabled.
+		result.Warnings = append(result.Warnings, applyVendorPolicy(result.Unverified, policies, policyGuard)...)
 		if opts.EnabledOnly {
 			result.Unverified = filterEnabled(result.Unverified)
 		}
