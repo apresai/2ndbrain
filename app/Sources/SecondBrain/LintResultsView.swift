@@ -249,8 +249,11 @@ struct LintResultsView: View {
             Spacer()
             // Step through the decision-class findings (the ones Fix-all can't
             // resolve one-click) one at a time via the existing per-finding sheet.
-            if ready && counts.decision >= 1 {
-                Button("Fix each (\(counts.decision))") { startWalkthrough(findings) }
+            // Count from the deduped walkthrough queue, not counts.decision (which
+            // is per-occurrence), so the label matches the "N of M" the walk shows.
+            let walkCount = ready ? FixAllPlanner.walkthroughQueue(from: classifiedPairs(findings)).count : 0
+            if ready && walkCount >= 1 {
+                Button("Fix each (\(walkCount))") { startWalkthrough(findings) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(appState.isLinting)
@@ -270,9 +273,15 @@ struct LintResultsView: View {
     /// complement of the Fix-all plan) from the current classifications and open
     /// the first finding in the per-finding sheet. A no-op if nothing needs a
     /// decision.
+    /// Pair each finding with its classification (dropping any not yet
+    /// classified), the input both the Fix-each button count and the walkthrough
+    /// queue derive from, so they can never disagree.
+    private func classifiedPairs(_ findings: [BrokenFinding]) -> [(BrokenFinding, LinkFixClass)] {
+        findings.compactMap { f in classifications[f.id].map { (f, $0) } }
+    }
+
     private func startWalkthrough(_ findings: [BrokenFinding]) {
-        let classified = findings.compactMap { f in classifications[f.id].map { (f, $0) } }
-        let queue = FixAllPlanner.walkthroughQueue(from: classified)
+        let queue = FixAllPlanner.walkthroughQueue(from: classifiedPairs(findings))
         guard let first = queue.first else { return }
         walkthroughQueue = queue
         walkthroughIndex = 0
