@@ -73,7 +73,7 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 	if err != nil {
 		return res, err
 	}
-	idx := buildRepairIndex(docs, aliases)
+	idx := NewRepairIndex(docs, aliases)
 	resolver := store.NewResolver(docs, aliases)
 
 	var filter map[string]bool
@@ -105,7 +105,7 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 		}
 		handled[target] = true
 
-		candidates := idx.lookup(target)
+		candidates := idx.Lookup(target)
 		switch len(candidates) {
 		case 1:
 			newTarget := candidates[0]
@@ -125,25 +125,28 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 	return res, nil
 }
 
-// repairIndex maps a normalized name (note basename, title, or alias) to the set
+// RepairIndex maps a normalized name (note basename, title, or alias) to the set
 // of resolvable bare target strings for the notes that carry it. A normalized
-// name with exactly one distinct target is safe to repair to.
-type repairIndex struct {
+// name with exactly one distinct target is safe to repair to. It is exported so
+// lint can classify each broken wikilink up front (drift/ambiguous/missing) with
+// the exact index repair resolves against, reusing lint's own CollectLiveDocs
+// walk instead of walking the vault twice.
+type RepairIndex struct {
 	byNorm map[string]map[string]struct{}
 }
 
-// lookup returns the sorted distinct resolvable targets a broken BARE name maps
-// to. A path-qualified authored target (containing "/") returns nothing: it must
-// be fixed by hand, because matching it by its leaf could retarget the link to an
-// unrelated note that merely shares the basename, and Obsidian does not resolve
-// path-qualified links by leaf either. For a bare name this is just the
+// Lookup returns the sorted distinct canonical bare targets a broken BARE name
+// maps to. A path-qualified authored target (containing "/") returns nothing: it
+// must be fixed by hand, because matching it by its leaf could retarget the link
+// to an unrelated note that merely shares the basename, and Obsidian does not
+// resolve path-qualified links by leaf either. For a bare name this is just the
 // normalized-name lookup into the basename/title/alias index.
-func (r *repairIndex) lookup(authored string) []string {
+func (r *RepairIndex) Lookup(authored string) []string {
 	authored = strings.TrimSuffix(strings.ReplaceAll(authored, "\\", "/"), ".md")
 	if strings.Contains(authored, "/") {
 		return nil
 	}
-	set := r.byNorm[normalizeName(authored)]
+	set := r.byNorm[NormalizeName(authored)]
 	targets := make([]string, 0, len(set))
 	for t := range set {
 		targets = append(targets, t)
@@ -152,7 +155,7 @@ func (r *repairIndex) lookup(authored string) []string {
 	return targets
 }
 
-// buildRepairIndex builds the normalized-name -> resolvable-target index from
+// NewRepairIndex builds the normalized-name -> resolvable-target index from
 // the live filesystem's documents and aliases (vault.CollectLiveDocs, the same
 // walk lint resolves against, so repair sees exactly the notes lint sees). The
 // resolvable target chosen per note is the prettiest form that is UNAMBIGUOUS
@@ -160,32 +163,32 @@ func (r *repairIndex) lookup(authored string) []string {
 // basename are both shared is omitted (a bare [[name]] could not be rewritten
 // to it without staying ambiguous), so repairs never produce a still-broken
 // link.
-func buildRepairIndex(docs []store.DocInfo, aliases map[string][]string) *repairIndex {
+func NewRepairIndex(docs []store.DocInfo, aliases map[string][]string) *RepairIndex {
 	titleCount := make(map[string]int)
 	baseCount := make(map[string]int)
 	titleByPath := make(map[string]string, len(docs))
 	for _, d := range docs {
 		titleByPath[d.Path] = d.Title
 		if d.Title != "" {
-			titleCount[normalizeName(d.Title)]++
+			titleCount[NormalizeName(d.Title)]++
 		}
-		baseCount[normalizeName(basenameNoExt(d.Path))]++
+		baseCount[NormalizeName(basenameNoExt(d.Path))]++
 	}
 
 	// canonicalFor picks the unambiguous bare target for a note, or "" when none
 	// exists (both title and basename are shared by another note).
 	canonicalFor := func(path, title string) string {
-		if title != "" && titleCount[normalizeName(title)] == 1 {
+		if title != "" && titleCount[NormalizeName(title)] == 1 {
 			return title
 		}
 		base := basenameNoExt(path)
-		if baseCount[normalizeName(base)] == 1 {
+		if baseCount[NormalizeName(base)] == 1 {
 			return base
 		}
 		return ""
 	}
 
-	idx := &repairIndex{byNorm: make(map[string]map[string]struct{})}
+	idx := &RepairIndex{byNorm: make(map[string]map[string]struct{})}
 	add := func(norm, target string) {
 		if norm == "" || target == "" {
 			return
@@ -203,14 +206,14 @@ func buildRepairIndex(docs []store.DocInfo, aliases map[string][]string) *repair
 		if canonical == "" {
 			continue
 		}
-		add(normalizeName(basenameNoExt(d.Path)), canonical)
+		add(NormalizeName(basenameNoExt(d.Path)), canonical)
 		if d.Title != "" {
-			add(normalizeName(d.Title), canonical)
+			add(NormalizeName(d.Title), canonical)
 		}
 	}
 	for alias, paths := range aliases {
 		for _, p := range paths {
-			add(normalizeName(alias), canonicalFor(p, titleByPath[p]))
+			add(NormalizeName(alias), canonicalFor(p, titleByPath[p]))
 		}
 	}
 	return idx
@@ -227,23 +230,24 @@ func buildRepairIndex(docs []store.DocInfo, aliases map[string][]string) *repair
 // bare target (a unique title or basename) that the caller resolves to a path
 // with store.Resolver.Resolve.
 func SuggestRepairTargets(docs []store.DocInfo, aliases map[string][]string, target string) []string {
-	return buildRepairIndex(docs, aliases).lookup(target)
+	return NewRepairIndex(docs, aliases).Lookup(target)
 }
 
-// normalizeName lower-cases, folds '-'/'_' to spaces, and collapses internal
+// NormalizeName lower-cases, folds '-'/'_' to spaces, and collapses internal
 // whitespace, so a link whose only drift from an existing note is case, spacing,
 // or hyphen-vs-space matches it. 2nb's resolver is case- and separator-sensitive
 // (it treats "claude-code" and "claude code" as distinct); Obsidian's is not, so
 // case and separator drift are the common breakage. The same fold runs on both
-// the index side (basenames/titles/aliases in buildRepairIndex) and the lookup
+// the index side (basenames/titles/aliases in NewRepairIndex) and the lookup
 // side (the authored target), so a kebab basename
 // "claude-code-skills-reference-and-index" and a spaced target
 // "Claude Code Skills Reference and Index" both become
 // "claude code skills reference and index". Folding can only MERGE a drifted
-// target onto its single note, or — if it newly collides two distinct notes —
-// fall to the ambiguity guard (lookup returns >1, repair skips), so it never
-// silently retargets.
-func normalizeName(s string) string {
+// target onto its single note, or, if it newly collides two distinct notes,
+// fall to the ambiguity guard (Lookup returns >1, repair skips), so it never
+// silently retargets. Exported so suggest-target's confidence grading folds
+// targets and candidate names with exactly the rules the repair index uses.
+func NormalizeName(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if r == '-' || r == '_' {
 			return ' '

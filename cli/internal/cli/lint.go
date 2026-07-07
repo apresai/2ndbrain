@@ -11,6 +11,7 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -33,6 +34,27 @@ type LintIssue struct {
 	Line    int    `json:"line,omitempty"`
 	Level   string `json:"level"` // error, warning
 	Message string `json:"message"`
+
+	// The fields below are ADDITIVE classification for broken-wikilink issues
+	// (all empty on every other issue kind). Message stays byte-identical to the
+	// pre-classification format because the Obsidian plugin and older app builds
+	// parse it.
+
+	// Target is the raw authored target of a broken wikilink (the T from
+	// "broken wikilink: [[T]]"), so consumers never re-parse Message.
+	Target string `json:"target,omitempty"`
+	// Fix classifies how a broken wikilink can be fixed, using the same
+	// polish.RepairIndex the repair tools resolve against:
+	//   "drift"     - the target maps to exactly one existing note (repairable
+	//                 one-click via repair-links)
+	//   "ambiguous" - the target maps to more than one note (needs a pick)
+	//   "missing"   - the target maps to no note (including path-qualified
+	//                 targets, which the repair index refuses by design)
+	Fix string `json:"fix,omitempty"`
+	// DriftTarget is the canonical target the link would be repaired to when
+	// Fix == "drift", so a UI can render [[x]] -> [[y]] without a preview
+	// round-trip.
+	DriftTarget string `json:"drift_target,omitempty"`
 }
 
 type LintReport struct {
@@ -105,6 +127,11 @@ func runLint(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("walk for resolver index: %w", werr)
 	}
 	resolver := store.NewResolver(docs, aliasIndex)
+	// The SAME walk also feeds the repair index, so each broken link is
+	// classified up front (drift / ambiguous / missing) against exactly the
+	// candidates repair-links and suggest-target tier 1 would resolve to -- the
+	// GUI can show "N drift-repairable / M need a decision" before any click.
+	repairIdx := polish.NewRepairIndex(docs, aliasIndex)
 
 	for _, path := range matches {
 		relPath := v.RelPath(path)
@@ -193,10 +220,21 @@ func runLint(cmd *cobra.Command, args []string) error {
 			// (>1 doc) — not broken. This is what makes lint agree with
 			// `2nb links` and the per-finding fix tools.
 			if _, rerr := resolver.Resolve(target); errors.Is(rerr, store.ErrTargetNotFound) {
-				report.Issues = append(report.Issues, LintIssue{
+				issue := LintIssue{
 					Path: relPath, Level: "warning",
 					Message: fmt.Sprintf("broken wikilink: [[%s]]", target),
-				})
+					Target:  target,
+				}
+				switch candidates := repairIdx.Lookup(target); len(candidates) {
+				case 1:
+					issue.Fix = "drift"
+					issue.DriftTarget = candidates[0]
+				case 0:
+					issue.Fix = "missing"
+				default:
+					issue.Fix = "ambiguous"
+				}
+				report.Issues = append(report.Issues, issue)
 				report.Warns++
 			}
 		}

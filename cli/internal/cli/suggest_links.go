@@ -36,12 +36,27 @@ func init() {
 	rootCmd.AddCommand(suggestLinksCmd)
 }
 
-// SuggestLinkResult is one ranked suggestion returned by `2nb suggest-links`.
+// SuggestLinkResult is one ranked suggestion returned by `2nb suggest-links`
+// and `2nb suggest-target`.
 type SuggestLinkResult struct {
 	Path    string  `json:"path"`
 	Title   string  `json:"title"`
 	Score   float64 `json:"score"`
 	Snippet string  `json:"snippet"`
+	// Confidence grades how likely this candidate is THE note a broken target
+	// meant: "high", "medium", or "low". Set only by suggest-target (additive;
+	// absent from suggest-links output). The rule is deterministic: fold the
+	// target and the candidate's title AND basename with the same normalization
+	// the repair index uses (polish.NormalizeName: lower-case, hyphen/underscore
+	// to space, collapse whitespace). Call it a WORD MATCH when the folded
+	// target equals, or is a whole-word subset of, the folded title or basename;
+	// call the candidate DOMINANT when it is the sole candidate or its score is
+	// at least 1.4x the best other candidate's score. "high" iff word match AND
+	// dominant (a tier-1 drift candidate that is the unique repair match is
+	// inherently high, since it may have matched via an alias); "medium" when
+	// exactly one of the two holds; "low" otherwise. A "high" candidate is safe
+	// to offer as a one-click fix.
+	Confidence string `json:"confidence,omitempty"`
 }
 
 func runSuggestLinks(cmd *cobra.Command, args []string) error {
