@@ -121,6 +121,8 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 			}
 			add(path, titleByPath[path], 1.0)
 		}
+	} else {
+		slog.Debug("suggest-target: live walk failed, drift tier skipped", "err", lerr)
 	}
 
 	// Tier 2 — semantic: nearest notes by embedding. Skipped (not an error) when

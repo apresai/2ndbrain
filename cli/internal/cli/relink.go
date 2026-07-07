@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -82,6 +83,8 @@ func runRelink(cmd *cobra.Command, args []string) error {
 			if _, rerr := store.NewResolver(docs, aliases).Resolve(relinkTo); rerr != nil {
 				warnings = append(warnings, fmt.Sprintf("--to %q does not resolve to an existing note; the link may remain broken", relinkTo))
 			}
+		} else {
+			slog.Debug("relink: live walk failed, skipping the --to advisory check", "err", lerr)
 		}
 	} else {
 		warnings = append(warnings, fmt.Sprintf("no [[%s]] link found to repoint", relinkFrom))
