@@ -63,7 +63,7 @@ func TestEnrichModels_LegacyZeroUserSourceDoesNotBlockVendorPricing(t *testing.T
 
 func TestEnrichModels_BuiltinFreePreservedWhenLiveAbsent(t *testing.T) {
 	// A builtin :free model that is NOT in the live API response must keep
-	// its builtin PriceSource. If clearModelPrice is called, PriceSource would
+	// its builtin PriceSource. Under the old no-match clearing behavior (removed), PriceSource would
 	// become "" and IsExplicitlyFree would return false.
 	model := ModelInfo{
 		Provider:    "openrouter",
@@ -116,8 +116,12 @@ func TestEnrichModels_NotReadyClearsNothing(t *testing.T) {
 	}
 }
 
-func TestEnrichModels_NonBuiltinClearedWhenLiveAbsent(t *testing.T) {
-	// A non-builtin model that is absent from the ready live API gets cleared.
+func TestEnrichModels_NonBuiltinRetainedWhenLiveAbsent(t *testing.T) {
+	// A vendor-priced entry absent from the ready live API keeps its price:
+	// a stale-but-labeled price (price_source records provenance) beats
+	// "unknown" for cost previews, and bedrock's heuristic alias matching
+	// used to silently blank real prices on a no-match (e.g. a promoted
+	// user entry with PriceSource=vendor flipping to unknown).
 	model := ModelInfo{
 		Provider:    "openrouter",
 		ID:          "some/model",
@@ -126,8 +130,8 @@ func TestEnrichModels_NonBuiltinClearedWhenLiveAbsent(t *testing.T) {
 	}
 	orPricing := makeOrPricing(true, map[string]modelPrice{}) // ready but absent
 	out := enrichModels([]ModelInfo{model}, orPricing, emptyBrPricing())
-	if out[0].PriceSource != "" {
-		t.Errorf("PriceSource = %q, want empty (stale vendor info cleared)", out[0].PriceSource)
+	if out[0].PriceSource != "vendor" || out[0].PriceIn != 2.0 {
+		t.Errorf("no-match must retain the labeled price, got source=%q in=%g", out[0].PriceSource, out[0].PriceIn)
 	}
 }
 

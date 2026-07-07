@@ -83,6 +83,13 @@ type AIStatus struct {
 	// state for the active provider (from `models verify` / `models test
 	// --save` results in the user catalog). Nil when nothing was tested.
 	ModelAccess *ModelAccessSummary `json:"model_access,omitempty"`
+
+	// ActiveProviderDisabled flags the contradictory hand-edited state where
+	// ai.<provider>.disabled is true for the ACTIVE provider. Disabled is
+	// visibility-only (the provider still executes), but the GUI hides its
+	// models everywhere, so surface it loudly. `config set ai.provider`
+	// clears the flag, so only manual YAML edits produce this.
+	ActiveProviderDisabled bool `json:"active_provider_disabled,omitempty"`
 }
 
 // ModelAccessSummary aggregates persisted per-account test outcomes.
@@ -198,6 +205,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 
 	status.Providers = collectProviderStatus(ctx, cfg)
 	status.ModelAccess = summarizeModelAccess(v.Root, cfg.Provider)
+	status.ActiveProviderDisabled = cfg.ProviderDisabled(cfg.Provider)
 
 	format := getFormat(cmd)
 	if format != "" {
@@ -213,6 +221,11 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 
 	// Pretty output
 	fmt.Printf("Provider:         %s\n", status.Provider)
+	if status.ActiveProviderDisabled {
+		fmt.Printf("  ⚠ ai.%s.disabled is true for the ACTIVE provider. Disabled only hides its models\n"+
+			"    from catalogs and dropdowns (it still executes), so the GUI and CLI will disagree.\n"+
+			"    Fix: `2nb config set ai.%s.disabled false`\n", status.Provider, status.Provider)
+	}
 	fmt.Printf("Embedding model:  %s\n", status.EmbeddingModel)
 	fmt.Printf("  pricing:        %s\n", ai.VerbosePriceLabel(embedModel))
 	fmt.Printf("Generation model: %s\n", status.GenModel)

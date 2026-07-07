@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Unified the two divergent "has known pricing" definitions into one exported `ai.HasKnownPricing` (local, non-zero price, or explicit price source): a priced entry with no recorded source now renders its price instead of "—".
+- Live pricing enrichment no longer clears a model's price when the vendor feed is reachable but the model doesn't match (Bedrock's alias matching is heuristic; a stale-but-labeled price beats "unknown"). Previously a promoted user entry could silently flip to unknown pricing on a later `models list`.
+- `ai status` now warns loudly (and reports additive `active_provider_disabled` in `--json`) when the ACTIVE provider is disabled, a contradictory hand-edited state where the CLI still executes it but the GUI hides all of its models.
+
 ### Added
 - Discovered Bedrock models now carry a context-window hint in `models list` (static per-family map; Bedrock's control-plane APIs don't expose the window). Unknown families honestly render `-`.
 - `2nb models verify` — batch-probe models to verify YOUR account can invoke them, persisting every result (pass and fail) with its classified code so `models list`'s STATE column and the new `ai status` "Model access" summary (`model_access` in `--json`) reflect the account's real access. Defaults to the recommended + active models on providers whose credentials resolve; narrow with `--provider`/`--vendor`/`--recommended`, broaden with `--all`, or name explicit IDs. Cost-gated (`--cost-cap`, default $0.05, plus a y/N confirm; a declined confirm exits non-zero) and grouped by vendor with one remediation line per distinct failure code. This is the check for AWS's staged frontier rollout: on a gated account the Anthropic line reports `access_denied` for Sonnet 5/Opus 4.8 while a provisioned account passes.

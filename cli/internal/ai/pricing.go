@@ -6,9 +6,18 @@ import (
 	"strings"
 )
 
-// HasKnownPricing reports whether pricing metadata is explicit, including
-// explicit free pricing.
+// HasKnownPricing reports whether we have confident price data for a model:
+// it is local (free to run), carries a non-zero price, or has an explicit
+// PriceSource (which marks known-free entries). This is the single
+// definition shared by display labels and cost estimates; entries with all
+// zero prices and no source are "unknown" so callers can say so.
 func HasKnownPricing(m ModelInfo) bool {
+	if m.Local {
+		return true
+	}
+	if m.PriceIn > 0 || m.PriceOut > 0 || m.PriceRequest > 0 {
+		return true
+	}
 	return m.PriceSource != ""
 }
 
