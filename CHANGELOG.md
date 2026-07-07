@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Added
+- Model test probes now classify failures into a stable `test_error_code` vocabulary (`access_denied`, `bad_credentials`, `throttled`, `not_found`, `provider_unreachable`, `invalid_request`, `incompatible`, `timeout`, `unknown`) with a user-actionable remediation hint. An AWS Bedrock 403 from the staged frontier-model rollout gate (a model the console lists as available but the account cannot invoke) is now distinguishable from bad credentials or throttling. Surfaced in `models test` output (`cause:`/`fix:` lines), `models test --json` (`code`/`remediation`), the persisted user catalog (`test_error_code`), `models list --discover --promote` failure lines, and the wizard's `test_result` events (`code`).
 
 ## [0.13.2] - 2026-07-05
 

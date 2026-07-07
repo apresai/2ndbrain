@@ -457,14 +457,22 @@ func TestContract_ModelsTestSaveJSONPersistsFailure(t *testing.T) {
 		t.Fatalf("models test --save --json failed: %v (out=%s)", err, truncate(got, 500))
 	}
 	var result struct {
-		OK     bool   `json:"ok"`
-		Detail string `json:"detail"`
+		OK          bool   `json:"ok"`
+		Detail      string `json:"detail"`
+		Code        string `json:"code"`
+		Remediation string `json:"remediation"`
 	}
 	if err := json.Unmarshal(got, &result); err != nil {
 		t.Fatalf("test result JSON parse: %v (body=%s)", err, truncate(got, 300))
 	}
 	if result.OK || !strings.Contains(result.Detail, "image-generation") {
 		t.Fatalf("expected static incompatibility failure, got %+v", result)
+	}
+	if result.Code != "incompatible" {
+		t.Fatalf("expected classified code %q, got %q", "incompatible", result.Code)
+	}
+	if result.Remediation == "" {
+		t.Fatalf("expected a remediation hint on classified failure, got none")
 	}
 
 	data, err := os.ReadFile(filepath.Join(root, ".2ndbrain", "models.yaml"))
@@ -474,6 +482,9 @@ func TestContract_ModelsTestSaveJSONPersistsFailure(t *testing.T) {
 	body := string(data)
 	if !strings.Contains(body, "tested_at:") || !strings.Contains(body, "test_error:") {
 		t.Fatalf("failure test result was not persisted:\n%s", body)
+	}
+	if !strings.Contains(body, "test_error_code: incompatible") {
+		t.Fatalf("classified test_error_code was not persisted:\n%s", body)
 	}
 }
 

@@ -152,12 +152,12 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 func BedrockPreflightModel(ctx context.Context, cfg BedrockConfig, modelID, modelType string) error {
 	if ok, reason := bedrockModelSupported(modelID, modelType); !ok {
 		slog.Debug("bedrock preflight: static blocklist", "model", modelID, "type", modelType, "reason", reason)
-		return errors.New(reason)
+		return &IncompatibleModelError{Reason: reason}
 	}
 	legacy, err := bedrockModelIsLegacy(ctx, cfg, modelID)
 	if err == nil && legacy {
 		slog.Debug("bedrock preflight: lifecycle blocked", "model", modelID)
-		return fmt.Errorf("model %s is legacy or end-of-life and excluded from 2nb discovery", modelID)
+		return &IncompatibleModelError{Reason: fmt.Sprintf("model %s is legacy or end-of-life and excluded from 2nb discovery", modelID)}
 	}
 	return nil
 }

@@ -15,6 +15,12 @@ type TestProbeResult struct {
 	OK       bool   `json:"ok"`
 	Detail   string `json:"detail,omitempty"` // response snippet or error
 	Latency  string `json:"latency"`
+	// Code classifies a failure into the stable TestErrorCode vocabulary
+	// (access_denied, bad_credentials, throttled, ...). Empty on success.
+	Code TestErrorCode `json:"code,omitempty"`
+	// Remediation is a user-actionable fix hint matching Code. Empty when
+	// there is no better advice than Detail.
+	Remediation string `json:"remediation,omitempty"`
 }
 
 // TestProbeModel creates a temporary provider for the given model and runs
@@ -63,6 +69,8 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 	if err != nil {
 		result.OK = false
 		result.Detail = err.Error()
+		result.Code = ClassifyProbeError(provider, err)
+		result.Remediation = RemediationFor(result.Code, provider)
 	} else {
 		result.OK = true
 	}

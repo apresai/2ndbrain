@@ -323,6 +323,9 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 				} else if err != nil {
 					detail = err.Error()
 				}
+				if result != nil && result.Code != "" && result.Code != ai.TestErrUnknown {
+					detail = fmt.Sprintf("[%s] %s", result.Code, detail)
+				}
 				fmt.Printf("[%d/%d] FAIL  %s/%s  (%s)  %s\n",
 					n, total, m.Provider, m.Type, m.ID, detail)
 			}
@@ -424,7 +427,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	slog.Info("models test", "provider", result.Provider, "model", result.ModelID, "type", result.Type, "ok", result.OK, "save", testSave)
+	slog.Info("models test", "provider", result.Provider, "model", result.ModelID, "type", result.Type, "ok", result.OK, "code", string(result.Code), "save", testSave)
 
 	if testSave {
 		scope := ai.UserCatalogScope(testSaveScope)
@@ -435,7 +438,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Printf("  warning: failed to save: %v\n", err)
 		} else {
-			slog.Info("models test saved", "provider", entry.Provider, "model", entry.ID, "type", entry.Type, "ok", result.OK, "scope", testSaveScope)
+			slog.Info("models test saved", "provider", entry.Provider, "model", entry.ID, "type", entry.Type, "ok", result.OK, "code", entry.TestErrorCode, "scope", testSaveScope)
 		}
 	}
 
@@ -460,6 +463,12 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Printf("FAIL  %s/%s  (%s, %s)\n", result.Provider, result.Type, result.Latency, result.ModelID)
 		fmt.Printf("  error: %s\n", result.Detail)
+		if result.Code != "" && result.Code != ai.TestErrUnknown {
+			fmt.Printf("  cause: %s\n", result.Code)
+		}
+		if result.Remediation != "" {
+			fmt.Printf("  fix: %s\n", result.Remediation)
+		}
 		if testSave {
 			fmt.Printf("  → saved failure to %s catalog\n", testSaveScope)
 		}
@@ -775,6 +784,7 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 	if result.OK {
 		entry = promotedEntry(base, result)
 		entry.TestError = ""
+		entry.TestErrorCode = ""
 	} else if base != nil {
 		entry = *base
 		if entry.Tier == "" {
@@ -796,6 +806,7 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 	entry.TestLatencyMs = latencyMs(result.Latency)
 	if !result.OK {
 		entry.TestError = result.Detail
+		entry.TestErrorCode = string(result.Code)
 	}
 	return entry
 }
