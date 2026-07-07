@@ -26,6 +26,10 @@ struct AIHubView: View {
     /// immediately see their models; collapsing is an opt-in to
     /// reduce clutter on very large catalogs.
     @State private var collapsedGroups: Set<String> = []
+    /// Curated-by-default: the catalog opens on the short trustworthy list
+    /// (recommended / verified / tested-by-you on the active provider) and
+    /// the long tail lives behind this explicit toggle.
+    @State private var showAllModels = false
 
     struct CatalogFilter: Equatable {
         var testedOnly: Bool = false
@@ -492,7 +496,10 @@ struct AIHubView: View {
                         ProgressView().controlSize(.small)
                         Text("discovering…").font(.caption).foregroundStyle(.secondary)
                     }
-                } else {
+                } else if showAllModels {
+                    // Discover belongs to the long-tail view: dumping fresh
+                    // unvalidated vendor listings into the curated view would
+                    // defeat its point.
                     Button("Discover more") {
                         Task { await discover() }
                     }
@@ -525,12 +532,30 @@ struct AIHubView: View {
             catalogTypeSection(type: "generation", title: "Generation Models")
             catalogTypeSection(type: "rerank", title: "Reranking Models")
 
+            curationToggle
+
             if filteredModels().isEmpty {
                 Text("No models match the current filter.")
                     .foregroundStyle(.secondary)
                     .padding()
                     .frame(maxWidth: .infinity)
             }
+        }
+    }
+
+    /// The curated/all switch, with the hidden-count so the short default
+    /// view never reads as "this is everything".
+    @ViewBuilder
+    private var curationToggle: some View {
+        let restCount = curationSplit().rest.count
+        if !showAllModels && restCount > 0 {
+            Button("Show all models (\(restCount) more)") { showAllModels = true }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
+        } else if showAllModels {
+            Button("Show recommended only") { showAllModels = false }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
         }
     }
 
@@ -545,10 +570,9 @@ struct AIHubView: View {
         .controlSize(.small)
     }
 
-    /// filteredModels applies the search text + filter toggles. Used
-    /// both for the empty-state check and as the input to group
-    /// partitioning.
-    private func filteredModels() -> [CatalogModelInfo] {
+    /// searchFiltered applies the search text + filter toggles only (no
+    /// curation): the raw pool both view modes draw from.
+    private func searchFiltered() -> [CatalogModelInfo] {
         let needle = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         return models.filter { m in
             if filter.testedOnly && (m.testedAt ?? "").isEmpty { return false }
@@ -567,10 +591,31 @@ struct AIHubView: View {
         }
     }
 
+    /// Curated/rest split of the searched pool (shared by the toggle count
+    /// and the default view).
+    private func curationSplit() -> (curated: [CatalogModelInfo], rest: [CatalogModelInfo]) {
+        ModelCuration.partition(
+            searchFiltered(),
+            activeProvider: aiStatus?.provider,
+            activeIDs: ModelCuration.activeIDs(aiStatus)
+        )
+    }
+
+    /// The models the current view mode shows: everything in all-mode, the
+    /// curated short list otherwise.
+    private func filteredModels() -> [CatalogModelInfo] {
+        showAllModels ? searchFiltered() : curationSplit().curated
+    }
+
     @ViewBuilder
     private func catalogTypeSection(type: String, title: String) -> some View {
         let ofType = filteredModels().filter { $0.modelType == type }
         if !ofType.isEmpty {
+            // In all-mode, untested unverified discoveries render demoted in
+            // their own collapsed group so they can't be mistaken for the
+            // trustworthy rows above them.
+            let main = showAllModels ? ofType.filter { !ModelCuration.isDemoted($0) } : ofType
+            let demoted = showAllModels ? ofType.filter { ModelCuration.isDemoted($0) } : []
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(title).font(.subheadline.bold())
@@ -578,8 +623,17 @@ struct AIHubView: View {
                     Spacer()
                 }
                 .padding(.top, 6)
-                ForEach(groupedByVendor(ofType), id: \.key) { group in
+                ForEach(groupedByVendor(main), id: \.key) { group in
                     vendorGroupView(group: group)
+                }
+                if !demoted.isEmpty {
+                    DisclosureGroup("Untested, discovered from the provider (\(demoted.count)): run a test before trusting one") {
+                        ForEach(groupedByVendor(demoted), id: \.key) { group in
+                            vendorGroupView(group: group)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
         }
