@@ -244,15 +244,15 @@ struct HomeView: View {
         // read as a core-AI failure.
         let rerankValue: String
         if status?.rerankEnabled == true {
-            let model = HomeAI.friendlyModel(status?.rerankModel) ?? status?.rerankModel ?? "on"
+            let model = HomeAI.modelValue(status?.rerankModel)
             rerankValue = (status?.rerankAvailable == false) ? "\(model) (unavailable)" : model
         } else {
             rerankValue = "Off"
         }
         return VStack(alignment: .leading, spacing: 8) {
-            SheetSectionHeader(title: "AI — AWS Bedrock", systemImage: "bolt.horizontal")
-            LabeledContent("Generation", value: HomeAI.friendlyModel(status?.genModel) ?? "Claude Haiku 4.5")
-            LabeledContent("Embeddings", value: HomeAI.friendlyModel(status?.embeddingModel) ?? "Amazon Nova-2")
+            SheetSectionHeader(title: HomeAI.headerTitle(status), systemImage: "bolt.horizontal")
+            LabeledContent("Generation") { modelText(status?.genModel) }
+            LabeledContent("Embeddings") { modelText(status?.embeddingModel) }
             LabeledContent("Rerank", value: rerankValue)
             HStack(spacing: 6) {
                 Circle().fill(ready ? Color.green : Color.red).frame(width: 8, height: 8)
@@ -260,8 +260,14 @@ struct HomeView: View {
             }
             .font(.callout)
             HStack {
-                Button(saving ? "Saving…" : "Save as default") {
-                    Task { await save() }
+                // The reset path only appears when the config has drifted from
+                // the recommended defaults, and always confirms first: the old
+                // "Save as default" silently reverted a user's chosen
+                // provider/models to the hardcoded Bedrock defaults.
+                if HomeAI.differsFromDefaults(status) {
+                    Button(saving ? "Resetting…" : "Reset to recommended defaults") {
+                        Task { await resetToRecommendedDefaults() }
+                    }
                 }
                 Button(testing ? "Testing…" : "Test") {
                     Task { await test() }
@@ -272,7 +278,24 @@ struct HomeView: View {
         }
     }
 
-    private func save() async {
+    /// Raw active model id, monospaced with middle truncation: the honest
+    /// display (any friendly-name table in Swift would drift from the CLI).
+    private func modelText(_ id: String?) -> some View {
+        Text(HomeAI.modelValue(id))
+            .font(.body.monospaced())
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
+    private func resetToRecommendedDefaults() async {
+        #if canImport(AppKit)
+        let alert = NSAlert()
+        alert.messageText = "Reset AI configuration to the recommended defaults?"
+        alert.informativeText = HomeAI.resetConfirmText(appState.aiStatus)
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        #endif
         saving = true
         actionMessage = nil
         defer { saving = false }
@@ -289,25 +312,52 @@ struct HomeView: View {
             await appState.refreshAIStatus()
             actionIsError = false
             // If the just-saved model no longer matches the vault's stored
-            // embeddings, nudge toward Re-embed All; otherwise plain confirm.
+            // embeddings, nudge toward Re-embed All; otherwise confirm with
+            // the values that were actually written.
             actionMessage = HomeAI.reembedHintAfterSave(appState.aiStatus)
-                ?? "Saved: AWS Bedrock · Claude Haiku 4.5 · Amazon Nova-2."
+                ?? "Reset to \(ProviderDisplay.name(HomeAI.provider)) · \(HomeAI.genModel) · \(HomeAI.embedModel)."
         } catch {
             actionIsError = true
-            actionMessage = "Save failed: \(error.localizedDescription)"
+            actionMessage = "Reset failed: \(error.localizedDescription)"
         }
     }
 
+    /// Probe the ACTIVE models, not the shipped defaults: testing anything
+    /// else answers a question the user didn't ask. Results are branched on
+    /// each probe's ok flag (the CLI exits 0 for a failed probe).
     private func test() async {
         testing = true
         actionMessage = nil
         defer { testing = false }
+        guard let status = appState.aiStatus else {
+            actionIsError = true
+            actionMessage = "AI status not loaded yet; try again in a moment."
+            return
+        }
         do {
-            _ = try await appState.testAndSave(modelID: HomeAI.embedModel, provider: HomeAI.provider, type: "embedding", scope: "vault")
-            _ = try await appState.testAndSave(modelID: HomeAI.genModel, provider: HomeAI.provider, type: "generation", scope: "vault")
+            var failures: [String] = []
+            var tested = 0
+            if !status.embeddingModel.isEmpty {
+                tested += 1
+                let r = try await appState.testAndSave(modelID: status.embeddingModel, provider: status.provider, type: "embedding", scope: "vault")
+                if !r.ok { failures.append("\(status.embeddingModel): \(r.detail ?? "failed")") }
+            }
+            if !status.genModel.isEmpty {
+                tested += 1
+                let r = try await appState.testAndSave(modelID: status.genModel, provider: status.provider, type: "generation", scope: "vault")
+                if !r.ok { failures.append("\(status.genModel): \(r.detail ?? "failed")") }
+            }
             await appState.refreshAIStatus()
-            actionIsError = false
-            actionMessage = "Test passed: both models responded."
+            if tested == 0 {
+                actionIsError = true
+                actionMessage = "No active models configured; pick models in the AI Hub first."
+            } else if failures.isEmpty {
+                actionIsError = false
+                actionMessage = "Test passed: \(status.embeddingModel) and \(status.genModel) responded."
+            } else {
+                actionIsError = true
+                actionMessage = "Test failed: \(failures.joined(separator: " / "))"
+            }
         } catch {
             actionIsError = true
             actionMessage = "Test failed: \(error.localizedDescription)"
@@ -490,32 +540,63 @@ struct HomeView: View {
 /// defaults (mirroring the CLI's `DefaultAIConfig`). Extracted from `HomeView`
 /// so the model-name and status-line mapping are unit-testable.
 enum HomeAI {
+    /// Recommended defaults: a unit-tested mirror of the CLI's
+    /// DefaultAIConfig (cli/internal/ai/config.go). The card never renders
+    /// these as if they were the live config; they exist only as the target
+    /// of the explicit Reset action and its drift check.
     static let provider = "bedrock"
     static let genModel = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     static let embedModel = "amazon.nova-2-multimodal-embeddings-v1:0"
     static let dims = 1024
 
-    /// Friendly name for the two default Bedrock models; the raw id for any
-    /// other non-empty model; `nil` when no model is set.
-    static func friendlyModel(_ id: String?) -> String? {
-        switch id {
-        case genModel: return "Claude Haiku 4.5"
-        case embedModel: return "Amazon Nova-2"
-        case .some(let value) where !value.isEmpty: return value
-        default: return nil
-        }
+    /// Card header reflecting the ACTIVE provider, never hardcoded copy.
+    static func headerTitle(_ status: AIStatusInfo?) -> String {
+        guard let status else { return "AI · checking…" }
+        return "AI · " + ProviderDisplay.name(status.provider)
     }
 
-    /// Plain-language readiness line for the AI card, preferring the provider's
-    /// own `reason` (actionable) over a generic credentials hint.
+    /// Display value for an active model slot: the raw id (the honest truth;
+    /// friendly-name tables in Swift drift from the CLI), or "(not set)".
+    static func modelValue(_ id: String?) -> String {
+        guard let id, !id.isEmpty else { return "(not set)" }
+        return id
+    }
+
+    /// True when the active config differs from the recommended defaults.
+    /// Gates the Reset button so it only appears when there is real drift.
+    static func differsFromDefaults(_ status: AIStatusInfo?) -> Bool {
+        guard let status else { return false }
+        return status.provider != provider
+            || status.genModel != genModel
+            || status.embeddingModel != embedModel
+            || status.dimensions != dims
+    }
+
+    /// Confirm-dialog body for the Reset action: names exactly what will be
+    /// written and what it replaces, so the reset can never be a surprise.
+    static func resetConfirmText(_ status: AIStatusInfo?) -> String {
+        var lines = [
+            "This writes provider \(ProviderDisplay.name(provider)), generation model \(genModel), embedding model \(embedModel), and \(dims) dimensions to the vault config."
+        ]
+        if let status {
+            lines.append("Current: \(ProviderDisplay.name(status.provider)) · \(modelValue(status.genModel)) · \(modelValue(status.embeddingModel)).")
+        }
+        lines.append("If the embedding model changes you may need Re-embed All afterwards.")
+        return lines.joined(separator: "\n\n")
+    }
+
+    /// Plain-language readiness line for the AI card, provider-generic,
+    /// preferring the ACTIVE provider's own `reason` (actionable) over a
+    /// generic credentials hint.
     static func statusLine(_ status: AIStatusInfo?) -> String {
         guard let status else { return "Checking…" }
-        if status.embedAvailable && status.genAvailable { return "Bedrock ready" }
-        if let reason = status.providers?.first(where: { $0.name == provider })?.reason,
+        let display = ProviderDisplay.name(status.provider)
+        if status.embedAvailable && status.genAvailable { return "\(display) ready" }
+        if let reason = status.providers?.first(where: { $0.name == status.provider })?.reason,
            !reason.isEmpty {
-            return "Not ready — \(reason)"
+            return "Not ready: \(reason)"
         }
-        return "Not ready — check AWS credentials"
+        return "Not ready: check \(display) credentials"
     }
 
     /// After saving the default config, the vault's stored embeddings may no

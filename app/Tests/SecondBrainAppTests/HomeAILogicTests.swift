@@ -8,29 +8,41 @@ private func decodeStatus(_ json: String) -> AIStatusInfo {
     try! JSONDecoder().decode(AIStatusInfo.self, from: Data(json.utf8))
 }
 
-@Test("HomeAI.friendlyModel maps the default Bedrock models and passes others through")
-func homeAIFriendlyModel() {
-    #expect(HomeAI.friendlyModel(HomeAI.genModel) == "Claude Haiku 4.5")
-    #expect(HomeAI.friendlyModel(HomeAI.embedModel) == "Amazon Nova-2")
-    #expect(HomeAI.friendlyModel("some.other.model") == "some.other.model")
-    #expect(HomeAI.friendlyModel("") == nil)
-    #expect(HomeAI.friendlyModel(nil) == nil)
+@Test("HomeAI.modelValue shows the raw id or a not-set placeholder")
+func homeAIModelValue() {
+    #expect(HomeAI.modelValue("us.anthropic.claude-sonnet-5") == "us.anthropic.claude-sonnet-5")
+    #expect(HomeAI.modelValue("") == "(not set)")
+    #expect(HomeAI.modelValue(nil) == "(not set)")
 }
 
-@Test("HomeAI.statusLine reports ready, the provider reason, or a credentials fallback")
+@Test("HomeAI.headerTitle reflects the ACTIVE provider, never hardcoded copy")
+func homeAIHeaderTitle() {
+    #expect(HomeAI.headerTitle(nil) == "AI · checking…")
+
+    let bedrock = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.headerTitle(bedrock) == "AI · AWS Bedrock")
+
+    let ollama = decodeStatus(#"{"provider":"ollama","embedding_model":"e","generation_model":"g","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.headerTitle(ollama) == "AI · Ollama (local)")
+}
+
+@Test("HomeAI.statusLine is provider-generic: ready, reason, or credentials fallback")
 func homeAIStatusLine() {
     #expect(HomeAI.statusLine(nil) == "Checking…")
 
     let ready = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
-    #expect(HomeAI.statusLine(ready) == "Bedrock ready")
+    #expect(HomeAI.statusLine(ready) == "AWS Bedrock ready")
 
-    // Not ready, with an actionable provider reason → surface the reason.
-    let withReason = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":false,"gen_available":false,"embedding_count":0,"document_count":10,"providers":[{"name":"bedrock","config_present":true,"disabled":false,"reachable":false,"reason":"AccessDeniedException: enable model access"}]}"#)
-    #expect(HomeAI.statusLine(withReason) == "Not ready — AccessDeniedException: enable model access")
+    let readyOllama = decodeStatus(#"{"provider":"ollama","embedding_model":"e","generation_model":"g","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.statusLine(readyOllama) == "Ollama (local) ready")
 
-    // Not ready, no provider reason available → generic credentials fallback.
-    let noReason = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":false,"gen_available":true,"embedding_count":0,"document_count":10}"#)
-    #expect(HomeAI.statusLine(noReason) == "Not ready — check AWS credentials")
+    // Not ready, with an actionable reason from the ACTIVE provider.
+    let withReason = decodeStatus(#"{"provider":"ollama","embedding_model":"e","generation_model":"g","dimensions":768,"embed_available":false,"gen_available":false,"embedding_count":0,"document_count":10,"providers":[{"name":"bedrock","config_present":true,"disabled":false,"reachable":true},{"name":"ollama","config_present":true,"disabled":false,"reachable":false,"reason":"server not running"}]}"#)
+    #expect(HomeAI.statusLine(withReason) == "Not ready: server not running")
+
+    // Not ready, no provider reason available: provider-named fallback.
+    let noReason = decodeStatus(#"{"provider":"openrouter","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":false,"gen_available":true,"embedding_count":0,"document_count":10}"#)
+    #expect(HomeAI.statusLine(noReason) == "Not ready: check OpenRouter credentials")
 }
 
 @Test("HomeAI defaults mirror the CLI DefaultAIConfig contract")
@@ -39,6 +51,45 @@ func homeAIDefaults() {
     #expect(HomeAI.genModel == "us.anthropic.claude-haiku-4-5-20251001-v1:0")
     #expect(HomeAI.embedModel == "amazon.nova-2-multimodal-embeddings-v1:0")
     #expect(HomeAI.dims == 1024)
+}
+
+@Test("HomeAI.differsFromDefaults gates the Reset button on real drift")
+func homeAIDiffersFromDefaults() {
+    // Unknown status: no button (nothing to compare against).
+    #expect(HomeAI.differsFromDefaults(nil) == false)
+
+    // Exactly the defaults: no drift, no button.
+    let defaults = decodeStatus(#"{"provider":"bedrock","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-haiku-4-5-20251001-v1:0","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.differsFromDefaults(defaults) == false)
+
+    // A different provider, model, or dimension each counts as drift.
+    let otherProvider = decodeStatus(#"{"provider":"ollama","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-haiku-4-5-20251001-v1:0","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.differsFromDefaults(otherProvider))
+
+    let otherGen = decodeStatus(#"{"provider":"bedrock","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-sonnet-5","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.differsFromDefaults(otherGen))
+
+    let otherDims = decodeStatus(#"{"provider":"bedrock","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-haiku-4-5-20251001-v1:0","dimensions":256,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.differsFromDefaults(otherDims))
+}
+
+@Test("HomeAI.resetConfirmText names the target and the current config")
+func homeAIResetConfirmText() {
+    let current = decodeStatus(#"{"provider":"ollama","embedding_model":"nomic-embed-text","generation_model":"gemma3:4b","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    let text = HomeAI.resetConfirmText(current)
+    #expect(text.contains(HomeAI.genModel))
+    #expect(text.contains(HomeAI.embedModel))
+    #expect(text.contains("Ollama (local)"))
+    #expect(text.contains("gemma3:4b"))
+}
+
+@Test("ProviderDisplay maps known providers and capitalizes unknowns")
+func providerDisplayNames() {
+    #expect(ProviderDisplay.name("bedrock") == "AWS Bedrock")
+    #expect(ProviderDisplay.name("openrouter") == "OpenRouter")
+    #expect(ProviderDisplay.name("ollama") == "Ollama (local)")
+    #expect(ProviderDisplay.name("llama-local") == "Local (llama.cpp)")
+    #expect(ProviderDisplay.name("something") == "Something")
 }
 
 @Test("HomeAI.reembedHintAfterSave nudges only on a model/dimension mismatch")

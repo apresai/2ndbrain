@@ -15,7 +15,6 @@ struct AIHubView: View {
 
     @State private var aiStatus: AIStatusInfo?
     @State private var models: [CatalogModelInfo] = []
-    @State private var testResults: [String: TestOutcome] = [:]
     @State private var loading = true
     @State private var isDiscovering = false
     @State private var togglingRerank = false
@@ -27,13 +26,6 @@ struct AIHubView: View {
     /// immediately see their models; collapsing is an opt-in to
     /// reduce clutter on very large catalogs.
     @State private var collapsedGroups: Set<String> = []
-
-    struct TestOutcome: Equatable {
-        var running: Bool
-        var ok: Bool?
-        var latency: String?
-        var detail: String?
-    }
 
     struct CatalogFilter: Equatable {
         var testedOnly: Bool = false
@@ -311,7 +303,7 @@ struct AIHubView: View {
     private func providerCard(_ p: ProviderStatusInfo) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(providerDisplayName(p.name)).font(.headline)
+                Text(ProviderDisplay.name(p.name)).font(.headline)
                 Spacer()
                 Circle()
                     .fill(providerStatusColor(p))
@@ -340,15 +332,6 @@ struct AIHubView: View {
         .opacity(p.disabled ? 0.55 : 1.0)
     }
 
-    private func providerDisplayName(_ name: String) -> String {
-        switch name {
-        case "bedrock": return "AWS Bedrock"
-        case "openrouter": return "OpenRouter"
-        case "ollama": return "Ollama (local)"
-        case "llama-local": return "Local (llama.cpp)"
-        default: return name.capitalized
-        }
-    }
 
     private func providerStatusLabel(_ p: ProviderStatusInfo) -> String {
         if p.disabled { return "disabled" }
@@ -386,7 +369,7 @@ struct AIHubView: View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text("Active provider \(providerDisplayName(provider)) is disabled — re-enable it or pick another active model.")
+            Text("Active provider \(ProviderDisplay.name(provider)) is disabled — re-enable it or pick another active model.")
                 .font(.callout)
         }
         .padding(8)
@@ -662,7 +645,7 @@ struct AIHubView: View {
 
                 Text(group.vendorDisplay).font(.subheadline.bold())
                 Text("·").foregroundStyle(.secondary)
-                Text(providerDisplayName(group.provider))
+                Text(ProviderDisplay.name(group.provider))
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                 Text("(\(group.models.count))")
@@ -718,7 +701,6 @@ struct AIHubView: View {
     }
 
     private func modelRow(_ m: CatalogModelInfo) -> some View {
-        let outcome = testResults[m.modelID]
         let activeKinds = activeKinds(for: m)
         let disabledProvider = providerIsDisabled(m.provider)
         return HStack(alignment: .center, spacing: 10) {
@@ -752,9 +734,6 @@ struct AIHubView: View {
                     .lineLimit(1)
             }
             Spacer()
-            if let outcome {
-                outcomeBadge(outcome)
-            }
             rowActions(m, disabled: disabledProvider)
         }
         .padding(.vertical, 4)
@@ -785,21 +764,6 @@ struct AIHubView: View {
         else if let testedAt = m.testedAt, !testedAt.isEmpty { parts.append("tested") }
         if let strat = m.invokeStrategy, !strat.isEmpty { parts.append(strat) }
         return parts.joined(separator: " · ")
-    }
-
-    @ViewBuilder
-    private func outcomeBadge(_ o: TestOutcome) -> some View {
-        if o.running {
-            ProgressView().controlSize(.small)
-        } else if let ok = o.ok {
-            if ok {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            } else {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.red)
-                    .help(o.detail ?? "failed")
-            }
-        }
     }
 
     private func rowActions(_ m: CatalogModelInfo, disabled: Bool) -> some View {
@@ -870,30 +834,6 @@ struct AIHubView: View {
             await reload()
         } catch {
             recordActionFailure("Toggle rerank failed", error: error)
-        }
-    }
-
-    private func testRow(_ m: CatalogModelInfo) async {
-        testResults[m.modelID] = TestOutcome(running: true)
-        do {
-            let scope = "vault"
-            let result = try await appState.testAndSave(
-                modelID: m.modelID, provider: m.provider, type: m.modelType, scope: scope
-            )
-            testResults[m.modelID] = TestOutcome(
-                running: false,
-                ok: result.ok,
-                latency: result.latency,
-                detail: result.detail
-            )
-            // A successful save bumps catalog version via FSEvents — let
-            // the watcher reload us. For fast feedback also kick reload.
-            if result.ok { Task { await reload() } }
-        } catch {
-            testResults[m.modelID] = TestOutcome(
-                running: false, ok: false, latency: nil, detail: error.localizedDescription
-            )
-            recordActionFailure("Test \(m.modelID) failed", error: error)
         }
     }
 
