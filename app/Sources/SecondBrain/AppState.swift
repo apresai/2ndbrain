@@ -3165,9 +3165,18 @@ struct CatalogModelInfo: Codable, Identifiable {
     let testedAt: String?
     let testLatencyMs: Int64?
     let testError: String?
+    // Classified failure code from the probe taxonomy (access_denied,
+    // bad_credentials, ...). Optional: absent on pre-taxonomy CLIs.
+    let testErrorCode: String?
     let benchmark: CatalogBenchmarkSummary?
     let compatible: Bool?
     let compatibilityReason: String?
+    // Curation flag: the short list 2nb suggests per provider. Optional:
+    // absent on pre-curation CLIs (curated view falls back to verified+tested).
+    let recommended: Bool?
+    // Matryoshka output widths the model accepts (e.g. Nova-2:
+    // 256/384/1024/3072). Optional: absent for fixed-width models.
+    let supportedDimensions: [Int]?
 
     enum CodingKeys: String, CodingKey {
         case modelID = "id"
@@ -3199,9 +3208,12 @@ struct CatalogModelInfo: Codable, Identifiable {
         case testedAt = "tested_at"
         case testLatencyMs = "test_latency_ms"
         case testError = "test_error"
+        case testErrorCode = "test_error_code"
         case benchmark
         case compatible
         case compatibilityReason = "compatibility_reason"
+        case recommended
+        case supportedDimensions = "supported_dimensions"
     }
 }
 

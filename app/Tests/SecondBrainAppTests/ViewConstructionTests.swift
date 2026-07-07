@@ -35,9 +35,12 @@ func primaryViewsConstruct() {
         testedAt: nil,
         testLatencyMs: nil,
         testError: nil,
+        testErrorCode: nil,
         benchmark: nil,
         compatible: nil,
-        compatibilityReason: nil
+        compatibilityReason: nil,
+        recommended: nil,
+        supportedDimensions: nil
     )
 
     let picker = ModelCatalogPickerView(
