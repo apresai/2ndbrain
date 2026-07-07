@@ -11,9 +11,10 @@ struct LintResultsView: View {
     @State private var activeSetValue: ActiveSetValue?
     /// The broken-link finding currently being repaired via the preview sheet.
     @State private var activeRepair: ActiveRepair?
-    /// Inline result banner after a fix (green) or failure (red).
+    /// Inline result banner after a fix (green), a stale-finding cleanup
+    /// (orange informational), or a failure (orange error).
     @State private var actionMessage: String?
-    @State private var actionIsError = false
+    @State private var actionTone: BannerTone = .success
     /// True while the bulk "Repair drift links" pass is running.
     @State private var bulkBusy = false
 
@@ -38,8 +39,8 @@ struct LintResultsView: View {
             if let actionMessage {
                 Divider()
                 HStack(spacing: 6) {
-                    Image(systemName: actionIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(actionIsError ? .orange : .green)
+                    Image(systemName: actionTone.icon)
+                        .foregroundStyle(actionTone.color)
                     Text(actionMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -47,7 +48,7 @@ struct LintResultsView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(actionIsError ? Color.orange.opacity(0.08) : Color.green.opacity(0.08))
+                .background(actionTone.color.opacity(0.08))
             }
 
             Divider()
@@ -156,19 +157,31 @@ struct LintResultsView: View {
         .sheet(item: $activeSetValue) { item in
             SetValueSheet(item: item) { field, value in
                 activeSetValue = nil
-                actionIsError = false
+                actionTone = .success
                 actionMessage = "Set \(field) = \(value). Re-checking…"
                 Task { await appState.runLint() }
             }
             .environment(appState)
         }
         .sheet(item: $activeRepair) { repair in
-            LinkResolutionSheet(fix: repair, onOpenInObsidian: { openInObsidian(forPath: repair.path) }) { message in
-                activeRepair = nil
-                actionIsError = false
-                actionMessage = "\(message) Re-checking…"
-                Task { await appState.runLint() }
-            }
+            LinkResolutionSheet(
+                fix: repair,
+                onOpenInObsidian: { openInObsidian(forPath: repair.path) },
+                onResolved: { message in
+                    activeRepair = nil
+                    actionTone = .success
+                    actionMessage = "\(message) Re-checking…"
+                    Task { await appState.runLint() }
+                },
+                onStale: { message in
+                    // The link no longer exists, so the finding is stale, not
+                    // failed: informational banner + re-lint so it disappears.
+                    activeRepair = nil
+                    actionTone = .info
+                    actionMessage = "\(message) Re-checking…"
+                    Task { await appState.runLint() }
+                }
+            )
             .environment(appState)
         }
     }
@@ -231,7 +244,7 @@ struct LintResultsView: View {
                 bulkBusy = false
                 // Error tint only when nothing succeeded; a partial success stays
                 // informational.
-                actionIsError = failed > 0 && repaired == 0
+                actionTone = failed > 0 && repaired == 0 ? .error : .success
                 var msg = repaired > 0
                     ? "Repaired \(repaired) drift link\(repaired == 1 ? "" : "s")."
                     : "No confident drift links to repair — the rest need a per-finding fix."
@@ -242,9 +255,32 @@ struct LintResultsView: View {
                 await appState.runLint()
             } catch {
                 bulkBusy = false
-                actionIsError = true
+                actionTone = .error
                 actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
             }
+        }
+    }
+}
+
+/// Visual tone of the inline result banner: green success, orange
+/// informational (a stale finding that was cleaned up), or orange error.
+private enum BannerTone {
+    case success
+    case info
+    case error
+
+    var icon: String {
+        switch self {
+        case .success: "checkmark.circle.fill"
+        case .info: "info.circle.fill"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .success: .green
+        case .info, .error: .orange
         }
     }
 }
@@ -430,7 +466,10 @@ private struct SetValueSheet: View {
 /// order: Repair drift (when a confident target exists, with a diff), Did-you-mean
 /// suggestions (relink to a chosen note), Create the note, and Unlink (keep the
 /// text). Create and Unlink are ALWAYS offered, so every finding has a real fix.
-/// Every mutating action is reversible with `polish --undo`.
+/// Every mutating action is reversible with `polish --undo`. Each action's
+/// result is classified by `LinkFixOutcome`: success and stale findings both
+/// dismiss and re-lint (green vs informational banner); actionable guidance
+/// keeps the sheet open so the user picks another option.
 private struct LinkResolutionSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
@@ -440,10 +479,18 @@ private struct LinkResolutionSheet: View {
     /// Called with a past-tense banner message after a successful resolution so
     /// the parent can dismiss, re-lint, and show the green banner.
     let onResolved: (String) -> Void
+    /// Called when the link no longer exists (a stale finding) so the parent
+    /// can dismiss, re-lint, and show an informational banner instead of a
+    /// false success or an in-sheet dead end.
+    let onStale: (String) -> Void
 
     @State private var loading = true
     @State private var repairPreview: PolishResult?
     @State private var suggestions: [SuggestTargetResult] = []
+    /// Non-error guidance when an action found the link but could not fix it
+    /// (e.g. no confident target): the sheet stays open so the user picks
+    /// another option.
+    @State private var guidanceText: String?
     @State private var errorText: String?
     @State private var busy = false
 
@@ -485,6 +532,13 @@ private struct LinkResolutionSheet: View {
                 .frame(maxHeight: 300)
             }
 
+            if let guidanceText {
+                Text(guidanceText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if let errorText {
                 Text(errorText)
                     .font(.caption)
@@ -523,7 +577,7 @@ private struct LinkResolutionSheet: View {
             Button(busy ? "Repairing…" : "Repair") {
                 run("Repaired [[\(fix.target)]].") {
                     let res = try await appState.repairLinks(path: fix.path, target: fix.target, preview: false)
-                    return noopProblem(res, verb: "repair")
+                    return LinkFixOutcome.classify(result: res, target: fix.target, verb: "repair")
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -548,7 +602,7 @@ private struct LinkResolutionSheet: View {
                         let to = (cand.path as NSString).deletingPathExtension
                         run("Linked [[\(fix.target)]] → [[\(cand.displayTitle)]].") {
                             let res = try await appState.relink(path: fix.path, from: fix.target, to: to, preview: false)
-                            return noopProblem(res, verb: "repoint")
+                            return LinkFixOutcome.classify(result: res, target: fix.target, verb: "repoint")
                         }
                     }
                     .controlSize(.small)
@@ -568,7 +622,7 @@ private struct LinkResolutionSheet: View {
             Button("Create note") {
                 run("Created note for [[\(fix.target)]].") {
                     _ = try await appState.createStub(title: fix.target)
-                    return nil
+                    return .success
                 }
             }
             .controlSize(.small)
@@ -586,7 +640,7 @@ private struct LinkResolutionSheet: View {
             Button("Unlink") {
                 run("Unlinked [[\(fix.target)]].") {
                     let res = try await appState.unlink(path: fix.path, target: fix.target, preview: false)
-                    return noopProblem(res, verb: "unlink")
+                    return LinkFixOutcome.classify(result: res, target: fix.target, verb: "unlink")
                 }
             }
             .controlSize(.small)
@@ -624,38 +678,32 @@ private struct LinkResolutionSheet: View {
         loading = false
     }
 
-    /// Run a mutating resolution. `work` returns nil on success, or a
-    /// user-facing problem string (e.g. a CLI no-op) to show in-sheet INSTEAD of
-    /// the green success banner — so a stale finding whose link no longer exists
-    /// doesn't falsely report success. On real success the parent dismisses +
-    /// re-lints.
-    private func run(_ successMessage: String, _ work: @escaping () async throws -> String?) {
+    /// Run a mutating resolution. `work` returns the classified outcome:
+    /// `.success` dismisses via `onResolved` (green banner + re-lint);
+    /// `.actionable` shows guidance in-sheet and keeps the sheet open (the link
+    /// still exists, the user should pick another option); `.stale` dismisses
+    /// via `onStale` (informational banner + re-lint) so a finding whose link
+    /// no longer exists disappears instead of stranding the user in the sheet.
+    private func run(_ successMessage: String, _ work: @escaping () async throws -> LinkFixOutcome) {
         busy = true
+        guidanceText = nil
         errorText = nil
         Task {
             do {
-                let problem = try await work()
+                let outcome = try await work()
                 busy = false
-                if let problem {
-                    errorText = problem
-                } else {
+                switch outcome {
+                case .success:
                     onResolved(successMessage)
+                case .actionable(let message):
+                    guidanceText = message
+                case .stale(let message):
+                    onStale(message)
                 }
             } catch {
                 busy = false
                 errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
             }
         }
-    }
-
-    /// nil when the edit actually changed a link; a user-facing message when the
-    /// CLI reported a no-op (no matching link — usually a stale finding). A
-    /// non-empty `warning` on a real edit is non-blocking: the edit happened, and
-    /// the subsequent re-lint reflects whether the finding persists.
-    private func noopProblem(_ r: PolishResult, verb: String) -> String? {
-        if r.linksRepaired?.isEmpty ?? true {
-            return "No [[\(fix.target)]] link found to \(verb) — it may have already changed. Re-check to refresh."
-        }
-        return nil
     }
 }
