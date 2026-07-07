@@ -31,9 +31,27 @@ struct AIHubView: View {
     /// the long tail lives behind this explicit toggle.
     @State private var showAllModels = false
 
+    /// A `models verify` run is streaming; its live progress replaces the
+    /// "Validate models" button in the Catalog header until `done` arrives.
+    @State private var verifying = false
+    @State private var verifyProgress: VerifyProgress?
+    /// The just-completed run's summary in the full verify vocabulary
+    /// ("7 verified, 3 no access, 1 throttled"), shown until the next run. More
+    /// granular than the persisted `model_access` line (which folds every
+    /// non-access-denied failure into "other"); reset when the Hub reopens.
+    @State private var lastVerifySummary: String?
+
     struct CatalogFilter: Equatable {
         var testedOnly: Bool = false
         var enabledOnly: Bool = false
+    }
+
+    /// Live state for the streamed "Validate models" run: the running counter
+    /// and last per-model verdict while in flight.
+    struct VerifyProgress {
+        var current: Int = 0
+        var total: Int = 0
+        var lastLine: String = ""
     }
 
     /// Catalog group key: (type, vendor, provider). Stored as a
@@ -518,6 +536,8 @@ struct AIHubView: View {
                 filterMenu
             }
 
+            accessSummaryRow
+
             // Search input — fuzzy-matches model ID + vendor display name.
             // Hoisted above both type sections so it applies uniformly.
             HStack {
@@ -550,6 +570,64 @@ struct AIHubView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    /// Persistent per-account access summary ("7 verified, 3 no access, 1
+    /// other, checked 2d ago") plus the "Validate models" button. While a
+    /// verify run streams, its live progress replaces the button so the header
+    /// doubles as the in-flight status line.
+    @ViewBuilder
+    private var accessSummaryRow: some View {
+        HStack(spacing: 8) {
+            if verifying, let p = verifyProgress {
+                ProgressView().controlSize(.small)
+                Text(verifyProgressLine(p))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+            } else {
+                Text(lastVerifySummary.map { "Validated: \($0)" } ?? accessSummaryLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Validate models") { startValidateModels() }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .disabled(appState.isIndexing || aiStatus == nil)
+            }
+        }
+    }
+
+    /// The access-summary text from `ai status`'s `model_access`, or a prompt
+    /// to run a first validation when the account has none.
+    private var accessSummaryLine: String {
+        guard let ma = aiStatus?.modelAccess else { return "No models validated yet" }
+        var parts = ["\(ma.verified) verified"]
+        if ma.accessDenied > 0 { parts.append("\(ma.accessDenied) no access") }
+        if ma.otherFailures > 0 { parts.append("\(ma.otherFailures) other") }
+        var line = parts.joined(separator: ", ")
+        if let when = ma.lastVerifiedAt, let rel = relativeChecked(when) {
+            line += ", checked \(rel)"
+        }
+        return line
+    }
+
+    private func verifyProgressLine(_ p: VerifyProgress) -> String {
+        let counter = p.total > 0 ? "\(p.current)/\(p.total)" : "\(p.current)"
+        return p.lastLine.isEmpty ? "Validating models… \(counter)" : "\(counter) - \(p.lastLine)"
+    }
+
+    /// Best-effort relative "2d ago" for the RFC3339 `last_verified_at`; nil
+    /// (caller omits the clause) when the timestamp doesn't parse.
+    private func relativeChecked(_ raw: String) -> String? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = iso.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) else { return nil }
+        let fmt = RelativeDateTimeFormatter()
+        fmt.unitsStyle = .short
+        return fmt.localizedString(for: date, relativeTo: Date())
     }
 
     /// The curated/all switch, with the hidden-count so the short default
@@ -729,6 +807,18 @@ struct AIHubView: View {
                 }
                 .controlSize(.small)
                 .buttonStyle(.bordered)
+
+                Menu {
+                    Button("Verify vendor") {
+                        startValidateModels(provider: group.provider, vendorIDs: group.models.map(\.modelID))
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .controlSize(.small)
+                .fixedSize()
+                .disabled(verifying || appState.isIndexing)
             }
             .padding(.vertical, 4)
 
@@ -742,6 +832,90 @@ struct AIHubView: View {
             }
         }
         .padding(.horizontal, 4)
+    }
+
+    // MARK: - Validate models (streamed access verification)
+
+    /// Entry point for the Catalog "Validate models" button (no args → the
+    /// active provider's enabled models) and the per-vendor "Verify vendor"
+    /// menu (explicit provider + IDs).
+    private func startValidateModels(provider: String? = nil, vendorIDs: [String] = []) {
+        guard let target = provider ?? aiStatus?.provider else { return }
+        Task { await runValidateModels(provider: target, vendorIDs: vendorIDs) }
+    }
+
+    /// Cost-preview → confirm → stream `models verify --events`, rendering live
+    /// progress and refreshing the catalog + access summary on completion.
+    private func runValidateModels(provider: String, vendorIDs: [String]) async {
+        // Claim the guard at entry, BEFORE the async costPreview + confirm, so a
+        // rapid double-tap can't launch two validate tasks (each would otherwise
+        // pass the guard while the other awaits the preview).
+        guard !verifying else { return }
+        verifying = true
+        defer { verifying = false }
+        let isVendorScoped = !vendorIDs.isEmpty
+        // Candidates for the cost estimate: the explicit vendor IDs, else the
+        // active provider's enabled models. rerank / incompatible entries are
+        // dropped since `models verify` can't probe them.
+        let candidateIDs = isVendorScoped
+            ? probeableIDs(models.filter { vendorIDs.contains($0.modelID) })
+            : probeableIDs(models.filter { $0.provider == provider && ($0.enabled ?? true) })
+        guard !candidateIDs.isEmpty else {
+            errorMessage = "No probeable models to validate for \(ProviderDisplay.name(provider))."
+            return
+        }
+
+        let preview = try? await appState.costPreview(modelIDs: candidateIDs, probe: "test")
+        let operation = isVendorScoped ? "Verify vendor" : "Validate models"
+        guard confirmPaidOperation(preview: preview, operation: operation) else { return }
+        let cap = VerifyFlow.costCap(preview: preview)
+
+        lastVerifySummary = nil
+        verifyProgress = VerifyProgress(current: 0, total: candidateIDs.count)
+        defer { verifyProgress = nil }
+        do {
+            // Default path streams --enabled-only (post-policy enabled set);
+            // the vendor path passes explicit IDs so it targets exactly the group.
+            try await appState.verifyModels(
+                provider: provider,
+                costCap: cap,
+                modelIDs: isVendorScoped ? candidateIDs : []
+            ) { event in
+                applyVerifyEvent(event)
+            }
+            await reload()
+        } catch {
+            recordActionFailure("Validate models failed", error: error)
+        }
+    }
+
+    /// Folds one streamed verify event into the live progress state.
+    private func applyVerifyEvent(_ event: VerifyEvent) {
+        switch event.event {
+        case "start":
+            verifyProgress = VerifyProgress(current: 0, total: event.total ?? 0)
+        case "result":
+            var p = verifyProgress ?? VerifyProgress()
+            p.current = event.n ?? p.current
+            if let total = event.total { p.total = total }
+            if let r = event.result {
+                p.lastLine = "\(r.ok ? "PASS" : "FAIL") \(r.modelID)"
+            }
+            verifyProgress = p
+        case "done":
+            // Hold the full-vocabulary summary (throttled kept distinct, unlike
+            // the persisted model_access line) as the post-run access text.
+            lastVerifySummary = VerifyFlow.summaryText(event.summary)
+        default:
+            break
+        }
+    }
+
+    /// Model IDs that `models verify` can actually probe: rerank models have no
+    /// test probe and the CLI skips incompatible entries, so exclude both to
+    /// keep the cost estimate aligned with what runs.
+    private func probeableIDs(_ ms: [CatalogModelInfo]) -> [String] {
+        ms.filter { $0.modelType != "rerank" && ($0.compatible ?? true) }.map(\.modelID)
     }
 
     private func bulkToggle(group: VendorGroup, enable: Bool) async {
