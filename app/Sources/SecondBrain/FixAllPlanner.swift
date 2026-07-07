@@ -196,4 +196,29 @@ enum FixAllPlanner {
     static func canCreateNote(forTarget target: String) -> Bool {
         !target.contains("/")
     }
+
+    /// The step-through queue for the "Fix each" walkthrough: the decision-class
+    /// findings (everything Fix-all cannot resolve in one click) in display
+    /// order, deduped by id. This is exactly the complement of `plan(from:)` over
+    /// the same classifications: a finding is in the Fix-all plan or this queue,
+    /// never both and never neither. Deduping matches `plan(from:)` (lint emits
+    /// one finding per link occurrence, but the sheet resolves a whole file by
+    /// target, so a repeated broken target only needs one pass). Pure so the
+    /// queue construction is unit-testable.
+    static func walkthroughQueue(from classified: [(BrokenFinding, LinkFixClass)]) -> [BrokenFinding] {
+        var seen = Set<String>()
+        var queue: [BrokenFinding] = []
+        for (finding, cls) in classified where !cls.isOneClick {
+            if seen.insert(finding.id).inserted {
+                queue.append(finding)
+            }
+        }
+        return queue
+    }
+
+    /// 1-based progress label for the "Fix each" walkthrough, e.g. "2 of 5".
+    /// `index` is the 0-based position of the finding currently shown.
+    static func walkthroughProgress(index: Int, total: Int) -> String {
+        "\(index + 1) of \(total)"
+    }
 }
