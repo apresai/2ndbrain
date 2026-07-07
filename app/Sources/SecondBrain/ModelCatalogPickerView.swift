@@ -481,6 +481,7 @@ struct ModelCatalogPickerView: View {
     }
 
     private func testModel(_ model: CatalogModelInfo) async {
+        guard await confirmPaidOperation(appState: appState, modelIDs: [model.modelID], probe: "test", operation: "Test \(model.modelID)") else { return }
         isTesting = true
         defer { isTesting = false }
         do {
@@ -542,6 +543,12 @@ struct ModelCatalogPickerView: View {
     }
 
     private func benchmark(_ model: CatalogModelInfo) async {
+        let probe = benchmarkProbe(benchmarkProbeSelection)
+        // The retrieval probe scores stored embeddings locally (zero API
+        // calls), so it needs no spend confirm.
+        if probe != "retrieval" {
+            guard await confirmPaidOperation(appState: appState, modelIDs: [model.modelID], probe: costProbe(probe), operation: "Benchmark \(model.modelID)") else { return }
+        }
         isBenchmarking = true
         benchmarkEvents = []
         defer { isBenchmarking = false }
