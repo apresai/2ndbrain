@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+// loadPoliciesNoWarn loads policies asserting no load warnings were produced.
+func loadPoliciesNoWarn(t *testing.T, vaultRoot string) []ScopedVendorPolicy {
+	t.Helper()
+	policies, warnings := LoadVendorPolicies(vaultRoot)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected policy load warnings: %v", warnings)
+	}
+	return policies
+}
+
 func mustSavePolicy(t *testing.T, scope UserCatalogScope, vaultRoot string, p VendorPolicy) {
 	t.Helper()
 	if err := SaveVendorPolicy(scope, vaultRoot, p); err != nil {
@@ -39,7 +49,7 @@ func TestVendorPolicy_SaveLoadClear_RoundTrip(t *testing.T) {
 		Provider: "bedrock", Mode: VendorPolicyModeEnableOnly, Vendors: []string{"Anthropic", " deepseek ", "anthropic"},
 	})
 
-	policies := LoadVendorPolicies(vaultRoot)
+	policies, _ := LoadVendorPolicies(vaultRoot)
 	if len(policies) != 2 {
 		t.Fatalf("expected 2 merged policies, got %d: %+v", len(policies), policies)
 	}
@@ -64,7 +74,7 @@ func TestVendorPolicy_SaveLoadClear_RoundTrip(t *testing.T) {
 	if err != nil || !removed {
 		t.Fatalf("clear vault bedrock: removed=%v err=%v", removed, err)
 	}
-	bedrock, ok = findPolicy(LoadVendorPolicies(vaultRoot), "bedrock")
+	bedrock, ok = findPolicy(loadPoliciesNoWarn(t, vaultRoot), "bedrock")
 	if !ok || bedrock.Scope != ScopeGlobal || strings.Join(bedrock.Vendors, ",") != "amazon" {
 		t.Fatalf("after vault clear expected global amazon policy, got %+v ok=%v", bedrock, ok)
 	}
@@ -73,7 +83,7 @@ func TestVendorPolicy_SaveLoadClear_RoundTrip(t *testing.T) {
 	if removed, err := ClearVendorPolicy(ScopeGlobal, "", "bedrock"); err != nil || !removed {
 		t.Fatalf("clear global bedrock: removed=%v err=%v", removed, err)
 	}
-	if _, ok := findPolicy(LoadVendorPolicies(vaultRoot), "bedrock"); ok {
+	if _, ok := findPolicy(loadPoliciesNoWarn(t, vaultRoot), "bedrock"); ok {
 		t.Fatal("bedrock policy should be gone after clearing both scopes")
 	}
 	if removed, err := ClearVendorPolicy(ScopeGlobal, "", "bedrock"); err != nil || removed {
@@ -105,11 +115,43 @@ func TestVendorPolicy_CorruptFileIsQuarantined(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{{{ not yaml"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := LoadVendorPolicies(""); len(got) != 0 {
+	got, warnings := LoadVendorPolicies("")
+	if len(got) != 0 {
 		t.Fatalf("corrupt file should load as empty, got %+v", got)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "unreadable") {
+		t.Fatalf("corrupt file must be surfaced as a warning, not silently dropped, got %v", warnings)
 	}
 	if _, err := os.Stat(path + ".bak"); err != nil {
 		t.Fatalf("corrupt file should be quarantined to .bak: %v", err)
+	}
+}
+
+// A corrupt policy file must REFUSE writes: proceeding would rewrite the file
+// from empty and silently drop every other provider's policy.
+func TestVendorPolicy_SaveAndClearRefuseCorruptFile(t *testing.T) {
+	setupHome(t)
+	path := globalVendorPolicyPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("{{{ not yaml")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := SaveVendorPolicy(ScopeGlobal, "", VendorPolicy{
+		Provider: "bedrock", Mode: VendorPolicyModeEnableOnly, Vendors: []string{"anthropic"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("SaveVendorPolicy on a corrupt file must refuse with a malformed error, got %v", err)
+	}
+	if _, err := ClearVendorPolicy(ScopeGlobal, "", "bedrock"); err == nil {
+		t.Fatal("ClearVendorPolicy on a corrupt file must refuse")
+	}
+	// The write path never quarantines or rewrites: the user's bytes survive in place.
+	data, rerr := os.ReadFile(path)
+	if rerr != nil || string(data) != string(raw) {
+		t.Fatalf("corrupt file must be left untouched by refused writes, got %q err=%v", data, rerr)
 	}
 }
 

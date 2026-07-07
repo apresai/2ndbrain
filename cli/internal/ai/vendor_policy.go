@@ -103,16 +103,31 @@ func VendorPolicyPathForScope(scope UserCatalogScope, vaultRoot string) (string,
 // returns the merged view: a vault policy for a provider fully overrides the
 // global policy for that provider. Missing files are not errors; a corrupt
 // file is quarantined to .bak (matching user-catalog behavior) so a bad file
-// never bricks the CLI. Result is sorted by provider for determinism.
-func LoadVendorPolicies(vaultRoot string) []ScopedVendorPolicy {
+// never bricks the CLI, and the returned warnings say so out loud: without
+// them a corrupted file would silently fail OPEN (every vendor re-enabled)
+// with `models policy show` reporting no policies at all. Result is sorted
+// by provider for determinism.
+func LoadVendorPolicies(vaultRoot string) ([]ScopedVendorPolicy, []string) {
 	vendorPolicyMu.Lock()
 	defer vendorPolicyMu.Unlock()
 
+	var warnings []string
+	corrupt := func(path string, err error) {
+		if err == nil {
+			return
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"vendor policy file %s was unreadable and is inactive (a malformed file is quarantined to %s.bak); re-apply it with `2nb models policy set`", path, path))
+	}
 	byProvider := map[string]ScopedVendorPolicy{}
-	for _, p := range readVendorPolicyFile(globalVendorPolicyPath(), true).Policies {
+	globalDoc, gerr := readVendorPolicyFile(globalVendorPolicyPath(), true)
+	corrupt(globalVendorPolicyPath(), gerr)
+	for _, p := range globalDoc.Policies {
 		byProvider[p.Provider] = ScopedVendorPolicy{VendorPolicy: p, Scope: ScopeGlobal}
 	}
-	for _, p := range readVendorPolicyFile(vaultVendorPolicyPath(vaultRoot), true).Policies {
+	vaultDoc, verr := readVendorPolicyFile(vaultVendorPolicyPath(vaultRoot), true)
+	corrupt(vaultVendorPolicyPath(vaultRoot), verr)
+	for _, p := range vaultDoc.Policies {
 		byProvider[p.Provider] = ScopedVendorPolicy{VendorPolicy: p, Scope: ScopeVault}
 	}
 
@@ -121,7 +136,7 @@ func LoadVendorPolicies(vaultRoot string) []ScopedVendorPolicy {
 		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
-	return out
+	return out, warnings
 }
 
 // SaveVendorPolicy upserts the policy for p.Provider in the file at scope.
@@ -146,7 +161,10 @@ func SaveVendorPolicy(scope UserCatalogScope, vaultRoot string, p VendorPolicy) 
 	if err != nil {
 		return err
 	}
-	doc := readVendorPolicyFile(path, true)
+	doc, rerr := readVendorPolicyFile(path, false)
+	if rerr != nil {
+		return fmt.Errorf("existing policy file is malformed and was left untouched; fix or remove it, then retry: %w", rerr)
+	}
 	replaced := false
 	for i := range doc.Policies {
 		if doc.Policies[i].Provider == p.Provider {
@@ -173,7 +191,10 @@ func ClearVendorPolicy(scope UserCatalogScope, vaultRoot, provider string) (bool
 	if err != nil {
 		return false, err
 	}
-	doc := readVendorPolicyFile(path, true)
+	doc, rerr := readVendorPolicyFile(path, false)
+	if rerr != nil {
+		return false, fmt.Errorf("existing policy file is malformed and was left untouched; fix or remove it, then retry: %w", rerr)
+	}
 	kept := doc.Policies[:0]
 	removed := false
 	for _, p := range doc.Policies {
@@ -188,6 +209,23 @@ func ClearVendorPolicy(scope UserCatalogScope, vaultRoot, provider string) (bool
 	}
 	doc.Policies = kept
 	return true, writeVendorPolicyFile(path, doc)
+}
+
+// CheckVendorPolicyFile verifies the policy file at scope parses. Write
+// flows run it BEFORE any catalog load: loads quarantine a corrupt file (the
+// read path fails safe), which would otherwise remove the evidence before
+// the write-path refusal in Save/ClearVendorPolicy could fire.
+func CheckVendorPolicyFile(scope UserCatalogScope, vaultRoot string) error {
+	vendorPolicyMu.Lock()
+	defer vendorPolicyMu.Unlock()
+	path, err := VendorPolicyPathForScope(scope, vaultRoot)
+	if err != nil {
+		return err
+	}
+	if _, rerr := readVendorPolicyFile(path, false); rerr != nil {
+		return fmt.Errorf("existing policy file is malformed and was left untouched; fix or remove it, then retry: %w", rerr)
+	}
+	return nil
 }
 
 // NormalizeVendorSlugs canonicalizes a vendor slug list: trim, lower-case,
@@ -353,20 +391,24 @@ func ClearModelEnabledOverrides(scope UserCatalogScope, vaultRoot, provider stri
 }
 
 // readVendorPolicyFile reads and parses a policy file. Missing files return
-// an empty document at the current version. Corrupt files are quarantined to
-// .bak when quarantineCorrupt is true (matching readCatalog) and treated as
-// empty either way.
-func readVendorPolicyFile(path string, quarantineCorrupt bool) VendorPolicyFile {
+// an empty document at the current version with a nil error. A file that
+// exists but cannot be read or parsed returns an empty document AND a non-nil
+// error so callers choose their failure mode: the read path (LoadVendorPolicies)
+// quarantines to .bak and surfaces a warning, the write path (Save/Clear)
+// refuses to proceed so a corrupt file can never be silently rewritten from
+// empty, dropping other providers' policies.
+func readVendorPolicyFile(path string, quarantineCorrupt bool) (VendorPolicyFile, error) {
 	empty := VendorPolicyFile{Version: vendorPolicyVersion}
 	if path == "" {
-		return empty
+		return empty, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("read vendor policy failed", "path", path, "err", err)
+		if os.IsNotExist(err) {
+			return empty, nil
 		}
-		return empty
+		slog.Warn("read vendor policy failed", "path", path, "err", err)
+		return empty, fmt.Errorf("read vendor policy %s: %w", path, err)
 	}
 	var doc VendorPolicyFile
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -378,12 +420,12 @@ func readVendorPolicyFile(path string, quarantineCorrupt bool) VendorPolicyFile 
 				slog.Warn("quarantined corrupt vendor policy", "path", path, "backup", path+".bak")
 			}
 		}
-		return empty
+		return empty, fmt.Errorf("parse vendor policy %s: %w", path, err)
 	}
 	if doc.Version == 0 {
 		doc.Version = vendorPolicyVersion
 	}
-	return doc
+	return doc, nil
 }
 
 func writeVendorPolicyFile(path string, doc VendorPolicyFile) error {

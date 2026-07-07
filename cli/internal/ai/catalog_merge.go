@@ -69,7 +69,8 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// and every other consumer honor the policy through this one hook.
 	// Explicit per-model Enabled from the user catalog wins; the active
 	// embedding/generation/rerank models are never policy-disabled.
-	policies := LoadVendorPolicies(opts.VaultRoot)
+	policies, policyWarnings := LoadVendorPolicies(opts.VaultRoot)
+	result.Warnings = append(result.Warnings, policyWarnings...)
 	policyGuard := VendorPolicyActiveGuard(opts.Config)
 	result.Warnings = append(result.Warnings, applyVendorPolicy(catalog, policies, policyGuard)...)
 

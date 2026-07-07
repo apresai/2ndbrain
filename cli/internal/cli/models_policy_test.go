@@ -349,3 +349,58 @@ func TestModelsPolicy_ActiveModelGuardWarns(t *testing.T) {
 		t.Errorf("both active models must survive the policy in dropdowns, got %d active", activeCount)
 	}
 }
+
+// Pass 5 review gap: the "no models known for provider" branch was untested.
+func TestModelsPolicy_UnknownProviderErrors(t *testing.T) {
+	_, root := newContractVault(t)
+	out, err := runCLIArgs(t, root,
+		"models", "policy", "set",
+		"--provider", "nosuchprovider",
+		"--enable-only", "anthropic",
+		"--scope", "vault")
+	if err == nil {
+		t.Fatalf("expected unknown-provider error, got success (out=%s)", truncate(out, 300))
+	}
+	if ExitCode(err) != ExitValidation {
+		t.Errorf("unknown provider should exit %d (validation), got %d", ExitValidation, ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "nosuchprovider") {
+		t.Errorf("error should name the provider, got: %s", err.Error())
+	}
+}
+
+// Pass 5 review gap: an empty or whitespace --enable-only was untested.
+func TestModelsPolicy_EmptyEnableOnlyErrors(t *testing.T) {
+	_, root := newContractVault(t)
+	for _, val := range []string{"", " , ,"} {
+		out, err := runCLIArgs(t, root,
+			"models", "policy", "set",
+			"--provider", "bedrock",
+			"--enable-only", val,
+			"--scope", "vault")
+		if err == nil {
+			t.Fatalf("enable-only=%q should error, got success (out=%s)", val, truncate(out, 300))
+		}
+		if ExitCode(err) != ExitValidation {
+			t.Errorf("enable-only=%q should exit %d (validation), got %d", val, ExitValidation, ExitCode(err))
+		}
+	}
+}
+
+// A corrupt vault policy file must surface in BuildModelList warnings (fail
+// LOUD, not open) and refuse a new set until fixed.
+func TestModelsPolicy_CorruptFileWarnsAndRefusesSet(t *testing.T) {
+	_, root := newContractVault(t)
+	policyPath := filepath.Join(root, ".2ndbrain", "models-policy.yaml")
+	if err := os.WriteFile(policyPath, []byte("{{{ not yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIArgs(t, root,
+		"models", "policy", "set",
+		"--provider", "bedrock",
+		"--enable-only", "anthropic",
+		"--scope", "vault")
+	if err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("set on a corrupt policy file must refuse with a malformed error, got err=%v out=%s", err, truncate(out, 200))
+	}
+}

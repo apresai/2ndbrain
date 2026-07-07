@@ -166,6 +166,9 @@ func runModelsPolicySet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := ai.CheckVendorPolicyFile(scope, vaultRoot); err != nil {
+		return exitWithError(ExitValidation, err.Error())
+	}
 
 	ctx := context.Background()
 	providerModels, err := policyProviderModels(ctx, cfg, vaultRoot, policySetProvider)
@@ -286,7 +289,10 @@ func runModelsPolicyShow(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	policies := ai.LoadVendorPolicies(vaultRoot)
+	policies, loadWarnings := ai.LoadVendorPolicies(vaultRoot)
+	for _, w := range loadWarnings {
+		fmt.Fprintln(os.Stderr, "warning: "+w)
+	}
 	if policyShowProvider != "" {
 		filtered := policies[:0]
 		for _, p := range policies {
@@ -366,6 +372,9 @@ func runModelsPolicyClear(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := ai.CheckVendorPolicyFile(scope, vaultRoot); err != nil {
+		return exitWithError(ExitValidation, err.Error())
+	}
 
 	cleared, err := ai.ClearVendorPolicy(scope, vaultRoot, policyClearProvider)
 	if err != nil {
@@ -376,7 +385,9 @@ func runModelsPolicyClear(cmd *cobra.Command, args []string) error {
 	// If the other scope still holds a policy for this provider, the
 	// effective policy has not actually gone away: say so.
 	var warnings []string
-	for _, p := range ai.LoadVendorPolicies(vaultRoot) {
+	remaining, loadWarnings := ai.LoadVendorPolicies(vaultRoot)
+	warnings = append(warnings, loadWarnings...)
+	for _, p := range remaining {
 		if p.Provider == policyClearProvider {
 			warnings = append(warnings, fmt.Sprintf(
 				"a %s-scope policy for %s remains in effect (enable only %s)",
