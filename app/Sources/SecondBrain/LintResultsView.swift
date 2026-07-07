@@ -11,12 +11,18 @@ struct LintResultsView: View {
     @State private var activeSetValue: ActiveSetValue?
     /// The broken-link finding currently being repaired via the preview sheet.
     @State private var activeRepair: ActiveRepair?
+    /// The Fix-all confirm sheet (nil = closed); holds the pre-checked plan.
+    @State private var activeFixAll: FixAllPlan?
     /// Inline result banner after a fix (green), a stale-finding cleanup
     /// (orange informational), or a failure (orange error).
     @State private var actionMessage: String?
     @State private var actionTone: BannerTone = .success
-    /// True while the bulk "Repair drift links" pass is running.
-    @State private var bulkBusy = false
+    /// Per-finding fix classification (keyed by `BrokenFinding.id`), computed by
+    /// probing each broken link's fixability once the report loads. Drives the
+    /// class-aware header counts, the per-row badges, and the Fix-all plan.
+    @State private var classifications: [String: LinkFixClass] = [:]
+    /// True while `classifyBrokenFindings` is probing suggest-target per finding.
+    @State private var classifying = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,44 +83,28 @@ struct LintResultsView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    let brokenPaths = distinctBrokenLinkPaths(report)
-                    let brokenCount = brokenLinkFindingCount(report)
-                    if brokenCount > 1 {
-                        // Bulk: one click repairs every confident case/separator
-                        // drift link across all affected files. Safe — repair-links
-                        // only rewrites unambiguous matches and skips the rest, so
-                        // this can't mis-target; ambiguous/missing links stay for
-                        // the per-finding sheet.
-                        HStack(spacing: 6) {
-                            Image(systemName: "wand.and.stars")
-                                .foregroundStyle(.secondary)
-                            Text("\(brokenCount) broken links across \(brokenPaths.count) file\(brokenPaths.count == 1 ? "" : "s")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button(bulkBusy ? "Repairing…" : "Repair drift links") {
-                                confirmAndRepairAllDrift(brokenPaths)
-                            }
-                            .controlSize(.small)
-                            .disabled(bulkBusy || appState.isLinting)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                    let findings = brokenFindings(report)
+                    if !findings.isEmpty {
+                        // Class-aware header: how many broken links can be fixed in
+                        // one click (drift repairs + confident relinks) vs how many
+                        // need a human decision, with a single "Fix all" that
+                        // applies every one-click case behind a preview confirm.
+                        classAwareHeader(findings)
                         Divider()
                     }
                     List(report.issues) { issue in
                         IssueRow(
                             issue: issue,
+                            linkClass: linkClass(for: issue),
                             onOpenInObsidian: { openInObsidian(issue) },
                             onSetValue: { setValue in activeSetValue = setValue },
                             onRepair: { repair in activeRepair = repair }
                         )
                     }
                     .listStyle(.inset)
-                    // Don't let a per-finding fix race the bulk pass on the same
-                    // file (both write atomically, but overlapping snapshots could
-                    // clobber an undo). The bulk pass is brief.
-                    .disabled(bulkBusy)
+                    .task(id: findings.map(\.id).joined(separator: "|")) {
+                        await classifyBrokenFindings(findings)
+                    }
                 }
             } else {
                 VStack(spacing: 12) {
@@ -184,6 +174,53 @@ struct LintResultsView: View {
             )
             .environment(appState)
         }
+        .sheet(item: $activeFixAll) { plan in
+            FixAllSheet(
+                rewrites: plan.rewrites,
+                onDone: { fixed, failed in
+                    activeFixAll = nil
+                    let banner = LinkFixOutcome.fixAllResultBanner(fixed: fixed, failed: failed)
+                    actionTone = banner.tone
+                    actionMessage = banner.message + " Re-checking…"
+                    Task { await appState.runLint() }
+                }
+            )
+            .environment(appState)
+        }
+    }
+
+    /// The class-aware header + Fix-all button shown above the findings list when
+    /// at least one broken link exists.
+    @ViewBuilder
+    private func classAwareHeader(_ findings: [BrokenFinding]) -> some View {
+        let classes = findings.compactMap { classifications[$0.id] }
+        let counts = FixAllPlanner.counts(classes)
+        // Ready only when the probe has finished AND produced a class for every
+        // finding, so a re-classification after a fix shows "checking fixes…"
+        // rather than a stale-but-complete count.
+        let ready = !classifying && classes.count == findings.count
+        HStack(spacing: 6) {
+            Image(systemName: "link")
+                .foregroundStyle(.secondary)
+            if !ready {
+                Text("\(findings.count) broken link\(findings.count == 1 ? "" : "s") · checking fixes…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(FixAllPlanner.headerSummary(total: findings.count, counts: counts))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if ready && counts.oneClick >= 1 {
+                Button("Fix all") { activeFixAll = FixAllPlan(rewrites: fixAllPlan(findings)) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(appState.isLinting)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     /// Open the note in Obsidian (not Finder), falling back to the file's
@@ -203,55 +240,73 @@ struct LintResultsView: View {
         ObsidianURL.open(vaultName: vaultName, relativePath: path, absoluteFileURL: absURL)
     }
 
-    /// Distinct note paths that have at least one broken-wikilink finding, in
-    /// report order. Drives the bulk "Repair drift links" affordance.
-    private func distinctBrokenLinkPaths(_ report: LintReport) -> [String] {
-        var seen = Set<String>()
-        var paths = [String]()
-        for issue in report.issues {
-            if case .brokenLink = LintFinding.classify(message: issue.message) {
-                if seen.insert(issue.path).inserted { paths.append(issue.path) }
+    /// The broken-wikilink findings in report order, normalized to
+    /// `BrokenFinding`. The raw target and drift class come from the CLI's
+    /// additive lint fields when present; on a pre-classification CLI the target
+    /// falls back to `LintFinding.classify(message:)` and `fix` stays nil (the
+    /// flow then leans on suggest-target alone).
+    private func brokenFindings(_ report: LintReport) -> [BrokenFinding] {
+        report.issues.compactMap { issue -> BrokenFinding? in
+            let target: String
+            if let t = issue.target, !t.isEmpty {
+                target = t
+            } else if case let .brokenLink(t) = LintFinding.classify(message: issue.message) {
+                target = t
+            } else {
+                return nil
             }
+            return BrokenFinding(
+                path: issue.path, target: target, fix: issue.fix, driftTarget: issue.driftTarget)
         }
-        return paths
     }
 
-    /// Total broken-wikilink findings across the report (one note can have
-    /// several). The bulk bar shows once there is more than one, since a single
-    /// finding is served just as well by its per-finding sheet.
-    private func brokenLinkFindingCount(_ report: LintReport) -> Int {
-        report.issues.reduce(into: 0) { count, issue in
-            if case .brokenLink = LintFinding.classify(message: issue.message) { count += 1 }
+    /// The stored classification for one issue's broken finding (nil for a
+    /// non-broken issue or before classification completes).
+    private func linkClass(for issue: LintIssue) -> LinkFixClass? {
+        let target: String
+        if let t = issue.target, !t.isEmpty {
+            target = t
+        } else if case let .brokenLink(t) = LintFinding.classify(message: issue.message) {
+            target = t
+        } else {
+            return nil
         }
+        return classifications["\(issue.path)|\(target)"]
     }
 
-    /// Confirm (the pass touches multiple files), then repair every confident
-    /// drift link across `paths`, re-lint, and report how many were fixed. Each
-    /// file is reversible with `2nb polish <path> --undo`.
-    private func confirmAndRepairAllDrift(_ paths: [String]) {
-        let alert = NSAlert()
-        alert.messageText = "Repair drift links across \(paths.count) files?"
-        alert.informativeText = "Fixes every link whose only drift from an existing note is case, spacing, or hyphens. Ambiguous or genuinely missing links are left untouched for a per-finding fix. Each file is reversible (polish --undo)."
-        alert.addButton(withTitle: "Repair")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+    /// The Fix-all plan derived from the stored classifications: one-click
+    /// classes (drift repairs + confident relinks) become rewrites; ambiguous /
+    /// missing findings are excluded (they route to the per-finding sheet).
+    private func fixAllPlan(_ findings: [BrokenFinding]) -> [PlannedRewrite] {
+        FixAllPlanner.plan(from: findings.compactMap { f in
+            classifications[f.id].map { (f, $0) }
+        })
+    }
 
-        bulkBusy = true
-        actionMessage = nil
-        Task {
-            do {
-                let (repaired, failed) = try await appState.repairAllDrift(paths: paths)
-                bulkBusy = false
-                let banner = LinkFixOutcome.bulkRepairBanner(repaired: repaired, failed: failed)
-                actionTone = banner.tone
-                actionMessage = banner.message + " Re-checking…"
-                await appState.runLint()
-            } catch {
-                bulkBusy = false
-                actionTone = .error
-                actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
-            }
+    /// Probe each broken finding's fixability once, storing the result. A "drift"
+    /// finding needs no lookup (the CLI already resolved it); every other finding
+    /// asks `suggest-target` (scoped with `--source` to the finding's own note)
+    /// for its best candidate, then classifies. Best-effort: a lookup miss just
+    /// classifies as missing rather than failing the whole pass.
+    private func classifyBrokenFindings(_ findings: [BrokenFinding]) async {
+        guard !findings.isEmpty else {
+            classifications = [:]
+            classifying = false
+            return
         }
+        classifying = true
+        var result: [String: LinkFixClass] = [:]
+        for f in findings {
+            if f.fix == "drift" {
+                result[f.id] = .repairable(driftTarget: f.driftTarget)
+                continue
+            }
+            let candidates = (try? await appState.suggestTarget(target: f.target, sourcePath: f.path)) ?? []
+            result[f.id] = FixAllPlanner.classify(
+                fix: f.fix, topCandidate: candidates.first, driftTarget: f.driftTarget)
+        }
+        classifications = result
+        classifying = false
     }
 }
 
@@ -260,6 +315,9 @@ struct LintResultsView: View {
 /// actual work to the parent via closures.
 private struct IssueRow: View {
     let issue: LintIssue
+    /// Fixability class for a broken-link finding (nil for other findings, or
+    /// before classification completes). Renders the subtle per-row badge.
+    let linkClass: LinkFixClass?
     let onOpenInObsidian: () -> Void
     let onSetValue: (ActiveSetValue) -> Void
     let onRepair: (ActiveRepair) -> Void
@@ -282,6 +340,9 @@ private struct IssueRow: View {
                         Text("line \(line)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    if let linkClass {
+                        LinkClassBadge(linkClass: linkClass)
                     }
                 }
 
@@ -320,11 +381,166 @@ private struct IssueRow: View {
     }
 }
 
+/// Subtle capsule showing a broken link's fixability class. A one-click class
+/// (auto-repairable, did you mean?) tints green; a decision class (matches
+/// several, no matching note) tints orange. Kept small so it reads as a hint,
+/// not a control.
+private struct LinkClassBadge: View {
+    let linkClass: LinkFixClass
+
+    private var tint: Color { linkClass.isOneClick ? .green : .orange }
+
+    var body: some View {
+        Text(linkClass.badgeText)
+            .font(.caption2)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(0.12)))
+    }
+}
+
 /// The broken-link finding being repaired in the preview sheet.
 struct ActiveRepair: Identifiable {
     let id = UUID()
     let path: String
     let target: String
+}
+
+/// The Fix-all confirm sheet's payload: the pre-checked plan of one-click
+/// rewrites. Wrapped so it can drive `.sheet(item:)`.
+struct FixAllPlan: Identifiable {
+    let id = UUID()
+    let rewrites: [PlannedRewrite]
+}
+
+/// One-tap confirm for the whole Fix-all plan. Lists every planned rewrite as a
+/// pre-checked `[[target]] -> [[chosen]]` row so nothing is applied blind, then
+/// applies each checked rewrite (`repair-links --write` / `relink --write`,
+/// each reversible with `polish --undo`) and reports the aggregate via
+/// `onDone`. Uses a SwiftUI sheet (like the per-finding sheet) since the
+/// checkbox list needs interactive controls an NSAlert can't host.
+private struct FixAllSheet: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+    let rewrites: [PlannedRewrite]
+    /// Called with (fixed, failed) counts after the pass so the parent can show
+    /// the aggregate banner, dismiss, and re-lint.
+    let onDone: (_ fixed: Int, _ failed: Int) -> Void
+
+    /// Finding ids the user has left checked (all pre-checked on open).
+    @State private var checked: Set<String>
+    @State private var applying = false
+    @State private var errorText: String?
+
+    init(rewrites: [PlannedRewrite], onDone: @escaping (Int, Int) -> Void) {
+        self.rewrites = rewrites
+        self.onDone = onDone
+        _checked = State(initialValue: Set(rewrites.map(\.id)))
+    }
+
+    private var checkedCount: Int { checked.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Fix \(rewrites.count) link\(rewrites.count == 1 ? "" : "s")")
+                .font(.headline)
+            Text("Each rewrite points a broken link at an existing note. Uncheck any you want to skip. Each edited note can be reverted with 2nb polish --undo (which restores its most recent change); to roll back a whole batch, use Obsidian's file history or git.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(rewrites) { rewrite in
+                        Toggle(isOn: binding(for: rewrite)) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("[[\(rewrite.target)]] → [[\(rewrite.chosenDisplay)]]")
+                                    .font(.callout)
+                                HStack(spacing: 6) {
+                                    Text(rewrite.kindLabel)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text(rewrite.path)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                        .disabled(applying)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(maxHeight: 260)
+
+            if let errorText {
+                Text(errorText)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(applying)
+                Button(applying ? "Fixing…" : "Fix \(checkedCount)") { apply() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(applying || checkedCount == 0)
+            }
+        }
+        .padding(16)
+        .frame(width: 520)
+    }
+
+    private func binding(for rewrite: PlannedRewrite) -> Binding<Bool> {
+        Binding(
+            get: { checked.contains(rewrite.id) },
+            set: { isOn in
+                if isOn { checked.insert(rewrite.id) } else { checked.remove(rewrite.id) }
+            }
+        )
+    }
+
+    /// Apply each checked rewrite sequentially. A rewrite counts as fixed when
+    /// the CLI reports a link was actually repaired/relinked; a no-op (the note
+    /// changed since the check) or an error counts as failed so the aggregate
+    /// banner is honest.
+    private func apply() {
+        let selected = rewrites.filter { checked.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        applying = true
+        errorText = nil
+        Task {
+            var fixed = 0
+            var failed = 0
+            for rewrite in selected {
+                do {
+                    let result: PolishResult
+                    switch rewrite.action {
+                    case .repair:
+                        result = try await appState.repairLinks(
+                            path: rewrite.path, target: rewrite.target, preview: false)
+                    case .relink(let chosenPath, _):
+                        result = try await appState.relink(
+                            path: rewrite.path, from: rewrite.target, to: chosenPath, preview: false)
+                    }
+                    let n = result.linksRepaired?.count ?? 0
+                    if n > 0 { fixed += n } else { failed += 1 }
+                } catch {
+                    failed += 1
+                }
+            }
+            applying = false
+            onDone(fixed, failed)
+        }
+    }
 }
 
 /// The finding being edited in the Set-value sheet. `allowed` non-empty means an
@@ -494,7 +710,11 @@ private struct LinkResolutionSheet: View {
                         if !filteredSuggestions.isEmpty {
                             suggestSection
                         }
-                        createSection
+                        // A path-qualified target ("folder/note") names a
+                        // location, not a title to mint, so Create doesn't apply.
+                        if FixAllPlanner.canCreateNote(forTarget: fix.target) {
+                            createSection
+                        }
                         unlinkSection
                     }
                     .padding(.vertical, 2)

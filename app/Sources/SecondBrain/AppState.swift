@@ -3099,6 +3099,21 @@ struct LintIssue: Codable, Identifiable {
     let line: Int?
     let level: String
     let message: String
+
+    // Additive broken-wikilink classification (nil on every other issue kind,
+    // and on a pre-classification CLI). `target` is the raw authored [[target]];
+    // `fix` is "drift" | "ambiguous" | "missing"; `driftTarget` is the canonical
+    // target the link would repair to when `fix == "drift"`. The `message`
+    // string is unchanged, so an older CLI (all three nil) still classifies via
+    // `LintFinding.classify(message:)`.
+    let target: String?
+    let fix: String?
+    let driftTarget: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, line, level, message, target, fix
+        case driftTarget = "drift_target"
+    }
 }
 
 struct LintReport: Codable {
@@ -3154,12 +3169,17 @@ struct RepairLinkRepair: Codable, Identifiable {
 
 /// One ranked "did you mean?" candidate from `2nb suggest-target`. Mirrors the
 /// Go `cli.SuggestLinkResult`.
-struct SuggestTargetResult: Codable, Identifiable {
+struct SuggestTargetResult: Codable, Identifiable, Equatable {
     var id: String { path }
     let path: String
     let title: String
     let score: Double
     let snippet: String
+    /// How likely this candidate is THE note the broken target meant:
+    /// "high" | "medium" | "low". Set only by `suggest-target` (nil on a
+    /// pre-confidence CLI and on `suggest-links`). A high or medium candidate
+    /// is safe to offer as a one-click relink.
+    let confidence: String?
 
     /// Display name: the frontmatter title if set, else the basename (a note
     /// can lack a title, in which case the Go side sends "").

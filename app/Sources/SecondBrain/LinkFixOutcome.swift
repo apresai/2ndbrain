@@ -61,6 +61,21 @@ enum LinkFixOutcome: Equatable {
         }
         return (tone, msg)
     }
+
+    /// Banner for the one-click "Fix all" pass, which applies a mix of drift
+    /// repairs and confident relinks. Error tint only when nothing succeeded; a
+    /// partial success stays green with the failure count appended. Pure so the
+    /// tone selection and pluralization are unit-testable.
+    static func fixAllResultBanner(fixed: Int, failed: Int) -> (tone: BannerTone, message: String) {
+        let tone: BannerTone = failed > 0 && fixed == 0 ? .error : .success
+        var msg = fixed > 0
+            ? "Fixed \(fixed) link\(fixed == 1 ? "" : "s")."
+            : "No links were fixed."
+        if failed > 0 {
+            msg += " \(failed) couldn’t be applied."
+        }
+        return (tone, msg)
+    }
 }
 
 /// Visual tone of the inline result banner: green success, orange
