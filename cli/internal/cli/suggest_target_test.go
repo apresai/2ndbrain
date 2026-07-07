@@ -82,3 +82,44 @@ func containsString(list []string, want string) bool {
 	}
 	return false
 }
+
+// The drift tier (polish.SuggestRepairTargets) is where a case-drifted
+// self-link surfaces: a note titled "Ghostty" is the unique normalized match
+// for the broken [[ghostty]] inside that same note (the resolver is
+// case-sensitive, so the link IS broken). The exclusion must drop it there
+// too, not only in the BM25 tier.
+func TestSuggestTarget_SourceExcludedFromDriftTier(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "ghostty.md", "Ghostty",
+		"# Ghostty\n\nSelf-referential case drift: see [[ghostty]].")
+	writeNote(t, root, "Ghostty Config.md", "Ghostty Config",
+		"# Ghostty Config\n\nGhostty terminal configuration reference.")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	paths := suggestPaths(t, root, "ghostty", "--json", "--porcelain")
+	if !containsString(paths, "ghostty.md") {
+		t.Fatalf("precondition: without --source the drift tier should offer the note itself: %v", paths)
+	}
+	paths = suggestPaths(t, root, "ghostty", "--source", "ghostty.md", "--json", "--porcelain")
+	if containsString(paths, "ghostty.md") {
+		t.Errorf("drift tier must not offer the --source note as its own fix: %v", paths)
+	}
+}
+
+// An AMBIGUOUS --source (two notes share the basename, no exact file match)
+// is the case that actually reaches the cleaned-raw-path fallback: auto-mode
+// resolution returns an AmbiguousTargetError, the error is logged at debug,
+// and the command still runs.
+func TestSuggestTarget_AmbiguousSourceFallsBackWithoutError(t *testing.T) {
+	root, _ := seedSuggestVault(t)
+	writeNote(t, root, "one/dup.md", "Dup One", "# Dup One\n\nFirst duplicate.")
+	writeNote(t, root, "two/dup.md", "Dup Two", "# Dup Two\n\nSecond duplicate.")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	paths := suggestPaths(t, root, "ghostty", "--source", "dup", "--json", "--porcelain")
+	if len(paths) == 0 {
+		t.Errorf("candidates should still be returned when --source is ambiguous")
+	}
+}

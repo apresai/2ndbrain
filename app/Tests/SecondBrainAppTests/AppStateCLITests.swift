@@ -183,3 +183,16 @@ func cliErrorSurfacesStderr() {
     #expect(CLIError.nonZeroExit(1, message: "\nfirst\nError: real reason\n").errorDescription
         == "first\nError: real reason")
 }
+
+@Test("AppState.suggestTargetArgs appends --source only when a source path is given")
+func suggestTargetArgConstruction() {
+    let base = AppState.suggestTargetArgs(target: "ghostty", sourcePath: nil)
+    #expect(base == ["suggest-target", "ghostty", "--limit", "6", "--json", "--porcelain"])
+
+    let withSource = AppState.suggestTargetArgs(
+        target: "ghostty", sourcePath: "resources/ghostty-matrix-theme.md")
+    #expect(withSource == [
+        "suggest-target", "ghostty", "--limit", "6", "--json", "--porcelain",
+        "--source", "resources/ghostty-matrix-theme.md",
+    ])
+}

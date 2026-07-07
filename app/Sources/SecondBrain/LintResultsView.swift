@@ -597,9 +597,12 @@ private struct LinkResolutionSheet: View {
     // MARK: Logic
 
     /// Drop the finding's own note (a note is never a fix for its own broken
-    /// link; guards older CLIs whose suggest-target lacks --source) and any
-    /// suggestion that duplicates the confident repair target (compared by the
-    /// note's bare name) so it isn't offered twice.
+    /// link). The CLI's --source exclusion already guarantees this; the local
+    /// filter is defense-in-depth for a CLI whose exclusion no-ops (an older
+    /// CLI without the flag returns no suggestions at all, so there is nothing
+    /// to filter here). Also drop any suggestion that duplicates the confident
+    /// repair target (compared by the note's bare name) so it isn't offered
+    /// twice.
     private var filteredSuggestions: [SuggestTargetResult] {
         let withoutSource = suggestions.filter { $0.path != fix.path }
         guard let n = confidentRepair?.newTarget, !n.isEmpty else { return withoutSource }

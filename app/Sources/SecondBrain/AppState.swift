@@ -1815,10 +1815,18 @@ final class AppState {
     /// from candidates (a note is never a fix for its own broken link).
     /// Read-only. Returns [] rather than throwing on a CLI miss so the
     /// resolution sheet still offers Create/Unlink — no dead end.
-    func suggestTarget(target: String, sourcePath: String? = nil) async throws -> [SuggestTargetResult] {
-        guard let vault else { throw CLIError.noVault }
+    /// Argument construction for `2nb suggest-target`, extracted so the
+    /// conditional --source append (the contract the link-fix sheet relies on)
+    /// is unit-testable without spawning the CLI.
+    nonisolated static func suggestTargetArgs(target: String, sourcePath: String?) -> [String] {
         var args = ["suggest-target", target, "--limit", "6", "--json", "--porcelain"]
         if let sourcePath { args += ["--source", sourcePath] }
+        return args
+    }
+
+    func suggestTarget(target: String, sourcePath: String? = nil) async throws -> [SuggestTargetResult] {
+        guard let vault else { throw CLIError.noVault }
+        let args = Self.suggestTargetArgs(target: target, sourcePath: sourcePath)
         let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
         return (try? JSONDecoder().decode([SuggestTargetResult].self, from: data)) ?? []
     }

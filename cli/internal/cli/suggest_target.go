@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -65,14 +66,18 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 	}
 
 	// The note containing the broken link is never a candidate for its own
-	// fix. Resolution is lenient: a --source that no longer resolves (e.g. a
-	// just-deleted note) falls back to the cleaned raw path so the command
-	// still runs and the exclusion still compares vault-relative paths.
+	// fix. Resolution is lenient and best-effort: a missing --source still
+	// resolves to its vault-relative path (auto mode returns it without an
+	// error), while an ambiguous or otherwise unresolvable one falls back to
+	// the cleaned raw path so the command still runs; that fallback excludes
+	// only an exact vault-relative match, so exclusion can no-op there.
 	sourcePath := strings.TrimSpace(suggestTargetSource)
 	if sourcePath != "" {
 		if _, rel, rerr := resolveTargetArg(v, sourcePath); rerr == nil && rel != "" {
 			sourcePath = rel
 		} else {
+			slog.Debug("suggest-target: --source did not resolve, excluding by cleaned raw path",
+				"source", suggestTargetSource, "err", rerr)
 			sourcePath = filepath.Clean(sourcePath)
 		}
 	}
