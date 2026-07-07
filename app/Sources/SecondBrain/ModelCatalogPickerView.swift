@@ -476,7 +476,7 @@ struct ModelCatalogPickerView: View {
                     ForEach(runs) { run in
                         Text("\(run.timestamp)  \(run.probe)  \(run.latencyMs)ms  \(run.ok ? "OK" : "FAIL")")
                             .font(.caption.monospaced())
-                            .foregroundStyle(run.ok ? .secondary : .red)
+                            .foregroundStyle(run.ok ? Color.secondary : Color.red)
                             .lineLimit(1)
                     }
                 }
