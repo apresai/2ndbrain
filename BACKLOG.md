@@ -2,6 +2,23 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Validation-fix + AI Hub vendor-policy effort follow-ups (2026-07-07)
+
+Non-blocking items surfaced by chad-review across the 13 PRs (#175-#187) that shipped the Validation link-fixing overhaul, the AI Hub vendor policy / validate-models / de-clutter work, and Bedrock mantle support.
+
+**MEDIUM**
+- **No Swift PR CI.** `make test-swift` runs only locally; the Go CI gates PRs but Swift tests do not. A Swift test regression (PR #176's `classifyTrimsPaddedTarget`, whose `PolishResult` fixture omitted the required `model`/`duration_ms` fields) merged red and sat on main until PR #183 fixed it. Add a `make test-swift` job to the PR workflow (macos runner; the suite is ~340 pure unit tests, ~6s, no creds). `.github/workflows/`.
+- **View-glue untested across the new AI Hub / Validation flows.** The pure helpers (FixAllPlanner, LinkFixOutcome, VerifyFlow, VendorPolicyBuilder, CatalogVisibility, CatalogSummary) are well unit-tested, but the Process-streaming / apply / re-lint glue (`verifyModels`, `FixAllSheet.apply`, `runValidateModels`, `startWalkthrough`/`advanceWalkthrough`, `setVendorPolicy`) has no coverage. Consistent with the existing house norm (no snapshot/XCUITest harness), but a `tests/gui-test-ai.sh`-style pass over Validate-models + Fix-all would close it.
+- **`models verify --events` cost-cap-exceeded path is opaque to the GUI.** A cap-exceeded run exits non-zero with an EMPTY stdout (no error event); the app treats empty-stream + non-zero-exit as a failure and shows stderr, but an explicit `{"event":"error"}` line would be cleaner. `cli/internal/cli/models_verify.go`.
+
+**LOW**
+- **Vendor policy sheet: a catalog-absent future-intent vendor can only be removed via Clear.** A policy naming `deepseek` before any DeepSeek model exists renders no checkbox row, so it is always re-preserved on Apply; dropping it needs Clear-then-reselect. Render a dimmed removable "future-intent" row so the intent is directly expressible. `app/Sources/SecondBrain/VendorPolicyView.swift`.
+- **Policy chip count vs per-vendor summary count scope mismatch.** The catalog policy chip counts the full unfiltered model list; the per-vendor summary rows count the curated/hide-disabled-filtered slice, so the chip total can exceed the visible sum. Different scopes by design; a caption or unified scope would remove the mild confusion. `app/Sources/SecondBrain/AIHubView.swift`.
+- **Dead code:** `AppState.repairAllDrift` + `LinkFixOutcome.bulkRepairBanner` lost their last production caller when the old bulk-repair bar was replaced by Fix-all (kept to avoid cross-file churn; their tests still pass). Remove in a cleanup pass.
+- **`CatalogSummary.validated` duplicates `VendorPolicyView.verifiedOK` / `VendorPolicyBuilder.validated`** (byte-identical). Extract one shared "an access result counts as validated" helper.
+- **`suggest-target` logs no invocation** (unlike `lint`/`search`); and the `--source` lenient-fallback debug log only fires on the ambiguous branch. Minor observability. `cli/internal/cli/suggest_target.go`.
+- **`cli/Makefile` `test` target sets no `-timeout`,** so on a cred-provisioned machine `TestContract_EvalAnswers_CredGated` can exceed go test's 10m default when a live pricing/catalog fetch stalls. Add `-timeout 30m` or a hard deadline on the fetch.
+
 ## Limitations roadmap — parallel-embed + probe + token-tracking, post-ship analysis (2026-06-30)
 
 A grounded analysis (4 opus readers over the real shipped code + synthesis) of where the Phase 1–3 system falls short. Full report with file:line root causes, effort tiers, and the fundamental-vs-fixable split is the vault note `resources/2ndbrain-parallel-embed-probe-and-token-tracking-limitations-roadmap.md`. The MCP token-capture quick win already shipped (PR #127). Remaining, by tier:
