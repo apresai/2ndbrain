@@ -70,6 +70,10 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	enableProvider, enableScope, enableVendor = "", "vault", ""
 	disableProvider, disableScope, disableVendor = "", "vault", ""
 	enableStateProvider, enableStateScope, enableStateValue = "", "vault", ""
+	policySetProvider, policySetEnableOnly, policySetScope = "", "", "vault"
+	policySetDryRun, policySetKeepOverrides = false, false
+	policyShowProvider = ""
+	policyClearProvider, policyClearScope = "", "vault"
 	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "vault"
 	modelsDiscover, modelsFreeOnly, modelsPromote = false, false, false
 	modelsCheckStatus, modelsEnabledOnly, modelsRecommended = false, false, false
@@ -522,6 +526,94 @@ func TestContract_ModelsTestSaveJSONPersistsFailure(t *testing.T) {
 	}
 	if !strings.Contains(body, "test_error_code: incompatible") {
 		t.Fatalf("classified test_error_code was not persisted:\n%s", body)
+	}
+}
+
+// --- Contract: models policy set / show --------------------------------
+
+// TestContract_ModelsPolicySetJSON pre-registers the exact argv the GUI will
+// send for the vendor-policy editor (the GUI wiring lands in a later PR).
+func TestContract_ModelsPolicySetJSON(t *testing.T) {
+	_, root := newContractVault(t)
+
+	got, err := runCLIArgs(t, root,
+		"models", "policy", "set",
+		"--provider", "bedrock",
+		"--enable-only", "anthropic,deepseek",
+		"--scope", "vault",
+		"--json")
+	if err != nil {
+		t.Fatalf("models policy set --json: %v (out=%s)", err, truncate(got, 500))
+	}
+	var res struct {
+		Provider string   `json:"provider"`
+		Mode     string   `json:"mode"`
+		Vendors  []string `json:"vendors"`
+		Scope    string   `json:"scope"`
+		DryRun   bool     `json:"dry_run"`
+		Effect   struct {
+			Enabled  int `json:"enabled"`
+			Disabled int `json:"disabled"`
+			ByVendor map[string]struct {
+				Models int    `json:"models"`
+				State  string `json:"state"`
+			} `json:"by_vendor"`
+		} `json:"effect"`
+		Warnings              []string `json:"warnings"`
+		ClearedModelOverrides []string `json:"cleared_model_overrides"`
+	}
+	if err := json.Unmarshal(got, &res); err != nil {
+		t.Fatalf("policy set JSON parse: %v (body=%s)", err, truncate(got, 500))
+	}
+	if res.Provider != "bedrock" || res.Mode != "enable_only" || res.Scope != "vault" || res.DryRun {
+		t.Fatalf("unexpected policy result header: %+v", res)
+	}
+	if strings.Join(res.Vendors, ",") != "anthropic,deepseek" {
+		t.Fatalf("vendors = %v, want normalized anthropic,deepseek", res.Vendors)
+	}
+	if len(res.Effect.ByVendor) == 0 || res.Effect.Enabled == 0 || res.Effect.Disabled == 0 {
+		t.Fatalf("effect should count enabled and disabled models across vendors: %+v", res.Effect)
+	}
+	if v, ok := res.Effect.ByVendor["anthropic"]; !ok || v.State != "enabled" || v.Models == 0 {
+		t.Fatalf("by_vendor.anthropic = %+v ok=%v, want enabled with models", v, ok)
+	}
+	if res.Warnings == nil || res.ClearedModelOverrides == nil {
+		t.Fatal("warnings and cleared_model_overrides must serialize as arrays, not null")
+	}
+
+	// The policy landed in the dedicated file, never models.yaml/config.yaml.
+	if _, err := os.Stat(filepath.Join(root, ".2ndbrain", "models-policy.yaml")); err != nil {
+		t.Fatalf("expected .2ndbrain/models-policy.yaml: %v", err)
+	}
+}
+
+func TestContract_ModelsPolicyShowJSON(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if _, err := runCLIArgs(t, root,
+		"models", "policy", "set",
+		"--provider", "bedrock",
+		"--enable-only", "anthropic",
+		"--scope", "vault",
+		"--json"); err != nil {
+		t.Fatalf("policy set: %v", err)
+	}
+
+	got, err := runCLIArgs(t, root, "models", "policy", "show", "--json")
+	if err != nil {
+		t.Fatalf("models policy show --json: %v (out=%s)", err, truncate(got, 500))
+	}
+	var parsed []struct {
+		Provider string   `json:"provider"`
+		Mode     string   `json:"mode"`
+		Vendors  []string `json:"vendors"`
+		Scope    string   `json:"scope"`
+	}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("policy show JSON parse: %v (body=%s)", err, truncate(got, 500))
+	}
+	if len(parsed) != 1 || parsed[0].Provider != "bedrock" || parsed[0].Scope != "vault" {
+		t.Fatalf("expected one vault-scope bedrock policy, got %+v", parsed)
 	}
 }
 

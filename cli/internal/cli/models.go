@@ -539,6 +539,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	if testSave {
 		scope := ai.UserCatalogScope(testSaveScope)
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
+		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			if getFormat(cmd) != "" {
 				return fmt.Errorf("save test result: %w", err)

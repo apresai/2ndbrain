@@ -64,42 +64,35 @@ func vendorForBedrock(lower string) VendorInfo {
 	return VendorInfo{Vendor: vendor, Display: display, Family: family}
 }
 
+// bedrockVendorDisplay maps the Bedrock vendor slugs 2nb recognizes to their
+// display names. It doubles as the static vendor vocabulary vendor policies
+// accept (KnownVendorSlugs in vendor_policy.go), so an enable-only policy can
+// name a vendor whose models are not yet in the merged catalog; they arrive
+// later via discovery, pre-verdicted by the policy.
+var bedrockVendorDisplay = map[string]string{
+	"anthropic":  "Anthropic",
+	"amazon":     "Amazon",
+	"meta":       "Meta",
+	"mistral":    "Mistral",
+	"cohere":     "Cohere",
+	"ai21":       "AI21",
+	"deepseek":   "DeepSeek",
+	"moonshot":   "Moonshot",
+	"moonshotai": "Moonshot",
+	"qwen":       "Qwen",
+	"zai":        "Z.ai",
+	"writer":     "Writer",
+	"minimax":    "MiniMax",
+	"nvidia":     "NVIDIA",
+	"openai":     "OpenAI",
+	"twelvelabs": "TwelveLabs",
+	"google":     "Google",
+	"stability":  "Stability AI",
+}
+
 func bedrockDisplayName(vendor string) string {
-	switch vendor {
-	case "anthropic":
-		return "Anthropic"
-	case "amazon":
-		return "Amazon"
-	case "meta":
-		return "Meta"
-	case "mistral":
-		return "Mistral"
-	case "cohere":
-		return "Cohere"
-	case "ai21":
-		return "AI21"
-	case "deepseek":
-		return "DeepSeek"
-	case "moonshot", "moonshotai":
-		return "Moonshot"
-	case "qwen":
-		return "Qwen"
-	case "zai":
-		return "Z.ai"
-	case "writer":
-		return "Writer"
-	case "minimax":
-		return "MiniMax"
-	case "nvidia":
-		return "NVIDIA"
-	case "openai":
-		return "OpenAI"
-	case "twelvelabs":
-		return "TwelveLabs"
-	case "google":
-		return "Google"
-	case "stability":
-		return "Stability AI"
+	if d, ok := bedrockVendorDisplay[vendor]; ok {
+		return d
 	}
 	return strings.Title(vendor) //nolint:staticcheck // Title is fine for ASCII vendor slugs
 }

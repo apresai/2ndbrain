@@ -387,6 +387,7 @@ func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCat
 	entry.Provider = provider
 	entry.Type = modelType
 	entry.Benchmark = summary
+	entry.Enabled = preserveScopeEnabled(scope, vaultRoot, provider, modelID)
 	if entry.Tier == "" {
 		entry.Tier = ai.TierUserVerified
 	}
