@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -569,6 +570,39 @@ func TestBedrockCanonicalPricingSmoke(t *testing.T) {
 		}
 		if !price.HasIn || !price.HasOut || price.PriceIn <= 0 || price.PriceOut <= 0 {
 			t.Fatalf("expected non-zero canonical Bedrock input/output prices for %s, got %+v", modelID, price)
+		}
+	}
+}
+
+// TestLivePricing_ResolvesUnpinnedBuiltinAnthropic guards the decision to ship
+// newer builtin Anthropic entries with zero prices: the AWS offer-file alias
+// machinery must resolve input+output prices for every unpinned builtin
+// Bedrock Anthropic model, or users would see "unknown" pricing forever.
+// Network test (public offer files, no AWS creds needed); skips offline.
+func TestLivePricing_ResolvesUnpinnedBuiltinAnthropic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("network test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pricing := loadBedrockPricing(ctx, "us-east-1")
+	if pricing == nil || !pricing.ready {
+		t.Skip("bedrock offer files unavailable (offline?)")
+	}
+	for _, m := range BuiltinCatalog() {
+		if m.Provider != "bedrock" || m.Type != "generation" || !strings.Contains(m.ID, "anthropic") {
+			continue
+		}
+		if m.PriceIn > 0 || m.PriceOut > 0 {
+			continue // pinned; enrichment optional
+		}
+		price, ok := bedrockPriceForModel(pricing, m.ID)
+		if !ok {
+			t.Errorf("unpinned builtin %s did not match the AWS offer file — pin a price or fix the alias machinery", m.ID)
+			continue
+		}
+		if !price.HasIn || !price.HasOut || price.PriceIn <= 0 || price.PriceOut <= 0 {
+			t.Errorf("unpinned builtin %s resolved incomplete pricing: in=%v(%v) out=%v(%v)", m.ID, price.PriceIn, price.HasIn, price.PriceOut, price.HasOut)
 		}
 	}
 }

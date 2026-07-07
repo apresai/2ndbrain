@@ -25,6 +25,7 @@ var (
 	modelsPromote      bool
 	modelsPromoteScope string
 	modelsEnabledOnly  bool
+	modelsRecommended  bool
 )
 
 var (
@@ -137,6 +138,7 @@ func init() {
 	modelsListCmd.Flags().BoolVar(&modelsPromote, "promote", false, "Test unverified discovered models and add those that pass (requires --discover)")
 	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "vault", "Catalog scope for --promote: vault or global")
 	modelsListCmd.Flags().BoolVar(&modelsEnabledOnly, "enabled-only", false, "Exclude models explicitly disabled by the user (use for GUI dropdowns)")
+	modelsListCmd.Flags().BoolVar(&modelsRecommended, "recommended", false, "Show only the curated recommended models")
 	_ = modelsListCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
@@ -349,6 +351,9 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 		if modelsProvider != "" && m.Provider != modelsProvider {
 			continue
 		}
+		if modelsRecommended && !m.Recommended {
+			continue
+		}
 		out = append(out, m)
 	}
 	return out
@@ -356,9 +361,9 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 
 func printModelHeader(w *tabwriter.Writer, showStatus bool) {
 	if showStatus {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tSTATUS")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tSTATE\tSTATUS")
 	} else {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tSTATE")
 	}
 }
 
@@ -378,11 +383,54 @@ func printModelRow(w *tabwriter.Writer, m ai.ModelInfo, showStatus bool) {
 
 	if showStatus {
 		status := statusLabel(m)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold, status)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, price, ctxLen, threshold, stateLabel(m), status)
 	} else {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, price, ctxLen, threshold, stateLabel(m))
+	}
+}
+
+// stateLabel renders curation + per-account test state compactly: a leading
+// ★ for recommended models, then the last test outcome ("ok 3d" for a pass,
+// the classified test_error_code for a failure), or "-" when untested.
+func stateLabel(m ai.ModelInfo) string {
+	var state string
+	switch {
+	case m.TestedAt != "" && m.TestError == "":
+		state = "ok"
+		if age := testAge(m.TestedAt); age != "" {
+			state += " " + age
+		}
+	case m.TestErrorCode != "":
+		state = m.TestErrorCode
+	case m.TestError != "":
+		state = "failed"
+	default:
+		state = "-"
+	}
+	if m.Recommended {
+		return "★ " + state
+	}
+	return state
+}
+
+// testAge renders how long ago a test ran, in the largest sensible unit.
+func testAge(testedAt string) string {
+	t, err := time.Parse(time.RFC3339, testedAt)
+	if err != nil {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Hour:
+		return "now"
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	default:
+		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
 	}
 }
 

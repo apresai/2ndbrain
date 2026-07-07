@@ -684,3 +684,33 @@ func TestBedrockModelSupportedStaticAllowlist(t *testing.T) {
 		})
 	}
 }
+
+// TestBuiltinBedrockAnthropicModelsStillListed is the catalog-freshness guard:
+// every builtin Bedrock Anthropic ID must still appear in the live
+// ListFoundationModels/ListInferenceProfiles output. Cred-gated; run it (and
+// the pricing-coverage test in live_pricing_test.go) before each release so
+// the curated catalog can't silently go stale against AWS again.
+func TestBuiltinBedrockAnthropicModelsStillListed(t *testing.T) {
+	requireBedrock(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
+	listed, err := ListBedrockVendorModels(ctx, cfg)
+	if err != nil {
+		t.Skipf("ListBedrockVendorModels: %v", err)
+	}
+	live := map[string]bool{}
+	for _, m := range listed {
+		live[m.ID] = true
+		live[inferenceProfileBaseID(m.ID)] = true
+	}
+	for _, m := range BuiltinCatalog() {
+		if m.Provider != "bedrock" || !strings.Contains(m.ID, "anthropic") {
+			continue
+		}
+		if !live[m.ID] && !live[inferenceProfileBaseID(m.ID)] {
+			t.Errorf("builtin catalog entry %s no longer appears in the live Bedrock listing — refresh the catalog", m.ID)
+		}
+	}
+}

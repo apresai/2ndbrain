@@ -357,6 +357,12 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 		out.Enabled = &e
 	}
 	out.Tier = elevateTier(out.Tier, top.Tier)
+	// Curation is add-only: an overlay may recommend a model, but a user
+	// catalog entry (which omits the field) must never demote a builtin
+	// recommendation.
+	if top.Recommended {
+		out.Recommended = true
+	}
 	if top.Local {
 		out.Local = true
 	}

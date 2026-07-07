@@ -35,6 +35,7 @@ func BuiltinCatalog() []ModelInfo {
 		PriceOut:                       0,
 		Local:                          false,
 		Tier:                           TierVerified,
+		Recommended:                    true,
 		ConfigHint:                     configHint("bedrock", "embedding", "amazon.nova-2-multimodal-embeddings-v1:0"),
 		RecommendedSimilarityThreshold: 0.25,
 		InvokeStrategy:                 StrategyBedrockInvokeNovaEmbed,
@@ -89,19 +90,34 @@ func BuiltinCatalog() []ModelInfo {
 	}
 
 	// --- Bedrock Generation (Converse API — works across all Bedrock models) ---
+	//
+	// Anthropic line policy: carry the tested default (Haiku 4.5) plus the
+	// current Sonnet and Opus versions. Newer frontier entries (Sonnet 5,
+	// Opus 4.8) ship with zero prices so live AWS offer-file enrichment
+	// resolves them, and carry a staged-rollout note: AWS gates these
+	// per-account (the console can show access granted while bedrock-runtime
+	// still 403s), so a real test probe is the only way to know. Opus 4.7 is
+	// intentionally absent (superseded by 4.8; still reachable via discovery).
+	// Fable 5 is intentionally absent from the curated set (premium pricing
+	// and materially different API semantics: always-on thinking, refusal stop
+	// reason); it remains discoverable and testable via `models list --discover`.
+	const stagedRolloutNote = "1M context; AWS staged rollout gates this per account — test it before relying on it"
 	for _, m := range []struct {
-		id, name string
-		ctxLen   int
-		priceIn  float64
-		priceOut float64
-		notes    string
+		id, name    string
+		ctxLen      int
+		priceIn     float64
+		priceOut    float64
+		notes       string
+		recommended bool
 	}{
-		{"us.anthropic.claude-haiku-4-5-20251001-v1:0", "Claude Haiku 4.5", 200000, 0.80, 4.00, ""},
-		{"us.anthropic.claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 3.00, 15.00, "1M context"},
-		{"us.anthropic.claude-opus-4-6-v1", "Claude Opus 4.6", 1000000, 15.00, 75.00, "1M context; Opus 4.7 is Mantle-only and not reachable via Converse"},
-		{"amazon.nova-micro-v1:0", "Amazon Nova Micro", 128000, 0.035, 0.14, "text-only, fastest"},
-		{"amazon.nova-lite-v1:0", "Amazon Nova Lite", 300000, 0.06, 0.24, ""},
-		{"amazon.nova-pro-v1:0", "Amazon Nova Pro", 300000, 0.80, 3.20, ""},
+		{"us.anthropic.claude-haiku-4-5-20251001-v1:0", "Claude Haiku 4.5", 200000, 1.00, 5.00, "2nb tested default", true},
+		{"us.anthropic.claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 3.00, 15.00, "1M context", true},
+		{"us.anthropic.claude-sonnet-5", "Claude Sonnet 5", 1000000, 0, 0, stagedRolloutNote, true},
+		{"us.anthropic.claude-opus-4-6-v1", "Claude Opus 4.6", 1000000, 0, 0, "1M context", false},
+		{"us.anthropic.claude-opus-4-8", "Claude Opus 4.8", 1000000, 0, 0, stagedRolloutNote, true},
+		{"amazon.nova-micro-v1:0", "Amazon Nova Micro", 128000, 0.035, 0.14, "text-only, fastest", false},
+		{"amazon.nova-lite-v1:0", "Amazon Nova Lite", 300000, 0.06, 0.24, "", false},
+		{"amazon.nova-pro-v1:0", "Amazon Nova Pro", 300000, 0.80, 3.20, "", false},
 	} {
 		models = append(models, ModelInfo{
 			ID:             m.id,
@@ -113,6 +129,7 @@ func BuiltinCatalog() []ModelInfo {
 			PriceOut:       m.priceOut,
 			Local:          false,
 			Tier:           TierVerified,
+			Recommended:    m.recommended,
 			ConfigHint:     configHint("bedrock", "generation", m.id),
 			Notes:          m.notes,
 			InvokeStrategy: StrategyBedrockConverse,
@@ -134,6 +151,7 @@ func BuiltinCatalog() []ModelInfo {
 		PriceOut:                       0,
 		Local:                          false,
 		Tier:                           TierVerified,
+		Recommended:                    true,
 		ConfigHint:                     configHint("openrouter", "embedding", "nvidia/llama-nemotron-embed-vl-1b-v2:free"),
 		RecommendedSimilarityThreshold: 0.60,
 		InvokeStrategy:                 StrategyOpenRouterEmbeddings,
@@ -141,21 +159,26 @@ func BuiltinCatalog() []ModelInfo {
 
 	// --- OpenRouter Generation (OpenAI-compatible chat completions) ---
 	// OpenRouter normalizes to a standard format so most models work.
+	// Anthropic entries mirror the Bedrock line (Opus 4.7 dropped for 4.8,
+	// Sonnet 5 added); newer versions ship unpriced so live OpenRouter
+	// /models pricing resolves them.
 	for _, m := range []struct {
-		id, name string
-		ctxLen   int
-		priceIn  float64
-		priceOut float64
+		id, name    string
+		ctxLen      int
+		priceIn     float64
+		priceOut    float64
+		recommended bool
 	}{
-		{"google/gemma-3-4b-it:free", "Gemma 3 4B (free)", 131072, 0, 0},
-		{"google/gemma-4-31b-it:free", "Gemma 4 31B (free)", 262144, 0, 0},
-		{"meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B (free)", 131072, 0, 0},
-		{"qwen/qwen3.6-plus", "Qwen 3.6 Plus", 1000000, 0.33, 1.95},
-		{"anthropic/claude-haiku-4-5", "Claude Haiku 4.5", 200000, 0.80, 4.00},
-		{"anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 3.00, 15.00},
-		{"anthropic/claude-opus-4-7", "Claude Opus 4.7", 1000000, 15.00, 75.00},
-		{"openai/gpt-4o-mini", "GPT-4o Mini", 128000, 0.15, 0.60},
-		{"openai/gpt-4o", "GPT-4o", 128000, 2.50, 10.00},
+		{"google/gemma-3-4b-it:free", "Gemma 3 4B (free)", 131072, 0, 0, false},
+		{"google/gemma-4-31b-it:free", "Gemma 4 31B (free)", 262144, 0, 0, true},
+		{"meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B (free)", 131072, 0, 0, false},
+		{"qwen/qwen3.6-plus", "Qwen 3.6 Plus", 1000000, 0.33, 1.95, false},
+		{"anthropic/claude-haiku-4-5", "Claude Haiku 4.5", 200000, 0.80, 4.00, true},
+		{"anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 3.00, 15.00, true},
+		{"anthropic/claude-sonnet-5", "Claude Sonnet 5", 1000000, 0, 0, false},
+		{"anthropic/claude-opus-4-8", "Claude Opus 4.8", 1000000, 0, 0, false},
+		{"openai/gpt-4o-mini", "GPT-4o Mini", 128000, 0.15, 0.60, false},
+		{"openai/gpt-4o", "GPT-4o", 128000, 2.50, 10.00, false},
 	} {
 		models = append(models, ModelInfo{
 			ID:             m.id,
@@ -167,6 +190,7 @@ func BuiltinCatalog() []ModelInfo {
 			PriceOut:       m.priceOut,
 			Local:          false,
 			Tier:           TierVerified,
+			Recommended:    m.recommended,
 			ConfigHint:     configHint("openrouter", "generation", m.id),
 			InvokeStrategy: StrategyOpenRouterChat,
 		})
@@ -180,21 +204,22 @@ func BuiltinCatalog() []ModelInfo {
 	// or Matryoshka losses cluster tighter. Users should run
 	// `2nb models calibrate` to tune for their own vault.
 	for _, m := range []struct {
-		id        string
-		dims      int
-		threshold float64
-		notes     string
+		id          string
+		dims        int
+		threshold   float64
+		notes       string
+		recommended bool
 	}{
 		// 768d Matryoshka: moderate spread, ~0.35–0.45 random-pair cosine typical.
-		{"nomic-embed-text", 768, 0.50, ""},
+		{"nomic-embed-text", 768, 0.50, "", true},
 		// 1024d contrastive + Matryoshka (Mixedbread): tighter than nomic.
-		{"mxbai-embed-large", 1024, 0.55, ""},
+		{"mxbai-embed-large", 1024, 0.55, "", false},
 		// 1024d retrieval-tuned (Snowflake Arctic).
-		{"snowflake-arctic-embed", 1024, 0.55, ""},
+		{"snowflake-arctic-embed", 1024, 0.55, "", false},
 		// 384d MiniLM: small/wide-spread; lower threshold is meaningful.
-		{"all-minilm", 384, 0.35, ""},
+		{"all-minilm", 384, 0.35, "", false},
 		// 1024d multi-granularity (BGE M3); dense channel similar to other 1024d.
-		{"bge-m3", 1024, 0.55, ""},
+		{"bge-m3", 1024, 0.55, "", false},
 	} {
 		models = append(models, ModelInfo{
 			ID:                             m.id,
@@ -204,6 +229,7 @@ func BuiltinCatalog() []ModelInfo {
 			Dimensions:                     m.dims,
 			Local:                          true,
 			Tier:                           TierVerified,
+			Recommended:                    m.recommended,
 			ConfigHint:                     configHint("ollama", "embedding", m.id),
 			RecommendedSimilarityThreshold: m.threshold,
 			Notes:                          m.notes,
@@ -213,15 +239,16 @@ func BuiltinCatalog() []ModelInfo {
 
 	// --- Ollama Generation (local) ---
 	for _, m := range []struct {
-		id, name string
-		ctxLen   int
+		id, name    string
+		ctxLen      int
+		recommended bool
 	}{
-		{"gemma3:4b", "Gemma 3 4B", 131072},
-		{"gemma3:1b", "Gemma 3 1B", 32768},
-		{"qwen2.5:0.5b", "Qwen 2.5 0.5B", 32768},
-		{"qwen3:30b-a3b", "Qwen3 30B MoE", 32768},
-		{"llama3.2:3b", "Llama 3.2 3B", 131072},
-		{"phi4-mini", "Phi-4 Mini", 131072},
+		{"gemma3:4b", "Gemma 3 4B", 131072, true},
+		{"gemma3:1b", "Gemma 3 1B", 32768, false},
+		{"qwen2.5:0.5b", "Qwen 2.5 0.5B", 32768, false},
+		{"qwen3:30b-a3b", "Qwen3 30B MoE", 32768, false},
+		{"llama3.2:3b", "Llama 3.2 3B", 131072, false},
+		{"phi4-mini", "Phi-4 Mini", 131072, false},
 	} {
 		models = append(models, ModelInfo{
 			ID:             m.id,
@@ -231,6 +258,7 @@ func BuiltinCatalog() []ModelInfo {
 			ContextLen:     m.ctxLen,
 			Local:          true,
 			Tier:           TierVerified,
+			Recommended:    m.recommended,
 			ConfigHint:     configHint("ollama", "generation", m.id),
 			InvokeStrategy: StrategyOllamaGenerate,
 		})
@@ -250,6 +278,7 @@ func BuiltinCatalog() []ModelInfo {
 		ContextLen:                     2048,
 		Local:                          true,
 		Tier:                           TierVerified,
+		Recommended:                    true,
 		ConfigHint:                     configHint(llamaProviderName, "embedding", "embeddinggemma-300m"),
 		RecommendedSimilarityThreshold: 0.55,
 		Notes:                          "768d Matryoshka (→512/256/128); 2K context; symmetric — run `2nb models calibrate`",
@@ -258,11 +287,12 @@ func BuiltinCatalog() []ModelInfo {
 
 	// --- llama-local Generation (bundled llama.cpp engine) ---
 	for _, m := range []struct {
-		id, name string
-		ctxLen   int
+		id, name    string
+		ctxLen      int
+		recommended bool
 	}{
-		{"gemma4-e4b", "Gemma 4 E4B", 131072},
-		{"gemma4-e2b", "Gemma 4 E2B", 131072},
+		{"gemma4-e4b", "Gemma 4 E4B", 131072, false},
+		{"gemma4-e2b", "Gemma 4 E2B", 131072, true},
 	} {
 		models = append(models, ModelInfo{
 			ID:             m.id,
@@ -272,6 +302,7 @@ func BuiltinCatalog() []ModelInfo {
 			ContextLen:     m.ctxLen,
 			Local:          true,
 			Tier:           TierVerified,
+			Recommended:    m.recommended,
 			ConfigHint:     configHint(llamaProviderName, "generation", m.id),
 			InvokeStrategy: StrategyLlamaChat,
 		})
