@@ -139,7 +139,7 @@ The MCP server exposes 22 tools (`kb_search`, `kb_ask`, `kb_read`, ...) to any M
 }
 ```
 
-Run `2nb mcp-setup` for ready-to-paste snippets for Cursor, Claude Desktop, Gemini CLI, Amazon Q, and Kiro. See [mcp-integration.md](mcp-integration.md) for details, and `2nb skills install --all` to teach coding agents your vault's conventions.
+**The one-command front door is `2nb setup --all`**: it installs the skill, wires the MCP server, and writes the always-loaded global-instructions block for every supported AI client (Claude Code, Claude Desktop, Warp, Codex, and the cross-tool agents target), each step idempotent and backup-safe. For manual wiring, `2nb mcp-setup` prints ready-to-paste snippets for Cursor, Claude Desktop, Gemini CLI, Amazon Q, and Kiro (see [mcp-integration.md](mcp-integration.md)), and `2nb skills install --all` installs just the skills.
 
 ## 8. Finishing touches
 

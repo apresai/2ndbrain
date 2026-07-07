@@ -12,7 +12,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 |---|---|---|
 | **`2nb` CLI** | Full Cobra command tree with `--json`, `--yaml`, `--porcelain`, `--vault` global flags. Parent-command defaults (`2nb ai` → `ai status`, etc.) | Any agent with shell access. One-shot queries, piping, scripting, or CI. Works even when MCP isn't wired up. |
 | **MCP server** | 22 tools served over stdio (`2nb mcp-server`). Sidecar status files at `.2ndbrain/mcp/<pid>.json` record live processes + invocation history. | MCP-capable clients. Persistent session caching (embeddings, threshold), structured JSON I/O, schema validation. |
-| **Skills system** | `SKILL.md` embedded in the binary (`cli/internal/skills/content/2ndbrain-skill.md`), installed per-agent by `2nb skills install`. 10 agents supported (`cli/internal/skills/skills.go`), including the cross-tool `agents` (`.agents/skills/`) standard. Also mirrored into the repo at `.agents/skills/2nb/SKILL.md` (+ `.warp/`, `.claude/`) so an agent opened on this repo discovers it with zero install; `make sync-skills` keeps the mirrors in step with the embedded source and release CI fails on drift. | The *teaching layer* — explains the CLI and MCP to an agent in one document. This is the file to invest in. |
+| **Skills system** | `SKILL.md` embedded in the binary (`cli/internal/skills/content/2ndbrain-skill.md`), installed per-agent by `2nb skills install`. 11 agents supported (the `Agents` registry in `cli/internal/skills/skills.go`), including the cross-tool `agents` (`.agents/skills/`) standard. Also mirrored into the repo at `.agents/skills/2nb/SKILL.md` (+ `.warp/`, `.claude/`) so an agent opened on this repo discovers it with zero install; `make sync-skills` keeps the mirrors in step with the embedded source and release CI fails on drift. | The *teaching layer* — explains the CLI and MCP to an agent in one document. This is the file to invest in. |
 
 ## MCP vs CLI — when to use which
 
@@ -20,7 +20,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 
 | Task | Prefer MCP when… | Prefer CLI when… | Notes |
 |------|---|---|---|
-| Search | Long agent session, repeated searches | One-shot, scripted, piping | MCP caches embeddings per session (`tools.go:34-82`) and threshold at first use (`tools.go:42-47`). From the 2nd search onward, MCP reuses the cached `AllEmbeddings()` result instead of re-reading from SQLite. |
+| Search | Long agent session, repeated searches | One-shot, scripted, piping | MCP caches embeddings per session and the resolved threshold at first use (the `handlers` embed cache + `threshOnce` in `cli/internal/mcp/tools.go`). From the 2nd search onward, MCP reuses the cached `AllEmbeddings()` result instead of re-reading from SQLite. |
 | RAG Q&A (`ask`) | Interactive multi-turn context with cached threshold | Batch / CI | Same caching rationale as search. |
 | Frontmatter edit | **MCP-only** (`kb_update_meta`) | — | There is no CLI equivalent that does atomic schema-validated frontmatter edits. `2nb meta --set` handles one key at a time and re-reads the file. |
 | Create document | Either — both return JSON + auto-index | Either — CLI prints to stderr with human-readable hints | Semantically identical. |
@@ -38,14 +38,14 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 3. **The JSON envelope is the contract** — since 0.1.12, `2nb search --json` and `2nb ask --json` return `{mode, warnings, results}` and `{mode, warnings, answer, sources}` respectively (multi-turn asks via `--history` add a `rewritten_query` field). These are defined in:
 
    ```go
-   // cli/internal/cli/search.go:31-35
+   // SearchResponse in cli/internal/cli/search.go
    type SearchResponse struct {
        Mode     string          `json:"mode"`      // "hybrid" or "keyword"
        Warnings []string        `json:"warnings,omitempty"`
        Results  []search.Result `json:"results"`
    }
 
-   // cli/internal/cli/ask.go:22-27
+   // AskResponse in cli/internal/cli/ask.go
    type AskResponse struct {
        Mode     string   `json:"mode"`
        Warnings []string `json:"warnings,omitempty"`
@@ -58,7 +58,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 
 ## Teaching improvements (Phase B — additions to `SKILL.md`)
 
-The current `SKILL.md` (280 lines at `cli/internal/skills/content/2ndbrain-skill.md`) is a solid command reference. It's missing four things an agent reaches for under pressure:
+The `SKILL.md` at `cli/internal/skills/content/2ndbrain-skill.md` is a full command reference plus the four things an agent reaches for under pressure (ALL FOUR SHIPPED; kept here as the design rationale):
 
 ### 1. "Which surface should I use?" section
 
@@ -76,7 +76,7 @@ Derived from `VectorCompat` in `cli/internal/retrieve/compat.go` — that functi
 | `"semantic search disabled: embedder X not registered"` | Config names a provider that isn't compiled in | Re-check `ai.provider` in `2nb config show` |
 | Zero warnings, `mode: keyword` anyway | Vault has no embeddings yet | `2nb index` (BM25 works immediately; embeddings backfill) |
 | Empty search result | Usually a threshold issue, not a content gap | Try `--threshold 0.15` or `--bm25-only` |
-| `kb_ask` says "no relevant documents" | `ask` and `search` share a threshold but `ask` only considers top 5 results (`tools.go:307`); a borderline match at rank 8 reaches `search` but not `ask` | Drop to `kb_search` with the same query — it will see more ranks |
+| `kb_ask` says "no relevant documents" | `ask` and `search` share a threshold but `ask` retrieves only `ai.DefaultRAGCandidateDocs` (12) candidates (`kb_ask` in `cli/internal/mcp/tools.go`); a borderline match below that rank reaches `search` but not `ask` | Drop to `kb_search` with the same query — it will see more ranks |
 | CLI errors with "schema version N newer than supported" | Vault opened by a newer `2nb` build than the one installed | `brew upgrade apresai/tap/twonb` |
 
 The battery test `TestBattery_HybridDegradation` should assert on `strings.HasPrefix(warning, "semantic search disabled:")` — matching the full message would be too brittle against provider-name changes.
@@ -143,7 +143,7 @@ Four tiers now exist, from cheapest to most expensive; the first three are built
 
 The original two-tier design below describes tier 1 plus targeted **gap-filler tests** that close coverage holes identified during exploration.
 
-### Golden-path battery — `cli/internal/cli/battery_test.go`
+### Golden-path battery — `cli/battery_test.go`
 
 A single Go test file containing 7 end-to-end scenarios. Each scenario is one test function (`TestBattery_VaultLifecycle`, etc.) so `go test -run TestBattery_VaultLifecycle` works for iteration.
 
@@ -153,7 +153,7 @@ New Makefile target:
 
 ```makefile
 test-battery:
-	cd cli && go test -race -tags fts5 -run TestBattery -timeout 180s .
+	cd cli && go test -race -run TestBattery -timeout 180s .
 ```
 
 Add `test-battery` to `test-all` so CI runs it by default.
@@ -209,11 +209,11 @@ These aren't in the battery — they go in existing (or new) test files targeted
 
 | File | What it defines | Who depends on it |
 |---|---|---|
-| `cli/internal/cli/search.go:31-35` | `SearchResponse` JSON envelope | Swift `AppState.swift`, any external agent parsing `search --json` |
-| `cli/internal/cli/ask.go:22-27` | `AskResponse` JSON envelope | Same |
+| `SearchResponse` in `cli/internal/cli/search.go` | `SearchResponse` JSON envelope | Swift `AppState.swift`, any external agent parsing `search --json` |
+| `AskResponse` in `cli/internal/cli/ask.go` | `AskResponse` JSON envelope | Same |
 | `cli/internal/retrieve/compat.go` | `VectorCompat` state strings (`DIMENSION BREAK`, `MODEL MISMATCH`, etc.) | Skill playbook table, `vault status` rendering, search warnings |
 | `cli/internal/ai/config.go` | `ResolveSimilarityThresholdFull` resolution chain | Threshold resolution battery test, skill explanation of per-model thresholds |
-| `cli/internal/mcp/tools.go:34-82` | Embedding + threshold cache behavior | MCP vs CLI rationale in skill file |
-| `cli/internal/skills/content/2ndbrain-skill.md` | The agent-facing teaching document | All 8 supported agents after `skills install` |
+| the `handlers` cache in `cli/internal/mcp/tools.go` | Embedding + threshold cache behavior | MCP vs CLI rationale in skill file |
+| `cli/internal/skills/content/2ndbrain-skill.md` | The agent-facing teaching document | All 11 supported agents after `skills install` |
 
 Drift between these files and the skill file is the main failure mode. The battery's `TestBattery_SearchThreshold` and `TestBattery_HybridDegradation` tests exist partly to catch drift — a change to warning strings that doesn't also update the skill will make the battery fail because it expects specific strings in `warnings[]`.
