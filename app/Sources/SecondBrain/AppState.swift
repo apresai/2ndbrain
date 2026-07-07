@@ -2303,6 +2303,48 @@ final class AppState {
         return try JSONDecoder().decode(CostPreviewResponse.self, from: data)
     }
 
+    // MARK: - Advanced settings (config visibility)
+
+    /// Writes one vault config key via `2nb config set`. Validation lives in
+    /// the CLI (ranges, Matryoshka dimension checks); its stderr comes back
+    /// verbatim through CLIError.nonZeroExit so the UI can show the real rule.
+    func setConfigValue(_ key: String, _ value: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await runCLI(["config", "set", key, value, "--porcelain"], cwd: vault.rootURL)
+    }
+
+    /// Reads one raw config value (`2nb config get --porcelain`), trimmed.
+    func getConfigValue(_ key: String) async throws -> String {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["config", "get", key, "--porcelain"], cwd: vault.rootURL)
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The full effective configuration (`2nb config show --json`), returned
+    /// raw for the generic read-only viewer (no schema coupling in Swift).
+    func fetchConfigShow() async throws -> Data {
+        guard let vault else { throw CLIError.noVault }
+        return try await runCLI(["config", "show", "--json", "--porcelain"], cwd: vault.rootURL)
+    }
+
+    /// Samples the vault's stored embeddings and saves a recommended
+    /// similarity threshold to the vault catalog. Free: pure cosine math
+    /// over stored vectors, no provider calls.
+    func calibrateThreshold() async throws -> CalibrationInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["models", "calibrate", "--save", "--scope", "vault", "--json", "--porcelain"], cwd: vault.rootURL)
+        return try JSONDecoder().decode(CalibrationInfo.self, from: data)
+    }
+
+    /// Ramps embed concurrency over a discarded sample to find the account's
+    /// real throughput ceiling. PAID (real embedding calls) and slow
+    /// (minutes); callers must confirm first.
+    func embedProbe() async throws -> EmbedProbeInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["ai", "embed-probe", "--json", "--porcelain"], cwd: vault.rootURL)
+        return try JSONDecoder().decode(EmbedProbeInfo.self, from: data)
+    }
+
     /// Tests one model and saves it on pass. Matches the wizard flow step.
     /// Returns the decoded AIProbeResult so the UI can render outcome + latency.
     func testAndSave(modelID: String, provider: String, type: String, scope: String) async throws -> AIProbeResult {
@@ -3301,6 +3343,56 @@ struct CostPreviewResponse: Codable {
     enum CodingKeys: String, CodingKey {
         case estimates
         case totalUSD = "total_usd"
+    }
+}
+
+/// `2nb models calibrate --json` payload (calibrationResult in the CLI).
+struct CalibrationInfo: Codable {
+    let provider: String
+    let model: String
+    let sampleCount: Int?
+    let p50: Double?
+    let p95: Double?
+    let recommendedThreshold: Double
+    let activeThreshold: Double?
+    let activeSource: String?
+    let savedTo: String?
+
+    enum CodingKeys: String, CodingKey {
+        case provider, model, p50, p95
+        case sampleCount = "sample_count"
+        case recommendedThreshold = "recommended_threshold"
+        case activeThreshold = "active_threshold"
+        case activeSource = "active_source"
+        case savedTo = "saved_to"
+    }
+}
+
+/// `2nb ai embed-probe --json` payload (ProbeResult in the CLI).
+struct EmbedProbeInfo: Codable {
+    struct Level: Codable, Identifiable {
+        var id: Int { concurrency }
+        let concurrency: Int
+        let durationMs: Int64?
+        let textsPerSec: Double?
+        let errors: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case concurrency, errors
+            case durationMs = "duration_ms"
+            case textsPerSec = "texts_per_sec"
+        }
+    }
+
+    let provider: String
+    let model: String
+    let sampleSize: Int?
+    let levels: [Level]
+    let recommended: Int
+
+    enum CodingKeys: String, CodingKey {
+        case provider, model, levels, recommended
+        case sampleSize = "sample_size"
     }
 }
 

@@ -323,15 +323,23 @@ struct ModelCatalogPickerView: View {
                 .controlSize(.small)
 
                 if model.modelType == "embedding" {
-                    HStack {
-                        Text("Similarity threshold")
-                        TextField("0.00-1.00", text: $thresholdText)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 100)
-                        Button("Save") { Task { await saveThreshold(model) } }
-                            .disabled(Double(thresholdText) == nil)
-                        Text("recommended \(formatThreshold(model.recommendedSimilarityThreshold))")
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Catalog recommendation for this model")
+                                .help("Saves this model's recommended similarity threshold to the user catalog. It feeds the automatic resolution chain when no vault override is set; the vault-level override lives under Advanced settings in the AI Hub.")
+                            TextField("0.00-1.00", text: $thresholdText)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 100)
+                            Button("Save") { Task { await saveThreshold(model) } }
+                                .disabled(Double(thresholdText) == nil)
+                            Text("recommended \(formatThreshold(model.recommendedSimilarityThreshold))")
+                                .foregroundStyle(.secondary)
+                        }
+                        if let t = aiStatus?.similarityThreshold {
+                            Text(String(format: "effective threshold now: %.2f (%@)", t, aiStatus?.similarityThresholdSource ?? "unknown"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .font(.callout)
                 }
