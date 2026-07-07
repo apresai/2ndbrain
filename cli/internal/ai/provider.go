@@ -213,6 +213,13 @@ type ModelInfo struct {
 	// is NOT known to work right now".
 	TestError string `json:"test_error,omitempty" yaml:"test_error,omitempty"`
 
+	// TestErrorCode classifies TestError into the stable TestErrorCode
+	// vocabulary (access_denied, bad_credentials, throttled, ...) so UIs can
+	// render actionable guidance instead of parsing the raw string. Empty
+	// when the last test passed or the model was never tested. Moves as a
+	// unit with TestedAt/TestError.
+	TestErrorCode string `json:"test_error_code,omitempty" yaml:"test_error_code,omitempty"`
+
 	// Benchmark is the most-recent benchmark summary for this model. Nil
 	// when the model has never been benchmarked. The full history still
 	// lives in <vault>/.2ndbrain/bench.db; this field lets dropdowns and

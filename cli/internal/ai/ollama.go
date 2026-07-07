@@ -236,7 +236,7 @@ func ollamaPost(ctx context.Context, client *http.Client, url string, body []byt
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama %s: status %d: %s", url, resp.StatusCode, string(respBody))
+		return nil, &ProviderHTTPError{Provider: "ollama", URL: url, StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 	return respBody, nil
 }

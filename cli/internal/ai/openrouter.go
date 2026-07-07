@@ -290,7 +290,7 @@ func doOpenRouterRequest(ctx context.Context, client *http.Client, url, apiKey s
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("openrouter %s: status %d: %s", url, resp.StatusCode, string(respBody))
+			return nil, &ProviderHTTPError{Provider: "openrouter", URL: url, StatusCode: resp.StatusCode, Body: string(respBody)}
 		}
 		return respBody, nil
 	}

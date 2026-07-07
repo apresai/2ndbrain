@@ -336,6 +336,7 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 		// empty on a passing run, so overlay even zero values here.
 		out.TestLatencyMs = top.TestLatencyMs
 		out.TestError = top.TestError
+		out.TestErrorCode = top.TestErrorCode
 	}
 	// RecommendedSimilarityThreshold: any positive overlay value wins. Zero
 	// means "not set in the overlay" — preserve the builtin value. Users who

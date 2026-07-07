@@ -70,6 +70,8 @@ type wizardEvent struct {
 	OK        *bool             `json:"ok,omitempty"`
 	LatencyMs int64             `json:"latency_ms,omitempty"`
 	Error     string            `json:"error,omitempty"`
+	// Code classifies a test_result failure (ai.TestErrorCode vocabulary).
+	Code string `json:"code,omitempty"`
 	Scope     string            `json:"scope,omitempty"`
 	Tested    int               `json:"tested,omitempty"`
 	Passed    int               `json:"passed,omitempty"`
@@ -189,6 +191,10 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		ok := r.OK
+		code := ""
+		if !r.OK {
+			code = string(r.Code)
+		}
 		events.emit(wizardEvent{
 			Step:      "test_result",
 			ModelID:   r.ModelID,
@@ -197,6 +203,7 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 			OK:        &ok,
 			LatencyMs: latencyMs(r.Latency),
 			Error:     errorDetailOnFail(r),
+			Code:      code,
 		})
 		results = append(results, r)
 	}

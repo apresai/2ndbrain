@@ -535,6 +535,84 @@ func TestMergeFields_NewFieldsOverlay(t *testing.T) {
 	}
 }
 
+// TestMergeFields_TestErrorCodeMovesWithTestedAt verifies TestErrorCode moves
+// as a unit with TestedAt/TestError: a failing overlay carries its code over
+// the base, and a later PASSING overlay (empty code, fresh TestedAt) clears a
+// stale code rather than preserving it.
+func TestMergeFields_TestErrorCodeMovesWithTestedAt(t *testing.T) {
+	base := ModelInfo{
+		ID: "m", Provider: "bedrock", Type: "generation",
+	}
+	failed := ModelInfo{
+		ID: "m", Provider: "bedrock",
+		TestedAt:      "2026-07-01T00:00:00Z",
+		TestError:     "invoke m: AccessDeniedException: not available",
+		TestErrorCode: string(TestErrAccessDenied),
+	}
+	out := mergeFields(base, failed)
+	if out.TestErrorCode != string(TestErrAccessDenied) {
+		t.Errorf("failing overlay didn't carry code: %+v", out)
+	}
+
+	passed := ModelInfo{
+		ID: "m", Provider: "bedrock",
+		TestedAt:      "2026-07-02T00:00:00Z",
+		TestLatencyMs: 300,
+	}
+	out2 := mergeFields(out, passed)
+	if out2.TestError != "" || out2.TestErrorCode != "" {
+		t.Errorf("passing overlay didn't clear stale failure: error=%q code=%q", out2.TestError, out2.TestErrorCode)
+	}
+	if out2.TestedAt != "2026-07-02T00:00:00Z" {
+		t.Errorf("TestedAt not updated: %q", out2.TestedAt)
+	}
+}
+
+// TestSaveUserCatalogEntry_PassAfterFailClearsCode verifies the write path:
+// SaveUserCatalogEntry replaces the whole entry, so a passing probe result
+// saved after a failure leaves no stale test_error_code in models.yaml.
+func TestSaveUserCatalogEntry_PassAfterFailClearsCode(t *testing.T) {
+	root := t.TempDir()
+	failEntry := ModelInfo{
+		ID: "m1", Provider: "bedrock", Type: "generation",
+		Tier:          TierUnverified,
+		TestedAt:      "2026-07-01T00:00:00Z",
+		TestError:     "AccessDeniedException: not available",
+		TestErrorCode: string(TestErrAccessDenied),
+	}
+	if err := SaveUserCatalogEntry(ScopeVault, root, failEntry); err != nil {
+		t.Fatalf("save fail entry: %v", err)
+	}
+
+	passEntry := ModelInfo{
+		ID: "m1", Provider: "bedrock", Type: "generation",
+		Tier:          TierUserVerified,
+		TestedAt:      "2026-07-02T00:00:00Z",
+		TestLatencyMs: 250,
+	}
+	if err := SaveUserCatalogEntry(ScopeVault, root, passEntry); err != nil {
+		t.Fatalf("save pass entry: %v", err)
+	}
+
+	models := LoadUserCatalog(root)
+	var got *ModelInfo
+	for i := range models {
+		if models[i].ID == "m1" {
+			got = &models[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("entry m1 not found after save")
+	}
+	if got.TestError != "" || got.TestErrorCode != "" {
+		t.Errorf("stale failure survived a passing save: error=%q code=%q", got.TestError, got.TestErrorCode)
+	}
+	if got.Tier != TierUserVerified {
+		t.Errorf("tier not promoted: %q", got.Tier)
+	}
+}
+
 // TestResolveInvokeStrategy_BuiltinLookups verifies known builtins expose
 // their declared strategy — the wizard / dispatcher will query this on
 // every model selection.
