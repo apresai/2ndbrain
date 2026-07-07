@@ -847,13 +847,14 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 				continue
 			}
 			inferenceProfiles = append(inferenceProfiles, ModelInfo{
-				ID:       id,
-				Name:     aws.ToString(p.InferenceProfileName),
-				Provider: "bedrock",
-				Type:     modelType,
-				Local:    false,
-				Tier:     TierUnverified,
-				Notes:    "use 2nb models test to verify",
+				ID:         id,
+				Name:       aws.ToString(p.InferenceProfileName),
+				Provider:   "bedrock",
+				Type:       modelType,
+				ContextLen: bedrockContextLenHint(id),
+				Local:      false,
+				Tier:       TierUnverified,
+				Notes:      "use 2nb models test to verify",
 			})
 			coveredBaseIDs[baseID] = true
 		}
@@ -886,13 +887,14 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 		}
 
 		models = append(models, ModelInfo{
-			ID:       id,
-			Name:     aws.ToString(fm.ModelName),
-			Provider: "bedrock",
-			Type:     modelType,
-			Local:    false,
-			Tier:     TierUnverified,
-			Notes:    "use 2nb models test to verify",
+			ID:         id,
+			Name:       aws.ToString(fm.ModelName),
+			Provider:   "bedrock",
+			Type:       modelType,
+			ContextLen: bedrockContextLenHint(id),
+			Local:      false,
+			Tier:       TierUnverified,
+			Notes:      "use 2nb models test to verify",
 		})
 	}
 

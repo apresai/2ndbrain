@@ -543,6 +543,11 @@ func TestListBedrockVendorModelsInferenceProfiles(t *testing.T) {
 	for _, m := range models {
 		if strings.HasPrefix(m.ID, "us.anthropic.") {
 			hasUsProfile = true
+			// Discovered Anthropic entries must carry the static context hint
+			// (control-plane APIs don't expose the window; the hint map does).
+			if m.ContextLen == 0 {
+				t.Errorf("discovered %s has no context-window hint", m.ID)
+			}
 		}
 		// Bare anthropic.* base IDs should be suppressed when inference profiles cover them.
 		if strings.HasPrefix(m.ID, "anthropic.claude-3-5") || strings.HasPrefix(m.ID, "anthropic.claude-haiku") {
