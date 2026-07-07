@@ -22,14 +22,22 @@ struct AIHubView: View {
     @State private var filter = CatalogFilter()
     @State private var searchText: String = ""
     @State private var pickerContext: ModelCatalogPickerContext?
-    /// Group keys currently collapsed. Default is expanded so users
-    /// immediately see their models; collapsing is an opt-in to
-    /// reduce clutter on very large catalogs.
-    @State private var collapsedGroups: Set<String> = []
+    /// Per-group collapse OVERRIDE keyed by group key. Absent = use the default
+    /// (a fully-disabled group auto-collapses; every other group is expanded so
+    /// users immediately see their models). Present = the user's explicit choice.
+    @State private var groupCollapseOverride: [String: Bool] = [:]
     /// Curated-by-default: the catalog opens on the short trustworthy list
     /// (recommended / verified / tested-by-you on the active provider) and
     /// the long tail lives behind this explicit toggle.
     @State private var showAllModels = false
+    /// In the curated view, explicitly-disabled models are hidden by default so
+    /// a vendor-policy disable visibly shrinks the list; this reveals them.
+    @State private var showDisabled = false
+    /// Configured enable-only vendor policies (from `models policy show`), used
+    /// to annotate the per-vendor bulk actions and drive the Manage-vendors sheet.
+    @State private var policies: [VendorPolicyResult] = []
+    /// Presents the Manage-vendors (VendorPolicyView) sheet.
+    @State private var showingVendorPolicy = false
 
     /// A `models verify` run is streaming; its live progress replaces the
     /// "Validate models" button in the Catalog header until `done` arrives.
@@ -109,6 +117,14 @@ struct AIHubView: View {
         .task { await reload() }
         .onChange(of: appState.modelsCatalogVersion) { _, _ in
             Task { await reload() }
+        }
+        .sheet(isPresented: $showingVendorPolicy) {
+            VendorPolicyView(models: models) { provider in
+                // The sheet dismissed; run the Hub's existing Validate flow for
+                // the provider's now-enabled models (never auto-spent).
+                startValidateModels(provider: provider)
+            }
+            .environment(appState)
         }
         .alert(
             "AI Hub error",
@@ -533,6 +549,10 @@ struct AIHubView: View {
                     .controlSize(.small)
                     .buttonStyle(.bordered)
                 }
+                Button("Manage vendors\u{2026}") { showingVendorPolicy = true }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .disabled(models.isEmpty)
                 filterMenu
             }
 
@@ -561,7 +581,10 @@ struct AIHubView: View {
             catalogTypeSection(type: "generation", title: "Generation Models")
             catalogTypeSection(type: "rerank", title: "Reranking Models")
 
-            curationToggle
+            HStack(spacing: 12) {
+                curationToggle
+                showDisabledToggle
+            }
 
             if filteredModels().isEmpty {
                 Text("No models match the current filter.")
@@ -646,6 +669,21 @@ struct AIHubView: View {
         }
     }
 
+    /// The "Show disabled (N)" reveal for the curated view, so a vendor-policy
+    /// or bulk disable visibly shrinks the list yet the hidden rows are one
+    /// click away. Only meaningful in curated mode (all-mode shows disabled rows).
+    @ViewBuilder
+    private var showDisabledToggle: some View {
+        let hidden = hiddenDisabledInCurated
+        if !showAllModels && hidden > 0 {
+            Button(showDisabled ? "Hide disabled" : "Show disabled (\(hidden))") {
+                showDisabled.toggle()
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderless)
+        }
+    }
+
     private var filterMenu: some View {
         Menu {
             Toggle("Tested only", isOn: $filter.testedOnly)
@@ -689,9 +727,26 @@ struct AIHubView: View {
     }
 
     /// The models the current view mode shows: everything in all-mode, the
-    /// curated short list otherwise.
+    /// curated short list otherwise. In curated mode, explicitly-disabled models
+    /// are hidden until the user reveals them (so a vendor-policy disable
+    /// visibly shrinks the list); all-mode keeps disabled rows visible.
     private func filteredModels() -> [CatalogModelInfo] {
-        showAllModels ? searchFiltered() : curationSplit().curated
+        if showAllModels { return searchFiltered() }
+        return CatalogVisibility.hideDisabled(curationSplit().curated, showDisabled: showDisabled).visible
+    }
+
+    /// How many curated models are hidden because they are disabled (0 in
+    /// all-mode, where disabled rows stay visible).
+    private var hiddenDisabledInCurated: Int {
+        guard !showAllModels else { return 0 }
+        return CatalogVisibility.hideDisabled(curationSplit().curated, showDisabled: showDisabled).hiddenDisabled
+    }
+
+    /// Whether an enable-only vendor policy is configured for a provider, so the
+    /// per-vendor bulk toggles can flag that they override it. Prefers the
+    /// vault-scope policy when both scopes exist.
+    private func hasPolicyFor(_ provider: String) -> Bool {
+        policies.contains { $0.provider == provider && $0.mode == "enable_only" && !$0.vendors.isEmpty }
     }
 
     @ViewBuilder
@@ -771,13 +826,14 @@ struct AIHubView: View {
 
     @ViewBuilder
     private func vendorGroupView(group: VendorGroup) -> some View {
-        let collapsed = collapsedGroups.contains(group.key)
         let allDisabled = group.models.allSatisfy { $0.enabled == false }
+        let collapsed = CatalogVisibility.groupCollapsed(
+            userOverride: groupCollapseOverride[group.key], allDisabled: allDisabled)
+        let policied = hasPolicyFor(group.provider)
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Button {
-                    if collapsed { collapsedGroups.remove(group.key) }
-                    else { collapsedGroups.insert(group.key) }
+                    groupCollapseOverride[group.key] = !collapsed
                 } label: {
                     Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                         .frame(width: 12)
@@ -792,24 +848,28 @@ struct AIHubView: View {
                 Text("(\(group.models.count))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if allDisabled {
+                    Text("disabled")
+                        .font(.caption2)
+                        .italic()
+                        .foregroundStyle(.secondary)
+                }
 
                 Spacer()
 
-                // Equal-weight bulk toggles per the user's design choice.
-                Button(allDisabled ? "Enable all" : "Disable all") {
-                    Task { await bulkToggle(group: group, enable: allDisabled) }
-                }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
-
-                Button(allDisabled ? "Disable all" : "Enable all") {
-                    Task { await bulkToggle(group: group, enable: !allDisabled) }
-                }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
-
+                // One compact menu replaces the old dual Enable/Disable buttons:
+                // both actions plus per-vendor Verify live here. Enable/Disable
+                // write explicit per-model overrides, which correctly beat any
+                // vendor policy, so the labels say so when a policy is in force.
                 Menu {
-                    Button("Verify vendor") {
+                    Button(policied ? "Enable all (overrides vendor policy)" : "Enable all") {
+                        Task { await bulkToggle(group: group, enable: true) }
+                    }
+                    Button(policied ? "Disable all (overrides vendor policy)" : "Disable all") {
+                        Task { await bulkToggle(group: group, enable: false) }
+                    }
+                    Divider()
+                    Button("Verify vendor\u{2026}") {
                         startValidateModels(provider: group.provider, vendorIDs: group.models.map(\.modelID))
                     }
                 } label: {
@@ -821,6 +881,7 @@ struct AIHubView: View {
                 .disabled(verifying || appState.isIndexing)
             }
             .padding(.vertical, 4)
+            .opacity(allDisabled ? 0.6 : 1.0)
 
             if !collapsed {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1034,9 +1095,14 @@ struct AIHubView: View {
         do {
             async let statusTask = appState.fetchAIStatus()
             async let modelsTask = appState.fetchModelsForWizard()
+            // Vendor policies are best-effort: a CLI predating `models policy`
+            // throws (unknown command), which degrades to no policies rather
+            // than failing the whole Hub load.
+            async let policiesTask = appState.fetchVendorPolicy()
             aiStatus = try await statusTask
             models = try await modelsTask
-            hubLog.info("AI Hub reload: \(self.models.count) models · \(self.aiStatus?.providers?.count ?? 0) providers")
+            policies = (try? await policiesTask) ?? []
+            hubLog.info("AI Hub reload: \(self.models.count) models · \(self.aiStatus?.providers?.count ?? 0) providers · \(self.policies.count) policies")
         } catch {
             recordActionFailure("Failed to load AI state", error: error)
         }

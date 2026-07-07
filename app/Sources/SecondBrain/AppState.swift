@@ -2730,6 +2730,72 @@ final class AppState {
         _ = try await runCLI(args, cwd: vault.rootURL)
     }
 
+    // MARK: - Vendor policy (enable-only per provider)
+
+    /// Argv for `models policy show` (every configured policy). Extracted so
+    /// the argv is unit-testable without spawning a subprocess.
+    nonisolated static func vendorPolicyShowArgs() -> [String] {
+        ["models", "policy", "show", "--json", "--porcelain"]
+    }
+
+    /// Argv for `models policy set --provider P --enable-only a,b`. Vendors are
+    /// joined with commas as the CLI expects; the caller guarantees a non-empty
+    /// list (the CLI refuses an empty one).
+    nonisolated static func vendorPolicySetArgs(provider: String, vendors: [String], scope: String) -> [String] {
+        [
+            "models", "policy", "set",
+            "--provider", provider,
+            "--enable-only", vendors.joined(separator: ","),
+            "--scope", scope,
+            "--json", "--porcelain",
+        ]
+    }
+
+    /// Argv for `models policy clear --provider P`.
+    nonisolated static func vendorPolicyClearArgs(provider: String, scope: String) -> [String] {
+        [
+            "models", "policy", "clear",
+            "--provider", provider,
+            "--scope", scope,
+            "--json", "--porcelain",
+        ]
+    }
+
+    /// Reads every configured vendor policy (`models policy show --json`). The
+    /// CLI emits a JSON array (possibly empty); a CLI predating `models policy`
+    /// exits non-zero (unknown command), which `runCLI` throws, so the caller
+    /// decides whether to degrade to no policies.
+    func fetchVendorPolicy() async throws -> [VendorPolicyResult] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(Self.vendorPolicyShowArgs(), cwd: vault.rootURL)
+        return (try? JSONDecoder().decode([VendorPolicyResult].self, from: data)) ?? []
+    }
+
+    /// Sets an enable-only vendor policy for a provider (`models policy set`),
+    /// returning the effect so the caller can show "N enabled, M disabled".
+    /// Bumps `modelsCatalogVersion` so the AI Hub reloads: policies live in
+    /// models-policy.yaml, which the FSEvents catalog watcher doesn't track.
+    @discardableResult
+    func setVendorPolicy(provider: String, vendors: [String], scope: String = "vault") async throws -> VendorPolicyResult {
+        guard let vault else { throw CLIError.noVault }
+        let args = Self.vendorPolicySetArgs(provider: provider, vendors: vendors, scope: scope)
+        log.info("AI Hub action: models policy set --provider \(provider, privacy: .public) --enable-only \(vendors.joined(separator: ","), privacy: .public) scope=\(scope, privacy: .public)")
+        let data = try await runCLI(args, cwd: vault.rootURL)
+        let res = try JSONDecoder().decode(VendorPolicyResult.self, from: data)
+        modelsCatalogVersion += 1
+        return res
+    }
+
+    /// Removes the vendor policy for a provider (`models policy clear`). Bumps
+    /// `modelsCatalogVersion` so the Hub reloads (see `setVendorPolicy`).
+    func clearVendorPolicy(provider: String, scope: String = "vault") async throws {
+        guard let vault else { throw CLIError.noVault }
+        let args = Self.vendorPolicyClearArgs(provider: provider, scope: scope)
+        log.info("AI Hub action: models policy clear --provider \(provider, privacy: .public) scope=\(scope, privacy: .public)")
+        _ = try await runCLI(args, cwd: vault.rootURL)
+        modelsCatalogVersion += 1
+    }
+
     /// Fetches the full AIStatusInfo envelope including providers[] for
     /// the AI Hub's provider cards and active-model section.
     func fetchAIStatus() async throws -> AIStatusInfo {
@@ -3580,6 +3646,52 @@ enum VerifyFlow {
         }
         return parts.isEmpty ? "No models validated" : parts.joined(separator: ", ")
     }
+}
+
+/// One `2nb models policy show` entry, and the result of `models policy set`,
+/// mirroring the Go `policyResult`. A vendor policy is a durable "enable only
+/// these vendors" statement for one provider: models from vendors not in the
+/// list are disabled, including ones discovered in the future.
+struct VendorPolicyResult: Codable, Identifiable {
+    // Two policies can exist for one provider (vault + global scope), so the
+    // identity includes the scope to keep ForEach keys unique.
+    var id: String { provider + "|" + scope }
+    let provider: String
+    let mode: String
+    let vendors: [String]
+    let scope: String
+    let dryRun: Bool
+    let effect: VendorPolicyEffect
+    let warnings: [String]
+    let clearedModelOverrides: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case provider, mode, vendors, scope, effect, warnings
+        case dryRun = "dry_run"
+        case clearedModelOverrides = "cleared_model_overrides"
+    }
+}
+
+/// The per-provider effect of applying a vendor policy: final enabled/disabled
+/// counts, how many models an explicit per-model override decided instead of
+/// the policy, and the per-vendor verdict.
+struct VendorPolicyEffect: Codable, Equatable {
+    let enabled: Int
+    let disabled: Int
+    let overridden: Int
+    let byVendor: [String: VendorEffectEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, disabled, overridden
+        case byVendor = "by_vendor"
+    }
+}
+
+/// One vendor's slice of a policy effect: how many models it has and the
+/// policy's verdict ("enabled" or "disabled") for the vendor.
+struct VendorEffectEntry: Codable, Equatable {
+    let models: Int
+    let state: String
 }
 
 struct CostEstimate: Codable, Identifiable {

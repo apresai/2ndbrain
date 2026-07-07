@@ -53,8 +53,10 @@ func primaryViewsConstruct() {
     )
     let hub = AIHubView(onClose: {})
     let home = HomeView()
+    let vendorPolicy = VendorPolicyView(models: [model], onValidate: { _ in })
 
     #expect(String(describing: type(of: picker)) == "ModelCatalogPickerView")
     #expect(String(describing: type(of: hub)) == "AIHubView")
     #expect(String(describing: type(of: home)) == "HomeView")
+    #expect(String(describing: type(of: vendorPolicy)) == "VendorPolicyView")
 }
