@@ -152,7 +152,7 @@ func TestRepairBrokenLinks_AmbiguousNameIsSkipped(t *testing.T) {
 // Reproduces the real-world dead-end: a note whose only resolvable form is its
 // hyphenated basename (no frontmatter title), linked with the spaced display
 // form. 2nb's resolver is case- AND separator-sensitive, so the link is broken;
-// before the normalizeName hyphen/underscore fold the spaced target never
+// before the NormalizeName hyphen/underscore fold the spaced target never
 // matched the kebab basename, so repair reported no_match and the GUI
 // dead-ended. After the fold it repairs to the basename.
 func TestRepairBrokenLinks_RepairsHyphenSpaceDriftToKebabBasename(t *testing.T) {
@@ -243,7 +243,7 @@ func TestRepairBrokenLinks_IgnoresNoteDeletedFromDisk(t *testing.T) {
 	}
 }
 
-// normalizeName is the symmetric chokepoint that makes case, hyphen/underscore,
+// NormalizeName is the symmetric chokepoint that makes case, hyphen/underscore,
 // and whitespace drift collide on one key. Distinct names must stay distinct so
 // the fold never widens a match into a wrong rewrite.
 func TestNormalizeName_FoldsSeparatorsCaseAndWhitespace(t *testing.T) {
@@ -254,10 +254,10 @@ func TestNormalizeName_FoldsSeparatorsCaseAndWhitespace(t *testing.T) {
 		{"auth-flow", "Auth Flow", "AUTH FLOW"},
 	}
 	for _, group := range same {
-		want := normalizeName(group[0])
+		want := NormalizeName(group[0])
 		for _, s := range group[1:] {
-			if got := normalizeName(s); got != want {
-				t.Errorf("normalizeName(%q)=%q, want %q (same group as %q)", s, got, want, group[0])
+			if got := NormalizeName(s); got != want {
+				t.Errorf("NormalizeName(%q)=%q, want %q (same group as %q)", s, got, want, group[0])
 			}
 		}
 	}
@@ -268,8 +268,8 @@ func TestNormalizeName_FoldsSeparatorsCaseAndWhitespace(t *testing.T) {
 		{"auth-flow", "auth flows"},
 	}
 	for _, pair := range diff {
-		if normalizeName(pair[0]) == normalizeName(pair[1]) {
-			t.Errorf("normalizeName collapsed distinct names %q and %q to %q", pair[0], pair[1], normalizeName(pair[0]))
+		if NormalizeName(pair[0]) == NormalizeName(pair[1]) {
+			t.Errorf("NormalizeName collapsed distinct names %q and %q to %q", pair[0], pair[1], NormalizeName(pair[0]))
 		}
 	}
 }

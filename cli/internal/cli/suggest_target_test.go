@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -142,5 +144,106 @@ func TestSuggestTarget_AmbiguousSourceFallsBackWithoutError(t *testing.T) {
 	paths := suggestPaths(t, root, "ghostty", "--source", "dup", "--json", "--porcelain")
 	if len(paths) == 0 {
 		t.Errorf("candidates should still be returned when --source is ambiguous")
+	}
+}
+
+// Confidence tests. All offline: candidates come from the drift and BM25 tiers
+// (the semantic tier skips silently without an embedder), and the grading rule
+// is deterministic (see SuggestLinkResult.Confidence).
+
+func suggestResults(t *testing.T, root string, argv ...string) []SuggestLinkResult {
+	t.Helper()
+	out, err := runCLIArgs(t, root, append([]string{"suggest-target"}, argv...)...)
+	if err != nil {
+		t.Fatalf("suggest-target: %v\n%s", err, out)
+	}
+	var results []SuggestLinkResult
+	if err := json.Unmarshal(out, &results); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	return results
+}
+
+func confidenceOf(t *testing.T, results []SuggestLinkResult, path string) string {
+	t.Helper()
+	for _, r := range results {
+		if r.Path == path {
+			return r.Confidence
+		}
+	}
+	t.Fatalf("expected %s among candidates: %+v", path, results)
+	return ""
+}
+
+// Whole-word subset + dominance (sole candidate): target "ghostty" against the
+// single note "Ghostty Config" must grade high.
+func TestSuggestTarget_ConfidenceHigh_SubsetAndDominant(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "Ghostty Config.md", "Ghostty Config",
+		"# Ghostty Config\n\nGhostty terminal configuration reference.")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	results := suggestResults(t, root, "ghostty", "--json", "--porcelain")
+	if got := confidenceOf(t, results, "Ghostty Config.md"); got != "high" {
+		t.Errorf("subset + dominant must be high, got %q: %+v", got, results)
+	}
+}
+
+// Two near-equal-score candidates both containing the target word: word match
+// without dominance grades medium on both.
+func TestSuggestTarget_ConfidenceMedium_WordMatchWithoutDominance(t *testing.T) {
+	_, root := newContractVault(t)
+	// Identically shaped bodies so the BM25 scores stay well inside the 1.4x
+	// dominance ratio.
+	writeNote(t, root, "Ghostty Config.md", "Ghostty Config",
+		"# Ghostty Config\n\nGhostty terminal configuration reference.")
+	writeNote(t, root, "Ghostty Themes.md", "Ghostty Themes",
+		"# Ghostty Themes\n\nGhostty terminal theming reference.")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	results := suggestResults(t, root, "ghostty", "--json", "--porcelain")
+	for _, path := range []string{"Ghostty Config.md", "Ghostty Themes.md"} {
+		if got := confidenceOf(t, results, path); got != "medium" {
+			t.Errorf("%s: word match without dominance must be medium, got %q: %+v", path, got, results)
+		}
+	}
+}
+
+// A candidate that matches only via BM25 body text (no word overlap with its
+// title or basename) and is not dominant grades low.
+func TestSuggestTarget_ConfidenceLow_NoWordOverlapNotDominant(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "Ghostty Config.md", "Ghostty Config",
+		"# Ghostty Config\n\nGhostty configuration: ghostty fonts, ghostty colors, ghostty keybinds.")
+	writeNote(t, root, "Terminal Emulators.md", "Terminal Emulators",
+		"# Terminal Emulators\n\nComparison of terminal emulators. One option is ghostty.")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	results := suggestResults(t, root, "ghostty", "--json", "--porcelain")
+	if got := confidenceOf(t, results, "Terminal Emulators.md"); got != "low" {
+		t.Errorf("body-only match without dominance must be low, got %q: %+v", got, results)
+	}
+}
+
+// A unique tier-1 drift match is inherently high even when the general rule
+// would grade it lower: here the target matches only via a frontmatter ALIAS,
+// so the title/basename word check fails, and without the drift pin the sole
+// candidate would grade medium (dominant only).
+func TestSuggestTarget_ConfidenceHigh_UniqueDriftViaAlias(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.WriteFile(filepath.Join(root, "Ghostty Config.md"),
+		[]byte("---\nid: gc1\ntitle: Ghostty Config\naliases:\n  - gt\ntype: note\nstatus: draft\n---\n\n# Ghostty Config\n\nTerminal configuration reference.\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	results := suggestResults(t, root, "gt", "--json", "--porcelain")
+	if got := confidenceOf(t, results, "Ghostty Config.md"); got != "high" {
+		t.Errorf("the unique drift (alias) match must be high, got %q: %+v", got, results)
 	}
 }

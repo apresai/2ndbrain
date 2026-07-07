@@ -108,16 +108,24 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 	// indexed still surfaces, and a note deleted on disk but still in the DB
 	// never does. One walk feeds both the fuzzy index and the resolver that
 	// turns each canonical name into a concrete path.
+	// uniqueDrift marks the candidate that is the repair index's single match
+	// for the target: it is what repair-links itself would rewrite to, so its
+	// confidence is inherently "high" (see SuggestLinkResult.Confidence).
+	uniqueDrift := make(map[string]bool, 1)
 	if docs, aliases, lerr := vault.CollectLiveDocs(v.Root); lerr == nil {
 		liveResolver := store.NewResolver(docs, aliases)
 		titleByPath := make(map[string]string, len(docs))
 		for _, d := range docs {
 			titleByPath[d.Path] = d.Title
 		}
-		for _, c := range polish.SuggestRepairTargets(docs, aliases, target) {
+		driftCandidates := polish.SuggestRepairTargets(docs, aliases, target)
+		for _, c := range driftCandidates {
 			path, rerr := liveResolver.Resolve(c)
 			if rerr != nil {
 				continue
+			}
+			if len(driftCandidates) == 1 {
+				uniqueDrift[path] = true
 			}
 			add(path, titleByPath[path], 1.0)
 		}
@@ -150,6 +158,8 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	assignConfidence(results, target, uniqueDrift)
+
 	if getFormat(cmd) == output.FormatJSON {
 		data, err := json.Marshal(results)
 		if err != nil {
@@ -171,4 +181,80 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 		fmt.Printf("%d. %s (%s, score %.3f)\n", i+1, title, r.Path, r.Score)
 	}
 	return nil
+}
+
+// dominantScoreRatio is the score multiple over the best OTHER candidate at
+// which a candidate counts as dominant for confidence grading.
+const dominantScoreRatio = 1.4
+
+// assignConfidence stamps each candidate's Confidence per the deterministic
+// rule documented on SuggestLinkResult.Confidence: word match x dominance,
+// with the unique tier-1 drift match pinned to "high" (it is exactly what
+// repair-links would rewrite to, and it may have matched via an alias the
+// title/basename word check cannot see).
+func assignConfidence(results []SuggestLinkResult, target string, uniqueDrift map[string]bool) {
+	for i := range results {
+		if uniqueDrift[results[i].Path] {
+			results[i].Confidence = "high"
+			continue
+		}
+		wordMatch := targetWordMatch(target, results[i].Title, results[i].Path)
+		dominant := dominantAmong(i, results)
+		switch {
+		case wordMatch && dominant:
+			results[i].Confidence = "high"
+		case wordMatch || dominant:
+			results[i].Confidence = "medium"
+		default:
+			results[i].Confidence = "low"
+		}
+	}
+}
+
+// targetWordMatch reports whether the target, folded with the same
+// normalization the repair index uses (polish.NormalizeName), equals or is a
+// whole-word subset of the candidate's folded title or basename.
+func targetWordMatch(target, title, path string) bool {
+	folded := polish.NormalizeName(target)
+	base := strings.TrimSuffix(filepath.Base(path), ".md")
+	return isWholeWordSubset(folded, polish.NormalizeName(title)) ||
+		isWholeWordSubset(folded, polish.NormalizeName(base))
+}
+
+// isWholeWordSubset reports whether every word of the folded target appears as
+// a whole word in the folded name (equality is the trivial subset). Both inputs
+// must already be NormalizeName-folded, so words split on single spaces.
+func isWholeWordSubset(target, name string) bool {
+	targetWords := strings.Fields(target)
+	if len(targetWords) == 0 {
+		return false
+	}
+	nameWords := make(map[string]bool)
+	for _, w := range strings.Fields(name) {
+		nameWords[w] = true
+	}
+	for _, w := range targetWords {
+		if !nameWords[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// dominantAmong reports whether candidate i is the sole candidate or scores at
+// least dominantScoreRatio times the best other candidate. Only the top-scoring
+// candidate can be dominant; scores are compared raw across tiers (drift 1.0,
+// cosine, BM25), which is deliberate: dominance is a within-list separation
+// signal, not a cross-tier calibration.
+func dominantAmong(i int, results []SuggestLinkResult) bool {
+	if len(results) == 1 {
+		return true
+	}
+	bestOther := 0.0
+	for j := range results {
+		if j != i && results[j].Score > bestOther {
+			bestOther = results[j].Score
+		}
+	}
+	return results[i].Score >= dominantScoreRatio*bestOther
 }

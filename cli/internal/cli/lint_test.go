@@ -324,9 +324,12 @@ func TestLint_NoIDIsNotAnError(t *testing.T) {
 // tests below.
 type lintReport struct {
 	Issues []struct {
-		Path    string `json:"path"`
-		Level   string `json:"level"`
-		Message string `json:"message"`
+		Path        string `json:"path"`
+		Level       string `json:"level"`
+		Message     string `json:"message"`
+		Target      string `json:"target"`
+		Fix         string `json:"fix"`
+		DriftTarget string `json:"drift_target"`
 	} `json:"issues"`
 	Errors int `json:"errors"`
 	Warns  int `json:"warnings"`
@@ -460,6 +463,111 @@ func TestLint_ResolvesBareCanvasLink(t *testing.T) {
 	report := runLintJSON(t, root, "--json")
 	if report.Warns != 0 {
 		t.Fatalf("bare/path-qualified canvas links must resolve, got %d: %+v", report.Warns, report.Issues)
+	}
+}
+
+// TestLint_ClassifiesBrokenLinks covers the additive broken-link classification
+// fields (target / fix / drift_target): a case-drifted link is "drift" with the
+// canonical target attached, a name that normalizes onto two notes is
+// "ambiguous", an unmatched name is "missing", and a path-qualified target is
+// "missing" too (the repair index refuses path-qualified names by design). The
+// message strings must remain byte-identical to the pre-classification format,
+// because the Obsidian plugin and older app builds parse them.
+func TestLint_ClassifiesBrokenLinks(t *testing.T) {
+	_, root := newContractVault(t)
+	for _, d := range []string{"alpha", "beta"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Drift target: the resolver is case/separator-sensitive, so the kebab link
+	// below is broken, but the repair index folds it onto this single note.
+	write("Claude Code Notes.md", "---\ntitle: Claude Code Notes\ntype: note\nstatus: draft\n---\nThe note.\n")
+	// Ambiguity pair: both basenames fold to "my note"; distinct titles keep two
+	// distinct canonical targets in the repair index.
+	write("alpha/My Note.md", "---\ntitle: Note Alpha\ntype: note\nstatus: draft\n---\nOne.\n")
+	write("beta/my-note.md", "---\ntitle: Note Beta\ntype: note\nstatus: draft\n---\nTwo.\n")
+	write("note.md", "---\ntitle: Note\ntype: note\nstatus: draft\n---\n"+
+		"Drift [[claude-code-notes]]. Ambiguous [[My_Note]]. "+
+		"Missing [[totally-missing-note]]. Path-qualified [[some/dir/totally-missing-note]].\n")
+
+	report := runLintJSON(t, root, "--json")
+	if report.Warns != 4 {
+		t.Fatalf("expected 4 broken-link warnings, got %d: %+v", report.Warns, report.Issues)
+	}
+
+	type want struct {
+		message     string
+		fix         string
+		driftTarget string
+	}
+	wants := map[string]want{
+		"claude-code-notes":             {"broken wikilink: [[claude-code-notes]]", "drift", "Claude Code Notes"},
+		"My_Note":                       {"broken wikilink: [[My_Note]]", "ambiguous", ""},
+		"totally-missing-note":          {"broken wikilink: [[totally-missing-note]]", "missing", ""},
+		"some/dir/totally-missing-note": {"broken wikilink: [[some/dir/totally-missing-note]]", "missing", ""},
+	}
+	seen := make(map[string]bool)
+	for _, is := range report.Issues {
+		w, ok := wants[is.Target]
+		if !ok {
+			t.Errorf("unexpected issue target %q: %+v", is.Target, is)
+			continue
+		}
+		seen[is.Target] = true
+		if is.Message != w.message {
+			t.Errorf("target %q: message must be byte-identical to the legacy format: got %q, want %q",
+				is.Target, is.Message, w.message)
+		}
+		if is.Fix != w.fix {
+			t.Errorf("target %q: fix = %q, want %q", is.Target, is.Fix, w.fix)
+		}
+		if is.DriftTarget != w.driftTarget {
+			t.Errorf("target %q: drift_target = %q, want %q", is.Target, is.DriftTarget, w.driftTarget)
+		}
+	}
+	for target := range wants {
+		if !seen[target] {
+			t.Errorf("expected an issue for target %q, got: %+v", target, report.Issues)
+		}
+	}
+}
+
+// TestLint_ClassificationFieldsAreOmitEmpty confirms the additive fields are
+// truly additive in the JSON encoding: drift_target is OMITTED (not "") when
+// fix is not "drift", so pre-classification consumers that decode into strict
+// structs or key-check maps see no new noise beyond target/fix on link issues.
+func TestLint_ClassificationFieldsAreOmitEmpty(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.WriteFile(filepath.Join(root, "note.md"),
+		[]byte("---\ntitle: Note\ntype: note\nstatus: draft\n---\nSee [[totally-missing-note]].\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIArgs(t, root, "lint", "--json")
+	if err != nil {
+		t.Fatalf("lint: %v", err)
+	}
+	var raw struct {
+		Issues []map[string]any `json:"issues"`
+	}
+	if jerr := json.Unmarshal(out, &raw); jerr != nil {
+		t.Fatalf("decode lint report: %v\n%s", jerr, out)
+	}
+	if len(raw.Issues) != 1 {
+		t.Fatalf("expected exactly 1 issue, got: %+v", raw.Issues)
+	}
+	is := raw.Issues[0]
+	if is["target"] != "totally-missing-note" || is["fix"] != "missing" {
+		t.Errorf("expected target/fix on the link issue, got: %+v", is)
+	}
+	if _, present := is["drift_target"]; present {
+		t.Errorf("drift_target must be omitted when fix != drift, got: %+v", is)
 	}
 }
 
