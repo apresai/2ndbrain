@@ -23,6 +23,12 @@ struct LintResultsView: View {
     @State private var classifications: [String: LinkFixClass] = [:]
     /// True while `classifyBrokenFindings` is probing suggest-target per finding.
     @State private var classifying = false
+    /// The "Fix each" walkthrough: the decision-class findings queued to step
+    /// through the existing per-finding sheet, and the 0-based index of the one
+    /// currently shown. Empty means no walkthrough is active (a single "Fix
+    /// link…" opens the sheet in its normal one-off mode).
+    @State private var walkthroughQueue: [BrokenFinding] = []
+    @State private var walkthroughIndex = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -154,23 +160,38 @@ struct LintResultsView: View {
             .environment(appState)
         }
         .sheet(item: $activeRepair) { repair in
+            // In walkthrough mode the sheet resolving OR the user skipping just
+            // advances to the next queued finding (no per-step re-lint); the
+            // single end re-lint happens when the queue drains. In single mode
+            // it behaves exactly as before: banner + re-lint on resolve/stale.
+            let inQueue = !walkthroughQueue.isEmpty
             LinkResolutionSheet(
                 fix: repair,
+                queuePosition: inQueue ? (index: walkthroughIndex, total: walkthroughQueue.count) : nil,
                 onOpenInObsidian: { openInObsidian(forPath: repair.path) },
                 onResolved: { message in
-                    activeRepair = nil
-                    actionTone = .success
-                    actionMessage = "\(message) Re-checking…"
-                    Task { await appState.runLint() }
+                    if inQueue {
+                        advanceWalkthrough()
+                    } else {
+                        activeRepair = nil
+                        actionTone = .success
+                        actionMessage = "\(message) Re-checking…"
+                        Task { await appState.runLint() }
+                    }
                 },
                 onStale: { message in
                     // The link no longer exists, so the finding is stale, not
                     // failed: informational banner + re-lint so it disappears.
-                    activeRepair = nil
-                    actionTone = .info
-                    actionMessage = "\(message) Re-checking…"
-                    Task { await appState.runLint() }
-                }
+                    if inQueue {
+                        advanceWalkthrough()
+                    } else {
+                        activeRepair = nil
+                        actionTone = .info
+                        actionMessage = "\(message) Re-checking…"
+                        Task { await appState.runLint() }
+                    }
+                },
+                onSkip: inQueue ? { advanceWalkthrough() } : nil
             )
             .environment(appState)
         }
@@ -186,6 +207,20 @@ struct LintResultsView: View {
                 }
             )
             .environment(appState)
+        }
+        // The walkthrough sheet dismissing to nil (queue drained, or the user
+        // cancelled mid-walk) ends the walkthrough: tear down the queue and
+        // re-lint once so every fix applied across the steps is reflected. In
+        // single-finding mode the queue is empty, so this is a no-op and the
+        // per-finding closures own their own re-lint (no double re-check).
+        .onChange(of: activeRepair?.id) { _, newID in
+            if newID == nil && !walkthroughQueue.isEmpty {
+                walkthroughQueue = []
+                walkthroughIndex = 0
+                actionTone = .success
+                actionMessage = "Finished stepping through broken links. Re-checking…"
+                Task { await appState.runLint() }
+            }
         }
     }
 
@@ -212,6 +247,17 @@ struct LintResultsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            // Step through the decision-class findings (the ones Fix-all can't
+            // resolve one-click) one at a time via the existing per-finding sheet.
+            // Count from the deduped walkthrough queue, not counts.decision (which
+            // is per-occurrence), so the label matches the "N of M" the walk shows.
+            let walkCount = ready ? FixAllPlanner.walkthroughQueue(from: classifiedPairs(findings)).count : 0
+            if ready && walkCount >= 1 {
+                Button("Fix each (\(walkCount))") { startWalkthrough(findings) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(appState.isLinting)
+            }
             if ready && counts.oneClick >= 1 {
                 Button("Fix all") { activeFixAll = FixAllPlan(rewrites: fixAllPlan(findings)) }
                     .buttonStyle(.borderedProminent)
@@ -221,6 +267,40 @@ struct LintResultsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    /// Begin the "Fix each" walkthrough: build the decision-class queue (the
+    /// complement of the Fix-all plan) from the current classifications and open
+    /// the first finding in the per-finding sheet. A no-op if nothing needs a
+    /// decision.
+    /// Pair each finding with its classification (dropping any not yet
+    /// classified), the input both the Fix-each button count and the walkthrough
+    /// queue derive from, so they can never disagree.
+    private func classifiedPairs(_ findings: [BrokenFinding]) -> [(BrokenFinding, LinkFixClass)] {
+        findings.compactMap { f in classifications[f.id].map { (f, $0) } }
+    }
+
+    private func startWalkthrough(_ findings: [BrokenFinding]) {
+        let queue = FixAllPlanner.walkthroughQueue(from: classifiedPairs(findings))
+        guard let first = queue.first else { return }
+        walkthroughQueue = queue
+        walkthroughIndex = 0
+        activeRepair = ActiveRepair(path: first.path, target: first.target)
+    }
+
+    /// Advance the walkthrough to the next queued finding after a fix is applied
+    /// or the finding is skipped. When the queue is exhausted, drop the sheet to
+    /// nil; the `.onChange` on `activeRepair` then ends the walkthrough and
+    /// re-lints once.
+    private func advanceWalkthrough() {
+        let next = walkthroughIndex + 1
+        guard next < walkthroughQueue.count else {
+            activeRepair = nil
+            return
+        }
+        walkthroughIndex = next
+        let finding = walkthroughQueue[next]
+        activeRepair = ActiveRepair(path: finding.path, target: finding.target)
     }
 
     /// Open the note in Obsidian (not Finder), falling back to the file's
@@ -660,6 +740,11 @@ private struct LinkResolutionSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     let fix: ActiveRepair
+    /// Position within the "Fix each" walkthrough, e.g. (index: 1, total: 5).
+    /// Non-nil puts the sheet in queue mode: it shows a "2 of 5" progress
+    /// indicator, offers a Skip button, and visually recommends an action. Nil
+    /// is the normal single-finding mode (opened from one "Fix link…" button).
+    var queuePosition: (index: Int, total: Int)? = nil
     /// Open the note in Obsidian (delegated to the parent, which knows the vault).
     let onOpenInObsidian: () -> Void
     /// Called with a past-tense banner message after a successful resolution so
@@ -669,6 +754,18 @@ private struct LinkResolutionSheet: View {
     /// can dismiss, re-lint, and show an informational banner instead of a
     /// false success or an in-sheet dead end.
     let onStale: (String) -> Void
+    /// In queue mode, skip this finding and advance to the next. Nil in
+    /// single-finding mode, where no Skip button is shown.
+    var onSkip: (() -> Void)? = nil
+
+    /// In queue mode, which action to visually recommend: the top suggestion
+    /// (relink) when one exists, else unlink. Nil in single-finding mode, so
+    /// that path renders with no preselection, exactly as before.
+    private enum RecommendedAction: Equatable { case relinkTop, unlink }
+    private var recommendedAction: RecommendedAction? {
+        guard queuePosition != nil, !loading else { return nil }
+        return filteredSuggestions.isEmpty ? .unlink : .relinkTop
+    }
 
     @State private var loading = true
     @State private var repairPreview: PolishResult?
@@ -688,8 +785,17 @@ private struct LinkResolutionSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Fix link")
-                .font(.headline)
+            HStack {
+                Text("Fix link")
+                    .font(.headline)
+                if let pos = queuePosition {
+                    Spacer()
+                    Text(FixAllPlanner.walkthroughProgress(index: pos.index, total: pos.total))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
             Text("[[\(fix.target)]] in \(fix.path)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -742,7 +848,14 @@ private struct LinkResolutionSheet: View {
                     .controlSize(.small)
                     .disabled(busy)
                 Spacer()
-                Button("Cancel") { dismiss() }
+                if let onSkip {
+                    Button("Skip") { onSkip() }
+                        .disabled(busy)
+                }
+                // In queue mode this stops the whole walkthrough (the parent's
+                // onChange on `activeRepair` re-lints once); in single mode it
+                // just closes the sheet.
+                Button(queuePosition == nil ? "Cancel" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(busy)
             }
@@ -781,24 +894,39 @@ private struct LinkResolutionSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Did you mean?", systemImage: "sparkle.magnifyingglass")
                 .font(.subheadline).fontWeight(.medium)
-            ForEach(filteredSuggestions) { cand in
+            ForEach(Array(filteredSuggestions.enumerated()), id: \.element.id) { index, cand in
+                let recommended = recommendedAction == .relinkTop && index == 0
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(cand.displayTitle).font(.callout)
                         Text(cand.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    if recommended {
+                        Text("Recommended").font(.caption2).foregroundStyle(.green)
+                    }
                     Spacer()
-                    Button("Link") {
-                        let to = (cand.path as NSString).deletingPathExtension
-                        run("Linked [[\(fix.target)]] → [[\(cand.displayTitle)]].") {
-                            let res = try await appState.relink(path: fix.path, from: fix.target, to: to, preview: false)
-                            return LinkFixOutcome.classify(result: res, target: fix.target, verb: "repoint")
+                    Group {
+                        if recommended {
+                            Button("Link") { relinkAction(cand) }.buttonStyle(.borderedProminent)
+                        } else {
+                            Button("Link") { relinkAction(cand) }
                         }
                     }
                     .controlSize(.small)
                     .disabled(busy)
                 }
             }
+        }
+    }
+
+    /// Repoint the broken link at the chosen candidate note (`.md` dropped).
+    /// Shared by the plain and recommended Link buttons so preselection changes
+    /// only the button's prominence, never the action.
+    private func relinkAction(_ cand: SuggestTargetResult) {
+        let to = (cand.path as NSString).deletingPathExtension
+        run("Linked [[\(fix.target)]] → [[\(cand.displayTitle)]].") {
+            let res = try await appState.relink(path: fix.path, from: fix.target, to: to, preview: false)
+            return LinkFixOutcome.classify(result: res, target: fix.target, verb: "repoint")
         }
     }
 
@@ -822,19 +950,35 @@ private struct LinkResolutionSheet: View {
 
     @ViewBuilder
     private var unlinkSection: some View {
+        let recommended = recommendedAction == .unlink
         VStack(alignment: .leading, spacing: 6) {
-            Label("Unlink", systemImage: "link.badge.plus")
-                .font(.subheadline).fontWeight(.medium)
+            HStack(spacing: 6) {
+                Label("Unlink", systemImage: "link.badge.plus")
+                    .font(.subheadline).fontWeight(.medium)
+                if recommended {
+                    Text("Recommended").font(.caption2).foregroundStyle(.green)
+                }
+            }
             Text("Remove the link, keep the text “\(fix.target)”.")
                 .font(.caption).foregroundStyle(.secondary)
-            Button("Unlink") {
-                run("Unlinked [[\(fix.target)]].") {
-                    let res = try await appState.unlink(path: fix.path, target: fix.target, preview: false)
-                    return LinkFixOutcome.classify(result: res, target: fix.target, verb: "unlink")
+            Group {
+                if recommended {
+                    Button("Unlink") { unlinkAction() }.buttonStyle(.borderedProminent)
+                } else {
+                    Button("Unlink") { unlinkAction() }
                 }
             }
             .controlSize(.small)
             .disabled(busy)
+        }
+    }
+
+    /// Remove the broken link, keeping its visible text. Shared by the plain and
+    /// recommended Unlink buttons.
+    private func unlinkAction() {
+        run("Unlinked [[\(fix.target)]].") {
+            let res = try await appState.unlink(path: fix.path, target: fix.target, preview: false)
+            return LinkFixOutcome.classify(result: res, target: fix.target, verb: "unlink")
         }
     }
 
