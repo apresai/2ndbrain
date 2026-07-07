@@ -82,6 +82,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	testSave = false
 	verifyProvider, verifyVendor, verifyScope = "", "", "vault"
 	verifyRecommended, verifyAll, verifyYes = false, false, false
+	verifyEnabledOnly, verifyEvents = false, false
 	verifyCostCap = 0.05
 	costProvider, costProbeKind = "", "test"
 	costAll = false
@@ -614,6 +615,68 @@ func TestContract_ModelsPolicyShowJSON(t *testing.T) {
 	}
 	if len(parsed) != 1 || parsed[0].Provider != "bedrock" || parsed[0].Scope != "vault" {
 		t.Fatalf("expected one vault-scope bedrock policy, got %+v", parsed)
+	}
+}
+
+// --- Contract: models verify --enabled-only --events -------------------
+
+// TestContract_ModelsVerifyEventsGUIArgv pre-registers the exact argv the GUI
+// sends for a streamed validation pass. AWS credentials are neutralized so
+// the bedrock cred gate yields a zero-candidate set: the command must parse,
+// spend nothing, and still emit a decodable start+done NDJSON stream (exit 0).
+func TestContract_ModelsVerifyEventsGUIArgv(t *testing.T) {
+	_, root := newContractVault(t)
+	neutralizeAWSCredentials(t)
+
+	got, err := runCLIArgs(t, root,
+		"models", "verify",
+		"--provider", "bedrock",
+		"--enabled-only",
+		"--scope", "vault",
+		"--yes",
+		"--events",
+		"--cost-cap", "0.10")
+	if err != nil {
+		t.Fatalf("models verify --events: %v (out=%s)", err, truncate(got, 500))
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(got), []byte("\n"))
+	if len(lines) < 2 {
+		t.Fatalf("expected at least start+done events, got:\n%s", got)
+	}
+	// Every line must be a decodable event object.
+	for _, line := range lines {
+		var e struct {
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(line, &e); err != nil || e.Event == "" {
+			t.Fatalf("non-decodable event line: %s", line)
+		}
+	}
+	var first, last struct {
+		Event      string         `json:"event"`
+		Total      int            `json:"total"`
+		Summary    map[string]int `json:"summary"`
+		SavedScope string         `json:"saved_scope"`
+	}
+	if err := json.Unmarshal(lines[0], &first); err != nil {
+		t.Fatalf("start event parse: %v (line=%s)", err, lines[0])
+	}
+	if first.Event != "start" {
+		t.Fatalf("first event = %q, want start", first.Event)
+	}
+	if first.Total != 0 {
+		t.Fatalf("expected zero candidates with credentials neutralized, got total=%d", first.Total)
+	}
+	if err := json.Unmarshal(lines[len(lines)-1], &last); err != nil {
+		t.Fatalf("done event parse: %v (line=%s)", err, lines[len(lines)-1])
+	}
+	if last.Event != "done" || last.SavedScope != "vault" {
+		t.Fatalf("last event = %+v, want done with saved_scope=vault", last)
+	}
+	// A zero-candidate run probes nothing and must not write the catalog.
+	if _, statErr := os.Stat(filepath.Join(root, ".2ndbrain", "models.yaml")); !os.IsNotExist(statErr) {
+		t.Fatal("zero-candidate events run must not write the catalog")
 	}
 }
 
