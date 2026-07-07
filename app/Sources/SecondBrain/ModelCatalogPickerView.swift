@@ -31,6 +31,9 @@ struct ModelCatalogPickerView: View {
     @State private var benchmarkProbeSelection = "embed"
     @State private var costPreview: CostPreviewResponse?
     @State private var benchmarkEvents: [BenchmarkEvent] = []
+    @State private var benchHistory: [BenchRunInfo] = []
+    @State private var benchHistoryLoaded = false
+    @State private var showBenchHistory = false
     @State private var thresholdText = ""
     @State private var statusText: String?
     @State private var errorText: String?
@@ -453,8 +456,41 @@ struct ModelCatalogPickerView: View {
                         }
                     }
                 }
+                benchHistoryList(model)
             }
         }
+    }
+
+    /// Past runs for the selected model from bench.db, loaded on expand so
+    /// the picker doesn't shell the CLI for models nobody inspects.
+    @ViewBuilder
+    private func benchHistoryList(_ model: CatalogModelInfo) -> some View {
+        DisclosureGroup("History", isExpanded: $showBenchHistory) {
+            let runs = benchHistory.filter { $0.modelID == model.modelID && $0.provider == model.provider }
+            if runs.isEmpty {
+                Text(benchHistoryLoaded ? "No benchmark runs recorded for this model." : "Loading…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(runs) { run in
+                        Text("\(run.timestamp)  \(run.probe)  \(run.latencyMs)ms  \(run.ok ? "OK" : "FAIL")")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(run.ok ? .secondary : .red)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .font(.caption)
+        .onChange(of: showBenchHistory) { _, expanded in
+            if expanded { Task { await loadBenchHistory() } }
+        }
+    }
+
+    private func loadBenchHistory() async {
+        benchHistory = (try? await appState.fetchBenchHistory()) ?? []
+        benchHistoryLoaded = true
     }
 
     private var selectedModel: CatalogModelInfo? {

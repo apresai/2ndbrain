@@ -2303,6 +2303,15 @@ final class AppState {
         return try JSONDecoder().decode(CostPreviewResponse.self, from: data)
     }
 
+    /// Recent benchmark runs from the vault's bench.db (`models bench
+    /// history --json`). The CLI emits JSON null (not []) when the history
+    /// is empty, so decode falls back to an empty list.
+    func fetchBenchHistory(limit: Int = 50) async throws -> [BenchRunInfo] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["models", "bench", "history", "--limit", "\(limit)", "--json", "--porcelain"], cwd: vault.rootURL)
+        return (try? JSONDecoder().decode([BenchRunInfo].self, from: data)) ?? []
+    }
+
     // MARK: - Advanced settings (config visibility)
 
     /// Writes one vault config key via `2nb config set`. Validation lives in
@@ -3349,6 +3358,26 @@ struct CostPreviewResponse: Codable {
     enum CodingKeys: String, CodingKey {
         case estimates
         case totalUSD = "total_usd"
+    }
+}
+
+/// One row of `2nb models bench history --json` (bench.Run in the CLI).
+struct BenchRunInfo: Codable, Identifiable {
+    let id: Int
+    let timestamp: String
+    let provider: String
+    let modelID: String
+    let probe: String
+    let latencyMs: Int64
+    let ok: Bool
+    let detail: String?
+    let vaultDocCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, provider, probe, ok, detail
+        case modelID = "model_id"
+        case latencyMs = "latency_ms"
+        case vaultDocCount = "vault_doc_count"
     }
 }
 
