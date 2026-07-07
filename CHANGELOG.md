@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.15.0] - 2026-07-07
+
+### Added
+- Bedrock mantle generation client with `openai.gpt-5.5` (us-east-2) and `xai.grok-4.3` (us-west-2) model entries, plus per-model Region/Endpoint support and the `bedrock_mantle_responses` invoke strategy.
+- `models policy set/show/clear`: persistent enable-only vendor selection per provider, honored by dropdowns, the AI Hub catalog, and `models verify` (future discoveries arrive pre-disabled).
+- `models verify --events` streaming NDJSON probe progress for the GUI, and `--enabled-only` to validate exactly the effectively-enabled models.
+- `lint` now classifies each broken wikilink (`drift`/`ambiguous`/`missing`) with additive `--json` fields, and `suggest-target` scores candidates `high`/`medium`/`low` confidence.
+- `suggest-target --source` excludes the note being fixed from its own candidates.
+- AI Hub: **Validate models** with streamed access results, a summary-first collapsed catalog, a vendor policy sheet with disabled-model visibility, and class-aware Validation with one-click **Fix all** plus a **Fix each** walkthrough for decision-class broken links.
+
+### Changed
+- `lint`, `repair-links`, and `suggest-target` now resolve candidates against the same live-filesystem walk (`vault.CollectLiveDocs`), so they can never disagree over a note added or deleted since the last index.
+
+### Fixed
+- Link-fix no-ops in the app are classified: a stale finding (link already gone) re-lints and clears instead of stranding an open sheet.
+
+
 ## [0.14.0] - 2026-07-07
 
 ### Added
