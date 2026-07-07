@@ -101,7 +101,7 @@ func BuiltinCatalog() []ModelInfo {
 	// Fable 5 is intentionally absent from the curated set (premium pricing
 	// and materially different API semantics: always-on thinking, refusal stop
 	// reason); it remains discoverable and testable via `models list --discover`.
-	const stagedRolloutNote = "1M context; AWS staged rollout gates this per account — test it before relying on it"
+	const stagedRolloutNote = "1M context; AWS staged rollout gates this per account — run `2nb models verify` to check yours"
 	for _, m := range []struct {
 		id, name    string
 		ctxLen      int

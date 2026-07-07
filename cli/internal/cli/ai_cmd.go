@@ -78,6 +78,47 @@ type AIStatus struct {
 	// and the `ai status` pretty output. Each entry reflects configured
 	// credentials, user disable flag, and a cheap reachability probe.
 	Providers []ProviderStatus `json:"providers,omitempty"`
+
+	// ModelAccess summarizes this account's persisted model-verification
+	// state for the active provider (from `models verify` / `models test
+	// --save` results in the user catalog). Nil when nothing was tested.
+	ModelAccess *ModelAccessSummary `json:"model_access,omitempty"`
+}
+
+// ModelAccessSummary aggregates persisted per-account test outcomes.
+type ModelAccessSummary struct {
+	Verified       int    `json:"verified"`
+	AccessDenied   int    `json:"access_denied"`
+	OtherFailures  int    `json:"other_failures"`
+	LastVerifiedAt string `json:"last_verified_at,omitempty"`
+}
+
+// summarizeModelAccess folds the user catalog's persisted test results for
+// the active provider into counts the GUI and `ai status` can render.
+func summarizeModelAccess(vaultRoot, provider string) *ModelAccessSummary {
+	var out ModelAccessSummary
+	any := false
+	for _, m := range ai.LoadUserCatalog(vaultRoot) {
+		if m.Provider != provider || m.TestedAt == "" {
+			continue
+		}
+		any = true
+		switch {
+		case m.TestError == "":
+			out.Verified++
+		case m.TestErrorCode == string(ai.TestErrAccessDenied):
+			out.AccessDenied++
+		default:
+			out.OtherFailures++
+		}
+		if m.TestedAt > out.LastVerifiedAt {
+			out.LastVerifiedAt = m.TestedAt
+		}
+	}
+	if !any {
+		return nil
+	}
+	return &out
 }
 
 // ProviderStatus is the GUI-facing shape of a single provider's health.
@@ -156,6 +197,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	)
 
 	status.Providers = collectProviderStatus(ctx, cfg)
+	status.ModelAccess = summarizeModelAccess(v.Root, cfg.Provider)
 
 	format := getFormat(cmd)
 	if format != "" {
@@ -188,6 +230,10 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	// so coverage reads cleanly against what can actually be embedded.
 	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.VaultEmbeddableDocs)
 	fmt.Printf("Search threshold: %g (%s)\n", status.SimilarityThreshold, status.SimilarityThresholdSource)
+	if ma := status.ModelAccess; ma != nil && (ma.Verified > 0 || ma.AccessDenied > 0 || ma.OtherFailures > 0) {
+		fmt.Printf("Model access:     %d verified, %d access denied, %d other failures (last verified %s; run `2nb models verify` to refresh)\n",
+			ma.Verified, ma.AccessDenied, ma.OtherFailures, ma.LastVerifiedAt)
+	}
 	// Loud degradation: an asymmetric model (Nova) embeds queries
 	// GENERIC_RETRIEVAL, which collapses the cosine scale (true matches land
 	// ~0.25-0.45). A threshold above ~0.45 is almost certainly carried over from

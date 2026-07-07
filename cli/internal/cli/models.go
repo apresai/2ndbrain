@@ -284,18 +284,55 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 
 	// --promote: test all unverified models concurrently and save passing ones.
 	total := len(merged.Unverified)
-	fmt.Printf("\nPromoting %d unverified model(s) — testing concurrently (max 5)...\n\n", total)
+	fmt.Printf("\nPromoting %d unverified model(s) — testing concurrently (max %d)...\n\n", total, probeConcurrency)
 
-	const promoteConcurrency = 5
-	sem := make(chan struct{}, promoteConcurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
 	var passed int
-	var counter atomic.Int32
-
 	scope := ai.UserCatalogScope(modelsPromoteScope)
 
-	for _, m := range merged.Unverified {
+	probeModelsConcurrently(ctx, v.Config.AI, merged.Unverified, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
+		if err == nil && result != nil && result.OK {
+			entry := promotedEntry(&m, result)
+			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
+				passed++
+				fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",
+					n, total, result.Provider, result.Type, result.ModelID)
+			} else {
+				fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → save failed: %v\n",
+					n, total, result.Provider, result.Type, result.ModelID, saveErr)
+			}
+		} else {
+			detail := m.ID
+			if result != nil && result.Detail != "" {
+				detail = result.Detail
+			} else if err != nil {
+				detail = err.Error()
+			}
+			if result != nil && result.Code != "" && result.Code != ai.TestErrUnknown {
+				detail = fmt.Sprintf("[%s] %s", result.Code, detail)
+			}
+			fmt.Printf("[%d/%d] FAIL  %s/%s  (%s)  %s\n",
+				n, total, m.Provider, m.Type, m.ID, detail)
+		}
+	})
+
+	fmt.Printf("\nPromoted %d of %d models to %s catalog.\n", passed, total, modelsPromoteScope)
+	return nil
+}
+
+// probeConcurrency bounds the worker pool for batch model probes
+// (--promote and models verify).
+const probeConcurrency = 5
+
+// probeModelsConcurrently runs TestProbeModel over models with a bounded
+// worker pool. onResult runs under a shared mutex (safe to print and save
+// from) with n as the 1-based completion counter.
+func probeModelsConcurrently(ctx context.Context, cfg ai.AIConfig, models []ai.ModelInfo, onResult func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error)) {
+	sem := make(chan struct{}, probeConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var counter atomic.Int32
+
+	for _, m := range models {
 		wg.Add(1)
 		go func(m ai.ModelInfo) {
 			defer wg.Done()
@@ -303,40 +340,14 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 			defer func() { <-sem }()
 
 			n := int(counter.Add(1))
-			result, err := ai.TestProbeModel(ctx, v.Config.AI, m.ID, m.Provider, m.Type)
+			result, err := ai.TestProbeModel(ctx, cfg, m.ID, m.Provider, m.Type)
 
 			mu.Lock()
 			defer mu.Unlock()
-
-			if err == nil && result != nil && result.OK {
-				entry := promotedEntry(&m, result)
-				if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
-					passed++
-					fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",
-						n, total, result.Provider, result.Type, result.ModelID)
-				} else {
-					fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → save failed: %v\n",
-						n, total, result.Provider, result.Type, result.ModelID, saveErr)
-				}
-			} else {
-				detail := m.ID
-				if result != nil && result.Detail != "" {
-					detail = result.Detail
-				} else if err != nil {
-					detail = err.Error()
-				}
-				if result != nil && result.Code != "" && result.Code != ai.TestErrUnknown {
-					detail = fmt.Sprintf("[%s] %s", result.Code, detail)
-				}
-				fmt.Printf("[%d/%d] FAIL  %s/%s  (%s)  %s\n",
-					n, total, m.Provider, m.Type, m.ID, detail)
-			}
+			onResult(n, m, result, err)
 		}(m)
 	}
 	wg.Wait()
-
-	fmt.Printf("\nPromoted %d of %d models to %s catalog.\n", passed, total, modelsPromoteScope)
-	return nil
 }
 
 func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
