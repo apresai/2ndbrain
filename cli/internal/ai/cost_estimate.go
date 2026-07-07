@@ -107,7 +107,7 @@ func EstimateCostWithSpec(m ModelInfo, probe ProbeKind, spec ProbeSpec) CostEsti
 		InputTokens:  spec.InputTokens,
 		OutputTokens: spec.OutputTokens,
 		USD:          usd,
-		KnownPricing: hasKnownPricing(m),
+		KnownPricing: HasKnownPricing(m),
 	}
 }
 
@@ -145,19 +145,3 @@ func probeAppliesToModel(m ModelInfo, spec ProbeSpec) bool {
 	return true
 }
 
-// hasKnownPricing returns true when we have a confident price for this
-// model — either non-zero price fields or an explicit "free" marker.
-// Entries with PriceIn=PriceOut=PriceRequest=0 and no PriceSource are
-// treated as unknown so callers can prompt the user.
-func hasKnownPricing(m ModelInfo) bool {
-	if m.Local {
-		return true
-	}
-	if m.PriceIn > 0 || m.PriceOut > 0 || m.PriceRequest > 0 {
-		return true
-	}
-	// An explicit zero-price entry with a source set is a "known free"
-	// entry (bundled pricing catalog marks free-tier vendor models this
-	// way). Without a source it's just "we don't know".
-	return m.PriceSource != ""
-}

@@ -121,6 +121,12 @@ func enrichModels(models []ModelInfo, orPricing, brPricing *providerPricing) []M
 	out := make([]ModelInfo, len(models))
 	copy(out, models)
 
+	// A live no-match deliberately clears NOTHING: a stale but labeled
+	// catalog price (price_source records its provenance) beats "unknown"
+	// for cost previews, and the alias-matching that feeds bedrock lookups
+	// is heuristic enough that clearing on no-match silently blanked real
+	// prices (the pre-0.14 behavior this replaced). Delisted-model staleness
+	// is the accepted trade-off.
 	for i := range out {
 		if hasUserPriceOverride(out[i]) {
 			continue
@@ -129,14 +135,10 @@ func enrichModels(models []ModelInfo, orPricing, brPricing *providerPricing) []M
 		case "openrouter":
 			if price, ok := orPricing.exact[out[i].ID]; ok {
 				applyModelPrice(&out[i], price)
-			} else if orPricing.ready && !out[i].Local && out[i].PriceSource != "builtin" {
-				clearModelPrice(&out[i])
 			}
 		case "bedrock":
 			if price, ok := bedrockPriceForModel(brPricing, out[i].ID); ok {
 				applyModelPrice(&out[i], price)
-			} else if brPricing.ready && !out[i].Local && out[i].PriceSource != "builtin" {
-				clearModelPrice(&out[i])
 			}
 		}
 	}
@@ -682,13 +684,6 @@ func applyModelPrice(m *ModelInfo, price modelPrice) {
 		m.PriceRequest = price.PriceRequest
 	}
 	m.PriceSource = price.Source
-}
-
-func clearModelPrice(m *ModelInfo) {
-	m.PriceIn = 0
-	m.PriceOut = 0
-	m.PriceRequest = 0
-	m.PriceSource = ""
 }
 
 func loadCachedHTTPBody(ctx context.Context, url, cacheName string) ([]byte, error) {

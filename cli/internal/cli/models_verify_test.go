@@ -197,3 +197,51 @@ func TestContract_ModelsVerifyAnthropicLine_CredGated(t *testing.T) {
 	}
 	t.Logf("anthropic line summary: %v", report.Summary)
 }
+
+// TestContract_AIStatusActiveProviderDisabled asserts the loud-degradation
+// flag: hand-setting ai.<active>.disabled=true must surface as
+// active_provider_disabled in ai status --json.
+func TestContract_AIStatusActiveProviderDisabled(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.bedrock.disabled", "true"); err != nil {
+		t.Fatalf("set disabled: %v", err)
+	}
+	got, err := runCLIArgs(t, root, "ai", "status", "--json", "--porcelain")
+	if err != nil {
+		t.Skipf("ai status unavailable in this environment: %v", err)
+	}
+	var status struct {
+		Provider               string `json:"provider"`
+		ActiveProviderDisabled bool   `json:"active_provider_disabled"`
+	}
+	if err := json.Unmarshal(got, &status); err != nil {
+		t.Fatalf("parse: %v (body=%s)", err, truncate(got, 300))
+	}
+	if status.Provider != "bedrock" {
+		t.Fatalf("expected default provider bedrock, got %q", status.Provider)
+	}
+	if !status.ActiveProviderDisabled {
+		t.Fatal("active_provider_disabled not reported for a disabled active provider")
+	}
+
+	// Re-selecting the provider clears the flag (config set side effect).
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrock"); err != nil {
+		t.Fatalf("re-select provider: %v", err)
+	}
+	got, err = runCLIArgs(t, root, "ai", "status", "--json", "--porcelain")
+	if err != nil {
+		t.Skipf("ai status unavailable after re-select: %v", err)
+	}
+	// Fresh struct: the field is omitempty, so when false the key is absent
+	// and Unmarshal would leave the previous decode's true value in place.
+	var after struct {
+		ActiveProviderDisabled bool `json:"active_provider_disabled"`
+	}
+	if err := json.Unmarshal(got, &after); err != nil {
+		t.Fatalf("parse 2: %v", err)
+	}
+	if after.ActiveProviderDisabled {
+		t.Fatal("re-selecting the provider should have cleared the disabled flag")
+	}
+}
