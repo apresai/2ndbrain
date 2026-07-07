@@ -326,14 +326,16 @@ struct HomeView: View {
     /// else answers a question the user didn't ask. Results are branched on
     /// each probe's ok flag (the CLI exits 0 for a failed probe).
     private func test() async {
-        testing = true
-        actionMessage = nil
-        defer { testing = false }
         guard let status = appState.aiStatus else {
             actionIsError = true
             actionMessage = "AI status not loaded yet; try again in a moment."
             return
         }
+        let ids = [status.embeddingModel, status.genModel].filter { !$0.isEmpty }
+        guard await confirmPaidOperation(appState: appState, modelIDs: ids, probe: "test", operation: "Test the active models") else { return }
+        testing = true
+        actionMessage = nil
+        defer { testing = false }
         do {
             var failures: [String] = []
             var tested = 0
