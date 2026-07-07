@@ -161,7 +161,7 @@ func RunGenerate(opts ProbeOpts) ProbeResult {
 	resp, err := func() (string, error) {
 		switch opts.Provider {
 		case "bedrock":
-			g, err := ai.NewBedrockGenerator(opts.Ctx, opts.AICfg.Bedrock, opts.ModelID)
+			g, err := ai.NewBedrockGeneration(opts.Ctx, opts.AICfg.Bedrock, opts.ModelID, opts.VaultRoot)
 			if err != nil {
 				return "", err
 			}
@@ -263,7 +263,7 @@ func RunRAG(opts ProbeOpts) ProbeResult {
 	var generator ai.GenerationProvider
 	switch opts.Provider {
 	case "bedrock":
-		g, err := ai.NewBedrockGenerator(opts.Ctx, opts.AICfg.Bedrock, opts.ModelID)
+		g, err := ai.NewBedrockGeneration(opts.Ctx, opts.AICfg.Bedrock, opts.ModelID, opts.VaultRoot)
 		if err != nil {
 			return ProbeResult{Probe: "rag", LatencyMs: time.Since(start).Milliseconds(), OK: false, Detail: err.Error()}
 		}

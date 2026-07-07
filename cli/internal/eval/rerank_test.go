@@ -41,7 +41,7 @@ func TestRerankRetrievalAB(t *testing.T) {
 		t.Skipf("rerank A/B needs a bedrock vault, got provider %q", cfg.Provider)
 	}
 	ctx := context.Background()
-	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg); err != nil {
+	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg, v.Root); err != nil {
 		t.Skipf("bedrock init (creds?): %v", err)
 	}
 	emb, err := ai.DefaultRegistry.Embedder("bedrock")

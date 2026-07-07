@@ -81,7 +81,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 
 ## AI Providers
 
-2ndbrain supports three AI providers for embeddings and generation. Bedrock uses the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html), so any Bedrock model works — Claude, Nova, Llama, Mistral, and more.
+2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token), set via `2nb config set-key bedrock`.
 
 | Provider | Embeddings | Generation | Setup |
 |----------|-----------|------------|-------|

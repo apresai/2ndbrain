@@ -136,6 +136,43 @@ func BuiltinCatalog() []ModelInfo {
 		})
 	}
 
+	// --- Bedrock Generation (mantle plane — OpenAI Responses dialect) ---
+	// These live on the bedrock-mantle invocation plane, not classic Bedrock:
+	// bearer-token (Bedrock API key) auth only, one pinned Region per model,
+	// invisible to the classic control plane. Entitlement is per-account (a
+	// valid token still gets 401 until AWS enables the model for the account),
+	// so neither ships Recommended — a real probe (`2nb models verify`) is the
+	// invokability check. Prices stay unset (PriceSource empty): checked
+	// 2026-07-07, the AWS offer file carries xai.grok-4.3-mantle usagetypes
+	// (so live enrichment resolves grok when the offer region matches) but no
+	// openai.gpt-5.5-mantle pricing at all yet. Context lengths verified
+	// 2026-07-07 against the OpenRouter listing (openai/gpt-5.5 1.05M,
+	// x-ai/grok-4.3 1.0M).
+	const mantleNote = "bedrock mantle plane: needs a Bedrock API key (bearer token); entitlement is per-account (401 until AWS enables it) — run `2nb models verify`"
+	for _, m := range []struct {
+		id, name string
+		region   string
+		ctxLen   int
+	}{
+		{"openai.gpt-5.5", "OpenAI GPT-5.5", "us-east-2", 1_050_000},
+		{"xai.grok-4.3", "xAI Grok 4.3", "us-west-2", 1_000_000},
+	} {
+		models = append(models, ModelInfo{
+			ID:             m.id,
+			Name:           m.name,
+			Provider:       "bedrock",
+			Type:           "generation",
+			ContextLen:     m.ctxLen,
+			Local:          false,
+			Tier:           TierVerified,
+			Recommended:    false,
+			Region:         m.region,
+			ConfigHint:     configHint("bedrock", "generation", m.id),
+			Notes:          mantleNote,
+			InvokeStrategy: StrategyBedrockMantleResponses,
+		})
+	}
+
 	// --- OpenRouter Embedding (OpenAI-compatible embeddings API) ---
 	// Threshold 0.60: vision-language embedder trained contrastively at 1024d.
 	// Estimated from training objective + dimensionality — not measured on a

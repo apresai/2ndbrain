@@ -179,7 +179,7 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 			Provider: m.Provider,
 			Type:     m.Type,
 		})
-		r, err := ai.TestProbeModel(ctx, v.Config.AI, m.ID, m.Provider, m.Type)
+		r, err := ai.TestProbeModel(ctx, v.Config.AI, m.ID, m.Provider, m.Type, v.Root)
 		if err != nil {
 			events.emit(wizardEvent{
 				Step:     "test_result",

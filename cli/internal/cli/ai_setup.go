@@ -189,7 +189,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	// catalog (as user_verified) so a model that passed setup is not thrown
 	// away: it shows up in `2nb models list` afterward.
 	fmt.Printf("\nTesting embedding model %s...\n", embedID)
-	embedProbe := probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "embedding", &embedID, &dims)
+	embedProbe := probeWithRetry(ctx, scanner, &cfg, v.Root, verifiedModels, provider, "embedding", &embedID, &dims)
 	cfg.EmbeddingModel = embedID
 	if dims > 0 {
 		cfg.Dimensions = dims
@@ -197,7 +197,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	persistProbe(v.Root, embedProbe)
 
 	fmt.Printf("Testing generation model %s...\n", genID)
-	genProbe := probeWithRetry(ctx, scanner, &cfg, verifiedModels, provider, "generation", &genID, &dims)
+	genProbe := probeWithRetry(ctx, scanner, &cfg, v.Root, verifiedModels, provider, "generation", &genID, &dims)
 	cfg.GenerationModel = genID
 	persistProbe(v.Root, genProbe)
 
@@ -425,9 +425,9 @@ func llamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 // the user catalog (so a model that passed setup shows as user_verified in
 // `2nb models list`). Returns nil when the user opts to continue without a
 // passing probe.
-func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig, models []ai.ModelInfo, provider, modelType string, modelID *string, dims *int) *ai.TestProbeResult {
+func probeWithRetry(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig, vaultRoot string, models []ai.ModelInfo, provider, modelType string, modelID *string, dims *int) *ai.TestProbeResult {
 	for {
-		result, err := ai.TestProbeModel(ctx, *cfg, *modelID, provider, modelType)
+		result, err := ai.TestProbeModel(ctx, *cfg, *modelID, provider, modelType, vaultRoot)
 		if err == nil && result.OK {
 			fmt.Printf("  OK (%s)\n", result.Latency)
 			return result

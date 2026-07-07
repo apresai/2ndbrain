@@ -74,10 +74,11 @@ func estimateAnswersCostUSD(genM ai.ModelInfo, judges []ai.ModelInfo, n int) flo
 
 // judgeGenerator builds a generation provider for a judge model ID, mirroring
 // the test-probe constructors (bedrock / openrouter / ollama by inference).
-func judgeGenerator(ctx context.Context, cfg ai.AIConfig, modelID string) (ai.GenerationProvider, error) {
+// vaultRoot scopes user-catalog invoke-strategy lookups (mantle dispatch).
+func judgeGenerator(ctx context.Context, cfg ai.AIConfig, modelID, vaultRoot string) (ai.GenerationProvider, error) {
 	switch provider := ai.InferProvider(modelID); provider {
 	case "bedrock":
-		return ai.NewBedrockGenerator(ctx, cfg.Bedrock, modelID)
+		return ai.NewBedrockGeneration(ctx, cfg.Bedrock, modelID, vaultRoot)
 	case "openrouter":
 		key, err := ai.GetAPIKey("openrouter")
 		if err != nil {
@@ -128,7 +129,7 @@ func runEvalAnswers(cmd *cobra.Command, args []string) error {
 		judgeNames = []string{cfg.GenerationModel}
 	} else {
 		for _, id := range evalJudges {
-			g, jerr := judgeGenerator(ctx, cfg, id)
+			g, jerr := judgeGenerator(ctx, cfg, id, v.Root)
 			if jerr != nil {
 				return fmt.Errorf("judge %s: %w", id, jerr)
 			}

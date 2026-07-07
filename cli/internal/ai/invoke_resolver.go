@@ -30,6 +30,16 @@ func ResolveModelRegion(provider, modelID, vaultRoot string) string {
 	})
 }
 
+// ResolveModelEndpoint returns the per-model endpoint URL override for
+// (provider, modelID), resolved through the same user-catalog-over-builtin
+// chain as ResolveInvokeStrategy. Returns "" when no catalog entry pins an
+// endpoint, meaning "derive the endpoint from the model's Region".
+func ResolveModelEndpoint(provider, modelID, vaultRoot string) string {
+	return resolveCatalogString(provider, modelID, vaultRoot, func(m ModelInfo) string {
+		return m.Endpoint
+	})
+}
+
 // resolveCatalogString resolves one string-valued catalog field for
 // (provider, modelID): builtin is the base layer, overlaid with the user
 // catalog so a user override can correct a builtin that's wrong or

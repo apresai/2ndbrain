@@ -20,7 +20,7 @@ func TestHandleKBPolishLinks_E2E_Bedrock(t *testing.T) {
 		t.Skip("AWS credentials not configured for Bedrock")
 	}
 	h, v := makeHandlers(t)
-	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, v.Config.AI.Bedrock, v.Config.AI); err != nil {
+	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, v.Config.AI.Bedrock, v.Config.AI, v.Root); err != nil {
 		t.Skipf("init bedrock: %v", err)
 	}
 

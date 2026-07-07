@@ -23,7 +23,7 @@ func initAIProviders(v *vault.Vault) {
 
 	switch cfg.Provider {
 	case "bedrock":
-		if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg); err != nil {
+		if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg, v.Root); err != nil {
 			if !flagPorcelain {
 				fmt.Fprintf(os.Stderr, "warning: bedrock init: %v\n", err)
 			}

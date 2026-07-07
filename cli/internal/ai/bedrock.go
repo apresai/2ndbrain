@@ -594,8 +594,32 @@ type BedrockGenerator struct {
 // actual input/output tokens rather than a chars/4 estimate.
 var _ UsageGenerator = (*BedrockGenerator)(nil)
 
-// NewBedrockGenerator creates a Bedrock generation provider.
+// NewBedrockGeneration builds the right generation client for the model's
+// declared invoke strategy: a mantle-strategy model gets the bearer-token
+// Responses client (BedrockMantleGenerator), everything else the classic
+// Converse generator. All Bedrock generator-construction paths (InitBedrock,
+// probeGeneration, bench, judges) route through here so a mantle model can
+// never fall through to Converse — the classic plane cannot see those models
+// and would fail with a misleading 404. vaultRoot scopes user-catalog
+// strategy/region lookups; pass "" when no vault is open.
+func NewBedrockGeneration(ctx context.Context, cfg BedrockConfig, model, vaultRoot string) (GenerationProvider, error) {
+	if ResolveInvokeStrategy("bedrock", model, vaultRoot) == StrategyBedrockMantleResponses {
+		slog.Debug("bedrock generation: dispatching to the mantle plane", "model", model)
+		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
+	}
+	return NewBedrockGenerator(ctx, cfg, model)
+}
+
+// NewBedrockGenerator creates the classic Converse generation provider.
+// Prefer NewBedrockGeneration, which dispatches by invoke strategy.
 func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (*BedrockGenerator, error) {
+	// Exhaustive-dispatch guard: a mantle-strategy model must never reach the
+	// Converse path. Builtin/global catalog resolution needs no vault root;
+	// callers with a vault root get the vault-scoped check via
+	// NewBedrockGeneration before this backstop runs.
+	if ResolveInvokeStrategy("bedrock", model, "") == StrategyBedrockMantleResponses {
+		return nil, fmt.Errorf("%s uses the bedrock mantle plane (%s); construct it via NewBedrockGeneration", model, StrategyBedrockMantleResponses)
+	}
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -913,14 +937,16 @@ func CheckBedrockCredentials(ctx context.Context, cfg BedrockConfig) bool {
 }
 
 // InitBedrock creates and registers Bedrock providers with the given registry.
-func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AIConfig) error {
+// vaultRoot scopes user-catalog invoke-strategy lookups (a vault-scoped mantle
+// entry must dispatch to the mantle client); pass "" when no vault is open.
+func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AIConfig, vaultRoot string) error {
 	embedder, err := NewBedrockEmbedder(ctx, cfg, aiCfg.EmbeddingModel, aiCfg.Dimensions)
 	if err != nil {
 		return fmt.Errorf("init bedrock embedder: %w", err)
 	}
 	reg.RegisterEmbedder("bedrock", embedder)
 
-	generator, err := NewBedrockGenerator(ctx, cfg, aiCfg.GenerationModel)
+	generator, err := NewBedrockGeneration(ctx, cfg, aiCfg.GenerationModel, vaultRoot)
 	if err != nil {
 		return fmt.Errorf("init bedrock generator: %w", err)
 	}
