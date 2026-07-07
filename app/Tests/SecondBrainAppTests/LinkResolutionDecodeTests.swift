@@ -34,6 +34,53 @@ func suggestTargetDecodesEmpty() throws {
     #expect(res.isEmpty)
 }
 
+@Test("SuggestTargetResult decodes the additive confidence field")
+func suggestTargetDecodesConfidence() throws {
+    let json = """
+    [
+      { "path": "resources/ghostty-config.md", "title": "Ghostty Config",
+        "score": 3.1, "snippet": "", "confidence": "medium" },
+      { "path": "resources/x.md", "title": "X", "score": 0.2, "snippet": "" }
+    ]
+    """.data(using: .utf8)!
+    let res = try JSONDecoder().decode([SuggestTargetResult].self, from: json)
+    #expect(res[0].confidence == "medium")
+    // Absent on a pre-confidence CLI (and on suggest-links) → nil, not a crash.
+    #expect(res[1].confidence == nil)
+}
+
+@Test("LintIssue decodes the additive broken-wikilink classification fields")
+func lintIssueDecodesClassification() throws {
+    let json = """
+    { "issues": [
+        { "path": "notes/ghostty.md", "line": 12, "level": "warning",
+          "message": "broken wikilink: [[ghostty]]",
+          "target": "ghostty", "fix": "drift", "drift_target": "Ghostty Config" },
+        { "path": "notes/plain.md", "level": "warning",
+          "message": "broken wikilink: [[nope]]", "target": "nope", "fix": "missing" }
+      ], "files_checked": 2, "errors": 0, "warnings": 2 }
+    """.data(using: .utf8)!
+    let report = try JSONDecoder().decode(LintReport.self, from: json)
+    #expect(report.issues[0].target == "ghostty")
+    #expect(report.issues[0].fix == "drift")
+    #expect(report.issues[0].driftTarget == "Ghostty Config")
+    #expect(report.issues[1].fix == "missing")
+    #expect(report.issues[1].driftTarget == nil)
+}
+
+@Test("LintIssue tolerates an older CLI with no classification fields")
+func lintIssueDecodesOldCLI() throws {
+    let json = """
+    { "issues": [
+        { "path": "n.md", "level": "warning", "message": "broken wikilink: [[x]]" }
+      ], "files_checked": 1, "errors": 0, "warnings": 1 }
+    """.data(using: .utf8)!
+    let report = try JSONDecoder().decode(LintReport.self, from: json)
+    #expect(report.issues[0].target == nil)
+    #expect(report.issues[0].fix == nil)
+    #expect(report.issues[0].message == "broken wikilink: [[x]]")
+}
+
 @Test("CreateResult decodes the create JSON contract")
 func createResultDecodesContract() throws {
     let json = """

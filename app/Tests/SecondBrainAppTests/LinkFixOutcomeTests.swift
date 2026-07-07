@@ -124,6 +124,7 @@ func classifyUnknownReasonIsActionable() throws {
 func classifyTrimsPaddedTarget() throws {
     let json = """
     {"path":"a.md","original":"x","polished":"x","provider":"repair-links",
+     "model":"","duration_ms":1,
      "links_skipped":[{"raw":"Auth Flow","reason":"no_match"}]}
     """
     let result = try JSONDecoder().decode(PolishResult.self, from: Data(json.utf8))
