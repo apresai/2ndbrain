@@ -34,7 +34,9 @@ func TestInstructionsCmd_Roundtrip(t *testing.T) {
 		t.Fatalf("memory file not written: %v", statErr)
 	}
 
-	// configured --all reports both claude-code and claude-desktop, installed+current
+	// configured --all reports claude-code + claude-desktop (shared file,
+	// installed+current) and codex (its own file, NOT installed by the
+	// claude-code install: per-client isolation).
 	out, err = runCLIArgs(t, root, "instructions", "configured", "--all", "--json")
 	if err != nil {
 		t.Fatalf("configured: %v\n%s", err, out)
@@ -43,12 +45,22 @@ func TestInstructionsCmd_Roundtrip(t *testing.T) {
 	if err := json.Unmarshal(out, &statuses); err != nil {
 		t.Fatalf("configured JSON: %v\n%s", err, out)
 	}
-	if len(statuses) != 2 {
-		t.Fatalf("want 2 clients (claude-code, claude-desktop), got %d: %+v", len(statuses), statuses)
+	if len(statuses) != 3 {
+		t.Fatalf("want 3 clients (claude-code, claude-desktop, codex), got %d: %+v", len(statuses), statuses)
 	}
 	for _, st := range statuses {
-		if !st.Installed || !st.UpToDate || st.Modified {
-			t.Errorf("%s status: %+v", st.Client, st)
+		switch st.Client {
+		case "codex":
+			if !strings.HasSuffix(st.Path, filepath.Join(".codex", "AGENTS.md")) {
+				t.Errorf("codex file path = %q, want ~/.codex/AGENTS.md", st.Path)
+			}
+			if st.Installed {
+				t.Errorf("claude-code install must not mark codex installed: %+v", st)
+			}
+		default:
+			if !st.Installed || !st.UpToDate || st.Modified {
+				t.Errorf("%s status: %+v", st.Client, st)
+			}
 		}
 	}
 
@@ -77,6 +89,45 @@ func TestInstructionsCmd_UnsupportedClient(t *testing.T) {
 	_, err := runCLIArgs(t, root, "instructions", "install", "--client", "warp", "--json")
 	if code := exitCode(t, err); code != ExitValidation {
 		t.Fatalf("unsupported client: want ExitValidation(%d), got %d (err=%v)", ExitValidation, code, err)
+	}
+}
+
+// TestInstructionsCmd_CodexPreservesUserContent verifies the codex install
+// lands in ~/.codex/AGENTS.md, preserves existing user content, and stays
+// isolated from the claude-code file.
+func TestInstructionsCmd_CodexPreservesUserContent(t *testing.T) {
+	_, root := newContractVault(t)
+	home, _ := os.UserHomeDir()
+	codexPath := filepath.Join(home, ".codex", "AGENTS.md")
+	claudePath := filepath.Join(home, ".claude", "CLAUDE.md")
+
+	// Pre-existing user content in the codex memory file.
+	if err := os.MkdirAll(filepath.Dir(codexPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userContent := "# My global Codex rules\n\nAlways run tests.\n"
+	if err := os.WriteFile(codexPath, []byte(userContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIArgs(t, root, "instructions", "install", "--client", "codex", "--json")
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(codexPath)
+	if err != nil {
+		t.Fatalf("read codex memory file: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "My global Codex rules") {
+		t.Errorf("user content was not preserved:\n%s", body)
+	}
+	if !strings.Contains(body, "BEGIN 2nb managed instructions") {
+		t.Errorf("managed block missing:\n%s", body)
+	}
+	// Per-client isolation: the codex install must not create the claude file.
+	if _, statErr := os.Stat(claudePath); !os.IsNotExist(statErr) {
+		t.Errorf("codex install must not touch ~/.claude/CLAUDE.md")
 	}
 }
 

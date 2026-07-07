@@ -187,7 +187,7 @@ func setupMCP(res *SetupClientResult, v *vault.Vault, client string) {
 
 // setupInstructions writes the always-loaded 2nb block into the client's global
 // memory file (e.g. ~/.claude/CLAUDE.md). A client with no known memory file
-// (warp/codex/agents) is silently skipped — it has no InstructionsPath.
+// (warp/agents) is silently skipped — it has no InstructionsPath.
 func setupInstructions(res *SetupClientResult, client string) {
 	path, ok := memoryFilePath(client)
 	if !ok {

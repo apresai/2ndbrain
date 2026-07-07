@@ -652,11 +652,12 @@ describe('MCP_CLIENTS', () => {
 	it('marks the clients with a global memory file (claude-code, claude-desktop)', () => {
 		const byKey = Object.fromEntries(MCP_CLIENTS.map((c) => [c.key, c]));
 		// claude-code + claude-desktop share ~/.claude/CLAUDE.md, so `2nb setup`
-		// installs the always-loaded instructions block for both; warp/codex do not.
+		// installs the always-loaded instructions block for these; warp does not
+		// (Warp Drive rules are cloud-managed, no on-disk global rules file).
 		expect(byKey['claude-code'].globalInstructions).toBe(true);
 		expect(byKey['claude-desktop'].globalInstructions).toBe(true);
+		expect(byKey['codex'].globalInstructions).toBe(true);
 		expect(byKey['warp'].globalInstructions).toBeUndefined();
-		expect(byKey['codex'].globalInstructions).toBeUndefined();
 	});
 });
 
