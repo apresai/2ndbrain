@@ -2624,6 +2624,95 @@ final class AppState {
         }
     }
 
+    /// Streams `2nb models verify --events` for `provider`, invoking `onEvent`
+    /// on the main actor per decoded NDJSON event (`start` / `result` / `done`).
+    /// Restricts to the provider's effectively-enabled models via `--enabled-only`
+    /// by default; pass explicit `modelIDs` to verify exactly those (the
+    /// per-vendor action, since verify accepts model IDs as positional args).
+    /// `costCap` bounds the CLI's spend guard; see `VerifyFlow.costCap`.
+    ///
+    /// Clones the `benchmarkModel` streaming shape (a `Process` + `LineBuffer`
+    /// over stdout). A non-zero exit is surfaced as a thrown `CLIError.nonZeroExit`
+    /// carrying the stderr text (`VerifyFlow.classify`), so a cost-cap-exceeded
+    /// run (which exits non-zero with an empty stream and no error event) is a
+    /// visible failure rather than a silent no-op.
+    func verifyModels(
+        provider: String,
+        costCap: Double,
+        modelIDs: [String] = [],
+        onEvent: @escaping @Sendable @MainActor (VerifyEvent) -> Void
+    ) async throws {
+        guard let vault else { throw CLIError.noVault }
+        var verifyArgs = [
+            "models", "verify",
+            "--provider", provider,
+            "--scope", "vault",
+            "--yes", "--events",
+            "--cost-cap", String(format: "%.4f", costCap),
+        ]
+        if modelIDs.isEmpty {
+            verifyArgs.append("--enabled-only")
+        } else {
+            verifyArgs.append(contentsOf: modelIDs)
+        }
+        let fullArgs = CLIPath.args(verifyArgs, vault: vault.rootURL)
+        let cmd = "2nb " + fullArgs.joined(separator: " ")
+        log.info("AI Hub action: \(cmd, privacy: .public)")
+        let errorLogger = self.errorLogger
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.arguments = fullArgs
+            process.currentDirectoryURL = vault.rootURL
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+
+            let state = LineBuffer()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                for line in state.append(data) {
+                    if let event = try? JSONDecoder().decode(VerifyEvent.self, from: Data(line.utf8)) {
+                        Task { @MainActor in onEvent(event) }
+                    }
+                }
+            }
+
+            process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                for line in state.append(stdout.fileHandleForReading.readDataToEndOfFile()) {
+                    if let event = try? JSONDecoder().decode(VerifyEvent.self, from: Data(line.utf8)) {
+                        Task { @MainActor in onEvent(event) }
+                    }
+                }
+                for line in state.finish() {
+                    if let event = try? JSONDecoder().decode(VerifyEvent.self, from: Data(line.utf8)) {
+                        Task { @MainActor in onEvent(event) }
+                    }
+                }
+                let errMsg = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                switch VerifyFlow.classify(exitStatus: proc.terminationStatus, stderr: errMsg) {
+                case .success:
+                    continuation.resume()
+                case .failure(let message):
+                    log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(message, privacy: .public)")
+                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(message)")
+                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: message))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
+                errorLogger?.log("CLI \(cmd) launch failed", error: error)
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
     /// Enable or disable every model from a vendor within a provider in
     /// one CLI call. The caller should pass the list of model IDs the
     /// Hub has already rendered; this avoids a catalog-lookup round-
@@ -2853,6 +2942,12 @@ struct AIStatusInfo: Codable {
     let rerankModel: String?
     let rerankAvailable: Bool?
 
+    // Per-account model-verification summary for the active provider
+    // (`model_access` in `2nb ai status --json`, from persisted `models verify`
+    // / `models test --save` results). Nil when nothing was ever validated, or
+    // on a CLI predating the summary.
+    let modelAccess: ModelAccessSummary?
+
     /// Denominator for embedding-coverage displays: the embeddable doc count
     /// when the CLI reports it, else the raw document count (older CLI).
     var embeddableDenominator: Int { vaultEmbeddableDocs ?? documentCount }
@@ -2879,6 +2974,27 @@ struct AIStatusInfo: Codable {
         case rerankEnabled = "rerank_enabled"
         case rerankModel = "rerank_model"
         case rerankAvailable = "rerank_available"
+        case modelAccess = "model_access"
+    }
+}
+
+/// Aggregated per-account model-verification state for the active provider,
+/// mirroring the Go `cli.ModelAccessSummary` from `2nb ai status --json`
+/// (`model_access`). `verified` counts models that passed a probe; `accessDenied`
+/// counts the AWS staged-rollout gate (a runtime 403 on a listed model);
+/// `otherFailures` counts every other classified failure. The parent field is
+/// nil when nothing was ever validated.
+struct ModelAccessSummary: Codable, Equatable {
+    let verified: Int
+    let accessDenied: Int
+    let otherFailures: Int
+    let lastVerifiedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case verified
+        case accessDenied = "access_denied"
+        case otherFailures = "other_failures"
+        case lastVerifiedAt = "last_verified_at"
     }
 }
 
@@ -3359,6 +3475,110 @@ struct BenchmarkProbeResult: Codable, Equatable {
         case detail
         case qualityScore = "quality_score"
         case vaultDocCount = "vault_doc_count"
+    }
+}
+
+/// One line-delimited JSON progress event from `2nb models verify --events`,
+/// mirroring the Go `verifyEvent`. `start` carries `total` + `estimatedUsd`;
+/// each `result` carries `n`/`total` + the probe `result`; `done` carries
+/// `total` + `summary` + `savedScope`. The zero-candidate `done` omits
+/// `summary` (Go `omitempty` on an empty map), so it decodes to nil; treat an
+/// absent summary as an empty result set.
+struct VerifyEvent: Codable {
+    let event: String
+    let n: Int?
+    let total: Int?
+    let estimatedUsd: Double?
+    let result: VerifyProbeResult?
+    let summary: [String: Int]?
+    let savedScope: String?
+
+    enum CodingKeys: String, CodingKey {
+        case event, n, total, result, summary
+        case estimatedUsd = "estimated_usd"
+        case savedScope = "saved_scope"
+    }
+}
+
+/// One model's outcome inside a verify `result` event, mirroring the Go
+/// `ai.TestProbeResult`. `code`/`remediation` classify a failure via the shared
+/// probe taxonomy; both are empty on a pass.
+struct VerifyProbeResult: Codable {
+    let modelID: String
+    let provider: String
+    let modelType: String
+    let ok: Bool
+    let detail: String?
+    let latency: String?
+    let code: String?
+    let remediation: String?
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+        case provider
+        case modelType = "type"
+        case ok, detail, latency, code, remediation
+    }
+}
+
+/// Pure helpers for the AI Hub "Validate models" streamed flow, split out so
+/// the cost-cap math, the empty-stream failure classification, and the
+/// verify-vocabulary summary text are unit-testable without AppKit or a live CLI.
+enum VerifyFlow {
+    /// The `--cost-cap` to pass a verify run given the confirmed estimate:
+    /// double the preview plus a cent of headroom, so the CLI's spend guard
+    /// still trips on a runaway but never on the exact amount the user just
+    /// approved. A nil preview (the estimator itself failed) falls back to the
+    /// CLI's own default guard.
+    static func costCap(preview: CostPreviewResponse?) -> Double {
+        guard let preview else { return 0.05 }
+        return preview.totalUSD * 2 + 0.01
+    }
+
+    enum StreamOutcome: Equatable {
+        case success
+        case failure(String)
+    }
+
+    /// Classifies the terminal state of a `models verify --events` run. A
+    /// non-zero exit is always a failure surfacing the stderr text, EVEN when
+    /// no events streamed: a cost-cap-exceeded `--events` run exits non-zero
+    /// with an empty stdout and no error event, so "no done event" must not be
+    /// read as success.
+    static func classify(exitStatus: Int32, stderr: String) -> StreamOutcome {
+        if exitStatus == 0 { return .success }
+        let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .failure(msg.isEmpty ? "models verify exited with status \(exitStatus)" : msg)
+    }
+
+    /// Renders a verify `done` summary map into a display line, mapping the
+    /// `ok` count to "verified" (the model_access naming) and each failure code
+    /// to a readable label; unknown codes fall back to their raw slug so nothing
+    /// is dropped. An absent/empty summary reads as "No models validated".
+    static func summaryText(_ summary: [String: Int]?) -> String {
+        let counts = summary ?? [:]
+        let ordered: [(key: String, label: String)] = [
+            ("ok", "verified"),
+            ("access_denied", "no access"),
+            ("throttled", "throttled"),
+            ("bad_credentials", "bad credentials"),
+            ("not_found", "not found"),
+            ("provider_unreachable", "unreachable"),
+            ("invalid_request", "invalid request"),
+            ("incompatible", "incompatible"),
+            ("timeout", "timeout"),
+            ("unknown", "other"),
+        ]
+        var parts: [String] = []
+        var covered = Set<String>()
+        for (key, label) in ordered {
+            covered.insert(key)
+            if let n = counts[key], n > 0 { parts.append("\(n) \(label)") }
+        }
+        for (key, n) in counts.sorted(by: { $0.key < $1.key }) where n > 0 && !covered.contains(key) {
+            parts.append("\(n) \(key)")
+        }
+        return parts.isEmpty ? "No models validated" : parts.joined(separator: ", ")
     }
 }
 

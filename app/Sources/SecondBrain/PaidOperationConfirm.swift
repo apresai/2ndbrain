@@ -35,6 +35,15 @@ enum PaidOpCopy {
 @MainActor
 func confirmPaidOperation(appState: AppState, modelIDs: [String], probe: String, operation: String) async -> Bool {
     let preview = try? await appState.costPreview(modelIDs: modelIDs, probe: probe)
+    return confirmPaidOperation(preview: preview, operation: operation)
+}
+
+/// Presents the same cost-estimate confirm from an ALREADY-computed preview, so
+/// a caller that needs the estimate for other decisions (e.g. deriving a
+/// verify `--cost-cap`) can preview once and reuse it instead of re-shelling
+/// `cost-preview` inside the confirm.
+@MainActor
+func confirmPaidOperation(preview: CostPreviewResponse?, operation: String) -> Bool {
     #if canImport(AppKit)
     let alert = NSAlert()
     alert.messageText = "\(operation)?"
