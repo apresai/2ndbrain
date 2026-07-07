@@ -113,11 +113,16 @@ enum CatalogVisibility {
         return (models.filter { $0.enabled != false }, hiddenCount)
     }
 
-    /// Effective collapsed state for a vendor group: a fully-disabled group
-    /// auto-collapses (its rows are noise until re-enabled) unless the user
-    /// explicitly toggled it; every other group defaults expanded.
-    static func groupCollapsed(userOverride: Bool?, allDisabled: Bool) -> Bool {
-        userOverride ?? allDisabled
+    /// Effective collapsed state for a vendor group. The user's explicit toggle
+    /// always wins. With `summaryFirst` (the AI Hub's default), every group
+    /// starts collapsed so the catalog reads as compact per-vendor summary rows
+    /// rather than a wall of model rows; otherwise only a fully-disabled group
+    /// auto-collapses (its rows are noise until re-enabled) and every other
+    /// group defaults expanded. `summaryFirst` defaults false so the A3/A4
+    /// callers and their tests keep their exact behavior.
+    static func groupCollapsed(userOverride: Bool?, allDisabled: Bool, summaryFirst: Bool = false) -> Bool {
+        if let userOverride { return userOverride }
+        return summaryFirst || allDisabled
     }
 }
 

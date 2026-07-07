@@ -557,6 +557,7 @@ struct AIHubView: View {
             }
 
             accessSummaryRow
+            policyChipRow
 
             // Search input — fuzzy-matches model ID + vendor display name.
             // Hoisted above both type sections so it applies uniformly.
@@ -651,6 +652,28 @@ struct AIHubView: View {
         let fmt = RelativeDateTimeFormatter()
         fmt.unitsStyle = .short
         return fmt.localizedString(for: date, relativeTo: Date())
+    }
+
+    /// A compact chip surfacing the active provider's enable-only vendor policy
+    /// so the user's declared intent is visible at a glance; tapping opens
+    /// Manage vendors. Hidden when no policy is set.
+    @ViewBuilder
+    private var policyChipRow: some View {
+        if let text = CatalogSummary.policyChip(policies: policies, models: models, provider: aiStatus?.provider) {
+            Button { showingVendorPolicy = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.shield")
+                    Text(text).lineLimit(1).truncationMode(.tail)
+                }
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.accentColor.opacity(0.10))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Manage which vendors are enabled")
+        }
     }
 
     /// The curated/all switch, with the hidden-count so the short default
@@ -824,38 +847,60 @@ struct AIHubView: View {
         return groups.sorted { $0.vendorDisplay < $1.vendorDisplay }
     }
 
+    /// Whether a vendor group's vendor is named by the active enable-only
+    /// policy for its provider (drives the summary's policy-member indicator).
+    private func vendorInPolicy(_ group: VendorGroup) -> Bool {
+        CatalogSummary.activePolicy(policies, provider: group.provider)?.vendors.contains(group.vendor) ?? false
+    }
+
     @ViewBuilder
     private func vendorGroupView(group: VendorGroup) -> some View {
         let allDisabled = group.models.allSatisfy { $0.enabled == false }
-        let collapsed = CatalogVisibility.groupCollapsed(
+        // Summary-first: groups start COLLAPSED so the catalog opens on compact
+        // per-vendor summary rows rather than a wall of model rows. The chevron
+        // (whole header row) drills in to the existing per-model rendering.
+        let collapsed = CatalogSummary.defaultCollapsed(
             userOverride: groupCollapseOverride[group.key], allDisabled: allDisabled)
         let policied = hasPolicyFor(group.provider)
+        let summary = CatalogSummary.summarize(group.models, policyMember: vendorInPolicy(group))
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
+                // The whole labels+badges span is the drill-in target: clicking
+                // anywhere (except the trailing menu) expands or collapses.
                 Button {
                     groupCollapseOverride[group.key] = !collapsed
                 } label: {
-                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                        .frame(width: 12)
+                    HStack(spacing: 8) {
+                        Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                            .frame(width: 12)
+                            .foregroundStyle(.secondary)
+                        Text(group.vendorDisplay).font(.subheadline.bold())
+                        Text(ProviderDisplay.name(group.provider))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        Text("(\(group.models.count))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if summary.policyMember {
+                            Image(systemName: "checkmark.shield.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .help("In the enabled-vendor policy")
+                        }
+                        if let badge = CatalogSummary.vendorBadge(summary) {
+                            Text(badge).font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        if let enabledBadge = CatalogSummary.enabledBadge(summary) {
+                            Text(enabledBadge)
+                                .font(.caption2)
+                                .italic()
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-
-                Text(group.vendorDisplay).font(.subheadline.bold())
-                Text("·").foregroundStyle(.secondary)
-                Text(ProviderDisplay.name(group.provider))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                Text("(\(group.models.count))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if allDisabled {
-                    Text("disabled")
-                        .font(.caption2)
-                        .italic()
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
 
                 // One compact menu replaces the old dual Enable/Disable buttons:
                 // both actions plus per-vendor Verify live here. Enable/Disable
