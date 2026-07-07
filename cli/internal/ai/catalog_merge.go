@@ -333,6 +333,17 @@ func catalogCompatibility(m ModelInfo) (bool, string) {
 	if m.Provider != "bedrock" {
 		return true, ""
 	}
+	// Mantle-plane models bypass the classic-Bedrock allowlist entirely:
+	// they invoke over the bedrock-mantle Responses API, which 2nb supports
+	// for generation only. m.InvokeStrategy is already the resolved value
+	// here (the merged catalog overlays user entries onto builtins before
+	// applyCatalogUIFields runs).
+	if m.InvokeStrategy == StrategyBedrockMantleResponses {
+		if m.Type == "generation" {
+			return true, ""
+		}
+		return false, "mantle models are generation-only in 2nb"
+	}
 	if ok, reason := bedrockModelSupported(m.ID, m.Type); !ok {
 		return false, reason
 	}

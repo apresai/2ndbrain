@@ -178,6 +178,7 @@ func InferProvider(modelID string) string {
 		strings.HasPrefix(modelID, "amazon.") ||
 		strings.HasPrefix(modelID, "anthropic.") ||
 		strings.HasPrefix(modelID, "openai.") ||
+		strings.HasPrefix(modelID, "xai.") ||
 		strings.HasPrefix(modelID, "meta.") ||
 		strings.HasPrefix(modelID, "mistral.") ||
 		strings.HasPrefix(modelID, "cohere.") {

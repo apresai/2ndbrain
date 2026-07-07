@@ -33,8 +33,10 @@ type BedrockReranker struct {
 
 // NewBedrockReranker creates a Bedrock rerank provider. It reuses
 // loadBedrockAWSConfig (SigV4 / bearer-token / region), identical to the
-// embedder and generator.
+// embedder and generator, except that a catalog Region pin on the model
+// overrides the configured region (see rerankRegion).
 func NewBedrockReranker(ctx context.Context, cfg BedrockConfig, model string) (*BedrockReranker, error) {
+	cfg.Region = rerankRegion(cfg, model)
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -45,6 +47,19 @@ func NewBedrockReranker(ctx context.Context, cfg BedrockConfig, model string) (*
 		model:  model,
 		region: cfg.Region,
 	}, nil
+}
+
+// rerankRegion returns the region the reranker should call: the model's
+// catalog-pinned Region when one is declared, else the configured
+// ai.bedrock.region. Cohere Rerank 3.5 is us-east-1 in-region only, so a
+// vault configured for any other region would otherwise fail every rerank
+// call; the pin routes just the rerank client, leaving embeddings and
+// generation in the configured region.
+func rerankRegion(cfg BedrockConfig, model string) string {
+	if pinned := ResolveModelRegion("bedrock", model, ""); pinned != "" {
+		return pinned
+	}
+	return cfg.Region
 }
 
 func (b *BedrockReranker) Name() string { return "bedrock" }

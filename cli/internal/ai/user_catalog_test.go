@@ -1,8 +1,10 @@
 package ai
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -532,6 +534,140 @@ func TestMergeFields_NewFieldsOverlay(t *testing.T) {
 	}
 	if out2.TestLatencyMs != 1000 {
 		t.Errorf("empty overlay wiped base latency: got %d", out2.TestLatencyMs)
+	}
+}
+
+// TestSaveAndLoad_RegionEndpointRoundTrip verifies the per-model Region and
+// Endpoint pins survive both serialization paths: YAML through the user
+// catalog (the mantle groundwork's persistence surface) and JSON (the CLI
+// --json / GUI payload surface).
+func TestSaveAndLoad_RegionEndpointRoundTrip(t *testing.T) {
+	setupHome(t)
+
+	entry := ModelInfo{
+		ID:             "openai.gpt-5.5",
+		Provider:       "bedrock",
+		Type:           "generation",
+		InvokeStrategy: StrategyBedrockMantleResponses,
+		Region:         "us-east-2",
+		Endpoint:       "https://bedrock-mantle.us-east-2.api.aws",
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded := LoadUserCatalog("")
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(loaded))
+	}
+	m := loaded[0]
+	if m.Region != "us-east-2" {
+		t.Errorf("Region after yaml round-trip: got %q", m.Region)
+	}
+	if m.Endpoint != "https://bedrock-mantle.us-east-2.api.aws" {
+		t.Errorf("Endpoint after yaml round-trip: got %q", m.Endpoint)
+	}
+	if m.InvokeStrategy != StrategyBedrockMantleResponses {
+		t.Errorf("InvokeStrategy after yaml round-trip: got %q", m.InvokeStrategy)
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	var fromJSON ModelInfo
+	if err := json.Unmarshal(data, &fromJSON); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+	if fromJSON.Region != entry.Region || fromJSON.Endpoint != entry.Endpoint {
+		t.Errorf("json round-trip lost fields: region=%q endpoint=%q", fromJSON.Region, fromJSON.Endpoint)
+	}
+
+	// omitempty: an entry without the new fields must not serialize them, so
+	// legacy catalogs and payloads stay byte-stable.
+	plain, err := json.Marshal(ModelInfo{ID: "plain", Provider: "bedrock", Type: "generation"})
+	if err != nil {
+		t.Fatalf("json marshal plain: %v", err)
+	}
+	if strings.Contains(string(plain), "\"region\"") || strings.Contains(string(plain), "\"endpoint\"") {
+		t.Errorf("empty Region/Endpoint should be omitted from json, got %s", plain)
+	}
+}
+
+// TestMergeFields_RegionEndpointOverlay verifies mergeFields carries a
+// non-empty Region/Endpoint from the overlay and preserves the base values
+// when the overlay omits them.
+func TestMergeFields_RegionEndpointOverlay(t *testing.T) {
+	base := ModelInfo{
+		ID: "m", Provider: "bedrock", Type: "generation",
+		Region:   "us-east-1",
+		Endpoint: "https://bedrock-mantle.us-east-1.api.aws",
+	}
+	top := ModelInfo{
+		ID: "m", Provider: "bedrock",
+		Region:   "us-west-2",
+		Endpoint: "https://bedrock-mantle.us-west-2.api.aws",
+	}
+	out := mergeFields(base, top)
+	if out.Region != "us-west-2" {
+		t.Errorf("overlay region not applied: got %q", out.Region)
+	}
+	if out.Endpoint != "https://bedrock-mantle.us-west-2.api.aws" {
+		t.Errorf("overlay endpoint not applied: got %q", out.Endpoint)
+	}
+
+	noop := ModelInfo{ID: "m", Provider: "bedrock"}
+	out2 := mergeFields(base, noop)
+	if out2.Region != "us-east-1" || out2.Endpoint != "https://bedrock-mantle.us-east-1.api.aws" {
+		t.Errorf("empty overlay wiped base pins: region=%q endpoint=%q", out2.Region, out2.Endpoint)
+	}
+}
+
+// TestResolveModelRegion verifies the region pin resolves through the same
+// user-catalog-over-builtin chain as ResolveInvokeStrategy.
+func TestResolveModelRegion(t *testing.T) {
+	setupHome(t)
+
+	// Builtin pin: the Cohere reranker is us-east-1 in-region only.
+	if got := ResolveModelRegion("bedrock", DefaultRerankModel, ""); got != "us-east-1" {
+		t.Errorf("builtin pin: got %q, want us-east-1", got)
+	}
+
+	// Unset: a builtin without a pin resolves empty (provider default).
+	if got := ResolveModelRegion("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != "" {
+		t.Errorf("unpinned builtin should resolve empty, got %q", got)
+	}
+	// Unknown model: empty.
+	if got := ResolveModelRegion("bedrock", "not.a.known.model", ""); got != "" {
+		t.Errorf("unknown model should resolve empty, got %q", got)
+	}
+
+	// User catalog entry for a model not in the builtin set.
+	custom := ModelInfo{
+		ID:             "xai.grok-4.3",
+		Provider:       "bedrock",
+		Type:           "generation",
+		InvokeStrategy: StrategyBedrockMantleResponses,
+		Region:         "us-west-2",
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", custom); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got := ResolveModelRegion("bedrock", "xai.grok-4.3", ""); got != "us-west-2" {
+		t.Errorf("user entry: got %q, want us-west-2", got)
+	}
+
+	// User override of a builtin pin wins.
+	override := ModelInfo{
+		ID:       DefaultRerankModel,
+		Provider: "bedrock",
+		Type:     "rerank",
+		Region:   "eu-central-1",
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", override); err != nil {
+		t.Fatalf("save override: %v", err)
+	}
+	if got := ResolveModelRegion("bedrock", DefaultRerankModel, ""); got != "eu-central-1" {
+		t.Errorf("user override of builtin pin: got %q, want eu-central-1", got)
 	}
 }
 

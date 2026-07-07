@@ -1,6 +1,46 @@
 package ai
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+// TestBedrockPreflightModel_MantleBypass verifies a model whose resolved
+// strategy is bedrock_mantle_responses skips BOTH preflight checks: the
+// static allowlist (which can't know mantle IDs) and the GetFoundationModel
+// lifecycle lookup (mantle models are invisible to the classic control plane
+// and would 404). No credentials and no network: the bypass must return
+// before any AWS client is built, which the short deadline enforces.
+func TestBedrockPreflightModel_MantleBypass(t *testing.T) {
+	setupHome(t)
+
+	entry := ModelInfo{
+		ID:             "openai.gpt-5.5",
+		Provider:       "bedrock",
+		Type:           "generation",
+		InvokeStrategy: StrategyBedrockMantleResponses,
+		Region:         "us-east-2",
+	}
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "openai.gpt-5.5", "generation"); err != nil {
+		t.Errorf("mantle model should bypass preflight, got %v", err)
+	}
+
+	// Contrast: without a mantle strategy the same unknown ID still fails the
+	// static allowlist (deterministically, before any network call).
+	err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "openai.gpt-5.5-no-catalog-entry", "generation")
+	var incompatible *IncompatibleModelError
+	if !errors.As(err, &incompatible) {
+		t.Errorf("non-mantle unknown model should fail the static allowlist, got %v", err)
+	}
+}
 
 func TestBedrockContextLenHint(t *testing.T) {
 	tests := []struct {

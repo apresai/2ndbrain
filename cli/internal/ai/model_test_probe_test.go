@@ -10,6 +10,8 @@ func TestInferProvider(t *testing.T) {
 		{"us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock"},
 		{"amazon.nova-2-multimodal-embeddings-v1:0", "bedrock"},
 		{"eu.anthropic.claude-sonnet-4-20250514-v1:0", "bedrock"},
+		{"openai.gpt-5.5", "bedrock"},
+		{"xai.grok-4.3", "bedrock"},
 		{"anthropic/claude-haiku-4-5", "openrouter"},
 		{"google/gemma-4-31b-it:free", "openrouter"},
 		{"openai/gpt-4o", "openrouter"},

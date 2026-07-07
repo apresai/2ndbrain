@@ -98,6 +98,54 @@ func TestCatalogCompatibility_BedrockUnsupportedReason(t *testing.T) {
 	}
 }
 
+// TestCatalogCompatibility_MantleStrategy verifies the mantle gate: a model
+// resolved to the bedrock-mantle Responses plane is compatible iff it is a
+// generation model, and never falls through to the classic-Bedrock allowlist
+// (which would reject the openai./xai. IDs it can't know about).
+func TestCatalogCompatibility_MantleStrategy(t *testing.T) {
+	ok, reason := catalogCompatibility(ModelInfo{
+		ID:             "openai.gpt-5.5",
+		Provider:       "bedrock",
+		Type:           "generation",
+		InvokeStrategy: StrategyBedrockMantleResponses,
+	})
+	if !ok {
+		t.Errorf("mantle generation model should be compatible, got reason %q", reason)
+	}
+
+	for _, typ := range []string{"embedding", "rerank"} {
+		ok, reason := catalogCompatibility(ModelInfo{
+			ID:             "xai.grok-4.3",
+			Provider:       "bedrock",
+			Type:           typ,
+			InvokeStrategy: StrategyBedrockMantleResponses,
+		})
+		if ok {
+			t.Errorf("mantle %s model should be incompatible", typ)
+			continue
+		}
+		if reason != "mantle models are generation-only in 2nb" {
+			t.Errorf("mantle %s reason = %q", typ, reason)
+		}
+	}
+
+	// Classic models are unaffected: the allowlist still decides.
+	if ok, _ := catalogCompatibility(ModelInfo{
+		ID:       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		Provider: "bedrock",
+		Type:     "generation",
+	}); !ok {
+		t.Error("classic supported model should stay compatible")
+	}
+	if ok, _ := catalogCompatibility(ModelInfo{
+		ID:       "amazon.nova-canvas-v1:0",
+		Provider: "bedrock",
+		Type:     "generation",
+	}); ok {
+		t.Error("classic unsupported model should stay incompatible")
+	}
+}
+
 func TestBuildModelList_Sorting(t *testing.T) {
 	ctx := context.Background()
 	result, err := BuildModelList(ctx, MergedListOptions{
