@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -56,5 +57,90 @@ func TestTestAge(t *testing.T) {
 	label := stateLabel(ai.ModelInfo{TestedAt: "garbage"})
 	if strings.HasSuffix(label, " ") {
 		t.Errorf("stateLabel with corrupt TestedAt has trailing space: %q", label)
+	}
+}
+
+// TestContract_ModelsListBenchColumnAndSort seeds a user-catalog entry with a
+// benchmark block and asserts (a) the benchmark round-trips through
+// models list --json, (b) the BENCH table cell renders, and (c) --sort best
+// puts the quality-benched model ahead of its unbenched peers.
+func TestContract_ModelsListBenchColumnAndSort(t *testing.T) {
+	_, root := newContractVault(t)
+
+	entry := ai.ModelInfo{
+		ID: "amazon.titan-embed-text-v2:0", Provider: "bedrock", Type: "embedding",
+		Tier:     ai.TierUserVerified,
+		TestedAt: "2026-07-01T00:00:00Z",
+		Benchmark: &ai.BenchmarkSummary{
+			RanAt:         "2026-07-01T00:00:00Z",
+			AvgLatencyMs:  412,
+			QualityScore:  0.87,
+			VaultDocCount: 150,
+		},
+	}
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, entry); err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+
+	// (a) JSON round-trip.
+	got, err := runCLIArgs(t, root, "models", "list", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("models list --json: %v", err)
+	}
+	var models []struct {
+		ID        string `json:"id"`
+		Benchmark *struct {
+			QualityScore float64 `json:"quality_score"`
+			AvgLatencyMs int64   `json:"avg_latency_ms"`
+		} `json:"benchmark"`
+	}
+	if err := json.Unmarshal(got, &models); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	found := false
+	for _, m := range models {
+		if m.ID == entry.ID && m.Benchmark != nil && m.Benchmark.QualityScore == 0.87 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("benchmark summary did not round-trip through models list --json")
+	}
+
+	// (b) Table cell renders q= and ms.
+	table, err := runCLIArgs(t, root, "models", "list")
+	if err != nil {
+		t.Fatalf("models list table: %v", err)
+	}
+	if !strings.Contains(string(table), "q=0.87 412ms") {
+		t.Fatalf("BENCH cell missing from table:\n%s", truncate(table, 1200))
+	}
+
+	// (c) --sort best puts the quality-benched embedding first among
+	// embeddings in JSON order.
+	got, err = runCLIArgs(t, root, "models", "list", "--sort", "best", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("models list --sort best: %v", err)
+	}
+	var sorted []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(got, &sorted); err != nil {
+		t.Fatalf("parse sorted: %v", err)
+	}
+	for _, m := range sorted {
+		if m.Type != "embedding" {
+			continue
+		}
+		if m.ID != entry.ID {
+			t.Fatalf("--sort best should rank the quality-benched embedding first, got %s", m.ID)
+		}
+		break
+	}
+
+	// (d) Unknown sort value errors.
+	if _, err := runCLIArgs(t, root, "models", "list", "--sort", "bogus"); err == nil {
+		t.Fatal("--sort bogus should error")
 	}
 }
