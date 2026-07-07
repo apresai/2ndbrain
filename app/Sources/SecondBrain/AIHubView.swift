@@ -823,7 +823,7 @@ struct AIHubView: View {
         if let p = priceLabel(m) { parts.append(p) }
         if m.compatible == false { parts.append("incompatible") }
         else if m.compatible == true { parts.append("compatible") }
-        if let err = m.testError, !err.isEmpty { parts.append("failed") }
+        if let label = ModelAccessPresentation.badgeLabel(testError: m.testError, testErrorCode: m.testErrorCode, provider: m.provider) { parts.append(label) }
         else if let testedAt = m.testedAt, !testedAt.isEmpty { parts.append("tested") }
         if let strat = m.invokeStrategy, !strat.isEmpty { parts.append(strat) }
         return parts.joined(separator: " · ")

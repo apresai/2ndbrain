@@ -99,7 +99,7 @@ func crossDependency() {
 
 @Test("modelCheck maps a probe; nil probe is a fail")
 func modelCheckMapping() {
-    let ok = AIProbeResult(modelID: "m", provider: "bedrock", modelType: "embedding", ok: true, detail: "fine", latency: "120ms")
+    let ok = AIProbeResult(modelID: "m", provider: "bedrock", modelType: "embedding", ok: true, detail: "fine", latency: "120ms", errorCode: nil, remediation: nil)
     #expect(ClaudeCodeHealth.modelCheck(ok, label: "Embedding").state == .pass)
     #expect(ClaudeCodeHealth.modelCheck(nil, label: "Generation").state == .fail)
 }

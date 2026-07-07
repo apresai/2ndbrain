@@ -3166,12 +3166,18 @@ struct AIProbeResult: Codable {
     let ok: Bool
     let detail: String?
     let latency: String
+    // Classified failure code + remediation hint from the CLI's probe
+    // taxonomy (models test --json: code/remediation). Optional: absent on
+    // passes and on pre-taxonomy CLIs.
+    let errorCode: String?
+    let remediation: String?
 
     enum CodingKeys: String, CodingKey {
         case modelID = "model_id"
         case provider
         case modelType = "type"
-        case ok, detail, latency
+        case ok, detail, latency, remediation
+        case errorCode = "code"
     }
 }
 
