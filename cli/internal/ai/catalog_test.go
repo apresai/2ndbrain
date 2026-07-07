@@ -102,3 +102,64 @@ func TestConfigHint_Rerank(t *testing.T) {
 		t.Errorf("rerank config hint = %q, want it to set ai.rerank.model + ai.rerank.enabled", h)
 	}
 }
+
+// TestBuiltinCatalog_RecommendedCoverage verifies curation is usable: every
+// provider has at least one recommended embedding and one recommended
+// generation model, so a "recommended only" view is never empty.
+func TestBuiltinCatalog_RecommendedCoverage(t *testing.T) {
+	type key struct{ provider, typ string }
+	got := map[key]bool{}
+	for _, m := range BuiltinCatalog() {
+		if m.Recommended {
+			got[key{m.Provider, m.Type}] = true
+		}
+	}
+	for _, p := range KnownProviders {
+		for _, typ := range []string{"embedding", "generation"} {
+			if !got[key{p, typ}] {
+				t.Errorf("provider %s has no recommended %s model", p, typ)
+			}
+		}
+	}
+}
+
+// TestBuiltinCatalog_AnthropicLine pins the curated Anthropic policy: the
+// tested default plus current Sonnet and Opus versions, with Opus 4.7 and
+// Fable 5 intentionally absent (superseded / premium+different API semantics;
+// both stay reachable via discovery).
+func TestBuiltinCatalog_AnthropicLine(t *testing.T) {
+	want := map[string]bool{
+		"us.anthropic.claude-haiku-4-5-20251001-v1:0": true,
+		"us.anthropic.claude-sonnet-4-6":              true,
+		"us.anthropic.claude-sonnet-5":                true,
+		"us.anthropic.claude-opus-4-6-v1":             false, // present but not recommended
+		"us.anthropic.claude-opus-4-8":                true,
+	}
+	seen := map[string]bool{}
+	for _, m := range BuiltinCatalog() {
+		// The 4.7/Fable exclusion applies across ALL providers: the OpenRouter
+		// Anthropic line mirrors the Bedrock policy.
+		if strings.Contains(m.ID, "opus-4-7") || strings.Contains(strings.ToLower(m.ID), "fable") {
+			t.Errorf("%s must not be in the curated builtin catalog", m.ID)
+		}
+		if m.Provider != "bedrock" || m.Type != "generation" {
+			continue
+		}
+		if strings.Contains(m.ID, "anthropic") {
+			seen[m.ID] = true
+			wantRec, ok := want[m.ID]
+			if !ok {
+				t.Errorf("unexpected builtin Anthropic entry %s (policy: haiku-4-5, sonnet-4-6, sonnet-5, opus-4-6, opus-4-8 only)", m.ID)
+				continue
+			}
+			if m.Recommended != wantRec {
+				t.Errorf("%s recommended = %v, want %v", m.ID, m.Recommended, wantRec)
+			}
+		}
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("builtin catalog missing Anthropic entry %s", id)
+		}
+	}
+}

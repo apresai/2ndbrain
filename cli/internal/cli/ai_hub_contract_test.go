@@ -72,7 +72,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	enableStateProvider, enableStateScope, enableStateValue = "", "vault", ""
 	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "vault"
 	modelsDiscover, modelsFreeOnly, modelsPromote = false, false, false
-	modelsCheckStatus, modelsEnabledOnly = false, false
+	modelsCheckStatus, modelsEnabledOnly, modelsRecommended = false, false, false
 	testProvider, testModelType, testSaveScope = "", "", "vault"
 	testSave = false
 	costProvider, costProbeKind = "", "test"
@@ -399,6 +399,7 @@ func TestContract_ModelsListPickerSchemaJSON(t *testing.T) {
 		PriceSource           string `json:"price_source"`
 		InvokeStrategy        string `json:"invoke_strategy"`
 		RecommendedSimilarity any    `json:"recommended_similarity_threshold"`
+		Recommended           bool   `json:"recommended"`
 	}
 	if err := json.Unmarshal(got, &parsed); err != nil {
 		t.Fatalf("models list picker schema parse: %v (body=%s)", err, truncate(got, 300))
@@ -407,9 +408,13 @@ func TestContract_ModelsListPickerSchemaJSON(t *testing.T) {
 		t.Fatal("expected at least one model")
 	}
 	foundDerived := false
+	foundRecommended := false
 	for _, m := range parsed {
 		if m.Vendor != "" && m.VendorDisplay != "" && m.VersionSortKey != "" && m.Compatible != nil {
 			foundDerived = true
+		}
+		if m.Recommended {
+			foundRecommended = true
 		}
 		if m.ID == "amazon.nova-2-multimodal-embeddings-v1:0" && m.InvokeStrategy == "" {
 			t.Errorf("nova embed missing invoke_strategy")
@@ -417,6 +422,33 @@ func TestContract_ModelsListPickerSchemaJSON(t *testing.T) {
 	}
 	if !foundDerived {
 		t.Fatalf("no model carried picker-derived fields: %+v", parsed[0])
+	}
+	if !foundRecommended {
+		t.Fatal("no model carried recommended=true — curation flag missing from picker JSON")
+	}
+}
+
+func TestContract_ModelsListRecommendedFilter(t *testing.T) {
+	_, root := newContractVault(t)
+
+	got, err := runCLIArgs(t, root, "models", "list", "--recommended", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("models list --recommended --json: %v (out=%s)", err, truncate(got, 300))
+	}
+	var parsed []struct {
+		ID          string `json:"id"`
+		Recommended bool   `json:"recommended"`
+	}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("parse: %v (body=%s)", err, truncate(got, 300))
+	}
+	if len(parsed) == 0 {
+		t.Fatal("recommended filter returned no models — the curated list must never be empty")
+	}
+	for _, m := range parsed {
+		if !m.Recommended {
+			t.Errorf("--recommended returned non-recommended model %s", m.ID)
+		}
 	}
 }
 

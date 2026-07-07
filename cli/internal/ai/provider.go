@@ -171,6 +171,13 @@ type ModelInfo struct {
 
 	// Tier indicates whether 2nb has a verified harness for this model.
 	Tier ModelTier `json:"tier,omitempty" yaml:"tier,omitempty"`
+	// Recommended marks a curated pick: the short list of models 2nb suggests
+	// per provider. Orthogonal to Tier (harness trust): a builtin entry can be
+	// verified but not recommended (a superseded version), and a recommended
+	// frontier entry may still be blocked for a given account (AWS staged
+	// rollout), so a test probe is still the invokability check. UIs show
+	// recommended models by default and put the long tail behind a toggle.
+	Recommended bool `json:"recommended,omitempty" yaml:"recommended,omitempty"`
 	// Active is true when this model is currently configured.
 	Active bool `json:"active,omitempty" yaml:"-"`
 	// Reachable indicates provider connectivity: nil=unchecked, true/false=probed.

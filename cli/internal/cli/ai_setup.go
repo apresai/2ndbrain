@@ -277,11 +277,13 @@ func setupBedrock(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig)
 
 // printBedrockModelAccessHint reminds the user about the most common Bedrock
 // gotcha: credentials can be valid while model access is still locked. If the
-// model probe later returns AccessDenied, this is why.
+// model probe later returns access_denied, this is why. Wording aligned with
+// ai.RemediationFor(TestErrAccessDenied, "bedrock").
 func printBedrockModelAccessHint(region string) {
 	fmt.Printf("  Note: Bedrock requires per-model access. If a model test fails with\n"+
-		"  \"AccessDenied\", enable Claude + Nova in the AWS console:\n"+
-		"    Bedrock → Model access (region: %s)\n", region)
+		"  access_denied, request access under Bedrock → Model access (region: %s).\n"+
+		"  Newer frontier models can stay gated by AWS's staged rollout even when\n"+
+		"  the console shows access as granted; only an AWS Support case unblocks that.\n", region)
 }
 
 func setupOpenRouter(scanner *bufio.Scanner) error {

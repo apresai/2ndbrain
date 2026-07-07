@@ -568,6 +568,23 @@ func TestMergeFields_TestErrorCodeMovesWithTestedAt(t *testing.T) {
 	}
 }
 
+// TestMergeFields_RecommendedIsAddOnly verifies curation semantics: an
+// overlay can recommend a model, but a user-catalog entry (which omits the
+// field) never demotes a builtin recommendation.
+func TestMergeFields_RecommendedIsAddOnly(t *testing.T) {
+	base := ModelInfo{ID: "m", Provider: "bedrock", Type: "generation", Recommended: true}
+	top := ModelInfo{ID: "m", Provider: "bedrock", TestedAt: "2026-07-01T00:00:00Z"}
+	if out := mergeFields(base, top); !out.Recommended {
+		t.Error("user overlay without recommended demoted a builtin recommendation")
+	}
+
+	base2 := ModelInfo{ID: "m2", Provider: "bedrock", Type: "generation"}
+	top2 := ModelInfo{ID: "m2", Provider: "bedrock", Recommended: true}
+	if out := mergeFields(base2, top2); !out.Recommended {
+		t.Error("overlay with recommended=true did not promote")
+	}
+}
+
 // TestSaveUserCatalogEntry_PassAfterFailClearsCode verifies the write path:
 // SaveUserCatalogEntry replaces the whole entry, so a passing probe result
 // saved after a failure leaves no stale test_error_code in models.yaml.

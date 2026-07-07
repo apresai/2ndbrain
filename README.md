@@ -231,7 +231,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ai setup` | Multi-provider setup wizard (easy mode or custom); a model that passes its probe is saved to the user catalog as `user_verified` |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
 | `ai embed <text>` | Generate embedding vector (debug) |
-| `models list [--discover] [--status] [--provider] [--promote] [--enabled-only]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass; `--enabled-only` filters out user-disabled models (dropdowns use this) |
+| `models list [--discover] [--status] [--provider] [--promote] [--enabled-only] [--recommended]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass; `--enabled-only` filters out user-disabled models (dropdowns use this); `--recommended` shows only the curated short list, and the STATE column marks curation (★) plus each model's last test outcome |
 | `models test <model-id> [--save] [--scope global\|vault]` | Smoke-test any model (embed or generate probe); failures are classified (`access_denied`, `bad_credentials`, `throttled`, ...) with a fix hint; `--save` records the result in your catalog, pass or fail |
 | `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (per-vault by default, or global with `--scope global`) |
 | `models remove <id> --provider [--scope global\|vault]` | Remove a model from your user catalog |
