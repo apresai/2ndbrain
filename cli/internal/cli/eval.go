@@ -63,11 +63,13 @@ machine except via the same AI calls indexing already makes.`,
 }
 
 func init() {
-	evalCmd.Flags().IntVar(&evalN, "n", 20, "Number of ground-truth questions to score against")
-	evalCmd.Flags().BoolVar(&evalRegen, "regenerate", false, "Discard the cached QA set and generate a fresh one")
-	evalCmd.Flags().Float64Var(&evalCostCap, "cost-cap", 0.25, "Abort if the estimated QA-generation cost exceeds this many USD")
-	evalCmd.Flags().BoolVar(&evalYes, "yes", false, "Skip the cost-confirmation prompt")
-	evalCmd.Flags().Int64Var(&evalSeed, "seed", 0, "Deterministic QA-set sampling seed")
+	// Persistent: the QA-set acquisition flags are shared with the `tune`
+	// subcommand (both go through ensureQASet).
+	evalCmd.PersistentFlags().IntVar(&evalN, "n", 20, "Number of ground-truth questions to score against")
+	evalCmd.PersistentFlags().BoolVar(&evalRegen, "regenerate", false, "Discard the cached QA set and generate a fresh one")
+	evalCmd.PersistentFlags().Float64Var(&evalCostCap, "cost-cap", 0.25, "Abort if the estimated QA-generation cost exceeds this many USD")
+	evalCmd.PersistentFlags().BoolVar(&evalYes, "yes", false, "Skip the cost-confirmation prompt")
+	evalCmd.PersistentFlags().Int64Var(&evalSeed, "seed", 0, "Deterministic QA-set sampling seed")
 	evalCmd.GroupID = "ai"
 	rootCmd.AddCommand(evalCmd)
 }
@@ -107,73 +109,9 @@ func runEval(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	// Retrieval scoring always needs the embedder; QA GENERATION additionally
-	// needs the generator, so that check is deferred to the cache-miss branch.
-	if embCount, cerr := v.DB.EmbeddingCount(); cerr != nil {
-		return fmt.Errorf("check embeddings: %w", cerr)
-	} else if embCount == 0 {
-		return fmt.Errorf("no embeddings yet — run `2nb index` first so search has vectors to score")
-	}
-	embedder, eerr := ai.DefaultRegistry.Embedder(cfg.Provider)
-	if eerr != nil {
-		return fmt.Errorf("embedding provider not available: %w", eerr)
-	}
-	if !embedder.Available(ctx) {
-		return fmt.Errorf("embedding provider %q is not available — check `2nb ai status`", cfg.Provider)
-	}
-
-	if evalN < 1 {
-		evalN = 1
-	}
-	qaPath := evalQAPath(v)
-	if evalRegen {
-		_ = os.Remove(qaPath)
-	}
-
-	// The cache is authoritative: any usable cached set (>= 2 items) is reused
-	// regardless of --n. A vault that can't produce the full --n (small vault, or
-	// generation skips) therefore does NOT re-pay for generation on every run —
-	// use --regenerate to rebuild (e.g. after growing --n or changing the vault).
-	cachedItems := loadQACache(qaPath)
-	cached := len(cachedItems) >= 2
-
-	var qa []eval.QAItem
-	if cached {
-		qa = cachedItems
-		if len(qa) > evalN {
-			qa = qa[:evalN]
-		}
-		if !flagPorcelain {
-			fmt.Fprintf(os.Stderr, "Using cached QA set of %d questions (%s)\n", len(qa), qaPath)
-		}
-	} else {
-		generator, gerr := ai.DefaultRegistry.Generator(cfg.Provider)
-		if gerr != nil {
-			return fmt.Errorf("a generation provider is required to build the QA set: %w", gerr)
-		}
-		if !generator.Available(ctx) {
-			return fmt.Errorf("generation provider %q is not available — check `2nb ai status`", cfg.Provider)
-		}
-		// Cost preview + confirm (the cap aborts identically interactive or piped).
-		if err := evalConfirmCost(ctx, cmd, cfg, v.Root, evalN); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(qaPath), 0o755); err != nil {
-			return fmt.Errorf("create eval cache dir: %w", err)
-		}
-		// The QA cache embeds note bodies; ensure it's gitignored (even in a vault
-		// created before .2ndbrain/eval/ was in the default list) BEFORE writing it.
-		ensureVaultIgnores(v.Root, ".2ndbrain/eval/")
-		if !flagPorcelain {
-			fmt.Fprintf(os.Stderr, "Generating a %d-question QA set from your notes...\n", evalN)
-		}
-		qa, err = eval.LoadOrGenerateQASet(ctx, v, generator, evalN, evalSeed, qaPath)
-		if err != nil {
-			return fmt.Errorf("build QA set: %w", err)
-		}
-	}
-	if len(qa) == 0 {
-		return fmt.Errorf("could not build a QA set — the vault needs some substantial notes (500+ chars) to generate questions from")
+	embedder, qa, cached, err := ensureQASet(ctx, cmd, v)
+	if err != nil {
+		return err
 	}
 
 	// Score the user's CURRENT config so the scorecard reflects their real setup.
@@ -221,13 +159,93 @@ func runEval(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// ensureQASet acquires the ground-truth QA set for retrieval scoring (shared
+// by `eval` and `eval tune`): validates the embedder + stored embeddings,
+// reuses the authoritative cache when it holds a usable set (>= 2 items,
+// regardless of --n), and otherwise cost-gates and generates a fresh one.
+// Returns the ready embedder, the QA items, and whether the cache was used.
+func ensureQASet(ctx context.Context, cmd *cobra.Command, v *vault.Vault) (ai.EmbeddingProvider, []eval.QAItem, bool, error) {
+	cfg := v.Config.AI
+
+	// Retrieval scoring always needs the embedder; QA GENERATION additionally
+	// needs the generator, so that check is deferred to the cache-miss branch.
+	if embCount, cerr := v.DB.EmbeddingCount(); cerr != nil {
+		return nil, nil, false, fmt.Errorf("check embeddings: %w", cerr)
+	} else if embCount == 0 {
+		return nil, nil, false, fmt.Errorf("no embeddings yet — run `2nb index` first so search has vectors to score")
+	}
+	embedder, eerr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	if eerr != nil {
+		return nil, nil, false, fmt.Errorf("embedding provider not available: %w", eerr)
+	}
+	if !embedder.Available(ctx) {
+		return nil, nil, false, fmt.Errorf("embedding provider %q is not available — check `2nb ai status`", cfg.Provider)
+	}
+
+	if evalN < 1 {
+		evalN = 1
+	}
+	qaPath := evalQAPath(v)
+	if evalRegen {
+		_ = os.Remove(qaPath)
+	}
+
+	// The cache is authoritative: any usable cached set (>= 2 items) is reused
+	// regardless of --n. A vault that can't produce the full --n (small vault, or
+	// generation skips) therefore does NOT re-pay for generation on every run —
+	// use --regenerate to rebuild (e.g. after growing --n or changing the vault).
+	cachedItems := loadQACache(qaPath)
+	cached := len(cachedItems) >= 2
+
+	var qa []eval.QAItem
+	if cached {
+		qa = cachedItems
+		if len(qa) > evalN {
+			qa = qa[:evalN]
+		}
+		if !flagPorcelain {
+			fmt.Fprintf(os.Stderr, "Using cached QA set of %d questions (%s)\n", len(qa), qaPath)
+		}
+	} else {
+		generator, gerr := ai.DefaultRegistry.Generator(cfg.Provider)
+		if gerr != nil {
+			return nil, nil, false, fmt.Errorf("a generation provider is required to build the QA set: %w", gerr)
+		}
+		if !generator.Available(ctx) {
+			return nil, nil, false, fmt.Errorf("generation provider %q is not available — check `2nb ai status`", cfg.Provider)
+		}
+		// Cost preview + confirm (the cap aborts identically interactive or piped).
+		if err := evalConfirmCost(ctx, cmd, cfg, v.Root, evalN); err != nil {
+			return nil, nil, false, err
+		}
+		if err := os.MkdirAll(filepath.Dir(qaPath), 0o755); err != nil {
+			return nil, nil, false, fmt.Errorf("create eval cache dir: %w", err)
+		}
+		// The QA cache embeds note bodies; ensure it's gitignored (even in a vault
+		// created before .2ndbrain/eval/ was in the default list) BEFORE writing it.
+		ensureVaultIgnores(v.Root, ".2ndbrain/eval/")
+		if !flagPorcelain {
+			fmt.Fprintf(os.Stderr, "Generating a %d-question QA set from your notes...\n", evalN)
+		}
+		var err error
+		qa, err = eval.LoadOrGenerateQASet(ctx, v, generator, evalN, evalSeed, qaPath)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("build QA set: %w", err)
+		}
+	}
+	if len(qa) == 0 {
+		return nil, nil, false, fmt.Errorf("could not build a QA set — the vault needs some substantial notes (500+ chars) to generate questions from")
+	}
+	return embedder, qa, cached, nil
+}
+
 // evalReadout turns the numbers into a one-line plain-English read + a nudge.
 func evalReadout(m eval.ConfigMetrics) string {
 	switch {
 	case m.RecallAtK >= 0.95 && m.RecallAt1 >= 0.65:
 		return "Search is strong: the right note almost always surfaces, and usually first. No tuning needed."
 	case m.RecallAtK >= 0.90:
-		return "Recall is high (the right note is nearly always in the top results), but its #1 rank could be sharper. `2nb eval tune` (coming soon) can suggest threshold/weight tweaks."
+		return "Recall is high (the right note is nearly always in the top results), but its #1 rank could be sharper. Run `2nb eval tune` to sweep threshold/weight combinations and get suggested settings."
 	default:
 		return "Recall is lower than ideal — some answers may be missed. Check embeddings are current (`2nb ai status`), try `--n` larger for a steadier read, and consider `2nb config set ai.similarity_threshold` lower."
 	}
