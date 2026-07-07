@@ -210,16 +210,19 @@ func TestMantleErrorClassification(t *testing.T) {
 		{429, TestErrThrottled},
 		{500, TestErrProviderUnreachable},
 	} {
-		err := error(mantleHTTPError(url, tt.status, []byte(`{"error":{"message":"x"}}`)))
+		err := error(mantleHTTPError("xai.grok-4.3", url, tt.status, []byte(`{"error":{"message":"x"}}`)))
 		if got := ClassifyProbeError("bedrock", err); got != tt.want {
 			t.Errorf("status %d classified %q, want %q", tt.status, got, tt.want)
 		}
 	}
 
 	// The 401 ambiguity hint must ride in the error text.
-	err401 := mantleHTTPError(url, 401, []byte("unauthorized"))
+	err401 := mantleHTTPError("xai.grok-4.3", url, 401, []byte("unauthorized"))
 	if !strings.Contains(err401.Error(), "not entitled on this account") {
 		t.Errorf("401 error missing entitlement hint: %v", err401)
+	}
+	if !strings.Contains(err401.Error(), "xai.grok-4.3") {
+		t.Errorf("error should name the model for debuggability: %v", err401)
 	}
 
 	// A missing bearer token classifies as bad credentials before any call.
@@ -231,36 +234,90 @@ func TestMantleErrorClassification(t *testing.T) {
 func TestMantleBaseURL(t *testing.T) {
 	setupHome(t)
 
+	mustURL := func(model string, cfg BedrockConfig) string {
+		t.Helper()
+		got, err := mantleBaseURL(cfg, model, "")
+		if err != nil {
+			t.Fatalf("mantleBaseURL(%s): %v", model, err)
+		}
+		return got
+	}
+
 	// Builtin region pins.
-	if got := mantleBaseURL(BedrockConfig{Region: "us-east-1"}, "openai.gpt-5.5", ""); got != "https://bedrock-mantle.us-east-2.api.aws" {
+	if got := mustURL("openai.gpt-5.5", BedrockConfig{Region: "us-east-1"}); got != "https://bedrock-mantle.us-east-2.api.aws" {
 		t.Errorf("gpt-5.5 base URL = %q", got)
 	}
-	if got := mantleBaseURL(BedrockConfig{Region: "us-east-1"}, "xai.grok-4.3", ""); got != "https://bedrock-mantle.us-west-2.api.aws" {
+	if got := mustURL("xai.grok-4.3", BedrockConfig{Region: "us-east-1"}); got != "https://bedrock-mantle.us-west-2.api.aws" {
 		t.Errorf("grok-4.3 base URL = %q", got)
 	}
 
 	// No catalog pin: configured region, then us-east-1.
-	if got := mantleBaseURL(BedrockConfig{Region: "eu-west-1"}, "acme.unpinned", ""); got != "https://bedrock-mantle.eu-west-1.api.aws" {
+	if got := mustURL("acme.unpinned", BedrockConfig{Region: "eu-west-1"}); got != "https://bedrock-mantle.eu-west-1.api.aws" {
 		t.Errorf("unpinned base URL = %q", got)
 	}
-	if got := mantleBaseURL(BedrockConfig{}, "acme.unpinned", ""); got != "https://bedrock-mantle.us-east-1.api.aws" {
+	if got := mustURL("acme.unpinned", BedrockConfig{}); got != "https://bedrock-mantle.us-east-1.api.aws" {
 		t.Errorf("default base URL = %q", got)
 	}
 
-	// A catalog Endpoint override wins over Region derivation.
+	// A catalog Endpoint override wins over Region derivation, but must still
+	// be an https *.api.aws host.
 	entry := ModelInfo{
 		ID:             "acme.endpoint-pinned",
 		Provider:       "bedrock",
 		Type:           "generation",
 		InvokeStrategy: StrategyBedrockMantleResponses,
 		Region:         "us-east-2",
-		Endpoint:       "https://example-mantle.aws.dev/",
+		Endpoint:       "https://bedrock-mantle-custom.api.aws/",
 	}
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if got := mantleBaseURL(BedrockConfig{}, "acme.endpoint-pinned", ""); got != "https://example-mantle.aws.dev" {
+	if got := mustURL("acme.endpoint-pinned", BedrockConfig{}); got != "https://bedrock-mantle-custom.api.aws" {
 		t.Errorf("endpoint override = %q", got)
+	}
+}
+
+// TestMantleBaseURL_RejectsHostileEndpoint is the token-exfiltration guard: a
+// vault-scoped models.yaml travels inside shared vaults, so a poisoned
+// Endpoint or Region must never send the AWS bearer token to a non-AWS host.
+func TestMantleBaseURL_RejectsHostileEndpoint(t *testing.T) {
+	setupHome(t)
+
+	cases := []struct {
+		name     string
+		endpoint string
+		region   string
+	}{
+		{"http endpoint", "http://attacker.tld", ""},
+		{"https non-aws endpoint", "https://attacker.tld", ""},
+		{"aws-lookalike suffix", "https://api.aws.attacker.tld", ""},
+		{"region smuggles host", "", "attacker.tld/x"},
+		{"region smuggles scheme", "", "https://attacker.tld"},
+		{"region with dot", "", "us-east-2.attacker.tld"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "acme.hostile-" + strings.ReplaceAll(tc.name, " ", "-")
+			entry := ModelInfo{
+				ID:             id,
+				Provider:       "bedrock",
+				Type:           "generation",
+				InvokeStrategy: StrategyBedrockMantleResponses,
+				Region:         tc.region,
+				Endpoint:       tc.endpoint,
+			}
+			if err := SaveUserCatalogEntry(ScopeGlobal, "", entry); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+			cfg := BedrockConfig{}
+			if tc.region != "" {
+				// Ensure the derivation path (not the config fallback) is exercised.
+				cfg.Region = ""
+			}
+			if got, err := mantleBaseURL(cfg, id, ""); err == nil {
+				t.Errorf("hostile input (%q/%q) must be rejected, got URL %q", tc.endpoint, tc.region, got)
+			}
+		})
 	}
 }
 

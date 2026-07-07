@@ -19,11 +19,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"runtime"
 	"strings"
 	"time"
 )
+
+// mantleMaxResponseBytes bounds the response body read so a buggy or hostile
+// endpoint cannot exhaust memory (the 90s timeout only weakly bounds a slow
+// unbounded stream). A Responses payload is a few KB; 8 MB is generous.
+const mantleMaxResponseBytes = 8 << 20
 
 // bedrockMantleTimeout hard-bounds one mantle HTTP call. A live probe hung
 // for over 120 seconds once, so the client carries its own timeout instead of
@@ -68,10 +74,14 @@ func NewBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot string) (*Bed
 	if token == "" {
 		return nil, errors.New(errNoMantleTokenText)
 	}
+	baseURL, err := mantleBaseURL(cfg, model, vaultRoot)
+	if err != nil {
+		return nil, err
+	}
 	return &BedrockMantleGenerator{
 		client:  &http.Client{Timeout: bedrockMantleTimeout},
 		model:   model,
-		baseURL: mantleBaseURL(cfg, model, vaultRoot),
+		baseURL: baseURL,
 		token:   token,
 	}, nil
 }
@@ -92,9 +102,21 @@ func resolveMantleBearerToken() string {
 // override wins, else the URL is derived from the model's pinned Region
 // (falling back to the configured ai.bedrock.region, then us-east-1). A wrong
 // region surfaces from the live endpoint as 404 "model does not exist".
-func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) string {
+//
+// The resolved URL is validated before it can carry the bearer token: the
+// Endpoint and Region fields come from the user catalog, and a vault-scoped
+// .2ndbrain/models.yaml travels inside shared or downloaded vaults, so an
+// unvalidated host would let a hostile entry exfiltrate the AWS Bedrock bearer
+// token to an attacker. The host must be https and end in ".api.aws"; a
+// region that is not a bare label (contains a slash, dot, or scheme) is
+// likewise rejected rather than interpolated into the host.
+func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) (string, error) {
 	if ep := ResolveModelEndpoint("bedrock", model, vaultRoot); ep != "" {
-		return strings.TrimRight(ep, "/")
+		u := strings.TrimRight(ep, "/")
+		if err := validateMantleHost(u); err != nil {
+			return "", fmt.Errorf("model %s has an invalid mantle endpoint %q: %w", model, ep, err)
+		}
+		return u, nil
 	}
 	region := ResolveModelRegion("bedrock", model, vaultRoot)
 	if region == "" {
@@ -103,7 +125,41 @@ func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) string {
 	if region == "" {
 		region = "us-east-1"
 	}
-	return fmt.Sprintf("https://bedrock-mantle.%s.api.aws", region)
+	if !isBareRegionLabel(region) {
+		return "", fmt.Errorf("model %s has an invalid mantle region %q: expected a bare region label like us-east-2", model, region)
+	}
+	return fmt.Sprintf("https://bedrock-mantle.%s.api.aws", region), nil
+}
+
+// validateMantleHost rejects any URL that is not an https URL whose host ends
+// in ".api.aws", so the bearer token is never sent to an arbitrary host.
+func validateMantleHost(raw string) error {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("unparseable: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("scheme must be https, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	if host != "api.aws" && !strings.HasSuffix(host, ".api.aws") {
+		return fmt.Errorf("host %q is not an *.api.aws AWS endpoint", host)
+	}
+	return nil
+}
+
+// isBareRegionLabel accepts only a plain AWS region token (letters, digits,
+// hyphens) so it cannot smuggle a host, path, or scheme into the derived URL.
+func isBareRegionLabel(region string) bool {
+	if region == "" {
+		return false
+	}
+	for _, r := range region {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *BedrockMantleGenerator) Name() string { return "bedrock" }
@@ -300,7 +356,7 @@ func (g *BedrockMantleGenerator) doMantleRequest(ctx context.Context, body []byt
 		if err != nil {
 			return nil, fmt.Errorf("bedrock mantle POST %s: %w", url, err)
 		}
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, mantleMaxResponseBytes))
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
@@ -317,11 +373,13 @@ func (g *BedrockMantleGenerator) doMantleRequest(ctx context.Context, body []byt
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, mantleHTTPError(url, resp.StatusCode, respBody)
+			return nil, mantleHTTPError(g.model, url, resp.StatusCode, respBody)
 		}
 		return respBody, nil
 	}
-	return nil, fmt.Errorf("bedrock mantle %s: exhausted retries", url)
+	// Unreachable: every iteration either returns or continues, and the final
+	// attempt never takes the retry branch. Kept to satisfy the compiler.
+	return nil, fmt.Errorf("bedrock mantle %s: retry loop exited unexpectedly", url)
 }
 
 // mantleHTTPError wraps a non-2xx mantle response as a *ProviderHTTPError.
@@ -330,13 +388,19 @@ func (g *BedrockMantleGenerator) doMantleRequest(ctx context.Context, body []byt
 // gate), so that hint rides in the body text while the status keeps its
 // standard classification. A 404 usually means the wrong region/plane for
 // the model ("model does not exist").
-func mantleHTTPError(url string, status int, body []byte) *ProviderHTTPError {
+func mantleHTTPError(model, url string, status int, body []byte) *ProviderHTTPError {
 	text := strings.TrimSpace(string(body))
 	if status == http.StatusUnauthorized {
 		if text != "" {
 			text += " "
 		}
 		text += "(mantle 401: valid token but model not entitled on this account, or bad token)"
+	}
+	if model != "" {
+		if text != "" {
+			text += " "
+		}
+		text += "[model " + model + "]"
 	}
 	return &ProviderHTTPError{Provider: "bedrock", URL: url, StatusCode: status, Body: text}
 }

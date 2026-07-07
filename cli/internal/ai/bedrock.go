@@ -604,6 +604,7 @@ var _ UsageGenerator = (*BedrockGenerator)(nil)
 // strategy/region lookups; pass "" when no vault is open.
 func NewBedrockGeneration(ctx context.Context, cfg BedrockConfig, model, vaultRoot string) (GenerationProvider, error) {
 	if ResolveInvokeStrategy("bedrock", model, vaultRoot) == StrategyBedrockMantleResponses {
+		slog.Debug("bedrock generation: dispatching to the mantle plane", "model", model)
 		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
 	}
 	return NewBedrockGenerator(ctx, cfg, model)
