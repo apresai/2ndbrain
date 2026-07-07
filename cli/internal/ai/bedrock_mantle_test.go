@@ -84,6 +84,39 @@ func TestBuildMantleRequest(t *testing.T) {
 	}
 }
 
+func TestBuildMantleRequest_ReasoningEffort(t *testing.T) {
+	// A smoke probe sets effort "none" so reasoning does not starve the answer;
+	// the field is sent only when non-empty (real generation omits it).
+	body, err := buildMantleRequest("xai.grok-4.3", "hi", GenOpts{MaxTokens: 512, ReasoningEffort: "none"})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	var req struct {
+		Reasoning *struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.Reasoning == nil || req.Reasoning.Effort != "none" {
+		t.Errorf("reasoning effort not sent: %+v", req.Reasoning)
+	}
+
+	// Empty ReasoningEffort omits the key entirely (model default reasoning).
+	body, err = buildMantleRequest("xai.grok-4.3", "hi", GenOpts{MaxTokens: 512})
+	if err != nil {
+		t.Fatalf("build (empty): %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal (empty): %v", err)
+	}
+	if _, ok := raw["reasoning"]; ok {
+		t.Error("reasoning key must be omitted when ReasoningEffort is empty")
+	}
+}
+
 func TestBuildMantleRequest_MaxTokens(t *testing.T) {
 	for _, tt := range []struct {
 		in, want int

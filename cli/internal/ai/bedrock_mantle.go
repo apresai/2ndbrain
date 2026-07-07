@@ -218,12 +218,20 @@ func buildMantleRequest(model, prompt string, opts GenOpts) ([]byte, error) {
 	if maxTokens < mantleMinOutputTokens {
 		maxTokens = mantleMinOutputTokens
 	}
-	body, err := json.Marshal(mantleResponsesRequest{
+	req := mantleResponsesRequest{
 		Model:           model,
 		Input:           prompt,
 		Instructions:    opts.SystemPrompt,
 		MaxOutputTokens: maxTokens,
-	})
+	}
+	// Default-on reasoning bills against MaxOutputTokens and, at a low budget,
+	// can consume it entirely and return a reasoning-only "incomplete" response
+	// with no answer text. A smoke probe passes effort "none" so the answer is
+	// never starved; real generation leaves this empty for the model default.
+	if opts.ReasoningEffort != "" {
+		req.Reasoning = &mantleReasoning{Effort: opts.ReasoningEffort}
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal mantle request: %w", err)
 	}

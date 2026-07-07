@@ -136,10 +136,13 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultR
 
 func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) (string, error) {
 	prompt := "What is 2+2? Reply with just the number."
-	// Note: a mantle-strategy model floors MaxTokens to mantleMinOutputTokens
-	// internally — its default-on reasoning bills against the output budget,
-	// and 32 tokens would yield a reasoning-only "incomplete" response.
-	opts := GenOpts{MaxTokens: 32, SystemPrompt: "You are a helpful assistant. Be concise."}
+	// ReasoningEffort "none" keeps a smoke probe deterministic: a mantle model
+	// reasons by default and, with reasoning on, non-deterministically consumes
+	// the whole output budget and returns a reasoning-only "incomplete"
+	// response (no answer text). Turning reasoning off for the probe yields a
+	// reliable short answer; non-mantle providers ignore the field. MaxTokens
+	// is still floored internally by the mantle client.
+	opts := GenOpts{MaxTokens: 32, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
 
 	switch provider {
 	case "bedrock":

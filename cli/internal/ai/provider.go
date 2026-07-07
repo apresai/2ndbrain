@@ -118,6 +118,11 @@ type GenOpts struct {
 	Temperature  *float64 // nil = omit (model uses its default); non-nil = send this value
 	MaxTokens    int
 	SystemPrompt string
+	// ReasoningEffort tunes reasoning-model effort ("none" | "low" | "medium"
+	// | "high"). Only the bedrock-mantle client reads it today; other
+	// providers ignore it. A smoke probe sets "none" so a short answer is not
+	// starved when reasoning-on-by-default would consume the token budget.
+	ReasoningEffort string
 }
 
 // ModelTier indicates whether a model has a verified API harness in 2nb.
