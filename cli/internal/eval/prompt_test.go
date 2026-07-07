@@ -157,7 +157,7 @@ func openEvalVault(t *testing.T) (*vault.Vault, ai.AIConfig, ai.EmbeddingProvide
 		return nil, ai.AIConfig{}, nil, nil, false
 	}
 	ctx := context.Background()
-	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg); err != nil {
+	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg, v.Root); err != nil {
 		v.DB.Close()
 		t.Skipf("bedrock init (creds?): %v", err)
 		return nil, ai.AIConfig{}, nil, nil, false

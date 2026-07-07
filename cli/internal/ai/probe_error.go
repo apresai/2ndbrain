@@ -102,11 +102,13 @@ func ClassifyProbeError(provider string, err error) TestErrorCode {
 
 	// Credential-resolution failures happen before any API call and carry no
 	// smithy code: a missing OpenRouter key (GetAPIKey), an unresolvable AWS
-	// profile, or an expired SSO session surfaced by the SDK's config loader.
+	// profile, an expired SSO session surfaced by the SDK's config loader, or
+	// a mantle model with no Bedrock API key (errNoMantleTokenText).
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "no api key"),
 		strings.Contains(msg, "api key not found"),
+		strings.Contains(msg, "need a bedrock api key"),
 		strings.Contains(msg, "failed to refresh cached credentials"),
 		strings.Contains(msg, "no ec2 imds role found"),
 		strings.Contains(msg, "failed to retrieve credentials"),

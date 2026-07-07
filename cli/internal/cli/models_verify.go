@@ -179,7 +179,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 	results := make([]*ai.TestProbeResult, 0, len(candidates))
 	total := len(candidates)
 	emitVerifyEvent(enc, verifyEvent{Event: "start", Total: total, EstimatedUSD: totalUSD})
-	probeModelsConcurrently(ctx, v.Config.AI, candidates, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
+	probeModelsConcurrently(ctx, v.Config.AI, v.Root, candidates, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
 		if err != nil {
 			// Hard errors (cannot infer provider etc.) become synthetic failed
 			// results so the report stays complete.

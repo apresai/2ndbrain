@@ -148,13 +148,15 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 }
 
 // BedrockPreflightModel performs deterministic local compatibility checks and
-// a lifecycle lookup before a probe invokes the model.
-func BedrockPreflightModel(ctx context.Context, cfg BedrockConfig, modelID, modelType string) error {
+// a lifecycle lookup before a probe invokes the model. vaultRoot scopes the
+// user-catalog strategy lookup so a VAULT-scoped mantle entry is bypassed
+// too; pass "" when no vault is open (builtin + global entries still resolve).
+func BedrockPreflightModel(ctx context.Context, cfg BedrockConfig, modelID, modelType, vaultRoot string) error {
 	// Mantle-plane models are invisible to the classic control plane: the
 	// static allowlist doesn't know them and GetFoundationModel would 404,
 	// so both checks are skipped. The real invoke probe is the only check
 	// that means anything for these models.
-	if ResolveInvokeStrategy("bedrock", modelID, "") == StrategyBedrockMantleResponses {
+	if ResolveInvokeStrategy("bedrock", modelID, vaultRoot) == StrategyBedrockMantleResponses {
 		slog.Debug("bedrock preflight: mantle strategy, skipping control-plane checks", "model", modelID)
 		return nil
 	}

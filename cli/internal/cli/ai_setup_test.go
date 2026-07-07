@@ -41,7 +41,7 @@ func TestAISetupPersistsPassingProbe(t *testing.T) {
 
 	_, root := newContractVault(t)
 
-	result, err := ai.TestProbeModel(ctx, cfg, cfg.EmbeddingModel, "bedrock", "embedding")
+	result, err := ai.TestProbeModel(ctx, cfg, cfg.EmbeddingModel, "bedrock", "embedding", root)
 	if err != nil || result == nil || !result.OK {
 		t.Skipf("Bedrock embedding probe did not pass (model access?): err=%v result=%+v", err, result)
 	}

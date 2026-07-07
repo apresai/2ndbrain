@@ -18,7 +18,7 @@ import (
 func TestNovaCrossLingual_Bedrock(t *testing.T) {
 	cfg := ai.DefaultAIConfig()
 	ctx := context.Background()
-	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg); err != nil {
+	if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg, ""); err != nil {
 		t.Skipf("bedrock init (creds?): %v", err)
 	}
 	emb, err := ai.DefaultRegistry.Embedder("bedrock")

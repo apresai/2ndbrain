@@ -127,7 +127,7 @@ func TestRemediationFor(t *testing.T) {
 func TestProbeClassification_OfflineOllama(t *testing.T) {
 	cfg := AIConfig{}
 	cfg.Ollama.Endpoint = "http://127.0.0.1:9" // discard port, nothing listens
-	result, err := TestProbeModel(context.Background(), cfg, "all-minilm", "ollama", "embedding")
+	result, err := TestProbeModel(context.Background(), cfg, "all-minilm", "ollama", "embedding", "")
 	if err != nil {
 		t.Fatalf("TestProbeModel returned hard error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestProbeClassification_OfflineOllama(t *testing.T) {
 // TestProbeClassification_StaticIncompatible exercises the bedrock static
 // preflight, which fails before any AWS call: works with no credentials.
 func TestProbeClassification_StaticIncompatible(t *testing.T) {
-	result, err := TestProbeModel(context.Background(), AIConfig{}, "amazon.nova-canvas-v1:0", "bedrock", "generation")
+	result, err := TestProbeModel(context.Background(), AIConfig{}, "amazon.nova-canvas-v1:0", "bedrock", "generation", "")
 	if err != nil {
 		t.Fatalf("TestProbeModel returned hard error: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestProbeClassification_BedrockRealError(t *testing.T) {
 	cfg.Bedrock = BedrockConfig{Profile: "default", Region: "us-east-1"}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	result, err := TestProbeModel(ctx, cfg, "anthropic.claude-nonexistent-v1:0", "bedrock", "generation")
+	result, err := TestProbeModel(ctx, cfg, "anthropic.claude-nonexistent-v1:0", "bedrock", "generation", "")
 	if err != nil {
 		t.Fatalf("TestProbeModel returned hard error: %v", err)
 	}

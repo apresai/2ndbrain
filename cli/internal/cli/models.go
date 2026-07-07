@@ -305,7 +305,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	var passed int
 	scope := ai.UserCatalogScope(modelsPromoteScope)
 
-	probeModelsConcurrently(ctx, v.Config.AI, merged.Unverified, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
+	probeModelsConcurrently(ctx, v.Config.AI, v.Root, merged.Unverified, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
 		if err == nil && result != nil && result.OK {
 			entry := promotedEntry(&m, result)
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
@@ -341,8 +341,9 @@ const probeConcurrency = 5
 
 // probeModelsConcurrently runs TestProbeModel over models with a bounded
 // worker pool. onResult runs under a shared mutex (safe to print and save
-// from) with n as the 1-based completion counter.
-func probeModelsConcurrently(ctx context.Context, cfg ai.AIConfig, models []ai.ModelInfo, onResult func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error)) {
+// from) with n as the 1-based completion counter. vaultRoot scopes the
+// user-catalog invoke-strategy lookups inside each probe.
+func probeModelsConcurrently(ctx context.Context, cfg ai.AIConfig, vaultRoot string, models []ai.ModelInfo, onResult func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error)) {
 	sem := make(chan struct{}, probeConcurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -356,7 +357,7 @@ func probeModelsConcurrently(ctx context.Context, cfg ai.AIConfig, models []ai.M
 			defer func() { <-sem }()
 
 			n := int(counter.Add(1))
-			result, err := ai.TestProbeModel(ctx, cfg, m.ID, m.Provider, m.Type)
+			result, err := ai.TestProbeModel(ctx, cfg, m.ID, m.Provider, m.Type, vaultRoot)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -530,7 +531,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Testing %s...\n", modelID)
 	}
 
-	result, err := ai.TestProbeModel(ctx, v.Config.AI, modelID, testProvider, testModelType)
+	result, err := ai.TestProbeModel(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root)
 	if err != nil {
 		return err
 	}

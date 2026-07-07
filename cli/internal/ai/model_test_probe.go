@@ -24,8 +24,10 @@ type TestProbeResult struct {
 }
 
 // TestProbeModel creates a temporary provider for the given model and runs
-// a quick smoke test (embed or generate). Returns the result.
-func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelType string) (*TestProbeResult, error) {
+// a quick smoke test (embed or generate). Returns the result. vaultRoot
+// scopes user-catalog invoke-strategy/region lookups (so a vault-scoped
+// mantle entry probes over the mantle plane); pass "" when no vault is open.
+func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelType, vaultRoot string) (*TestProbeResult, error) {
 	if provider == "" {
 		provider = InferProvider(modelID)
 	}
@@ -51,14 +53,14 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 
 	switch modelType {
 	case "embedding":
-		err = probeEmbedding(ctx, cfg, provider, modelID)
+		err = probeEmbedding(ctx, cfg, provider, modelID, vaultRoot)
 	case "rerank":
 		// No rerank probe exists; don't generation-probe a reranker (which would
 		// fail confusingly). Enable a reranker with `2nb config set ai.rerank.enabled true`.
 		err = fmt.Errorf("rerank models aren't testable via `2nb models test` yet")
 	default:
 		var snippet string
-		snippet, err = probeGeneration(ctx, cfg, provider, modelID)
+		snippet, err = probeGeneration(ctx, cfg, provider, modelID, vaultRoot)
 		if err == nil {
 			result.Detail = snippet
 		}
@@ -78,10 +80,10 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 	return result, nil
 }
 
-func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID string) error {
+func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) error {
 	switch provider {
 	case "bedrock":
-		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding"); err != nil {
+		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding", vaultRoot); err != nil {
 			return err
 		}
 		e, err := NewBedrockEmbedder(ctx, cfg.Bedrock, modelID, cfg.Dimensions)
@@ -132,16 +134,19 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID string)
 	}
 }
 
-func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID string) (string, error) {
+func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) (string, error) {
 	prompt := "What is 2+2? Reply with just the number."
+	// Note: a mantle-strategy model floors MaxTokens to mantleMinOutputTokens
+	// internally — its default-on reasoning bills against the output budget,
+	// and 32 tokens would yield a reasoning-only "incomplete" response.
 	opts := GenOpts{MaxTokens: 32, SystemPrompt: "You are a helpful assistant. Be concise."}
 
 	switch provider {
 	case "bedrock":
-		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation"); err != nil {
+		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation", vaultRoot); err != nil {
 			return "", err
 		}
-		g, err := NewBedrockGenerator(ctx, cfg.Bedrock, modelID)
+		g, err := NewBedrockGeneration(ctx, cfg.Bedrock, modelID, vaultRoot)
 		if err != nil {
 			return "", err
 		}
