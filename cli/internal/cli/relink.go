@@ -10,6 +10,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/polish"
+	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
@@ -70,12 +71,17 @@ func runRelink(cmd *cobra.Command, args []string) error {
 	if n > 0 {
 		result.LinksRepaired = []polish.LinkRepair{{Raw: relinkFrom, NewTarget: document.Basename(relinkTo)}}
 		// relink is meant to point at an EXISTING note (the "apply a Did-you-mean
-		// suggestion" action). Warn — but don't block — when --to resolves to no
-		// note, so a typo isn't silently left as a still-broken link. We don't
-		// hard-fail: the user may be relinking to a note created moments ago that
-		// isn't indexed yet.
-		if _, rerr := v.DB.ResolveTarget(relinkTo); rerr != nil {
-			warnings = append(warnings, fmt.Sprintf("--to %q does not resolve to an existing note; the link may remain broken", relinkTo))
+		// suggestion" action). Warn, but don't block, when --to resolves to no
+		// note on the LIVE FILESYSTEM (vault.CollectLiveDocs, the same walk lint
+		// reports from), so a typo isn't silently left as a still-broken link.
+		// Resolving live rather than via the index DB means a note created
+		// moments ago that isn't indexed yet resolves cleanly (no false warning),
+		// and a note deleted on disk but still in the DB does warn. The check is
+		// advisory, so a failed walk skips it rather than failing the relink.
+		if docs, aliases, lerr := vault.CollectLiveDocs(v.Root); lerr == nil {
+			if _, rerr := store.NewResolver(docs, aliases).Resolve(relinkTo); rerr != nil {
+				warnings = append(warnings, fmt.Sprintf("--to %q does not resolve to an existing note; the link may remain broken", relinkTo))
+			}
 		}
 	} else {
 		warnings = append(warnings, fmt.Sprintf("no [[%s]] link found to repoint", relinkFrom))

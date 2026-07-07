@@ -12,6 +12,8 @@ import (
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/search"
+	"github.com/apresai/2ndbrain/internal/store"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -99,20 +101,25 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// Tier 1 — drift: the highest-confidence candidates, the existing notes the
+	// Tier 1 (drift): the highest-confidence candidates, the existing notes the
 	// broken name maps to via repair's fuzzy index (surfacing ambiguity repair
-	// would skip). Resolve each canonical name to a concrete path.
-	if cands, cerr := polish.SuggestRepairTargets(v.DB, target); cerr == nil {
-		for _, c := range cands {
-			path, rerr := v.DB.ResolveTarget(c)
+	// would skip). Sourced from the LIVE FILESYSTEM (vault.CollectLiveDocs, the
+	// same walk lint reports from), so a note created in Obsidian but not yet
+	// indexed still surfaces, and a note deleted on disk but still in the DB
+	// never does. One walk feeds both the fuzzy index and the resolver that
+	// turns each canonical name into a concrete path.
+	if docs, aliases, lerr := vault.CollectLiveDocs(v.Root); lerr == nil {
+		liveResolver := store.NewResolver(docs, aliases)
+		titleByPath := make(map[string]string, len(docs))
+		for _, d := range docs {
+			titleByPath[d.Path] = d.Title
+		}
+		for _, c := range polish.SuggestRepairTargets(docs, aliases, target) {
+			path, rerr := liveResolver.Resolve(c)
 			if rerr != nil {
 				continue
 			}
-			title := ""
-			if d, derr := v.DB.GetDocumentByPath(path); derr == nil && d != nil {
-				title = d.Title
-			}
-			add(path, title, 1.0)
+			add(path, titleByPath[path], 1.0)
 		}
 	}
 

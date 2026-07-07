@@ -107,6 +107,27 @@ func TestSuggestTarget_SourceExcludedFromDriftTier(t *testing.T) {
 	}
 }
 
+// The drift tier resolves against the LIVE FILESYSTEM, not the index DB, so a
+// note created on disk after the last index (e.g. in Obsidian, before any
+// reindex) still surfaces as a "did you mean?" candidate. The DB-backed tier
+// used to miss it entirely.
+func TestSuggestTarget_DriftTierSeesUnindexedNote(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "some-note.md", "Some Note",
+		"# Some Note\n\nSee [[ghostty config]].")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	// Created AFTER the index run; it exists only on disk.
+	writeNote(t, root, "Ghostty Config.md", "Ghostty Config",
+		"# Ghostty Config\n\nGhostty terminal configuration reference.")
+
+	paths := suggestPaths(t, root, "ghostty config", "--json", "--porcelain")
+	if !containsString(paths, "Ghostty Config.md") {
+		t.Errorf("drift tier must surface the unindexed on-disk note: %v", paths)
+	}
+}
+
 // An AMBIGUOUS --source (two notes share the basename, no exact file match)
 // is the case that actually reaches the cleaned-raw-path fallback: auto-mode
 // resolution returns an AmbiguousTargetError, the error is logged at debug,

@@ -1,11 +1,28 @@
 package polish
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/testutil"
+	"github.com/apresai/2ndbrain/internal/vault"
 )
+
+// writeUnindexedNote writes a markdown note directly to disk WITHOUT touching
+// the index DB, simulating a note created in Obsidian before any reindex.
+func writeUnindexedNote(t *testing.T, v *vault.Vault, relPath, title, body string) {
+	t.Helper()
+	abs := filepath.Join(v.Root, relPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", relPath, err)
+	}
+	content := "---\ntitle: " + title + "\ntype: note\nstatus: draft\n---\n\n# " + title + "\n\n" + body + "\n"
+	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", relPath, err)
+	}
+}
 
 func TestRepairBrokenLinks_RepairsCaseDriftLeavesRestAlone(t *testing.T) {
 	v := testutil.NewTestVault(t)
@@ -140,16 +157,14 @@ func TestRepairBrokenLinks_AmbiguousNameIsSkipped(t *testing.T) {
 // dead-ended. After the fold it repairs to the basename.
 func TestRepairBrokenLinks_RepairsHyphenSpaceDriftToKebabBasename(t *testing.T) {
 	v := testutil.NewTestVault(t)
-	// Create the note (its slug gives the kebab basename), then strip the title
-	// from the index so ONLY the hyphenated basename remains as a resolvable
-	// form — testutil.CreateAndIndex always sets a title, which would otherwise
-	// bridge the spaced target and mask the hyphen-vs-space drift.
-	tgt := testutil.CreateAndIndex(t, v, "Claude Code Skills Reference and Index", "note",
-		note("Claude Code Skills Reference and Index", "Reference and index."))
-	tgt.Title = ""
-	delete(tgt.Frontmatter, "title")
-	if err := v.DB.UpsertDocument(tgt); err != nil {
-		t.Fatalf("re-upsert title-less target: %v", err)
+	// Write the target note directly to disk WITHOUT a frontmatter title so
+	// ONLY the hyphenated basename remains as a resolvable form. Repair reads
+	// the live filesystem, so the title-less state must exist on disk;
+	// testutil.CreateAndIndex always writes a title, which would bridge the
+	// spaced target and mask the hyphen-vs-space drift.
+	abs := filepath.Join(v.Root, "claude-code-skills-reference-and-index.md")
+	if err := os.WriteFile(abs, []byte("---\ntype: note\nstatus: draft\n---\n\nReference and index.\n"), 0o644); err != nil {
+		t.Fatalf("write title-less target: %v", err)
 	}
 
 	src := testutil.CreateAndIndex(t, v, "Src", "note",
@@ -165,6 +180,66 @@ func TestRepairBrokenLinks_RepairsHyphenSpaceDriftToKebabBasename(t *testing.T) 
 	}
 	if !strings.Contains(res.Body, "[[claude-code-skills-reference-and-index]]") {
 		t.Fatalf("body not rewritten to the kebab basename: %q", res.Body)
+	}
+}
+
+// Stale-DB direction 1: a note added on disk after the last index (created in
+// Obsidian, not yet reindexed) must be visible to repair. The DB-backed repair
+// index used to skip a fixable case-drift link to it as no_match while lint
+// (which walks the live filesystem) reported it repairable.
+func TestRepairBrokenLinks_SeesNoteAddedAfterIndex(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	src := testutil.CreateAndIndex(t, v, "Source Doc", "note",
+		note("Source Doc", "See [[auth flow]] and [[Auth Flow]].\n"))
+
+	// The target exists ONLY on disk; the DB has no row for it.
+	writeUnindexedNote(t, v, "auth-flow.md", "Auth Flow", "How auth works.")
+
+	res, err := RepairBrokenLinks(v, src.Body)
+	if err != nil {
+		t.Fatalf("RepairBrokenLinks: %v", err)
+	}
+	if len(res.Repaired) != 1 || res.Repaired[0].Raw != "auth flow" || res.Repaired[0].NewTarget != "Auth Flow" {
+		t.Fatalf("expected the unindexed note to repair auth flow -> Auth Flow, got repaired=%+v skipped=%+v",
+			res.Repaired, res.Skipped)
+	}
+	if !strings.Contains(res.Body, "[[Auth Flow]]") {
+		t.Fatalf("repaired body missing [[Auth Flow]]: %q", res.Body)
+	}
+	// [[Auth Flow]] resolves against the live filesystem (title match), so it
+	// is neither repaired nor reported broken, matching what lint says. The
+	// DB-backed already-resolves check used to report it no_match noise.
+	if len(res.Skipped) != 0 {
+		t.Fatalf("a link resolving on disk must not be reported, got %+v", res.Skipped)
+	}
+}
+
+// Stale-DB direction 2: a note deleted from disk but still present in the DB
+// (no reindex since) must NOT be offered as a repair target. The DB-backed
+// repair index used to "fix" a link to that ghost, contradicting lint, which
+// reports the link broken because the file is gone.
+func TestRepairBrokenLinks_IgnoresNoteDeletedFromDisk(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	ghost := testutil.CreateAndIndex(t, v, "Auth Flow", "note", note("Auth Flow", "How auth works."))
+	src := testutil.CreateAndIndex(t, v, "Src", "note", note("Src", "See [[auth flow]].\n"))
+
+	// Delete the target from disk; its row remains in the DB.
+	if err := os.Remove(filepath.Join(v.Root, ghost.Path)); err != nil {
+		t.Fatalf("remove ghost note: %v", err)
+	}
+
+	res, err := RepairBrokenLinks(v, src.Body)
+	if err != nil {
+		t.Fatalf("RepairBrokenLinks: %v", err)
+	}
+	if len(res.Repaired) != 0 {
+		t.Fatalf("a note deleted on disk must never be a repair target, got %+v", res.Repaired)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Raw != "auth flow" || res.Skipped[0].Reason != "no_match" {
+		t.Fatalf("expected one no_match skip for the ghost target, got %+v", res.Skipped)
+	}
+	if !strings.Contains(res.Body, "[[auth flow]]") {
+		t.Fatalf("body must be left untouched: %q", res.Body)
 	}
 }
 
