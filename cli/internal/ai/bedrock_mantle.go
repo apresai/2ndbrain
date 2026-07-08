@@ -382,15 +382,39 @@ func (g *BedrockMantleGenerator) doMantleRequest(ctx context.Context, body []byt
 	return nil, fmt.Errorf("bedrock mantle %s: retry loop exited unexpectedly", url)
 }
 
+// mantleErrorCode extracts the mantle plane's machine-readable error code from
+// a non-2xx body shaped `{"error":{"code":"...","message":"...","type":"..."}}`.
+// Returns "" when the body is empty, not JSON, or carries no code — callers
+// then fall back to HTTP-status classification.
+func mantleErrorCode(body []byte) string {
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	return payload.Error.Code
+}
+
 // mantleHTTPError wraps a non-2xx mantle response as a *ProviderHTTPError.
-// A 401 on this plane is ambiguous (live-probed): a bad token OR a valid
-// token whose AWS account is not entitled to the model (the per-account
-// gate), so that hint rides in the body text while the status keeps its
-// standard classification. A 404 usually means the wrong region/plane for
-// the model ("model does not exist").
+//
+// A 401 on this plane means one of two very different things, and the HTTP
+// status alone cannot tell them apart: a bad bearer token, or a valid token
+// whose AWS account is not entitled to the model (the staged per-account
+// rollout gate). The response body DOES disambiguate them via `error.code`
+// (`invalid_api_key` vs `access_denied`), so we lift that code onto the error
+// and let it drive classification. Without it, a gated-but-working account saw
+// "bad credentials" and a remediation telling it to re-run `aws configure`.
+//
+// A 404 usually means the wrong region/plane for the model ("model does not
+// exist").
 func mantleHTTPError(model, url string, status int, body []byte) *ProviderHTTPError {
 	text := strings.TrimSpace(string(body))
-	if status == http.StatusUnauthorized {
+	code := mantleErrorCode(body)
+	if status == http.StatusUnauthorized && code == "" {
+		// No code to disambiguate with: keep the human-readable hint.
 		if text != "" {
 			text += " "
 		}
@@ -402,5 +426,5 @@ func mantleHTTPError(model, url string, status int, body []byte) *ProviderHTTPEr
 		}
 		text += "[model " + model + "]"
 	}
-	return &ProviderHTTPError{Provider: "bedrock", URL: url, StatusCode: status, Body: text}
+	return &ProviderHTTPError{Provider: "bedrock", URL: url, StatusCode: status, Body: text, Code: code}
 }

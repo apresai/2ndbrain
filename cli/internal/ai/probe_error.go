@@ -66,6 +66,13 @@ type ProviderHTTPError struct {
 	URL        string
 	StatusCode int
 	Body       string
+	// Code is the provider's own machine-readable error code, when the
+	// response carries one (e.g. the bedrock-mantle plane's
+	// `{"error":{"code":"access_denied"}}`). It takes precedence over
+	// StatusCode during classification, because a provider that overloads one
+	// status for several causes still distinguishes them here. Empty when the
+	// provider reports no code.
+	Code string
 }
 
 func (e *ProviderHTTPError) Error() string {
@@ -92,6 +99,9 @@ func ClassifyProbeError(provider string, err error) TestErrorCode {
 
 	var httpErr *ProviderHTTPError
 	if errors.As(err, &httpErr) {
+		if code := classifyProviderErrorCode(httpErr.Code); code != "" {
+			return code
+		}
 		return classifyHTTPStatus(httpErr.StatusCode)
 	}
 
@@ -176,6 +186,31 @@ func classifySmithyError(apiErr smithy.APIError) TestErrorCode {
 		return TestErrProviderUnreachable
 	}
 	return TestErrUnknown
+}
+
+// classifyProviderErrorCode maps a provider's own error code onto a
+// TestErrorCode, for providers that overload one HTTP status across causes the
+// status alone cannot separate. Returns "" for an unknown or absent code, so
+// the caller falls back to classifyHTTPStatus.
+//
+// The bedrock-mantle plane returns HTTP 401 for BOTH a bad bearer token and a
+// valid token whose account is not entitled to the model. Live-probed
+// 2026-07-08 against bedrock-mantle.{us-west-2,us-east-2}.api.aws:
+//
+//	bad token, entitled model  -> 401 {"error":{"code":"invalid_api_key"}}
+//	valid token, gated model   -> 401 {"error":{"code":"access_denied"}}
+//
+// (Both carry type "permission_denied_error", so only `code` separates them.)
+// Classifying every mantle 401 as bad_credentials told users to re-run
+// `aws configure` when their credentials were provably fine.
+func classifyProviderErrorCode(code string) TestErrorCode {
+	switch code {
+	case "access_denied":
+		return TestErrAccessDenied
+	case "invalid_api_key":
+		return TestErrBadCredentials
+	}
+	return ""
 }
 
 func classifyHTTPStatus(status int) TestErrorCode {
