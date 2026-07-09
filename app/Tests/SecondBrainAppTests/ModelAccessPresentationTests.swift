@@ -15,6 +15,28 @@ func accessDeniedGuidance() {
     #expect(or?.actionURL == nil)
 }
 
+@Test("a mantle model's access_denied suppresses the console link and points at AWS Sales")
+func mantleAccessDeniedSuppressesConsoleLink() {
+    let g = ModelAccessPresentation.guidance(code: "access_denied", provider: "bedrock", region: "us-west-2", strategy: "bedrock_mantle_responses")
+    #expect(g?.badge == "no access")
+    // The Bedrock console Model-access page can't unblock a mantle model, so no button.
+    #expect(g?.actionLabel == nil)
+    #expect(g?.actionURL == nil)
+    // Fallback advice is account-aware, not the classic console text.
+    #expect(g?.advice.contains("AWS Sales") == true)
+    #expect(g?.advice.contains("mantle") == true)
+
+    // The CLI's own remediation still wins as advice, and the link stays suppressed.
+    let withRem = ModelAccessPresentation.guidance(code: "access_denied", provider: "bedrock", remediation: "Contact AWS Sales.", region: "us-west-2", strategy: "bedrock_mantle_responses")
+    #expect(withRem?.advice == "Contact AWS Sales.")
+    #expect(withRem?.actionURL == nil)
+
+    // A classic bedrock model (no mantle strategy) still gets the console link.
+    let classic = ModelAccessPresentation.guidance(code: "access_denied", provider: "bedrock", region: "us-east-1", strategy: "bedrock_converse")
+    #expect(classic?.actionLabel == "Open AWS console")
+    #expect(classic?.actionURL != nil)
+}
+
 @Test("the CLI's own remediation text wins over the local fallback")
 func remediationWins() {
     let g = ModelAccessPresentation.guidance(code: "bad_credentials", provider: "bedrock", remediation: "Refresh your SSO session.")
@@ -55,11 +77,13 @@ func consoleURLFallback() {
 
 @Test("AIProbeResult decodes code and remediation from models test JSON")
 func probeResultDecodesTaxonomy() {
-    let json = #"{"model_id":"us.anthropic.claude-sonnet-5","provider":"bedrock","type":"generation","ok":false,"detail":"converse: 403","latency":"512ms","code":"access_denied","remediation":"Request access under Bedrock > Model access."}"#
+    let json = #"{"model_id":"openai.gpt-5.5","provider":"bedrock","type":"generation","ok":false,"detail":"mantle: 401","latency":"512ms","code":"access_denied","remediation":"Contact AWS Sales.","invoke_strategy":"bedrock_mantle_responses"}"#
     let r = try! JSONDecoder().decode(AIProbeResult.self, from: Data(json.utf8))
     #expect(r.errorCode == "access_denied")
-    #expect(r.remediation?.contains("Model access") == true)
+    #expect(r.remediation?.contains("AWS Sales") == true)
+    #expect(r.invokeStrategy == "bedrock_mantle_responses")
     // Pre-taxonomy CLI: fields absent, decode still succeeds.
     let legacy = try! JSONDecoder().decode(AIProbeResult.self, from: Data(#"{"model_id":"m","provider":"bedrock","type":"generation","ok":true,"latency":"100ms"}"#.utf8))
     #expect(legacy.errorCode == nil)
+    #expect(legacy.invokeStrategy == nil)
 }

@@ -21,6 +21,11 @@ type TestProbeResult struct {
 	// Remediation is a user-actionable fix hint matching Code. Empty when
 	// there is no better advice than Detail.
 	Remediation string `json:"remediation,omitempty"`
+	// Strategy is the model's resolved InvokeStrategy (e.g.
+	// bedrock_mantle_responses). Additive; lets a UI tailor guidance —
+	// notably suppress the Bedrock "Model access" console link for mantle
+	// models, which that page doesn't govern. Empty when undeclared.
+	Strategy string `json:"invoke_strategy,omitempty"`
 }
 
 // TestProbeModel creates a temporary provider for the given model and runs
@@ -68,11 +73,17 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 
 	result.Latency = time.Since(start).Round(time.Millisecond).String()
 
+	// The model's invoke strategy tailors failure guidance (a mantle model's
+	// access_denied points at AWS Sales, not the Bedrock console) and rides
+	// out on the result so a UI can do the same. Resolved through the same
+	// user-catalog-over-builtin chain the dispatcher uses.
+	result.Strategy = ResolveInvokeStrategy(provider, modelID, vaultRoot)
+
 	if err != nil {
 		result.OK = false
 		result.Detail = err.Error()
 		result.Code = ClassifyProbeError(provider, err)
-		result.Remediation = RemediationFor(result.Code, provider)
+		result.Remediation = RemediationFor(result.Code, provider, result.Strategy)
 	} else {
 		result.OK = true
 	}

@@ -204,7 +204,8 @@ func TestMantleErrorClassification(t *testing.T) {
 		status int
 		want   TestErrorCode
 	}{
-		{401, TestErrBadCredentials}, // bad token OR not entitled (per-account gate)
+		// A body with no `error.code` falls back to HTTP-status classification.
+		{401, TestErrBadCredentials},
 		{403, TestErrAccessDenied},
 		{404, TestErrNotFound}, // wrong region/plane: "model does not exist"
 		{429, TestErrThrottled},
@@ -216,7 +217,8 @@ func TestMantleErrorClassification(t *testing.T) {
 		}
 	}
 
-	// The 401 ambiguity hint must ride in the error text.
+	// The 401 ambiguity hint must ride in the error text when the body carries
+	// no code to disambiguate with.
 	err401 := mantleHTTPError("xai.grok-4.3", url, 401, []byte("unauthorized"))
 	if !strings.Contains(err401.Error(), "not entitled on this account") {
 		t.Errorf("401 error missing entitlement hint: %v", err401)
@@ -225,9 +227,132 @@ func TestMantleErrorClassification(t *testing.T) {
 		t.Errorf("error should name the model for debuggability: %v", err401)
 	}
 
+	// A 401 carrying a non-empty but UNMAPPED code is still ambiguous: the hint
+	// must be kept (the whole point of gating on classifyProviderErrorCode(code)
+	// rather than code != ""), and classification falls back to the status
+	// (bad_credentials). Without the mapped-classification gate this hint would
+	// be dropped and the user left with a bare bad_credentials.
+	errUnmapped := mantleHTTPError("xai.grok-4.3", url, 401, []byte(`{"error":{"code":"some_future_401_code"}}`))
+	if !strings.Contains(errUnmapped.Error(), "not entitled on this account") {
+		t.Errorf("401 with an unmapped code should keep the entitlement hint: %v", errUnmapped)
+	}
+	if got := ClassifyProbeError("bedrock", errUnmapped); got != TestErrBadCredentials {
+		t.Errorf("401 with an unmapped code should fall back to bad_credentials, got %q", got)
+	}
+
 	// A missing bearer token classifies as bad credentials before any call.
 	if got := ClassifyProbeError("bedrock", errors.New(errNoMantleTokenText)); got != TestErrBadCredentials {
 		t.Errorf("missing-token error classified %q, want bad_credentials", got)
+	}
+}
+
+// TestMantleMappedCodeWinsOverNon401Status pins, deliberately, that a mapped
+// error.code overrides the HTTP status even on a non-401 response. The mantle
+// plane attaches error.code to every non-2xx (live-observed 400
+// integer_below_min_value / missing_required_parameter, 404 not_found_error),
+// and ClassifyProbeError consults Code before StatusCode unconditionally. Those
+// live codes are currently unmapped so they fall back to status; this asserts
+// the intended behavior for the day a mapped code (access_denied /
+// invalid_api_key) arrives on a non-401 — the definitive cause wins over the
+// coarser status.
+func TestMantleMappedCodeWinsOverNon401Status(t *testing.T) {
+	url := "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses"
+	for _, tt := range []struct {
+		name       string
+		status     int
+		body       string
+		want       TestErrorCode
+		wantStatus TestErrorCode // what pure status classification would have said
+	}{
+		{"429 carrying access_denied", 429, `{"error":{"code":"access_denied"}}`, TestErrAccessDenied, TestErrThrottled},
+		{"403 carrying invalid_api_key", 403, `{"error":{"code":"invalid_api_key"}}`, TestErrBadCredentials, TestErrAccessDenied},
+		{"500 carrying an unmapped code falls back to status", 500, `{"error":{"code":"internal_server_error"}}`, TestErrProviderUnreachable, TestErrProviderUnreachable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := mantleHTTPError("xai.grok-4.3", url, tt.status, []byte(tt.body))
+			if got := ClassifyProbeError("bedrock", err); got != tt.want {
+				t.Errorf("classified %q, want %q (pure-status would be %q)", got, tt.want, tt.wantStatus)
+			}
+			if err.StatusCode != tt.status {
+				t.Errorf("StatusCode = %d, want %d (must not be rewritten)", err.StatusCode, tt.status)
+			}
+		})
+	}
+}
+
+// TestMantle401DisambiguatedByErrorCode pins the behavior that a mantle 401 is
+// classified from the body's `error.code`, not the status. Both bodies below
+// were captured verbatim from the live plane on 2026-07-08: an invalid bearer
+// token against an entitled model (us-west-2 / xai.grok-4.3), and a valid
+// bearer token against a model the account is not entitled to (us-east-2 /
+// openai.gpt-5.5). Both are HTTP 401 with type "permission_denied_error".
+//
+// Regression guard: classifying the second as bad_credentials told a user with
+// working credentials to re-run `aws configure`.
+func TestMantle401DisambiguatedByErrorCode(t *testing.T) {
+	const (
+		badTokenBody = `{"error":{"code":"invalid_api_key","message":"Invalid bearer token","param":null,"type":"permission_denied_error"}}`
+		notEntitled  = `{"error":{"code":"access_denied","message":"openai.gpt-5.5 is not available for this account. You can explore other available models on Amazon Bedrock. For additional access options, contact AWS Sales at https://aws.amazon.com/contact-us/sales-support/","param":null,"type":"permission_denied_error"}}`
+	)
+	for _, tt := range []struct {
+		name  string
+		model string
+		url   string
+		body  string
+		want  TestErrorCode
+	}{
+		{"bad token", "xai.grok-4.3", "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses", badTokenBody, TestErrBadCredentials},
+		{"valid token, model not entitled", "openai.gpt-5.5", "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses", notEntitled, TestErrAccessDenied},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := mantleHTTPError(tt.model, tt.url, 401, []byte(tt.body))
+			if got := ClassifyProbeError("bedrock", err); got != tt.want {
+				t.Errorf("classified %q, want %q", got, tt.want)
+			}
+			// The status is reported honestly; only classification is lifted.
+			if err.StatusCode != 401 {
+				t.Errorf("StatusCode = %d, want 401 (must not be rewritten)", err.StatusCode)
+			}
+			// With a code present, the speculative "or bad token" hint is
+			// suppressed: we now know which one it is.
+			if strings.Contains(err.Error(), "not entitled on this account, or bad token") {
+				t.Errorf("ambiguity hint should be dropped once error.code disambiguates: %v", err)
+			}
+			// The provider's own message must survive for the detail pane.
+			if !strings.Contains(err.Error(), tt.model) {
+				t.Errorf("error should name the model: %v", err)
+			}
+		})
+	}
+}
+
+func TestMantleErrorCodeExtraction(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"access denied", `{"error":{"code":"access_denied"}}`, "access_denied"},
+		{"invalid key", `{"error":{"code":"invalid_api_key"}}`, "invalid_api_key"},
+		{"no code field", `{"error":{"message":"x"}}`, ""},
+		{"not json", `unauthorized`, ""},
+		{"empty", ``, ""},
+		{"html error page", `<html><body>502</body></html>`, ""},
+		{"error is a string not an object", `{"error":"boom"}`, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mantleErrorCode([]byte(tt.body)); got != tt.want {
+				t.Errorf("mantleErrorCode(%q) = %q, want %q", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+// An unknown provider code must not swallow the status-based classification.
+func TestUnknownProviderErrorCodeFallsBackToStatus(t *testing.T) {
+	err := &ProviderHTTPError{Provider: "bedrock", StatusCode: 429, Code: "some_novel_code"}
+	if got := ClassifyProbeError("bedrock", err); got != TestErrThrottled {
+		t.Errorf("unknown code classified %q, want throttled (status fallback)", got)
 	}
 }
 
@@ -401,10 +526,17 @@ func TestLiveMantleGrokProbe(t *testing.T) {
 	}
 	if !result.OK {
 		switch {
+		// An unentitled account now reports access_denied (from the body's
+		// error.code); a genuinely bad token still reports bad_credentials.
+		// Neither is a client defect, so both skip.
+		case result.Code == TestErrAccessDenied:
+			t.Skipf("account not entitled to xai.grok-4.3: %s", result.Detail)
 		case result.Code == TestErrBadCredentials && strings.Contains(result.Detail, "status 401"):
-			t.Skipf("account not entitled to xai.grok-4.3 (or token invalid): %s", result.Detail)
+			t.Skipf("bedrock bearer token rejected by the mantle plane: %s", result.Detail)
 		case result.Code == TestErrThrottled:
 			t.Skipf("throttled (model very likely works): %s", result.Detail)
+		case result.Code == TestErrProviderUnreachable:
+			t.Skipf("mantle plane returned a transient 5xx (not a client defect): %s", result.Detail)
 		case result.Code == TestErrTimeout:
 			t.Skipf("mantle plane stalled twice (transient, not a client defect): %s", result.Detail)
 		default:
