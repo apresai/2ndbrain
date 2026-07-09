@@ -236,16 +236,30 @@ func classifyHTTPStatus(status int) TestErrorCode {
 // RemediationFor returns a one-paragraph, user-actionable fix hint for a
 // classified probe failure. Empty for codes with no better advice than the
 // raw error text.
-func RemediationFor(code TestErrorCode, provider string) string {
+//
+// strategy is the model's resolved InvokeStrategy (from ResolveInvokeStrategy),
+// used to tailor Bedrock guidance: a model on the mantle plane
+// (StrategyBedrockMantleResponses) is entitled per-account through AWS Sales,
+// NOT the Bedrock console's "Model access" page (mantle models are invisible to
+// that control plane), so it needs different text than classic Bedrock. Pass ""
+// when the strategy is unknown to get the generic per-provider text.
+func RemediationFor(code TestErrorCode, provider, strategy string) string {
+	mantle := strategy == StrategyBedrockMantleResponses
 	switch code {
 	case TestErrAccessDenied:
 		if provider == "bedrock" {
+			if mantle {
+				return "Your AWS account isn't entitled to this model on the Bedrock mantle plane. This is AWS's staged, per-account rollout, not a 2nb or credential problem, and your other models still work. Request access by contacting AWS Sales (https://aws.amazon.com/contact-us/sales-support/); the Bedrock console's Model access page does not govern mantle models, so it can't unblock this one."
+			}
 			return "Your AWS account can't invoke this model yet. AWS's staged rollout can gate newer frontier models even when the console shows access as granted. Request access under Bedrock > Model access in the AWS console; if it already shows granted and invocations still 403, only an AWS Support case unblocks it."
 		}
 		return "Your account doesn't have access to this model. Check your plan or entitlements with the provider."
 	case TestErrBadCredentials:
 		switch provider {
 		case "bedrock":
+			if mantle {
+				return "The Bedrock API key was rejected by the mantle plane (invalid or expired bearer token). Store a valid key with `2nb config set-key bedrock`; the mantle plane is bearer-token only and does not accept SigV4 credentials."
+			}
 			return "AWS credentials are missing, expired, or invalid. Refresh your SSO session or run `aws configure`, or store a Bedrock API key with `2nb config set-key bedrock`."
 		case "openrouter":
 			return "OpenRouter API key is missing or invalid. Set OPENROUTER_API_KEY or run `2nb config set-key openrouter`."

@@ -340,7 +340,7 @@ struct HomeView: View {
             var failures: [String] = []
             var tested = 0
             func failureLine(_ r: AIProbeResult, model: String) -> String {
-                let guidance = ModelAccessPresentation.guidance(code: r.errorCode, provider: status.provider, remediation: r.remediation)
+                let guidance = ModelAccessPresentation.guidance(code: r.errorCode, provider: status.provider, remediation: r.remediation, strategy: r.invokeStrategy)
                 if let g = guidance { return "\(model) [\(g.badge)]: \(g.advice)" }
                 return "\(model): \(r.detail ?? "failed")"
             }

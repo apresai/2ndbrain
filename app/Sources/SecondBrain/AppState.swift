@@ -3393,6 +3393,10 @@ struct AIProbeResult: Codable {
     // passes and on pre-taxonomy CLIs.
     let errorCode: String?
     let remediation: String?
+    // The model's resolved invoke strategy (e.g. bedrock_mantle_responses).
+    // Lets access guidance suppress the Bedrock console link for mantle
+    // models. Optional: absent on pre-strategy CLIs.
+    let invokeStrategy: String?
 
     enum CodingKeys: String, CodingKey {
         case modelID = "model_id"
@@ -3400,6 +3404,7 @@ struct AIProbeResult: Codable {
         case modelType = "type"
         case ok, detail, latency, remediation
         case errorCode = "code"
+        case invokeStrategy = "invoke_strategy"
     }
 }
 

@@ -233,6 +233,40 @@ func TestMantleErrorClassification(t *testing.T) {
 	}
 }
 
+// TestMantleMappedCodeWinsOverNon401Status pins, deliberately, that a mapped
+// error.code overrides the HTTP status even on a non-401 response. The mantle
+// plane attaches error.code to every non-2xx (live-observed 400
+// integer_below_min_value / missing_required_parameter, 404 not_found_error),
+// and ClassifyProbeError consults Code before StatusCode unconditionally. Those
+// live codes are currently unmapped so they fall back to status; this asserts
+// the intended behavior for the day a mapped code (access_denied /
+// invalid_api_key) arrives on a non-401 — the definitive cause wins over the
+// coarser status.
+func TestMantleMappedCodeWinsOverNon401Status(t *testing.T) {
+	url := "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses"
+	for _, tt := range []struct {
+		name       string
+		status     int
+		body       string
+		want       TestErrorCode
+		wantStatus TestErrorCode // what pure status classification would have said
+	}{
+		{"429 carrying access_denied", 429, `{"error":{"code":"access_denied"}}`, TestErrAccessDenied, TestErrThrottled},
+		{"403 carrying invalid_api_key", 403, `{"error":{"code":"invalid_api_key"}}`, TestErrBadCredentials, TestErrAccessDenied},
+		{"500 carrying an unmapped code falls back to status", 500, `{"error":{"code":"internal_server_error"}}`, TestErrProviderUnreachable, TestErrProviderUnreachable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := mantleHTTPError("xai.grok-4.3", url, tt.status, []byte(tt.body))
+			if got := ClassifyProbeError("bedrock", err); got != tt.want {
+				t.Errorf("classified %q, want %q (pure-status would be %q)", got, tt.want, tt.wantStatus)
+			}
+			if err.StatusCode != tt.status {
+				t.Errorf("StatusCode = %d, want %d (must not be rewritten)", err.StatusCode, tt.status)
+			}
+		})
+	}
+}
+
 // TestMantle401DisambiguatedByErrorCode pins the behavior that a mantle 401 is
 // classified from the body's `error.code`, not the status. Both bodies below
 // were captured verbatim from the live plane on 2026-07-08: an invalid bearer
@@ -488,6 +522,8 @@ func TestLiveMantleGrokProbe(t *testing.T) {
 			t.Skipf("bedrock bearer token rejected by the mantle plane: %s", result.Detail)
 		case result.Code == TestErrThrottled:
 			t.Skipf("throttled (model very likely works): %s", result.Detail)
+		case result.Code == TestErrProviderUnreachable:
+			t.Skipf("mantle plane returned a transient 5xx (not a client defect): %s", result.Detail)
 		case result.Code == TestErrTimeout:
 			t.Skipf("mantle plane stalled twice (transient, not a client defect): %s", result.Detail)
 		default:

@@ -302,7 +302,7 @@ struct ModelCatalogPickerView: View {
     @ViewBuilder
     private func accessCallout(_ model: CatalogModelInfo) -> some View {
         if let err = model.testError, !err.isEmpty {
-            let guidance = ModelAccessPresentation.guidance(code: model.testErrorCode, provider: model.provider)
+            let guidance = ModelAccessPresentation.guidance(code: model.testErrorCode, provider: model.provider, strategy: model.invokeStrategy)
             VStack(alignment: .leading, spacing: 6) {
                 Label(guidance?.title ?? "Last test failed", systemImage: "exclamationmark.triangle.fill")
                     .font(.callout.weight(.semibold))
@@ -564,7 +564,7 @@ struct ModelCatalogPickerView: View {
             if result.ok {
                 statusText = "Test passed: \(result.latency)"
             } else {
-                let guidance = ModelAccessPresentation.guidance(code: result.errorCode, provider: model.provider, remediation: result.remediation)
+                let guidance = ModelAccessPresentation.guidance(code: result.errorCode, provider: model.provider, remediation: result.remediation, strategy: result.invokeStrategy)
                 var line = "Test failed"
                 if let badge = guidance?.badge { line += " [\(badge)]" }
                 if let advice = guidance?.advice, !advice.isEmpty { line += ": \(advice)" }

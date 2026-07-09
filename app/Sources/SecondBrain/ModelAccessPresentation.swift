@@ -18,18 +18,26 @@ enum ModelAccessPresentation {
     /// the code (not the remediation), so persistent surfaces like the
     /// picker callout use the local fallback text while transient probe
     /// results carry the CLI's own wording. `region` scopes the AWS console
-    /// link.
-    static func guidance(code: String?, provider: String, remediation: String? = nil, region: String? = nil) -> Guidance? {
+    /// link. `strategy` is the model's invoke strategy: a mantle-plane model
+    /// (`bedrock_mantle_responses`) is entitled per-account via AWS Sales and
+    /// is invisible to the Bedrock console's Model-access page, so the console
+    /// link is suppressed for it (it can't unblock the model).
+    static func guidance(code: String?, provider: String, remediation: String? = nil, region: String? = nil, strategy: String? = nil) -> Guidance? {
         guard let code, !code.isEmpty, code != "unknown" else { return nil }
+        let isMantle = strategy == "bedrock_mantle_responses"
         let advice: String
         var actionLabel: String?
         var actionURL: URL?
         switch code {
         case "access_denied":
-            advice = remediation ?? "Your account can't invoke this model yet. For Bedrock, request access under Model access in the AWS console; newer frontier models can stay gated by AWS's staged rollout even when the console shows access as granted."
-            if provider == "bedrock" {
-                actionLabel = "Open AWS console"
-                actionURL = bedrockConsoleURL(region: region)
+            if isMantle {
+                advice = remediation ?? "Your account isn't entitled to this model on the Bedrock mantle plane. This is AWS's staged, per-account rollout, not a problem with 2nb or your credentials, and your other models still work. Request access by contacting AWS Sales; the Bedrock console's Model access page does not govern mantle models."
+            } else {
+                advice = remediation ?? "Your account can't invoke this model yet. For Bedrock, request access under Model access in the AWS console; newer frontier models can stay gated by AWS's staged rollout even when the console shows access as granted."
+                if provider == "bedrock" {
+                    actionLabel = "Open AWS console"
+                    actionURL = bedrockConsoleURL(region: region)
+                }
             }
             return Guidance(badge: "no access", title: "This account can't invoke the model", advice: advice, actionLabel: actionLabel, actionURL: actionURL)
         case "bad_credentials":

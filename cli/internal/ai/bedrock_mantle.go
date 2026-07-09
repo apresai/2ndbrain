@@ -413,8 +413,12 @@ func mantleErrorCode(body []byte) string {
 func mantleHTTPError(model, url string, status int, body []byte) *ProviderHTTPError {
 	text := strings.TrimSpace(string(body))
 	code := mantleErrorCode(body)
-	if status == http.StatusUnauthorized && code == "" {
-		// No code to disambiguate with: keep the human-readable hint.
+	if status == http.StatusUnauthorized && classifyProviderErrorCode(code) == "" {
+		// The code (if any) doesn't map to a definitive cause, so the 401 is
+		// still ambiguous: keep the human-readable hint. Gating on the mapped
+		// classification (not merely code != "") means an UNMAPPED code — e.g.
+		// a future mantle 401 variant — keeps the hint too, instead of silently
+		// dropping it and falling back to bad_credentials with no explanation.
 		if text != "" {
 			text += " "
 		}

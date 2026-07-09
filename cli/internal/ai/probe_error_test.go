@@ -108,17 +108,47 @@ func TestProviderHTTPErrorPreservesMessageShape(t *testing.T) {
 
 func TestRemediationFor(t *testing.T) {
 	// Every non-empty code except unknown should have provider-appropriate advice.
-	if got := RemediationFor(TestErrAccessDenied, "bedrock"); !strings.Contains(got, "Model access") || !strings.Contains(got, "AWS Support") {
+	// Classic Bedrock (no mantle strategy): console Model-access page + support.
+	if got := RemediationFor(TestErrAccessDenied, "bedrock", ""); !strings.Contains(got, "Model access") || !strings.Contains(got, "AWS Support") {
 		t.Errorf("bedrock access_denied remediation missing console/support guidance: %q", got)
 	}
-	if got := RemediationFor(TestErrBadCredentials, "openrouter"); !strings.Contains(got, "OPENROUTER_API_KEY") {
+	if got := RemediationFor(TestErrBadCredentials, "openrouter", ""); !strings.Contains(got, "OPENROUTER_API_KEY") {
 		t.Errorf("openrouter bad_credentials remediation missing key guidance: %q", got)
 	}
-	if got := RemediationFor(TestErrProviderUnreachable, "ollama"); !strings.Contains(got, "ollama serve") {
+	if got := RemediationFor(TestErrProviderUnreachable, "ollama", ""); !strings.Contains(got, "ollama serve") {
 		t.Errorf("ollama unreachable remediation missing serve hint: %q", got)
 	}
-	if got := RemediationFor(TestErrUnknown, "bedrock"); got != "" {
+	if got := RemediationFor(TestErrUnknown, "bedrock", ""); got != "" {
 		t.Errorf("unknown code should have no remediation, got %q", got)
+	}
+}
+
+// TestRemediationFor_MantleIsAccountAware pins that a mantle model's failure
+// guidance is distinct from classic Bedrock: access_denied points at AWS Sales
+// and disclaims a 2nb/credential fault (mantle gating is per-account rollout),
+// and it must NOT send the user to the Bedrock console Model-access page, which
+// does not govern mantle models. A bad bearer token names `config set-key`, not
+// `aws configure` (mantle is bearer-only, no SigV4).
+func TestRemediationFor_MantleIsAccountAware(t *testing.T) {
+	mantle := StrategyBedrockMantleResponses
+
+	denied := RemediationFor(TestErrAccessDenied, "bedrock", mantle)
+	if !strings.Contains(denied, "AWS Sales") || !strings.Contains(denied, "mantle") {
+		t.Errorf("mantle access_denied should point at AWS Sales for the mantle plane: %q", denied)
+	}
+	// It may reference the console Model-access page to disclaim it, but must
+	// not DIRECT the user there (the classic text's "Request access under
+	// Bedrock > Model access") — that page can't unblock a mantle model.
+	if strings.Contains(denied, "Request access under Bedrock > Model access") {
+		t.Errorf("mantle access_denied must not direct users to the Bedrock console Model access page: %q", denied)
+	}
+	if denied == RemediationFor(TestErrAccessDenied, "bedrock", "") {
+		t.Error("mantle access_denied text should differ from classic Bedrock text")
+	}
+
+	badKey := RemediationFor(TestErrBadCredentials, "bedrock", mantle)
+	if !strings.Contains(badKey, "set-key bedrock") || strings.Contains(badKey, "aws configure") {
+		t.Errorf("mantle bad_credentials should name the bearer key, not `aws configure`: %q", badKey)
 	}
 }
 
