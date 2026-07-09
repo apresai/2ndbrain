@@ -227,6 +227,19 @@ func TestMantleErrorClassification(t *testing.T) {
 		t.Errorf("error should name the model for debuggability: %v", err401)
 	}
 
+	// A 401 carrying a non-empty but UNMAPPED code is still ambiguous: the hint
+	// must be kept (the whole point of gating on classifyProviderErrorCode(code)
+	// rather than code != ""), and classification falls back to the status
+	// (bad_credentials). Without the mapped-classification gate this hint would
+	// be dropped and the user left with a bare bad_credentials.
+	errUnmapped := mantleHTTPError("xai.grok-4.3", url, 401, []byte(`{"error":{"code":"some_future_401_code"}}`))
+	if !strings.Contains(errUnmapped.Error(), "not entitled on this account") {
+		t.Errorf("401 with an unmapped code should keep the entitlement hint: %v", errUnmapped)
+	}
+	if got := ClassifyProbeError("bedrock", errUnmapped); got != TestErrBadCredentials {
+		t.Errorf("401 with an unmapped code should fall back to bad_credentials, got %q", got)
+	}
+
 	// A missing bearer token classifies as bad credentials before any call.
 	if got := ClassifyProbeError("bedrock", errors.New(errNoMantleTokenText)); got != TestErrBadCredentials {
 		t.Errorf("missing-token error classified %q, want bad_credentials", got)

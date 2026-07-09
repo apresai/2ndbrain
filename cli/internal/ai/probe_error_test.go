@@ -185,6 +185,12 @@ func TestProbeClassification_StaticIncompatible(t *testing.T) {
 	if result.Code != TestErrIncompatible {
 		t.Errorf("code = %q (detail %q), want incompatible", result.Code, result.Detail)
 	}
+	// TestProbeModel must populate result.Strategy from the resolver so the UI
+	// can tailor guidance (mantle vs classic). Assert the wiring: the field
+	// equals what ResolveInvokeStrategy returns for this model.
+	if want := ResolveInvokeStrategy("bedrock", "amazon.nova-canvas-v1:0", ""); result.Strategy != want {
+		t.Errorf("result.Strategy = %q, want %q (must be wired from ResolveInvokeStrategy)", result.Strategy, want)
+	}
 }
 
 // TestProbeClassification_BedrockRealError is cred-gated: it probes a
