@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.15.1] - 2026-07-08
+
+### Fixed
+- Bedrock mantle plane (`openai.gpt-5.5`, `xai.grok-4.3`) now returns account-aware guidance when a model is entitlement-gated: a valid bearer token on an un-entitled account is classified as `access_denied` (via the response body's `error.code`) rather than `bad credentials`, so users with working credentials aren't sent to re-run `aws configure`.
+
+### Changed
+- Remediation for a gated mantle model points to **AWS Sales** and notes your other models still work, instead of the Bedrock console's "Model access" page (which does not govern mantle models).
+- Probe results now carry the model's `invoke_strategy`, letting the macOS AI Hub suppress its "Open AWS console" button for mantle `access_denied` findings (the console can't unblock those models).
+
+
 ## [0.15.0] - 2026-07-07
 
 ### Added
