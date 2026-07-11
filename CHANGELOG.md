@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.16.0] - 2026-07-11
+
+### Added
+- `suggest-target --source <path>`: context-aware candidate search that seeds semantic and BM25 lookups with the broken link's surrounding prose, not just the bare target; the source note is excluded from candidates and resolves leniently (a just-deleted source falls back to the cleaned raw path)
+- `suggest-target --llm`: optional LLM re-rank of the grounded candidate shortlist when no candidate is already high-confidence, attaching a one-line reason to each pick; fail-closed, never invents paths, and caps promoted confidence at medium so LLM picks stay recommendations
+- Validation tab: decision-class findings show the top 2-3 candidate Link buttons inline, and the Fix link sheet loads context-aware, LLM re-ranked suggestions with reasons
+
+### Changed
+- Validation "Fix all" now bulk-applies only high-confidence rewrites (drift repairs plus high-confidence relinks); medium and low confidence candidates are excluded from bulk apply and handled per-finding instead
+
+
 ## [0.15.1] - 2026-07-08
 
 ### Fixed
