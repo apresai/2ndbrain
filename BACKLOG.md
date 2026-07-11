@@ -2,6 +2,24 @@
 
 Non-blocking follow-ups (MEDIUM/LOW) filed from `/chad-review`. CRITICAL/HIGH are fixed before merge; these are tracked here.
 
+## Link-fix verdict effort follow-ups (2026-07-11)
+
+Non-blocking items from the 3-PR effort (#191 eval harness + prompt selection, #192 `--verdict` envelope, #193 verdict-driven Validation tab) and its reviews. The measured context lives in `docs/link-prompt-eval.md`.
+
+**MEDIUM**
+- **Retrieval recall is the ranking bottleneck, not the prompt.** 23% of the eval's planted positives (typo + paraphrase classes) never entered suggest-target's 12-candidate pool, making them unwinnable for the LLM re-rank. Fuzzy/edit-distance candidates or alias-aware BM25 in `gatherSuggestions` would lift top-1 more than any prompt change. `cli/internal/cli/suggest_target.go`.
+- **Path-qualified targets are categorically unrepairable**, even for pure case drift: `RepairIndex.Lookup` returns nil for any target containing `/`, so `[[Folder/Note]]` vs `folder/note.md` classifies as `missing`, never `drift`. `cli/internal/polish/repair.go:144`.
+- **Latest-only snapshot slot = single-level undo.** A Fix-each queue (or bulk pass) touching the same note twice silently discards the first fix's undo point; only the last step is revertible. `cli/internal/polish/snapshot.go`.
+- **Port RemoveAllSheet's Stop-while-applying to FixAllSheet.** FixAllSheet still disables Cancel during its sequential apply loop (same slow post-write re-embed per note), so a wedged CLI strands the modal; RemoveAllSheet got the cancellable pattern in #193's remediation. `app/Sources/SecondBrain/LintResultsView.swift`.
+
+**LOW**
+- **`polish --links` weaving prompt was never judged**: the polish prompt eval explicitly excluded link adding (`NewLinks==0` was a disqualifying gate), so link-weaving quality is unmeasured. Port the link-fix eval's planted-truth pattern.
+- **`--links` candidate gathering is DB-backed while repair is live-FS-backed**: with a stale `index.db`, `polish --links` can offer a deleted note or miss a new one, while `--repair-links` in the same invocation resolves against disk. `cli/internal/polish/candidates.go`.
+- **Create-note flow claims success unconditionally**: `create` slugifies the title (punctuation dropped), so `[[C++ Notes]]` creates `c-notes.md` and the link stays broken while the banner says success; verify the created slug resolves the authored target. `app/Sources/SecondBrain/LintResultsView.swift`.
+- **Inline row actions stay tappable during re-classification** (classifications are not cleared while re-probing), so a stale inline Link/Unlink can fire; safe today because the CLI re-checks live files, but worth disabling rows while `classifying`.
+- **Fix each (N) counts decisions + removables while the header splits them**, so the button number exceeds the stated decision count; cosmetic.
+- **Re-measure the re-rank eval on the sorted catalog**: production now feeds the LLM a confidence-sorted shortlist; the 0.83 promotion-precision figure was measured on tier-add order (documented in docs/link-prompt-eval.md). Fold into the next eval run alongside any generation-model change (the U1 auto-fix gate also re-opens then).
+
 ## Validation-fix + AI Hub vendor-policy effort follow-ups (2026-07-07)
 
 Non-blocking items surfaced by chad-review across the 13 PRs (#175-#187) that shipped the Validation link-fixing overhaul, the AI Hub vendor policy / validate-models / de-clutter work, and Bedrock mantle support.
