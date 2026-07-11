@@ -123,6 +123,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	unlinkTarget, unlinkWrite = "", false
 	suggestTargetLimit = 6
 	suggestTargetSource = ""
+	suggestTargetLLM = false
 	tagsRenameDryRun = false
 	dailyAppendText, dailyAppendFile = "", ""
 	moveDryRun, moveForce = false, false

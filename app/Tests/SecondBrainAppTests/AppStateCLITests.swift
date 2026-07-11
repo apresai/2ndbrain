@@ -184,15 +184,18 @@ func cliErrorSurfacesStderr() {
         == "first\nError: real reason")
 }
 
-@Test("AppState.suggestTargetArgs appends --source only when a source path is given")
+@Test("AppState.suggestTargetArgs appends --source and --llm by default")
 func suggestTargetArgConstruction() {
     let base = AppState.suggestTargetArgs(target: "ghostty", sourcePath: nil)
-    #expect(base == ["suggest-target", "ghostty", "--limit", "6", "--json", "--porcelain"])
+    #expect(base == ["suggest-target", "ghostty", "--limit", "3", "--json", "--porcelain", "--llm"])
 
     let withSource = AppState.suggestTargetArgs(
         target: "ghostty", sourcePath: "resources/ghostty-matrix-theme.md")
     #expect(withSource == [
-        "suggest-target", "ghostty", "--limit", "6", "--json", "--porcelain",
-        "--source", "resources/ghostty-matrix-theme.md",
+        "suggest-target", "ghostty", "--limit", "3", "--json", "--porcelain",
+        "--source", "resources/ghostty-matrix-theme.md", "--llm",
     ])
+
+    let noLLM = AppState.suggestTargetArgs(target: "x", sourcePath: nil, limit: 6, llm: false)
+    #expect(noLLM == ["suggest-target", "x", "--limit", "6", "--json", "--porcelain"])
 }

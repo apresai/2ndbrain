@@ -49,6 +49,21 @@ func suggestTargetDecodesConfidence() throws {
     #expect(res[1].confidence == nil)
 }
 
+@Test("SuggestTargetResult decodes the additive reason field from --llm")
+func suggestTargetDecodesReason() throws {
+    let json = """
+    [
+      { "path": "resources/ghostty-config.md", "title": "Ghostty Config",
+        "score": 3.1, "snippet": "", "confidence": "medium",
+        "reason": "Same terminal theme topic as the surrounding note" },
+      { "path": "resources/x.md", "title": "X", "score": 0.2, "snippet": "" }
+    ]
+    """.data(using: .utf8)!
+    let res = try JSONDecoder().decode([SuggestTargetResult].self, from: json)
+    #expect(res[0].reason == "Same terminal theme topic as the surrounding note")
+    #expect(res[1].reason == nil)
+}
+
 @Test("LintIssue decodes the additive broken-wikilink classification fields")
 func lintIssueDecodesClassification() throws {
     let json = """

@@ -23,14 +23,17 @@ func walkthroughQueueDecisionOnly() {
     let f2 = BrokenFinding(path: "2.md", target: "b", fix: "missing", driftTarget: nil)
     let f3 = BrokenFinding(path: "3.md", target: "c", fix: "ambiguous", driftTarget: nil)
     let f4 = BrokenFinding(path: "4.md", target: "d", fix: "missing", driftTarget: nil)
+    let med = candidate(path: "gamma.md", title: "Gamma", confidence: "medium")
+    let f5 = BrokenFinding(path: "5.md", target: "e", fix: "missing", driftTarget: nil)
     let classified: [(BrokenFinding, LinkFixClass)] = [
         (f1, .repairable(driftTarget: "Alpha")),   // one-click, excluded
         (f2, .didYouMean(cand)),                    // one-click, excluded
         (f3, .ambiguous),                           // decision, included
         (f4, .missing),                             // decision, included
+        (f5, .recommend([med])),                    // decision (medium), included
     ]
     let queue = FixAllPlanner.walkthroughQueue(from: classified)
-    #expect(queue.map(\.id) == ["3.md|c", "4.md|d"])
+    #expect(queue.map(\.id) == ["3.md|c", "4.md|d", "5.md|e"])
 }
 
 @Test("a one-click-fixable finding is excluded from the walkthrough queue")
@@ -48,6 +51,7 @@ func walkthroughQueueExcludesOneClick() {
 @Test("the walkthrough queue is exactly the complement of the Fix-all plan")
 func walkthroughQueueComplementsPlan() {
     let cand = candidate(path: "resources/auth.md", title: "Auth", confidence: "high")
+    let med = candidate(path: "resources/maybe.md", title: "Maybe", confidence: "medium")
     let classified: [(BrokenFinding, LinkFixClass)] = [
         (BrokenFinding(path: "1.md", target: "ghostty", fix: "drift", driftTarget: "Ghostty Config"),
          .repairable(driftTarget: "Ghostty Config")),
@@ -57,6 +61,8 @@ func walkthroughQueueComplementsPlan() {
          .missing),
         (BrokenFinding(path: "4.md", target: "setup", fix: "ambiguous", driftTarget: nil),
          .ambiguous),
+        (BrokenFinding(path: "5.md", target: "topic", fix: "missing", driftTarget: nil),
+         .recommend([med])),
     ]
     let planIDs = Set(FixAllPlanner.plan(from: classified).map(\.id))
     let queueIDs = Set(FixAllPlanner.walkthroughQueue(from: classified).map(\.id))
@@ -66,7 +72,7 @@ func walkthroughQueueComplementsPlan() {
     let allIDs = Set(classified.map { $0.0.id })
     #expect(planIDs.union(queueIDs) == allIDs)
     #expect(planIDs == ["1.md|ghostty", "2.md|auth"])
-    #expect(queueIDs == ["3.md|mystery", "4.md|setup"])
+    #expect(queueIDs == ["3.md|mystery", "4.md|setup", "5.md|topic"])
 }
 
 @Test("duplicate occurrences of the same decision finding queue once")

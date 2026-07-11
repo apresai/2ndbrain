@@ -104,7 +104,10 @@ struct LintResultsView: View {
                             linkClass: linkClass(for: issue),
                             onOpenInObsidian: { openInObsidian(issue) },
                             onSetValue: { setValue in activeSetValue = setValue },
-                            onRepair: { repair in activeRepair = repair }
+                            onRepair: { repair in activeRepair = repair },
+                            onRelink: { path, target, cand in
+                                Task { await applyInlineRelink(path: path, target: target, cand: cand) }
+                            }
                         )
                     }
                     .listStyle(.inset)
@@ -365,8 +368,9 @@ struct LintResultsView: View {
 
     /// Probe each broken finding's fixability once, storing the result. A "drift"
     /// finding needs no lookup (the CLI already resolved it); every other finding
-    /// asks `suggest-target` (scoped with `--source` to the finding's own note)
-    /// for its best candidate, then classifies. Best-effort: a lookup miss just
+    /// asks `suggest-target --source --llm` (context-aware + optional LLM re-rank)
+    /// for its top candidates, then classifies. High confidence → one-click;
+    /// otherwise top 2-3 are recommendations. Best-effort: a lookup miss just
     /// classifies as missing rather than failing the whole pass.
     private func classifyBrokenFindings(_ findings: [BrokenFinding]) async {
         guard !findings.isEmpty else {
@@ -383,10 +387,36 @@ struct LintResultsView: View {
             }
             let candidates = (try? await appState.suggestTarget(target: f.target, sourcePath: f.path)) ?? []
             result[f.id] = FixAllPlanner.classify(
-                fix: f.fix, topCandidate: candidates.first, driftTarget: f.driftTarget)
+                fix: f.fix, candidates: candidates, driftTarget: f.driftTarget)
         }
         classifications = result
         classifying = false
+    }
+
+    /// One-tap relink from an inline recommendation on a list row. Snapshotted
+    /// (reversible via polish --undo); re-lints on success.
+    private func applyInlineRelink(path: String, target: String, cand: SuggestTargetResult) async {
+        let to = (cand.path as NSString).deletingPathExtension
+        do {
+            let res = try await appState.relink(path: path, from: target, to: to, preview: false)
+            let outcome = LinkFixOutcome.classify(result: res, target: target, verb: "repoint")
+            switch outcome {
+            case .success:
+                actionTone = .success
+                actionMessage = "Linked [[\(target)]] → [[\(cand.displayTitle)]]. Re-checking…"
+                await appState.runLint()
+            case .actionable(let message):
+                actionTone = .error
+                actionMessage = message
+            case .stale(let message):
+                actionTone = .info
+                actionMessage = "\(message) Re-checking…"
+                await appState.runLint()
+            }
+        } catch {
+            actionTone = .error
+            actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 }
 
@@ -396,11 +426,14 @@ struct LintResultsView: View {
 private struct IssueRow: View {
     let issue: LintIssue
     /// Fixability class for a broken-link finding (nil for other findings, or
-    /// before classification completes). Renders the subtle per-row badge.
+    /// before classification completes). Renders the subtle per-row badge and
+    /// (for `.recommend`) the top 2-3 inline pick buttons.
     let linkClass: LinkFixClass?
     let onOpenInObsidian: () -> Void
     let onSetValue: (ActiveSetValue) -> Void
     let onRepair: (ActiveRepair) -> Void
+    /// Inline one-tap relink from a recommended candidate (decision rows).
+    let onRelink: (_ path: String, _ target: String, _ cand: SuggestTargetResult) -> Void
 
     private var finding: LintFinding { LintFinding.classify(message: issue.message) }
 
@@ -429,6 +462,45 @@ private struct IssueRow: View {
                 Text(issue.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                // Top 2-3 recommendations for decision-class findings (medium/low
+                // search hits or LLM re-rank). High-confidence one-click cases
+                // go through Fix all / Fix link, not the inline list.
+                if case .recommend(let cands) = linkClass, !cands.isEmpty,
+                   case let .brokenLink(target) = finding {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Did you mean?")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        ForEach(Array(cands.prefix(FixAllPlanner.maxRecommendations))) { cand in
+                            HStack(spacing: 6) {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(cand.displayTitle)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                    if let reason = cand.reason, !reason.isEmpty {
+                                        Text(reason)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 4)
+                                if let conf = cand.confidence {
+                                    Text(conf)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Button("Link") {
+                                    onRelink(issue.path, target, cand)
+                                }
+                                .controlSize(.mini)
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                    .padding(.top, 2)
+                }
 
                 HStack(spacing: 8) {
                     Button("Open in Obsidian", action: onOpenInObsidian)
@@ -892,14 +964,28 @@ private struct LinkResolutionSheet: View {
     @ViewBuilder
     private var suggestSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Did you mean?", systemImage: "sparkle.magnifyingglass")
+            Label("Did you mean? (top \(min(filteredSuggestions.count, FixAllPlanner.maxRecommendations)))",
+                  systemImage: "sparkle.magnifyingglass")
                 .font(.subheadline).fontWeight(.medium)
-            ForEach(Array(filteredSuggestions.enumerated()), id: \.element.id) { index, cand in
+            ForEach(Array(filteredSuggestions.prefix(FixAllPlanner.maxRecommendations).enumerated()), id: \.element.id) { index, cand in
                 let recommended = recommendedAction == .relinkTop && index == 0
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(cand.displayTitle).font(.callout)
+                        HStack(spacing: 4) {
+                            Text(cand.displayTitle).font(.callout)
+                            if let conf = cand.confidence {
+                                Text(conf)
+                                    .font(.caption2)
+                                    .foregroundStyle(conf == "high" ? .green : .secondary)
+                            }
+                        }
                         Text(cand.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        if let reason = cand.reason, !reason.isEmpty {
+                            Text(reason)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(2)
+                        }
                     }
                     if recommended {
                         Text("Recommended").font(.caption2).foregroundStyle(.green)
