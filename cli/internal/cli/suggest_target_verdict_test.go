@@ -27,6 +27,20 @@ func TestSortSuggestionsByConfidence(t *testing.T) {
 			t.Fatalf("position %d = %s, want %s (full: %+v)", i, in[i].Path, w, in)
 		}
 	}
+
+	// Stability: equal (confidence, score) keys keep their add order, so the
+	// drift-before-semantic-before-BM25 tie-break survives the sort.
+	ties := []SuggestLinkResult{
+		{Path: "first-added.md", Confidence: "medium", Score: 0.5},
+		{Path: "second-added.md", Confidence: "medium", Score: 0.5},
+		{Path: "third-added.md", Confidence: "medium", Score: 0.5},
+	}
+	sortSuggestionsByConfidence(ties)
+	for i, w := range []string{"first-added.md", "second-added.md", "third-added.md"} {
+		if ties[i].Path != w {
+			t.Fatalf("stability violated at %d: got %s, want %s", i, ties[i].Path, w)
+		}
+	}
 }
 
 func TestComputeSuggestRecommendation(t *testing.T) {
@@ -84,6 +98,28 @@ func TestSuggestTarget_VerdictEnvelope_Relink(t *testing.T) {
 	// The first candidate is the recommended one (ordering invariant).
 	if env.Candidates[0].Path != env.Recommendation.To {
 		t.Errorf("candidates[0] (%s) should match the recommendation (%s)", env.Candidates[0].Path, env.Recommendation.To)
+	}
+}
+
+func TestSuggestTarget_VerdictLLMSkippedOffline(t *testing.T) {
+	// --llm with a high-confidence deterministic candidate short-circuits the
+	// model entirely (no generator is even resolved), so this runs offline and
+	// pins the "skipped" outcome: the one llm state reachable without a
+	// network call. seedSuggestVault's [[ghostty]] resolves high via drift.
+	root, source := seedSuggestVault(t)
+	out, err := runCLIArgs(t, root, "suggest-target", "ghostty", "--source", source, "--llm", "--verdict", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("suggest-target --llm --verdict: %v\n%s", err, out)
+	}
+	var env SuggestTargetEnvelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v\n%s", err, out)
+	}
+	if env.LLM != llmOutcomeSkipped {
+		t.Errorf("llm = %q, want %q (high-confidence candidate short-circuits the model)", env.LLM, llmOutcomeSkipped)
+	}
+	if env.Recommendation.Action != "relink" || env.Recommendation.Confidence != "high" {
+		t.Errorf("expected a high relink recommendation, got %+v", env.Recommendation)
 	}
 }
 

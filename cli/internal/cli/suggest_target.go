@@ -140,15 +140,6 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 	cfg := v.Config.AI
 	results, contextSnippet := gatherSuggestions(ctx, v, target, sourcePath, poolLimit)
 
-	// Order the deterministic pool by confidence tier (high > medium > low),
-	// then score within a tier, so "the first candidate" is always the best
-	// claim the pipeline can make. Before this sort, candidates sat in
-	// tier-ADD order (drift, then semantic, then BM25), so a high-confidence
-	// word-match from a later tier could rank below weaker earlier hits — the
-	// GUI treats candidates[0] as the one-click ticket, which misclassified
-	// those findings as decisions.
-	sortSuggestionsByConfidence(results)
-
 	// Tier 4 (optional) — LLM re-rank when no candidate is already high-confidence.
 	// Fail-closed: any generation error leaves the deterministic list intact.
 	llmOutcome := llmOutcomeOff
@@ -159,7 +150,7 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 			switch {
 			case rerr != nil:
 				llmOutcome = llmOutcomeError
-				slog.Debug("suggest-target: llm re-rank skipped", "err", rerr)
+				slog.Debug("suggest-target: llm re-rank skipped", "target", target, "err", rerr)
 			case picks == 0:
 				// The model's explicit "none of these is plausible" verdict —
 				// the strongest available signal that the link should be
@@ -330,6 +321,17 @@ func gatherSuggestions(ctx context.Context, v *vault.Vault, target, sourcePath s
 	}
 
 	assignConfidence(results, target, uniqueDrift)
+
+	// Order the pool by confidence tier (high > medium > low), then score
+	// within a tier, so "the first candidate" is always the best claim the
+	// pipeline can make. Before this sort, candidates sat in tier-ADD order
+	// (drift, then semantic, then BM25), so a high-confidence word-match from
+	// a later tier could rank below weaker earlier hits — the GUI treats
+	// candidates[0] as the one-click ticket, which misclassified those
+	// findings as decisions. Sorting here (not at the call site) keeps the
+	// eval harness and production on the same ordering, including the catalog
+	// the LLM re-rank sees.
+	sortSuggestionsByConfidence(results)
 	return results, contextSnippet
 }
 
@@ -657,7 +659,15 @@ func rerankSuggestTargetLLM(ctx context.Context, cfg ai.AIConfig, system, target
 	if err != nil {
 		return nil, 0, err
 	}
-	return applyLLMPicks(candidates, picks, byPath), len(picks), nil
+	// Count only GROUNDED picks (paths that exist in the shortlist) so an
+	// all-hallucinated response reports as a decline, not a promotion.
+	applied := 0
+	for _, p := range picks {
+		if _, ok := byPath[strings.TrimSpace(p.Path)]; ok {
+			applied++
+		}
+	}
+	return applyLLMPicks(candidates, picks, byPath), applied, nil
 }
 
 // buildRerankCatalog renders the grounded shortlist for the model. With
