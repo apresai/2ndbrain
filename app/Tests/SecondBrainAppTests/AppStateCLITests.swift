@@ -184,15 +184,23 @@ func cliErrorSurfacesStderr() {
         == "first\nError: real reason")
 }
 
-@Test("AppState.suggestTargetArgs appends --source only when a source path is given")
+@Test("AppState.suggestTargetArgs appends --source; --llm only when requested")
 func suggestTargetArgConstruction() {
+    // Bulk classify path: context search only (no generation spend).
     let base = AppState.suggestTargetArgs(target: "ghostty", sourcePath: nil)
-    #expect(base == ["suggest-target", "ghostty", "--limit", "6", "--json", "--porcelain"])
+    #expect(base == ["suggest-target", "ghostty", "--limit", "3", "--json", "--porcelain"])
 
     let withSource = AppState.suggestTargetArgs(
         target: "ghostty", sourcePath: "resources/ghostty-matrix-theme.md")
     #expect(withSource == [
-        "suggest-target", "ghostty", "--limit", "6", "--json", "--porcelain",
+        "suggest-target", "ghostty", "--limit", "3", "--json", "--porcelain",
         "--source", "resources/ghostty-matrix-theme.md",
+    ])
+
+    // Per-finding sheet path: opt into LLM re-rank.
+    let withLLM = AppState.suggestTargetArgs(target: "x", sourcePath: "n.md", limit: 3, llm: true)
+    #expect(withLLM == [
+        "suggest-target", "x", "--limit", "3", "--json", "--porcelain",
+        "--source", "n.md", "--llm",
     ])
 }

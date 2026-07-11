@@ -3,16 +3,17 @@ import Testing
 @testable import SecondBrain
 
 // Pins the class-aware Validation logic: how a broken finding is classified from
-// its lint `fix` field plus its top suggest-target candidate, and how the
+// its lint `fix` field plus ranked suggest-target candidates, and how the
 // Fix-all plan, header counts, and helpers are derived. All pure (no CLI), so a
-// stub `suggest` closure exercises the async planner. The real-data finding that
-// drives the design (strict high-confidence yields ZERO matches on real vaults;
-// ghostty -> "Ghostty Config" is MEDIUM) is why MEDIUM candidates must plan.
+// stub `suggest` closure exercises the async planner.
+//
+// Policy (updated): only HIGH confidence (or drift) is one-click / Fix-all.
+// Medium/low candidates become `.recommend` (top 2-3 for a human pick).
 
 private func candidate(
-    path: String, title: String = "", score: Double = 1.0, confidence: String?
+    path: String, title: String = "", score: Double = 1.0, confidence: String?, reason: String? = nil
 ) -> SuggestTargetResult {
-    SuggestTargetResult(path: path, title: title, score: score, snippet: "", confidence: confidence)
+    SuggestTargetResult(path: path, title: title, score: score, snippet: "", confidence: confidence, reason: reason)
 }
 
 // MARK: - classify
@@ -26,7 +27,7 @@ func classifyDriftIsRepairable() {
     #expect(cls.isOneClick)
 }
 
-@Test("a high-confidence candidate classifies as did-you-mean")
+@Test("a high-confidence candidate classifies as did-you-mean (one-click)")
 func classifyHighIsDidYouMean() {
     let cand = candidate(path: "resources/auth-flow.md", title: "Auth Flow", confidence: "high")
     let cls = FixAllPlanner.classify(fix: "missing", topCandidate: cand, driftTarget: nil)
@@ -34,20 +35,35 @@ func classifyHighIsDidYouMean() {
     #expect(cls.isOneClick)
 }
 
-@Test("a MEDIUM candidate also classifies as did-you-mean (the real-data rule)")
-func classifyMediumIsDidYouMean() {
-    // ghostty -> "Ghostty Config" is medium on real data; a high-only rule would
-    // no-op Fix-all, so medium must be one-click.
+@Test("a MEDIUM candidate classifies as recommend (not one-click)")
+func classifyMediumIsRecommend() {
+    // Medium is a recommendation only: Fix-all is high-confidence exclusive so
+    // a weak semantic hit cannot bulk-rewrite the vault.
     let cand = candidate(path: "resources/ghostty-config.md", title: "Ghostty Config", confidence: "medium")
     let cls = FixAllPlanner.classify(fix: "ambiguous", topCandidate: cand, driftTarget: nil)
-    #expect(cls == .didYouMean(cand))
-    #expect(cls.isOneClick)
+    #expect(cls == .recommend([cand]))
+    #expect(!cls.isOneClick)
+    #expect(cls.recommendations.count == 1)
 }
 
-@Test("a low candidate with an ambiguous fix classifies as ambiguous (decision)")
-func classifyLowAmbiguousIsAmbiguous() {
-    let cand = candidate(path: "a.md", confidence: "low")
-    let cls = FixAllPlanner.classify(fix: "ambiguous", topCandidate: cand, driftTarget: nil)
+@Test("multiple non-high candidates become a top-3 recommend shortlist")
+func classifyRecommendCapsAtThree() {
+    let cands = (1...5).map { i in
+        candidate(path: "n\(i).md", title: "N\(i)", confidence: "low")
+    }
+    let cls = FixAllPlanner.classify(fix: "missing", candidates: cands, driftTarget: nil)
+    guard case .recommend(let recs) = cls else {
+        Issue.record("expected recommend, got \(cls)")
+        return
+    }
+    #expect(recs.count == 3)
+    #expect(recs.map(\.path) == ["n1.md", "n2.md", "n3.md"])
+    #expect(!cls.isOneClick)
+}
+
+@Test("a low candidate with an ambiguous fix and no shortlist uses ambiguous")
+func classifyEmptyAmbiguousIsAmbiguous() {
+    let cls = FixAllPlanner.classify(fix: "ambiguous", candidates: [], driftTarget: nil)
     #expect(cls == .ambiguous)
     #expect(!cls.isOneClick)
 }
@@ -59,13 +75,13 @@ func classifyMissingIsMissing() {
     #expect(!cls.isOneClick)
 }
 
-@Test("an old CLI (nil fix) leans on the candidate: high -> did-you-mean, else missing")
+@Test("an old CLI (nil fix) leans on the candidate: high -> did-you-mean, else recommend/missing")
 func classifyOldCLIDegrades() {
     let high = candidate(path: "n.md", title: "Note", confidence: "high")
     #expect(FixAllPlanner.classify(fix: nil, topCandidate: high, driftTarget: nil) == .didYouMean(high))
     #expect(FixAllPlanner.classify(fix: nil, topCandidate: nil, driftTarget: nil) == .missing)
     let low = candidate(path: "n.md", confidence: "low")
-    #expect(FixAllPlanner.classify(fix: nil, topCandidate: low, driftTarget: nil) == .missing)
+    #expect(FixAllPlanner.classify(fix: nil, topCandidate: low, driftTarget: nil) == .recommend([low]))
 }
 
 // MARK: - plan
@@ -88,15 +104,19 @@ func planDriftIsRepair() async {
     #expect(plan[0].chosenDisplay == "Ghostty Config")
 }
 
-@Test("a medium/high candidate plans a relink to the candidate (md dropped)")
-func planCandidateIsRelink() async {
-    let finding = BrokenFinding(path: "n.md", target: "auth flow", fix: "missing", driftTarget: nil)
-    let cand = candidate(path: "resources/auth-flow.md", title: "Auth Flow", confidence: "medium")
-    let plan = await FixAllPlanner.plan(findings: [finding]) { _ in [cand] }
-    #expect(plan.count == 1)
-    #expect(plan[0].action == .relink(chosenPath: "resources/auth-flow", chosenDisplay: "Auth Flow"))
-    #expect(plan[0].chosenDisplay == "Auth Flow")
-    #expect(plan[0].kindLabel == "Did you mean")
+@Test("a high candidate plans a relink; medium does not")
+func planHighIsRelinkMediumExcluded() async {
+    let highFinding = BrokenFinding(path: "n.md", target: "auth flow", fix: "missing", driftTarget: nil)
+    let high = candidate(path: "resources/auth-flow.md", title: "Auth Flow", confidence: "high")
+    let planHigh = await FixAllPlanner.plan(findings: [highFinding]) { _ in [high] }
+    #expect(planHigh.count == 1)
+    #expect(planHigh[0].action == .relink(chosenPath: "resources/auth-flow", chosenDisplay: "Auth Flow"))
+    #expect(planHigh[0].kindLabel == "High confidence")
+
+    let medFinding = BrokenFinding(path: "m.md", target: "ghostty", fix: "missing", driftTarget: nil)
+    let med = candidate(path: "resources/ghostty-config.md", title: "Ghostty Config", confidence: "medium")
+    let planMed = await FixAllPlanner.plan(findings: [medFinding]) { _ in [med] }
+    #expect(planMed.isEmpty)
 }
 
 @Test("low/no-candidate decision findings are excluded from the plan")
@@ -118,7 +138,7 @@ func planMixedSubset() async {
     let plan = await FixAllPlanner.plan(findings: [drift, didYouMean, decision]) { f in
         switch f.target {
         case "auth": return [candidate(path: "resources/auth.md", title: "Auth", confidence: "high")]
-        default: return []
+        default: return [candidate(path: "maybe.md", confidence: "medium")]
         }
     }
     #expect(plan.map(\.path) == ["1.md", "2.md"])
@@ -145,10 +165,11 @@ func planFromClassifications() {
     let cand = candidate(path: "beta.md", title: "Beta", confidence: "high")
     let f2 = BrokenFinding(path: "2.md", target: "b", fix: "missing", driftTarget: nil)
     let f3 = BrokenFinding(path: "3.md", target: "c", fix: "ambiguous", driftTarget: nil)
+    let med = candidate(path: "gamma.md", title: "Gamma", confidence: "medium")
     let plan = FixAllPlanner.plan(from: [
         (f1, .repairable(driftTarget: "Alpha")),
         (f2, .didYouMean(cand)),
-        (f3, .ambiguous),
+        (f3, .recommend([med])),
     ])
     #expect(plan.count == 2)
     #expect(plan[0].action == .repair(driftTarget: "Alpha"))
@@ -162,8 +183,8 @@ func countsSplit() {
     let classes: [LinkFixClass] = [
         .repairable(driftTarget: "X"),
         .didYouMean(candidate(path: "y.md", confidence: "high")),
+        .recommend([candidate(path: "z.md", confidence: "medium")]),
         .ambiguous,
-        .missing,
         .missing,
     ]
     let counts = FixAllPlanner.counts(classes)
@@ -201,7 +222,8 @@ func canCreateNotePathQualified() {
 @Test("each class maps to its subtle badge label")
 func linkFixClassBadgeLabels() {
     #expect(LinkFixClass.repairable(driftTarget: "X").badgeText == "auto-repairable")
-    #expect(LinkFixClass.didYouMean(candidate(path: "y.md", confidence: "high")).badgeText == "did you mean?")
+    #expect(LinkFixClass.didYouMean(candidate(path: "y.md", confidence: "high")).badgeText == "high confidence")
+    #expect(LinkFixClass.recommend([candidate(path: "z.md", confidence: "medium")]).badgeText == "top picks")
     #expect(LinkFixClass.ambiguous.badgeText == "matches several")
     #expect(LinkFixClass.missing.badgeText == "no matching note")
 }

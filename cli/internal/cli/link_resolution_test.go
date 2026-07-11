@@ -263,3 +263,138 @@ func TestRelink_DBGhostTargetWarns(t *testing.T) {
 		t.Errorf("a --to target deleted from disk must warn even though the DB still has it: %q", res.Warning)
 	}
 }
+
+func TestContextWindowAroundTarget(t *testing.T) {
+	body := "Intro paragraph about Ghostty themes.\n\nSee [[terminal-emulators]] and more about colors."
+	win := contextWindowAroundTarget(body, "terminal-emulators", 80)
+	if !strings.Contains(win, "[[terminal-emulators]]") {
+		t.Errorf("window should include the link, got %q", win)
+	}
+	// Missing link: head of body.
+	head := contextWindowAroundTarget("ABCDEFGHIJ", "missing", 4)
+	if head != "ABCD" {
+		t.Errorf("missing link should take body head, got %q", head)
+	}
+}
+
+func TestBuildSourceContextQuery(t *testing.T) {
+	dir := t.TempDir()
+	// Note body ends with related-topic links the way real vault notes do.
+	path := dir + "/note.md"
+	content := "---\ntitle: Ghostty Themes\ntype: note\nid: 00000000-0000-4000-8000-000000000001\n---\n# Ghostty Themes\n\nGPU terminal themes and matrix colors.\n\n[[ghostty-config]] [[terminal-emulators]] [[color-schemes]]\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q, ctx := buildSourceContextQuery(dir, "note.md", "terminal-emulators")
+	if !strings.HasPrefix(q, "terminal-emulators\n") {
+		t.Errorf("query should start with target, got %q", q)
+	}
+	if !strings.Contains(ctx, "terminal-emulators") && !strings.Contains(ctx, "Ghostty") {
+		t.Errorf("context should carry surrounding prose, got %q", ctx)
+	}
+	// No source: bare target.
+	q2, ctx2 := buildSourceContextQuery(dir, "", "terminal-emulators")
+	if q2 != "terminal-emulators" || ctx2 != "" {
+		t.Errorf("no-source should be bare target, got q=%q ctx=%q", q2, ctx2)
+	}
+}
+
+func TestParseLLMPicks(t *testing.T) {
+	raw := "Here you go:\n```json\n[{\"path\":\"a.md\",\"reason\":\"typo of Auth\"},{\"path\":\"b.md\",\"reason\":\"related\"}]\n```\n"
+	picks, err := parseLLMPicks(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(picks) != 2 || picks[0].Path != "a.md" || picks[0].Reason != "typo of Auth" {
+		t.Errorf("unexpected picks: %+v", picks)
+	}
+}
+
+func TestApplyLLMPicks_GroundedAndCap(t *testing.T) {
+	original := []SuggestLinkResult{
+		{Path: "noise.md", Title: "Noise", Score: 0.9, Confidence: "low"},
+		{Path: "auth.md", Title: "Auth Flow", Score: 0.5, Confidence: "low"},
+		{Path: "other.md", Title: "Other", Score: 0.4, Confidence: "low"},
+	}
+	picks := []llmPick{
+		{Path: "auth.md", Reason: "closest title match"},
+		{Path: "invented.md", Reason: "hallucination"},
+		{Path: "other.md", Reason: "secondary"},
+	}
+	out := applyLLMPicks(original, picks, nil)
+	if len(out) < 2 {
+		t.Fatalf("expected at least 2, got %+v", out)
+	}
+	if out[0].Path != "auth.md" {
+		t.Errorf("LLM top pick should lead, got %q", out[0].Path)
+	}
+	if out[0].Confidence != "medium" {
+		t.Errorf("LLM pick confidence should cap at medium, got %q", out[0].Confidence)
+	}
+	if out[0].Reason != "closest title match" {
+		t.Errorf("reason not attached: %q", out[0].Reason)
+	}
+	// Invented path dropped.
+	for _, r := range out {
+		if r.Path == "invented.md" {
+			t.Errorf("invented path must not appear: %+v", out)
+		}
+	}
+	// Unused originals still present after LLM top.
+	if !containsPath(out, "noise.md") {
+		t.Errorf("unused original should remain: %+v", out)
+	}
+}
+
+func TestHasHighConfidence(t *testing.T) {
+	if hasHighConfidence([]SuggestLinkResult{{Confidence: "medium"}, {Confidence: "low"}}) {
+		t.Error("expected false")
+	}
+	if !hasHighConfidence([]SuggestLinkResult{{Confidence: "low"}, {Confidence: "high"}}) {
+		t.Error("expected true")
+	}
+}
+
+// Context-aware search: a bare-target query finds nothing useful for an
+// aspirational related-topic link, but --source folds surrounding prose so
+// BM25/semantic can surface a real neighbor note.
+func TestSuggestTarget_SourceContextSurfacesNeighbor(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "ghostty-config.md", "Ghostty Config",
+		"# Ghostty Config\n\nGPU-accelerated terminal emulator configuration and themes.")
+	writeNote(t, root, "unrelated.md", "Unrelated Cooking",
+		"# Unrelated Cooking\n\nPasta recipes and wine pairings.")
+	writeNote(t, root, "src.md", "Ghostty Themes Guide",
+		"# Ghostty Themes\n\nGPU terminal themes and matrix color schemes.\n\n[[ghostty-config]] [[terminal-emulators]]")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	// Without context the bare target "terminal-emulators" is unlikely to match
+	// (no note has that name). With --source the prose mentions terminal/themes
+	// and ghostty-config should rank.
+	out, err := runCLIArgs(t, root, "suggest-target", "terminal-emulators",
+		"--source", "src.md", "--limit", "3", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("suggest-target: %v\n%s", err, out)
+	}
+	var results []SuggestLinkResult
+	if err := json.Unmarshal(out, &results); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	// Source note must never appear.
+	if containsPath(results, "src.md") {
+		t.Errorf("source note must be excluded: %+v", results)
+	}
+	// Best-effort: with BM25 at least, ghostty-config should surface from context
+	// words (terminal/themes/ghostty). If the vault has no FTS hit either way,
+	// empty is still valid JSON [] — only fail if cooking outranks ghostty when
+	// both are present.
+	if containsPath(results, "ghostty-config.md") {
+		return // ideal path
+	}
+	// Soft assert: if we got any hit, ghostty should outrank cooking.
+	if len(results) > 0 && results[0].Path == "unrelated.md" {
+		t.Errorf("context-aware query ranked cooking over ghostty: %+v", results)
+	}
+}

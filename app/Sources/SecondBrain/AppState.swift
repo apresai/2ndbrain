@@ -1816,17 +1816,24 @@ final class AppState {
     /// Read-only. Returns [] rather than throwing on a CLI miss so the
     /// resolution sheet still offers Create/Unlink — no dead end.
     /// Argument construction for `2nb suggest-target`, extracted so the
-    /// conditional --source append (the contract the link-fix sheet relies on)
-    /// is unit-testable without spawning the CLI.
-    nonisolated static func suggestTargetArgs(target: String, sourcePath: String?) -> [String] {
-        var args = ["suggest-target", target, "--limit", "6", "--json", "--porcelain"]
+    /// conditional --source / --llm append (the contract the link-fix sheet
+    /// relies on) is unit-testable without spawning the CLI.
+    ///
+    /// Default limit is 3 (the top recommendations the Validation UI shows).
+    /// `--llm` defaults OFF: bulk classification runs context-aware search only
+    /// (cheap, offline-friendly). The Fix-link sheet passes `llm: true` so a
+    /// single opened finding can spend a generation call when nothing is already
+    /// high-confidence (the CLI still no-ops the model when high already exists).
+    nonisolated static func suggestTargetArgs(target: String, sourcePath: String?, limit: Int = 3, llm: Bool = false) -> [String] {
+        var args = ["suggest-target", target, "--limit", "\(limit)", "--json", "--porcelain"]
         if let sourcePath { args += ["--source", sourcePath] }
+        if llm { args.append("--llm") }
         return args
     }
 
-    func suggestTarget(target: String, sourcePath: String? = nil) async throws -> [SuggestTargetResult] {
+    func suggestTarget(target: String, sourcePath: String? = nil, limit: Int = 3, llm: Bool = false) async throws -> [SuggestTargetResult] {
         guard let vault else { throw CLIError.noVault }
-        let args = Self.suggestTargetArgs(target: target, sourcePath: sourcePath)
+        let args = Self.suggestTargetArgs(target: target, sourcePath: sourcePath, limit: limit, llm: llm)
         let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
         return (try? JSONDecoder().decode([SuggestTargetResult].self, from: data)) ?? []
     }
@@ -3359,15 +3366,27 @@ struct SuggestTargetResult: Codable, Identifiable, Equatable {
     let snippet: String
     /// How likely this candidate is THE note the broken target meant:
     /// "high" | "medium" | "low". Set only by `suggest-target` (nil on a
-    /// pre-confidence CLI and on `suggest-links`). A high or medium candidate
-    /// is safe to offer as a one-click relink.
+    /// pre-confidence CLI and on `suggest-links`). Only "high" is safe for
+    /// one-click / Fix-all; medium/low are recommendations (top 2-3).
     let confidence: String?
+    /// Short explanation from `suggest-target --llm` re-rank (nil when the
+    /// deterministic tiers alone produced the candidate).
+    let reason: String?
 
     /// Display name: the frontmatter title if set, else the basename (a note
     /// can lack a title, in which case the Go side sends "").
     var displayTitle: String {
         if !title.isEmpty { return title }
         return (path as NSString).lastPathComponent
+    }
+
+    init(path: String, title: String, score: Double, snippet: String, confidence: String? = nil, reason: String? = nil) {
+        self.path = path
+        self.title = title
+        self.score = score
+        self.snippet = snippet
+        self.confidence = confidence
+        self.reason = reason
     }
 }
 

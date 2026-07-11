@@ -55,8 +55,14 @@ type SuggestLinkResult struct {
 	// dominant (a tier-1 drift candidate that is the unique repair match is
 	// inherently high, since it may have matched via an alias); "medium" when
 	// exactly one of the two holds; "low" otherwise. A "high" candidate is safe
-	// to offer as a one-click fix.
+	// to offer as a one-click / Fix-all apply; "medium"/"low" are recommendations
+	// only (top 2–3 shown for human pick).
 	Confidence string `json:"confidence,omitempty"`
+	// Reason is a short human-readable explanation of why this candidate was
+	// ranked here. Set by suggest-target's optional --llm re-rank (additive;
+	// absent from suggest-links and from the deterministic tiers). Never
+	// required to apply a fix.
+	Reason string `json:"reason,omitempty"`
 }
 
 func runSuggestLinks(cmd *cobra.Command, args []string) error {
