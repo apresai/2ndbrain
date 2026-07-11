@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.17.0] - 2026-07-11
+
+### Added
+- `suggest-target --verdict`: recommendation envelope (`{recommendation, llm, candidates}`) emitting exactly one machine recommendation per broken link — `relink` to the top candidate at high (one-click) or medium (confirm) confidence, else `unlink`; an explicit model decline recommends `unlink` (measured trustworthy: 0 false promotions)
+- Link-fix prompt eval harness: planted-truth corruption corpus with calibrated LLM judge for measuring `suggest-target --llm` promotion precision, documented in `docs/link-prompt-eval.md`
+- Validation tab (macOS app): removal recommendations for dead links — "removable" badge with inline Unlink button, plus a bulk "Remove dead links" confirm sheet mirroring Fix all (removal is never silent and never part of Fix all)
+- Validation tab: "Fix each (N)" queue stepping through all findings needing a decision (the exact complement of the Fix-all set) with progress indicator and Skip
+
+### Changed
+- `suggest-target` re-rank now uses the eval-selected `strict_plausibility` prompt: fail-closed, attaches a one-line reason, never invents paths, caps LLM promotions at medium confidence (the ≥0.95 auto-fix precision bar was measured and not met)
+- `suggest-target` candidates are ordered confidence-first (tier then score), so `candidates[0]` is always the pipeline's best claim
+- Validation tab bulk classification runs `suggest-target --llm --verdict` probes concurrently (bounded 4-wide), skipping generation calls when a high-confidence candidate already exists; the fix sheet reuses the bulk verdict instead of re-probing, and the recommended action is preselected from the verdict
+- Validation tab: a failed classification probe renders a neutral "check failed" badge, never a removal recommendation
+
+
 ## [0.16.0] - 2026-07-11
 
 ### Added
