@@ -1820,16 +1820,18 @@ final class AppState {
     /// relies on) is unit-testable without spawning the CLI.
     ///
     /// Default limit is 3 (the top recommendations the Validation UI shows).
-    /// `--llm` is always passed: the CLI only spends a generation call when no
-    /// candidate is already high-confidence, so drift/high hits stay free.
-    nonisolated static func suggestTargetArgs(target: String, sourcePath: String?, limit: Int = 3, llm: Bool = true) -> [String] {
+    /// `--llm` defaults OFF: bulk classification runs context-aware search only
+    /// (cheap, offline-friendly). The Fix-link sheet passes `llm: true` so a
+    /// single opened finding can spend a generation call when nothing is already
+    /// high-confidence (the CLI still no-ops the model when high already exists).
+    nonisolated static func suggestTargetArgs(target: String, sourcePath: String?, limit: Int = 3, llm: Bool = false) -> [String] {
         var args = ["suggest-target", target, "--limit", "\(limit)", "--json", "--porcelain"]
         if let sourcePath { args += ["--source", sourcePath] }
         if llm { args.append("--llm") }
         return args
     }
 
-    func suggestTarget(target: String, sourcePath: String? = nil, limit: Int = 3, llm: Bool = true) async throws -> [SuggestTargetResult] {
+    func suggestTarget(target: String, sourcePath: String? = nil, limit: Int = 3, llm: Bool = false) async throws -> [SuggestTargetResult] {
         guard let vault else { throw CLIError.noVault }
         let args = Self.suggestTargetArgs(target: target, sourcePath: sourcePath, limit: limit, llm: llm)
         let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)

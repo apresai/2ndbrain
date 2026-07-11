@@ -1092,7 +1092,11 @@ private struct LinkResolutionSheet: View {
         // Repair preview and suggestions are independent — fetch concurrently.
         // repair-links can error (e.g. read-only file); suggestions never do.
         async let repairResult: PolishResult? = try? await appState.repairLinks(path: fix.path, target: fix.target, preview: true)
-        async let suggestResult: [SuggestTargetResult] = (try? await appState.suggestTarget(target: fix.target, sourcePath: fix.path)) ?? []
+        // LLM re-rank only in the per-finding sheet (one spend per opened finding),
+        // not during bulk classify. CLI still skips the model when a candidate is
+        // already high-confidence.
+        async let suggestResult: [SuggestTargetResult] = (try? await appState.suggestTarget(
+            target: fix.target, sourcePath: fix.path, llm: true)) ?? []
         repairPreview = await repairResult
         suggestions = await suggestResult
         loading = false
