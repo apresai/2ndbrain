@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -48,16 +49,30 @@ reason, and caps confidence at "medium" so LLM picks are recommendations, never
 silent auto-fixes. Fail-closed: if generation is unavailable the non-LLM list is
 returned unchanged.
 
+Candidates are ordered best-first: confidence tier (high > medium > low), then
+score within a tier — so the first candidate is always the pipeline's best
+claim.
+
+--verdict wraps the output in a recommendation envelope
+{recommendation, llm, candidates}: exactly one machine recommendation per
+broken link — relink to the top candidate when it is high (one-click safe) or
+medium (needs a human confirm), else unlink (remove the link, keep the text).
+An explicit LLM decline ("llm": "declined" — the model judged no candidate
+plausible) recommends unlink even over a medium candidate; measured to be the
+right call (docs/link-prompt-eval.md). "Create the note" is never machine-
+recommended; it stays a user choice.
+
 Read-only. Pair with "2nb relink <path> --from <target> --to <pick>" to apply a
-chosen candidate.`,
+chosen candidate, or "2nb unlink <path> --target <target>" to remove it.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSuggestTarget,
 }
 
 var (
-	suggestTargetLimit  int
-	suggestTargetSource string
-	suggestTargetLLM    bool
+	suggestTargetLimit   int
+	suggestTargetSource  string
+	suggestTargetLLM     bool
+	suggestTargetVerdict bool
 )
 
 func init() {
@@ -67,6 +82,8 @@ func init() {
 		"Vault-relative path of the note containing the broken link; excluded from candidates and used as search context")
 	suggestTargetCmd.Flags().BoolVar(&suggestTargetLLM, "llm", false,
 		"Re-rank candidates with the generation model when none is high-confidence (grounded; fail-closed)")
+	suggestTargetCmd.Flags().BoolVar(&suggestTargetVerdict, "verdict", false,
+		"Emit the recommendation envelope {recommendation, llm, candidates} instead of the bare candidate array")
 	rootCmd.AddCommand(suggestTargetCmd)
 }
 
@@ -125,17 +142,26 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 
 	// Tier 4 (optional) — LLM re-rank when no candidate is already high-confidence.
 	// Fail-closed: any generation error leaves the deterministic list intact.
-	if suggestTargetLLM && !hasHighConfidence(results) && len(results) > 0 {
-		if reranked, rerr := rerankSuggestTargetLLM(ctx, cfg, suggestTargetRerankSystem, target, contextSnippet, results); rerr == nil && len(reranked) > 0 {
-			// A decline (the model returned a valid empty list) leaves every
-			// candidate reason-less; log it so "LLM ran and declined" is
-			// distinguishable from "LLM never consulted" in the file log.
-			if reranked[0].Reason == "" {
+	llmOutcome := llmOutcomeOff
+	if suggestTargetLLM {
+		llmOutcome = llmOutcomeSkipped
+		if !hasHighConfidence(results) && len(results) > 0 {
+			reranked, picks, rerr := rerankSuggestTargetLLM(ctx, cfg, suggestTargetRerankSystem, target, contextSnippet, results)
+			switch {
+			case rerr != nil:
+				llmOutcome = llmOutcomeError
+				slog.Debug("suggest-target: llm re-rank skipped", "target", target, "err", rerr)
+			case picks == 0:
+				// The model's explicit "none of these is plausible" verdict —
+				// the strongest available signal that the link should be
+				// removed rather than repointed.
+				llmOutcome = llmOutcomeDeclined
 				slog.Debug("suggest-target: llm declined to promote any candidate", "target", target)
+				results = reranked
+			default:
+				llmOutcome = llmOutcomePromoted
+				results = reranked
 			}
-			results = reranked
-		} else if rerr != nil {
-			slog.Debug("suggest-target: llm re-rank skipped", "err", rerr)
 		}
 	}
 
@@ -144,13 +170,40 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 		results = results[:suggestTargetLimit]
 	}
 
+	recommendation := computeSuggestRecommendation(results, llmOutcome)
+
 	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(results)
+		var payload any = results
+		if suggestTargetVerdict {
+			payload = SuggestTargetEnvelope{
+				Recommendation: recommendation,
+				LLM:            llmOutcome,
+				Candidates:     results,
+			}
+		}
+		data, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
 		fmt.Println(string(data))
 		return nil
+	}
+
+	if suggestTargetVerdict {
+		switch recommendation.Action {
+		case "relink":
+			display := recommendation.Title
+			if display == "" {
+				display = recommendation.To
+			}
+			line := fmt.Sprintf("Recommendation: relink to %s (%s, %s)", display, recommendation.To, recommendation.Confidence)
+			if recommendation.Reason != "" {
+				line += ": " + recommendation.Reason
+			}
+			fmt.Println(line)
+		default:
+			fmt.Printf("Recommendation: unlink [[%s]] — no existing note matches confidently (llm: %s).\n", target, llmOutcome)
+		}
 	}
 
 	if len(results) == 0 {
@@ -268,6 +321,17 @@ func gatherSuggestions(ctx context.Context, v *vault.Vault, target, sourcePath s
 	}
 
 	assignConfidence(results, target, uniqueDrift)
+
+	// Order the pool by confidence tier (high > medium > low), then score
+	// within a tier, so "the first candidate" is always the best claim the
+	// pipeline can make. Before this sort, candidates sat in tier-ADD order
+	// (drift, then semantic, then BM25), so a high-confidence word-match from
+	// a later tier could rank below weaker earlier hits — the GUI treats
+	// candidates[0] as the one-click ticket, which misclassified those
+	// findings as decisions. Sorting here (not at the call site) keeps the
+	// eval harness and production on the same ordering, including the catalog
+	// the LLM re-rank sees.
+	sortSuggestionsByConfidence(results)
 	return results, contextSnippet
 }
 
@@ -448,6 +512,98 @@ func dominantAmong(i int, results []SuggestLinkResult) bool {
 	return results[i].Score >= dominantScoreRatio*bestOther
 }
 
+// llmOutcome values for the --verdict envelope's "llm" field. They answer
+// "what did the LLM tier actually do?", which the recommendation logic and the
+// GUI both need — in particular, a DECLINE (the model judged no candidate
+// plausible) is a trustworthy removal signal (measured 0 false promotions and
+// 6/6 judge-confirmed declines on negatives; docs/link-prompt-eval.md), while
+// an ERROR says nothing about the link at all.
+const (
+	llmOutcomeOff      = "off"      // --llm not requested
+	llmOutcomeSkipped  = "skipped"  // a high-confidence candidate (or empty pool) short-circuited the model
+	llmOutcomePromoted = "promoted" // the model picked candidate(s); reasons attached
+	llmOutcomeDeclined = "declined" // the model explicitly returned [] — nothing plausible
+	llmOutcomeError    = "error"    // generation/parse failed; deterministic list unchanged (fail-closed)
+)
+
+// SuggestRecommendation is the single machine recommendation for one broken
+// link: repoint it (relink) or remove it (unlink). Create-the-note is
+// deliberately never machine-recommended — it is a user decision offered by
+// the GUI alongside whichever of these two is recommended.
+type SuggestRecommendation struct {
+	Action     string `json:"action"`               // "relink" | "unlink"
+	To         string `json:"to,omitempty"`         // candidate path (relink only)
+	Title      string `json:"title,omitempty"`      // candidate display title (relink only)
+	Confidence string `json:"confidence,omitempty"` // the recommended candidate's confidence (relink only)
+	Reason     string `json:"reason,omitempty"`     // the LLM's one-line reason when it promoted the pick
+}
+
+// SuggestTargetEnvelope is the --verdict output shape. The bare-array --json
+// output remains the default for back-compat; the envelope is opt-in.
+type SuggestTargetEnvelope struct {
+	Recommendation SuggestRecommendation `json:"recommendation"`
+	LLM            string                `json:"llm"`
+	Candidates     []SuggestLinkResult   `json:"candidates"`
+}
+
+// computeSuggestRecommendation derives the one recommendation from the final
+// candidate list and the LLM outcome. Rules (in order):
+//  1. top candidate high  -> relink (the one-click / Fix-all tier);
+//  2. LLM declined        -> unlink, even over a deterministic medium — the
+//     model saw those candidates and judged none plausible, and its declines
+//     measured more reliable than deterministic mediums (docs/link-prompt-eval.md);
+//  3. top candidate medium -> relink (a recommendation, not an auto-fix);
+//  4. otherwise           -> unlink (nothing >= medium matches).
+//
+// Pure so every branch is unit-testable.
+func computeSuggestRecommendation(results []SuggestLinkResult, llmOutcome string) SuggestRecommendation {
+	relinkTo := func(c SuggestLinkResult) SuggestRecommendation {
+		return SuggestRecommendation{
+			Action: "relink", To: c.Path, Title: c.Title,
+			Confidence: c.Confidence, Reason: c.Reason,
+		}
+	}
+	if len(results) > 0 && results[0].Confidence == "high" {
+		return relinkTo(results[0])
+	}
+	if llmOutcome == llmOutcomeDeclined {
+		return SuggestRecommendation{Action: "unlink"}
+	}
+	if len(results) > 0 && results[0].Confidence == "medium" {
+		return relinkTo(results[0])
+	}
+	return SuggestRecommendation{Action: "unlink"}
+}
+
+// confidenceRank orders confidence grades best-first for sorting.
+func confidenceRank(c string) int {
+	switch c {
+	case "high":
+		return 0
+	case "medium":
+		return 1
+	case "low":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// sortSuggestionsByConfidence stably orders candidates by confidence tier,
+// then score descending within a tier. Stable so equal-key candidates keep
+// their tier-add order (drift before semantic before BM25). Raw scores are
+// cross-tier-incomparable, which is acceptable here: the score only breaks
+// ties WITHIN a confidence tier, and the tier is the load-bearing signal.
+func sortSuggestionsByConfidence(results []SuggestLinkResult) {
+	sort.SliceStable(results, func(i, j int) bool {
+		ri, rj := confidenceRank(results[i].Confidence), confidenceRank(results[j].Confidence)
+		if ri != rj {
+			return ri < rj
+		}
+		return results[i].Score > results[j].Score
+	})
+}
+
 // llmPick is one entry in the generation model's re-rank JSON response.
 // Confidence is only emitted by prompts that ask for it (the eval's
 // per-pick-confidence variant); absent in the shipped prompt's output.
@@ -487,9 +643,13 @@ Respond with ONLY a JSON array, no prose:
 // shortlist using the given system prompt (production passes
 // suggestTargetRerankSystem; the eval passes candidate variants). It never
 // invents paths (unknown paths are dropped), never promotes confidence above
-// "medium" (LLM picks are recommendations, not auto-fixes), and preserves any
-// pre-existing high-confidence entries at the front.
-func rerankSuggestTargetLLM(ctx context.Context, cfg ai.AIConfig, system, target, contextSnippet string, candidates []SuggestLinkResult) ([]SuggestLinkResult, error) {
+// "medium" (LLM picks are recommendations, not auto-fixes — the auto-fix bar
+// was measured and NOT met, see docs/link-prompt-eval.md), and preserves any
+// pre-existing high-confidence entries at the front. The returned pick count
+// distinguishes a promotion (>0) from the model's explicit decline (0): a
+// decline still returns the deterministic list, but the caller can surface it
+// as a removal signal.
+func rerankSuggestTargetLLM(ctx context.Context, cfg ai.AIConfig, system, target, contextSnippet string, candidates []SuggestLinkResult) ([]SuggestLinkResult, int, error) {
 	byPath := make(map[string]SuggestLinkResult, len(candidates))
 	for _, c := range candidates {
 		byPath[c.Path] = c
@@ -497,9 +657,17 @@ func rerankSuggestTargetLLM(ctx context.Context, cfg ai.AIConfig, system, target
 	user := buildRerankUser(target, contextSnippet, buildRerankCatalog(candidates, true))
 	picks, err := llmRerankPicks(ctx, cfg, system, user)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return applyLLMPicks(candidates, picks, byPath), nil
+	// Count only GROUNDED picks (paths that exist in the shortlist) so an
+	// all-hallucinated response reports as a decline, not a promotion.
+	applied := 0
+	for _, p := range picks {
+		if _, ok := byPath[strings.TrimSpace(p.Path)]; ok {
+			applied++
+		}
+	}
+	return applyLLMPicks(candidates, picks, byPath), applied, nil
 }
 
 // buildRerankCatalog renders the grounded shortlist for the model. With

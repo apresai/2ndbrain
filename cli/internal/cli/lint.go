@@ -55,6 +55,11 @@ type LintIssue struct {
 	// Fix == "drift", so a UI can render [[x]] -> [[y]] without a preview
 	// round-trip.
 	DriftTarget string `json:"drift_target,omitempty"`
+	// Candidates carries the repair index's matches when Fix == "ambiguous"
+	// (each a canonical target usable as relink --to), so a UI can offer the
+	// pick list without a suggest-target round-trip. Empty for other Fix
+	// classes: drift's single match is DriftTarget, and missing has none.
+	Candidates []string `json:"candidates,omitempty"`
 }
 
 type LintReport struct {
@@ -233,6 +238,7 @@ func runLint(cmd *cobra.Command, args []string) error {
 					issue.Fix = "missing"
 				default:
 					issue.Fix = "ambiguous"
+					issue.Candidates = candidates
 				}
 				report.Issues = append(report.Issues, issue)
 				report.Warns++

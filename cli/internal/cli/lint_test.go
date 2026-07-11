@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -324,12 +325,13 @@ func TestLint_NoIDIsNotAnError(t *testing.T) {
 // tests below.
 type lintReport struct {
 	Issues []struct {
-		Path        string `json:"path"`
-		Level       string `json:"level"`
-		Message     string `json:"message"`
-		Target      string `json:"target"`
-		Fix         string `json:"fix"`
-		DriftTarget string `json:"drift_target"`
+		Path        string   `json:"path"`
+		Level       string   `json:"level"`
+		Message     string   `json:"message"`
+		Target      string   `json:"target"`
+		Fix         string   `json:"fix"`
+		DriftTarget string   `json:"drift_target"`
+		Candidates  []string `json:"candidates"`
 	} `json:"issues"`
 	Errors int `json:"errors"`
 	Warns  int `json:"warnings"`
@@ -505,12 +507,13 @@ func TestLint_ClassifiesBrokenLinks(t *testing.T) {
 		message     string
 		fix         string
 		driftTarget string
+		candidates  []string
 	}
 	wants := map[string]want{
-		"claude-code-notes":             {"broken wikilink: [[claude-code-notes]]", "drift", "Claude Code Notes"},
-		"My_Note":                       {"broken wikilink: [[My_Note]]", "ambiguous", ""},
-		"totally-missing-note":          {"broken wikilink: [[totally-missing-note]]", "missing", ""},
-		"some/dir/totally-missing-note": {"broken wikilink: [[some/dir/totally-missing-note]]", "missing", ""},
+		"claude-code-notes":             {"broken wikilink: [[claude-code-notes]]", "drift", "Claude Code Notes", nil},
+		"My_Note":                       {"broken wikilink: [[My_Note]]", "ambiguous", "", []string{"Note Alpha", "Note Beta"}},
+		"totally-missing-note":          {"broken wikilink: [[totally-missing-note]]", "missing", "", nil},
+		"some/dir/totally-missing-note": {"broken wikilink: [[some/dir/totally-missing-note]]", "missing", "", nil},
 	}
 	seen := make(map[string]bool)
 	for _, is := range report.Issues {
@@ -529,6 +532,10 @@ func TestLint_ClassifiesBrokenLinks(t *testing.T) {
 		}
 		if is.DriftTarget != w.driftTarget {
 			t.Errorf("target %q: drift_target = %q, want %q", is.Target, is.DriftTarget, w.driftTarget)
+		}
+		if !reflect.DeepEqual(is.Candidates, w.candidates) {
+			t.Errorf("target %q: candidates = %v, want %v (ambiguous findings carry the pick list; others omit it)",
+				is.Target, is.Candidates, w.candidates)
 		}
 	}
 	for target := range wants {

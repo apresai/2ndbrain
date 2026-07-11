@@ -166,3 +166,9 @@ was the only variant to promote a candidate for a fabricated negative.
 The harness is deliberately cheap (~200 Haiku generation calls + ~40 Sonnet judge calls at default
 sizing). Re-run it whenever `suggestTargetRerankSystem`, the tier logic in `gatherSuggestions`, or
 the default generation model changes, and update this page's numbers in the same PR.
+
+**Known measurement delta since the selection run:** the selection run fed the model a
+tier-add-ordered catalog; `gatherSuggestions` now sorts the pool confidence-first before the catalog
+is built (the `--verdict` ordering fix), so the model sees the deterministic best candidate first.
+Position bias makes this more likely to help than hurt, but the 0.83 promotion-precision figure was
+measured pre-sort — fold a fresh run into the next prompt or model change.
