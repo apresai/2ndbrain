@@ -21,6 +21,16 @@ struct LintResultsView: View {
     /// probing each broken link's fixability once the report loads. Drives the
     /// class-aware header counts, the per-row badges, and the Fix-all plan.
     @State private var classifications: [String: LinkFixClass] = [:]
+    /// The full `--verdict` envelope per finding, so the resolution sheet can
+    /// reuse the bulk result (candidates + recommendation + llm outcome)
+    /// instead of re-running suggest-target on open.
+    @State private var bulkVerdicts: [String: SuggestVerdictEnvelope] = [:]
+    /// Findings whose fixability probe itself FAILED (CLI error), as opposed to
+    /// legitimately returning no match — rendered as a neutral badge, never as
+    /// a removal recommendation.
+    @State private var classifyFailed: Set<String> = []
+    /// The Remove-dead-links confirm sheet (nil = closed).
+    @State private var activeRemoveAll: RemovalPlan?
     /// True while `classifyBrokenFindings` is probing suggest-target per finding.
     @State private var classifying = false
     /// The "Fix each" walkthrough: the decision-class findings queued to step
@@ -102,11 +112,15 @@ struct LintResultsView: View {
                         IssueRow(
                             issue: issue,
                             linkClass: linkClass(for: issue),
+                            probeFailed: probeFailed(for: issue),
                             onOpenInObsidian: { openInObsidian(issue) },
                             onSetValue: { setValue in activeSetValue = setValue },
                             onRepair: { repair in activeRepair = repair },
                             onRelink: { path, target, cand in
                                 Task { await applyInlineRelink(path: path, target: target, cand: cand) }
+                            },
+                            onUnlink: { path, target in
+                                Task { await applyInlineUnlink(path: path, target: target) }
                             }
                         )
                     }
@@ -171,6 +185,7 @@ struct LintResultsView: View {
             LinkResolutionSheet(
                 fix: repair,
                 queuePosition: inQueue ? (index: walkthroughIndex, total: walkthroughQueue.count) : nil,
+                preloaded: bulkVerdict(forPath: repair.path, target: repair.target),
                 onOpenInObsidian: { openInObsidian(forPath: repair.path) },
                 onResolved: { message in
                     if inQueue {
@@ -204,6 +219,19 @@ struct LintResultsView: View {
                 onDone: { fixed, failed in
                     activeFixAll = nil
                     let banner = LinkFixOutcome.fixAllResultBanner(fixed: fixed, failed: failed)
+                    actionTone = banner.tone
+                    actionMessage = banner.message + " Re-checking…"
+                    Task { await appState.runLint() }
+                }
+            )
+            .environment(appState)
+        }
+        .sheet(item: $activeRemoveAll) { plan in
+            RemoveAllSheet(
+                findings: plan.findings,
+                onDone: { removed, failed in
+                    activeRemoveAll = nil
+                    let banner = LinkFixOutcome.removeAllResultBanner(removed: removed, failed: failed)
                     actionTone = banner.tone
                     actionMessage = banner.message + " Re-checking…"
                     Task { await appState.runLint() }
@@ -260,6 +288,18 @@ struct LintResultsView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(appState.isLinting)
+            }
+            // Bulk removal for the findings whose machine recommendation is
+            // unlink (nothing >= medium matched / the model declined). Always
+            // behind a pre-checked confirm sheet, never silent.
+            let removals = ready ? FixAllPlanner.removalPlan(from: classifiedPairs(findings)) : []
+            if ready && !removals.isEmpty {
+                Button("Remove dead links (\(removals.count))") {
+                    activeRemoveAll = RemovalPlan(findings: removals)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(appState.isLinting)
             }
             if ready && counts.oneClick >= 1 {
                 Button("Fix all") { activeFixAll = FixAllPlan(rewrites: fixAllPlan(findings)) }
@@ -346,6 +386,22 @@ struct LintResultsView: View {
     /// The stored classification for one issue's broken finding (nil for a
     /// non-broken issue or before classification completes).
     private func linkClass(for issue: LintIssue) -> LinkFixClass? {
+        findingID(for: issue).flatMap { classifications[$0] }
+    }
+
+    /// Whether the fixability probe itself failed for this issue's finding
+    /// (CLI error — the badge must not read as a dead link).
+    private func probeFailed(for issue: LintIssue) -> Bool {
+        findingID(for: issue).map { classifyFailed.contains($0) } ?? false
+    }
+
+    /// The stored `--verdict` envelope for this finding, so the resolution
+    /// sheet reuses the bulk probe instead of re-running suggest-target.
+    private func bulkVerdict(forPath path: String, target: String) -> SuggestVerdictEnvelope? {
+        bulkVerdicts["\(path)|\(target)"]
+    }
+
+    private func findingID(for issue: LintIssue) -> String? {
         let target: String
         if let t = issue.target, !t.isEmpty {
             target = t
@@ -354,7 +410,7 @@ struct LintResultsView: View {
         } else {
             return nil
         }
-        return classifications["\(issue.path)|\(target)"]
+        return "\(issue.path)|\(target)"
     }
 
     /// The Fix-all plan derived from the stored classifications: one-click
@@ -368,29 +424,102 @@ struct LintResultsView: View {
 
     /// Probe each broken finding's fixability once, storing the result. A "drift"
     /// finding needs no lookup (the CLI already resolved it); every other finding
-    /// asks `suggest-target --source --llm` (context-aware + optional LLM re-rank)
-    /// for its top candidates, then classifies. High confidence → one-click;
-    /// otherwise top 2-3 are recommendations. Best-effort: a lookup miss just
-    /// classifies as missing rather than failing the whole pass.
+    /// asks `suggest-target --llm --verdict` (context-aware, LLM re-rank when
+    /// nothing is high-confidence, one machine recommendation) and classifies
+    /// from the envelope: high relink → one-click, medium relink → top picks,
+    /// unlink → removable. Probes run concurrently (bounded) since each is an
+    /// independent CLI call; a probe that ERRORS is recorded in
+    /// `classifyFailed` and degrades to the offline classification so a
+    /// transient failure is never presented as a dead link.
     private func classifyBrokenFindings(_ findings: [BrokenFinding]) async {
         guard !findings.isEmpty else {
             classifications = [:]
+            bulkVerdicts = [:]
+            classifyFailed = []
             classifying = false
             return
         }
         classifying = true
         var result: [String: LinkFixClass] = [:]
+        var verdicts: [String: SuggestVerdictEnvelope] = [:]
+        var failed: Set<String> = []
+
+        // Drift findings classify instantly; only the rest need a CLI probe.
+        var pending: [BrokenFinding] = []
+        var pendingIDs = Set<String>()
         for f in findings {
             if f.fix == "drift" {
                 result[f.id] = .repairable(driftTarget: f.driftTarget)
-                continue
+            } else if pendingIDs.insert(f.id).inserted {
+                pending.append(f) // dedupe: one probe per (path, target)
             }
-            let candidates = (try? await appState.suggestTarget(target: f.target, sourcePath: f.path)) ?? []
-            result[f.id] = FixAllPlanner.classify(
-                fix: f.fix, candidates: candidates, driftTarget: f.driftTarget)
+        }
+
+        // Bounded fan-out: at most maxConcurrentProbes suggest-target processes
+        // at a time (each may spend one generation call).
+        let maxConcurrentProbes = 4
+        await withTaskGroup(of: (String, SuggestVerdictEnvelope?).self) { group in
+            var iterator = pending.makeIterator()
+            var inFlight = 0
+            func addNext() {
+                guard let f = iterator.next() else { return }
+                inFlight += 1
+                group.addTask {
+                    let env = try? await appState.suggestTargetVerdict(target: f.target, sourcePath: f.path)
+                    return (f.id, env)
+                }
+            }
+            for _ in 0..<maxConcurrentProbes { addNext() }
+            while inFlight > 0 {
+                guard let (id, env) = await group.next() else { break }
+                inFlight -= 1
+                if let env {
+                    verdicts[id] = env
+                } else {
+                    failed.insert(id)
+                }
+                addNext()
+            }
+        }
+
+        for f in pending {
+            if let env = verdicts[f.id] {
+                result[f.id] = FixAllPlanner.classify(fix: f.fix, envelope: env, driftTarget: f.driftTarget)
+            } else {
+                // Probe failed: degrade to the lint-only classification (never
+                // .removable — a transient error is not evidence of a dead link).
+                result[f.id] = FixAllPlanner.classify(fix: f.fix, candidates: [], driftTarget: f.driftTarget)
+            }
         }
         classifications = result
+        bulkVerdicts = verdicts
+        classifyFailed = failed
         classifying = false
+    }
+
+    /// One-tap unlink from a removable row (remove the link, keep the text).
+    /// Snapshotted (reversible via polish --undo); re-lints on success.
+    private func applyInlineUnlink(path: String, target: String) async {
+        do {
+            let res = try await appState.unlink(path: path, target: target, preview: false)
+            let outcome = LinkFixOutcome.classify(result: res, target: target, verb: "unlink")
+            switch outcome {
+            case .success:
+                actionTone = .success
+                actionMessage = "Unlinked [[\(target)]] (text kept). Re-checking…"
+                await appState.runLint()
+            case .actionable(let message):
+                actionTone = .error
+                actionMessage = message
+            case .stale(let message):
+                actionTone = .info
+                actionMessage = "\(message) Re-checking…"
+                await appState.runLint()
+            }
+        } catch {
+            actionTone = .error
+            actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     /// One-tap relink from an inline recommendation on a list row. Snapshotted
@@ -427,13 +556,18 @@ private struct IssueRow: View {
     let issue: LintIssue
     /// Fixability class for a broken-link finding (nil for other findings, or
     /// before classification completes). Renders the subtle per-row badge and
-    /// (for `.recommend`) the top 2-3 inline pick buttons.
+    /// (for `.recommend` / `.removable`) the inline actions.
     let linkClass: LinkFixClass?
+    /// True when the fixability probe itself errored — the badge reads
+    /// "check failed", never a removal recommendation.
+    var probeFailed: Bool = false
     let onOpenInObsidian: () -> Void
     let onSetValue: (ActiveSetValue) -> Void
     let onRepair: (ActiveRepair) -> Void
     /// Inline one-tap relink from a recommended candidate (decision rows).
     let onRelink: (_ path: String, _ target: String, _ cand: SuggestTargetResult) -> Void
+    /// Inline one-tap unlink from a removable row (remove link, keep text).
+    let onUnlink: (_ path: String, _ target: String) -> Void
 
     private var finding: LintFinding { LintFinding.classify(message: issue.message) }
 
@@ -454,7 +588,14 @@ private struct IssueRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    if let linkClass {
+                    if probeFailed {
+                        Text("check failed")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                    } else if let linkClass {
                         LinkClassBadge(linkClass: linkClass)
                     }
                 }
@@ -462,6 +603,25 @@ private struct IssueRow: View {
                 Text(issue.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                // Removal recommendation: the CLI's verdict says nothing >=
+                // medium matches (or the model declined every candidate), so
+                // offer the one-tap Unlink inline. The Fix link sheet remains
+                // for picking a weak candidate or creating the note instead.
+                if case .removable = linkClass, !probeFailed,
+                   case let .brokenLink(target) = finding {
+                    HStack(spacing: 6) {
+                        Text("No existing note matches — remove the link, keep the text?")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Button("Unlink") {
+                            onUnlink(issue.path, target)
+                        }
+                        .controlSize(.mini)
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.top, 2)
+                }
 
                 // Top 2-3 recommendations for decision-class findings (medium/low
                 // search hits or LLM re-rank). High-confidence one-click cases
@@ -564,6 +724,13 @@ struct ActiveRepair: Identifiable {
 struct FixAllPlan: Identifiable {
     let id = UUID()
     let rewrites: [PlannedRewrite]
+}
+
+/// The Remove-dead-links confirm sheet's payload: the deduped `.removable`
+/// findings. Wrapped so it can drive `.sheet(item:)`.
+struct RemovalPlan: Identifiable {
+    let id = UUID()
+    let findings: [BrokenFinding]
 }
 
 /// One-tap confirm for the whole Fix-all plan. Lists every planned rewrite as a
@@ -695,6 +862,111 @@ private struct FixAllSheet: View {
     }
 }
 
+/// One-tap confirm for the bulk Remove-dead-links pass. Lists every removable
+/// finding as a pre-checked "[[target]] in path" row (nothing is removed
+/// blind), then unlinks each checked one (`2nb unlink --write`, keeping the
+/// visible text, each reversible with `polish --undo`) and reports the
+/// aggregate via `onDone`. Mirrors FixAllSheet.
+private struct RemoveAllSheet: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+    let findings: [BrokenFinding]
+    /// Called with (removed, failed) counts after the pass so the parent can
+    /// show the aggregate banner, dismiss, and re-lint.
+    let onDone: (_ removed: Int, _ failed: Int) -> Void
+
+    /// Finding ids the user has left checked (all pre-checked on open).
+    @State private var checked: Set<String>
+    @State private var applying = false
+
+    init(findings: [BrokenFinding], onDone: @escaping (Int, Int) -> Void) {
+        self.findings = findings
+        self.onDone = onDone
+        _checked = State(initialValue: Set(findings.map(\.id)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Remove \(findings.count) dead link\(findings.count == 1 ? "" : "s")")
+                .font(.headline)
+            Text("These links match no existing note confidently, so removing them is the recommended fix. Removal keeps the visible text and only strips the [[brackets]]. Uncheck any you want to keep. Each edited note can be reverted with 2nb polish --undo.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(findings, id: \.id) { finding in
+                        Toggle(isOn: binding(for: finding)) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("[[\(finding.target)]]")
+                                    .font(.callout)
+                                Text(finding.path)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                        .disabled(applying)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(maxHeight: 260)
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(applying)
+                Button(applying ? "Removing…" : "Remove \(checked.count)") { apply() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(applying || checked.isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 520)
+    }
+
+    private func binding(for finding: BrokenFinding) -> Binding<Bool> {
+        Binding(
+            get: { checked.contains(finding.id) },
+            set: { isOn in
+                if isOn { checked.insert(finding.id) } else { checked.remove(finding.id) }
+            }
+        )
+    }
+
+    /// Unlink each checked finding sequentially. A finding counts as removed
+    /// when the CLI reports a link was actually rewritten; a no-op (the note
+    /// changed since the check) or an error counts as failed so the aggregate
+    /// banner is honest.
+    private func apply() {
+        let selected = findings.filter { checked.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        applying = true
+        Task {
+            var removed = 0
+            var failed = 0
+            for finding in selected {
+                do {
+                    let result = try await appState.unlink(
+                        path: finding.path, target: finding.target, preview: false)
+                    let n = result.linksRepaired?.count ?? 0
+                    if n > 0 { removed += n } else { failed += 1 }
+                } catch {
+                    failed += 1
+                }
+            }
+            applying = false
+            onDone(removed, failed)
+        }
+    }
+}
+
 /// The finding being edited in the Set-value sheet. `allowed` non-empty means an
 /// enum (render a picker); empty means a free-text required field.
 struct ActiveSetValue: Identifiable {
@@ -814,9 +1086,14 @@ private struct LinkResolutionSheet: View {
     let fix: ActiveRepair
     /// Position within the "Fix each" walkthrough, e.g. (index: 1, total: 5).
     /// Non-nil puts the sheet in queue mode: it shows a "2 of 5" progress
-    /// indicator, offers a Skip button, and visually recommends an action. Nil
-    /// is the normal single-finding mode (opened from one "Fix link…" button).
+    /// indicator and a Skip button. Nil is the normal single-finding mode
+    /// (opened from one "Fix link…" button).
     var queuePosition: (index: Int, total: Int)? = nil
+    /// The bulk classification's `--verdict` envelope for this finding, when
+    /// available: the sheet reuses it (candidates + recommendation + llm
+    /// outcome) instead of re-running suggest-target on open. Nil falls back
+    /// to a fresh fetch.
+    var preloaded: SuggestVerdictEnvelope? = nil
     /// Open the note in Obsidian (delegated to the parent, which knows the vault).
     let onOpenInObsidian: () -> Void
     /// Called with a past-tense banner message after a successful resolution so
@@ -830,18 +1107,27 @@ private struct LinkResolutionSheet: View {
     /// single-finding mode, where no Skip button is shown.
     var onSkip: (() -> Void)? = nil
 
-    /// In queue mode, which action to visually recommend: the top suggestion
-    /// (relink) when one exists, else unlink. Nil in single-finding mode, so
-    /// that path renders with no preselection, exactly as before.
+    /// Which action to visually recommend, in BOTH modes (queue and single):
+    /// driven by the CLI's verdict when one is available (relink → the top
+    /// suggestion, unlink → removal), else the shape heuristic (suggestions
+    /// exist → relink, none → unlink). Suppressed while loading and when a
+    /// confident drift repair exists (that section is already labeled
+    /// "recommended").
     private enum RecommendedAction: Equatable { case relinkTop, unlink }
     private var recommendedAction: RecommendedAction? {
-        guard queuePosition != nil, !loading else { return nil }
+        guard !loading, confidentRepair == nil else { return nil }
+        if let verdict {
+            return verdict.action == "unlink" ? .unlink : .relinkTop
+        }
         return filteredSuggestions.isEmpty ? .unlink : .relinkTop
     }
 
     @State private var loading = true
     @State private var repairPreview: PolishResult?
     @State private var suggestions: [SuggestTargetResult] = []
+    /// The machine recommendation for this finding (from the preloaded bulk
+    /// envelope or the sheet's own fetch); nil when the probe failed.
+    @State private var verdict: SuggestRecommendation?
     /// Non-error guidance when an action found the link but could not fix it
     /// (e.g. no confident target): the sheet stays open so the user picks
     /// another option.
@@ -1090,15 +1376,28 @@ private struct LinkResolutionSheet: View {
         loading = true
         errorText = nil
         // Repair preview and suggestions are independent — fetch concurrently.
-        // repair-links can error (e.g. read-only file); suggestions never do.
+        // repair-links can error (e.g. read-only file); suggestions degrade to
+        // no-verdict rather than erroring.
         async let repairResult: PolishResult? = try? await appState.repairLinks(path: fix.path, target: fix.target, preview: true)
-        // LLM re-rank only in the per-finding sheet (one spend per opened finding),
-        // not during bulk classify. CLI still skips the model when a candidate is
-        // already high-confidence.
-        async let suggestResult: [SuggestTargetResult] = (try? await appState.suggestTarget(
-            target: fix.target, sourcePath: fix.path, llm: true)) ?? []
+        if let preloaded {
+            // Reuse the bulk classification's probe: no second generation
+            // spend on open, and the sheet agrees with the row badge.
+            suggestions = preloaded.candidates
+            verdict = preloaded.recommendation
+        } else {
+            // No bulk result (opened before classification finished, or the
+            // bulk probe failed): fetch fresh. A failed fetch leaves verdict
+            // nil so the recommendation falls back to the shape heuristic.
+            if let env = try? await appState.suggestTargetVerdict(target: fix.target, sourcePath: fix.path) {
+                suggestions = env.candidates
+                verdict = env.recommendation
+            } else {
+                suggestions = (try? await appState.suggestTarget(
+                    target: fix.target, sourcePath: fix.path, llm: true)) ?? []
+                verdict = nil
+            }
+        }
         repairPreview = await repairResult
-        suggestions = await suggestResult
         loading = false
     }
 

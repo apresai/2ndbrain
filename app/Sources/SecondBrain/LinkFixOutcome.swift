@@ -76,6 +76,20 @@ enum LinkFixOutcome: Equatable {
         }
         return (tone, msg)
     }
+
+    /// Banner for the bulk "Remove dead links" pass (unlink per checked row).
+    /// Same tone policy as fixAllResultBanner: error tint only when nothing
+    /// succeeded. Pure so it is unit-testable.
+    static func removeAllResultBanner(removed: Int, failed: Int) -> (tone: BannerTone, message: String) {
+        let tone: BannerTone = failed > 0 && removed == 0 ? .error : .success
+        var msg = removed > 0
+            ? "Removed \(removed) dead link\(removed == 1 ? "" : "s") (text kept)."
+            : "No links were removed."
+        if failed > 0 {
+            msg += " \(failed) couldn’t be applied."
+        }
+        return (tone, msg)
+    }
 }
 
 /// Visual tone of the inline result banner: green success, orange

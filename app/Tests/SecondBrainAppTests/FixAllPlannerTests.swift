@@ -247,3 +247,140 @@ func fixAllBannerTones() {
     #expect(partial.tone == .success)
     #expect(partial.message == "Fixed 2 links. 1 couldn’t be applied.")
 }
+
+// MARK: - verdict-driven classification (suggest-target --verdict envelope)
+
+private func envelope(
+    action: String, to: String? = nil, confidence: String? = nil,
+    llm: String = "off", candidates: [SuggestTargetResult] = []
+) -> SuggestVerdictEnvelope {
+    SuggestVerdictEnvelope(
+        recommendation: SuggestRecommendation(
+            action: action, to: to, title: nil, confidence: confidence, reason: nil),
+        llm: llm,
+        candidates: candidates)
+}
+
+@Test("an unlink verdict classifies as removable, keeping weak candidates for the sheet")
+func classifyVerdictUnlinkIsRemovable() {
+    let weak = candidate(path: "weak.md", confidence: "low")
+    let cls = FixAllPlanner.classify(
+        fix: "missing",
+        envelope: envelope(action: "unlink", llm: "declined", candidates: [weak]),
+        driftTarget: nil)
+    #expect(cls == .removable(candidates: [weak]))
+    #expect(cls.isRemovable)
+    #expect(!cls.isOneClick)
+    #expect(cls.recommendations == [weak])
+    #expect(cls.badgeText == "remove?")
+}
+
+@Test("a high relink verdict classifies as one-click did-you-mean")
+func classifyVerdictHighRelinkIsDidYouMean() {
+    let top = candidate(path: "resources/auth-flow.md", title: "Auth Flow", confidence: "high")
+    let cls = FixAllPlanner.classify(
+        fix: "missing",
+        envelope: envelope(action: "relink", to: top.path, confidence: "high", llm: "skipped", candidates: [top]),
+        driftTarget: nil)
+    #expect(cls == .didYouMean(top))
+    #expect(cls.isOneClick)
+}
+
+@Test("a medium relink verdict classifies as recommend (never one-click)")
+func classifyVerdictMediumRelinkIsRecommend() {
+    let top = candidate(path: "a.md", confidence: "medium")
+    let other = candidate(path: "b.md", confidence: "low")
+    let cls = FixAllPlanner.classify(
+        fix: "missing",
+        envelope: envelope(action: "relink", to: top.path, confidence: "medium", llm: "promoted", candidates: [top, other]),
+        driftTarget: nil)
+    #expect(cls == .recommend([top, other]))
+    #expect(!cls.isOneClick)
+}
+
+@Test("a drift fix wins over any verdict (no envelope consulted)")
+func classifyVerdictDriftStillRepairable() {
+    let cls = FixAllPlanner.classify(
+        fix: "drift",
+        envelope: envelope(action: "unlink", llm: "declined"),
+        driftTarget: "Real Note")
+    #expect(cls == .repairable(driftTarget: "Real Note"))
+}
+
+@Test("an unknown verdict action degrades to the candidate-only classification")
+func classifyVerdictUnknownActionDegrades() {
+    let top = candidate(path: "a.md", confidence: "medium")
+    let cls = FixAllPlanner.classify(
+        fix: "missing",
+        envelope: envelope(action: "mystery", candidates: [top]),
+        driftTarget: nil)
+    #expect(cls == .recommend([top]))
+}
+
+// MARK: - removable counts, header, and removal plan
+
+@Test("counts splits one-click, decision, and removable")
+func countsSplitsRemovable() {
+    let classes: [LinkFixClass] = [
+        .repairable(driftTarget: "X"),
+        .recommend([candidate(path: "a.md", confidence: "medium")]),
+        .removable(candidates: []),
+        .removable(candidates: []),
+        .missing,
+    ]
+    let counts = FixAllPlanner.counts(classes)
+    #expect(counts == ClassCounts(oneClick: 1, decision: 2, removable: 2))
+    #expect(counts.total == 5)
+}
+
+@Test("headerSummary appends the removable clause only when nonzero")
+func headerSummaryRemovableClause() {
+    #expect(
+        FixAllPlanner.headerSummary(total: 7, counts: ClassCounts(oneClick: 2, decision: 4, removable: 1))
+            == "7 broken links: 2 one-click fixable, 4 need a decision, 1 removable")
+    #expect(
+        FixAllPlanner.headerSummary(total: 7, counts: ClassCounts(oneClick: 2, decision: 5))
+            == "7 broken links: 2 one-click fixable, 5 need a decision")
+}
+
+@Test("removalPlan collects removable findings, deduped by id")
+func removalPlanDedupes() {
+    let f1 = BrokenFinding(path: "n.md", target: "dead", fix: "missing", driftTarget: nil)
+    let f1dup = BrokenFinding(path: "n.md", target: "dead", fix: "missing", driftTarget: nil)
+    let f2 = BrokenFinding(path: "m.md", target: "gone", fix: "missing", driftTarget: nil)
+    let keep = BrokenFinding(path: "k.md", target: "ok", fix: "missing", driftTarget: nil)
+    let plan = FixAllPlanner.removalPlan(from: [
+        (f1, .removable(candidates: [])),
+        (f1dup, .removable(candidates: [])),
+        (f2, .removable(candidates: [])),
+        (keep, .recommend([candidate(path: "a.md", confidence: "medium")])),
+    ])
+    #expect(plan.map(\.id) == ["n.md|dead", "m.md|gone"])
+}
+
+@Test("removable findings stay in the walkthrough queue (the Fix-all complement invariant)")
+func walkthroughIncludesRemovable() {
+    let dead = BrokenFinding(path: "n.md", target: "dead", fix: "missing", driftTarget: nil)
+    let drift = BrokenFinding(path: "d.md", target: "Drift", fix: "drift", driftTarget: "Drift Note")
+    let queue = FixAllPlanner.walkthroughQueue(from: [
+        (drift, .repairable(driftTarget: "Drift Note")),
+        (dead, .removable(candidates: [])),
+    ])
+    #expect(queue.map(\.id) == ["n.md|dead"])
+}
+
+// MARK: - Remove-all result banner
+
+@Test("removeAllResultBanner picks tone and pluralizes")
+func removeAllBannerTones() {
+    let ok = LinkFixOutcome.removeAllResultBanner(removed: 2, failed: 0)
+    #expect(ok.tone == .success)
+    #expect(ok.message == "Removed 2 dead links (text kept).")
+
+    let one = LinkFixOutcome.removeAllResultBanner(removed: 1, failed: 0)
+    #expect(one.message == "Removed 1 dead link (text kept).")
+
+    let none = LinkFixOutcome.removeAllResultBanner(removed: 0, failed: 2)
+    #expect(none.tone == .error)
+    #expect(none.message == "No links were removed. 2 couldn’t be applied.")
+}

@@ -184,9 +184,8 @@ func cliErrorSurfacesStderr() {
         == "first\nError: real reason")
 }
 
-@Test("AppState.suggestTargetArgs appends --source; --llm only when requested")
+@Test("AppState.suggestTargetArgs appends --source; --llm/--verdict only when requested")
 func suggestTargetArgConstruction() {
-    // Bulk classify path: context search only (no generation spend).
     let base = AppState.suggestTargetArgs(target: "ghostty", sourcePath: nil)
     #expect(base == ["suggest-target", "ghostty", "--limit", "3", "--json", "--porcelain"])
 
@@ -197,10 +196,18 @@ func suggestTargetArgConstruction() {
         "--source", "resources/ghostty-matrix-theme.md",
     ])
 
-    // Per-finding sheet path: opt into LLM re-rank.
     let withLLM = AppState.suggestTargetArgs(target: "x", sourcePath: "n.md", limit: 3, llm: true)
     #expect(withLLM == [
         "suggest-target", "x", "--limit", "3", "--json", "--porcelain",
         "--source", "n.md", "--llm",
+    ])
+
+    // Bulk classification + sheet path: LLM re-rank plus the recommendation
+    // envelope (the CLI still no-ops the model when high confidence exists).
+    let withVerdict = AppState.suggestTargetArgs(
+        target: "x", sourcePath: "n.md", limit: 3, llm: true, verdict: true)
+    #expect(withVerdict == [
+        "suggest-target", "x", "--limit", "3", "--json", "--porcelain",
+        "--source", "n.md", "--llm", "--verdict",
     ])
 }
