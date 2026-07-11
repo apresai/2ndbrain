@@ -310,9 +310,9 @@ enum FixAllPlanner {
         !target.contains("/")
     }
 
-    /// The step-through queue for the "Fix each" walkthrough: the decision-class
-    /// findings (everything Fix-all cannot resolve in one click) in display
-    /// order, deduped by id. This is exactly the complement of `plan(from:)` over
+    /// The step-through queue for the "Fix each" walkthrough: the non-one-click
+    /// findings — decisions AND removals, everything Fix-all cannot resolve in
+    /// one click — in display order, deduped by id. This is exactly the complement of `plan(from:)` over
     /// the same classifications: a finding is in the Fix-all plan or this queue,
     /// never both and never neither. Deduping matches `plan(from:)` (lint emits
     /// one finding per link occurrence, but the sheet resolves a whole file by

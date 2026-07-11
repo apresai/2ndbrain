@@ -384,3 +384,31 @@ func removeAllBannerTones() {
     #expect(none.tone == .error)
     #expect(none.message == "No links were removed. 2 couldn’t be applied.")
 }
+
+@Test("a high relink verdict with an EMPTY candidate list degrades to the lint class (defensive)")
+func classifyVerdictHighRelinkEmptyCandidatesDegrades() {
+    // The CLI contract implies a high recommendation always ships its
+    // candidate first; if that ever breaks, the classify must fall through to
+    // the lint-only class rather than crash or fabricate a one-click fix.
+    let missing = FixAllPlanner.classify(
+        fix: "missing",
+        envelope: envelope(action: "relink", to: "ghost.md", confidence: "high", candidates: []),
+        driftTarget: nil)
+    #expect(missing == .missing)
+    let ambiguous = FixAllPlanner.classify(
+        fix: "ambiguous",
+        envelope: envelope(action: "relink", to: "ghost.md", confidence: "high", candidates: []),
+        driftTarget: nil)
+    #expect(ambiguous == .ambiguous)
+}
+
+@Test("removable findings are excluded from the Fix-all plan")
+func planExcludesRemovable() {
+    let dead = BrokenFinding(path: "n.md", target: "dead", fix: "missing", driftTarget: nil)
+    let drift = BrokenFinding(path: "d.md", target: "Drift", fix: "drift", driftTarget: "Drift Note")
+    let plan = FixAllPlanner.plan(from: [
+        (dead, .removable(candidates: [candidate(path: "weak.md", confidence: "low")])),
+        (drift, .repairable(driftTarget: "Drift Note")),
+    ])
+    #expect(plan.map(\.id) == ["d.md|Drift"])
+}

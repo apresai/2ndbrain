@@ -33,10 +33,10 @@ struct LintResultsView: View {
     @State private var activeRemoveAll: RemovalPlan?
     /// True while `classifyBrokenFindings` is probing suggest-target per finding.
     @State private var classifying = false
-    /// The "Fix each" walkthrough: the decision-class findings queued to step
-    /// through the existing per-finding sheet, and the 0-based index of the one
-    /// currently shown. Empty means no walkthrough is active (a single "Fix
-    /// link…" opens the sheet in its normal one-off mode).
+    /// The "Fix each" walkthrough: the non-one-click findings (decisions AND
+    /// removals) queued to step through the existing per-finding sheet, and the
+    /// 0-based index of the one currently shown. Empty means no walkthrough is
+    /// active (a single "Fix link…" opens the sheet in its normal one-off mode).
     @State private var walkthroughQueue: [BrokenFinding] = []
     @State private var walkthroughIndex = 0
 
@@ -125,7 +125,10 @@ struct LintResultsView: View {
                         )
                     }
                     .listStyle(.inset)
-                    .task(id: findings.map(\.id).joined(separator: "|")) {
+                    // Newline separator: finding ids already contain "|"
+                    // (path|target), so a "|" join could collide across
+                    // distinct finding sets and skip re-classification.
+                    .task(id: findings.map(\.id).joined(separator: "\n")) {
                         await classifyBrokenFindings(findings)
                     }
                 }
@@ -278,8 +281,8 @@ struct LintResultsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            // Step through the decision-class findings (the ones Fix-all can't
-            // resolve one-click) one at a time via the existing per-finding sheet.
+            // Step through the non-one-click findings (decisions + removals —
+            // the ones Fix-all can't resolve) one at a time via the per-finding sheet.
             // Count from the deduped walkthrough queue, not counts.decision (which
             // is per-occurrence), so the label matches the "N of M" the walk shows.
             let walkCount = ready ? FixAllPlanner.walkthroughQueue(from: classifiedPairs(findings)).count : 0
@@ -312,10 +315,10 @@ struct LintResultsView: View {
         .padding(.vertical, 6)
     }
 
-    /// Begin the "Fix each" walkthrough: build the decision-class queue (the
-    /// complement of the Fix-all plan) from the current classifications and open
-    /// the first finding in the per-finding sheet. A no-op if nothing needs a
-    /// decision.
+    /// Begin the "Fix each" walkthrough: build the non-one-click queue
+    /// (decisions and removals — the complement of the Fix-all plan) from the
+    /// current classifications and open the first finding in the per-finding
+    /// sheet. A no-op when everything is one-click.
     /// Pair each finding with its classification (dropping any not yet
     /// classified), the input both the Fix-each button count and the walkthrough
     /// queue derive from, so they can never disagree.
@@ -878,6 +881,10 @@ private struct RemoveAllSheet: View {
     /// Finding ids the user has left checked (all pre-checked on open).
     @State private var checked: Set<String>
     @State private var applying = false
+    /// Set when the user cancels mid-pass: the loop stops after the in-flight
+    /// unlink (each can block on the CLI's post-write re-embed), reporting the
+    /// partial counts, so a slow or wedged CLI never strands the modal.
+    @State private var cancelRequested = false
 
     init(findings: [BrokenFinding], onDone: @escaping (Int, Int) -> Void) {
         self.findings = findings
@@ -918,9 +925,14 @@ private struct RemoveAllSheet: View {
             Divider()
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(applying)
+                // Cancel stays enabled while applying: it stops the pass after
+                // the in-flight unlink (which can block on a slow re-embed)
+                // instead of stranding the user in an un-dismissable modal.
+                Button(applying ? "Stop" : "Cancel") {
+                    if applying { cancelRequested = true } else { dismiss() }
+                }
+                .keyboardShortcut(.cancelAction)
+                .disabled(cancelRequested)
                 Button(applying ? "Removing…" : "Remove \(checked.count)") { apply() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
@@ -943,15 +955,18 @@ private struct RemoveAllSheet: View {
     /// Unlink each checked finding sequentially. A finding counts as removed
     /// when the CLI reports a link was actually rewritten; a no-op (the note
     /// changed since the check) or an error counts as failed so the aggregate
-    /// banner is honest.
+    /// banner is honest. A cancel request stops before the next unlink and
+    /// reports the partial counts.
     private func apply() {
         let selected = findings.filter { checked.contains($0.id) }
         guard !selected.isEmpty else { return }
         applying = true
+        cancelRequested = false
         Task {
             var removed = 0
             var failed = 0
             for finding in selected {
+                if cancelRequested { break }
                 do {
                     let result = try await appState.unlink(
                         path: finding.path, target: finding.target, preview: false)

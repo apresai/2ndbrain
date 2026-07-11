@@ -1849,8 +1849,17 @@ final class AppState {
     func suggestTargetVerdict(target: String, sourcePath: String? = nil, limit: Int = 3) async throws -> SuggestVerdictEnvelope {
         guard let vault else { throw CLIError.noVault }
         let args = Self.suggestTargetArgs(target: target, sourcePath: sourcePath, limit: limit, llm: true, verdict: true)
-        let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
-        return try JSONDecoder().decode(SuggestVerdictEnvelope.self, from: data)
+        do {
+            let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
+            return try JSONDecoder().decode(SuggestVerdictEnvelope.self, from: data)
+        } catch {
+            // The bulk classifier swallows this throw into a "check failed"
+            // badge; persist the cause to the vault error log so a failing
+            // probe (throttling, stale CLI, bad JSON) is debuggable from
+            // .2ndbrain/logs rather than invisible.
+            errorLogger?.log("suggest-target --verdict probe failed for [[\(target)]]", error: error)
+            throw error
+        }
     }
 
     /// Repoint the broken wikilink `from` in `path` to the chosen existing note
