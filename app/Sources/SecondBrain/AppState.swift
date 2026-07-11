@@ -1816,18 +1816,19 @@ final class AppState {
     /// Read-only. Returns [] rather than throwing on a CLI miss so the
     /// resolution sheet still offers Create/Unlink — no dead end.
     /// Argument construction for `2nb suggest-target`, extracted so the
-    /// conditional --source / --llm append (the contract the link-fix sheet
-    /// relies on) is unit-testable without spawning the CLI.
+    /// conditional --source / --llm / --verdict append (the contract the
+    /// Validation flow relies on) is unit-testable without spawning the CLI.
     ///
     /// Default limit is 3 (the top recommendations the Validation UI shows).
-    /// `--llm` defaults OFF: bulk classification runs context-aware search only
-    /// (cheap, offline-friendly). The Fix-link sheet passes `llm: true` so a
-    /// single opened finding can spend a generation call when nothing is already
-    /// high-confidence (the CLI still no-ops the model when high already exists).
-    nonisolated static func suggestTargetArgs(target: String, sourcePath: String?, limit: Int = 3, llm: Bool = false) -> [String] {
+    /// Bulk classification passes `llm: true, verdict: true` so every row gets
+    /// the model-informed recommendation (the CLI still no-ops the model when a
+    /// high-confidence candidate already exists, so drift-adjacent findings
+    /// never spend a generation call); the sheet reuses the bulk result.
+    nonisolated static func suggestTargetArgs(target: String, sourcePath: String?, limit: Int = 3, llm: Bool = false, verdict: Bool = false) -> [String] {
         var args = ["suggest-target", target, "--limit", "\(limit)", "--json", "--porcelain"]
         if let sourcePath { args += ["--source", sourcePath] }
         if llm { args.append("--llm") }
+        if verdict { args.append("--verdict") }
         return args
     }
 
@@ -1836,6 +1837,29 @@ final class AppState {
         let args = Self.suggestTargetArgs(target: target, sourcePath: sourcePath, limit: limit, llm: llm)
         let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
         return (try? JSONDecoder().decode([SuggestTargetResult].self, from: data)) ?? []
+    }
+
+    /// `2nb suggest-target --llm --verdict`: the recommendation envelope behind
+    /// the class-aware Validation flow — one machine recommendation per broken
+    /// link (relink or unlink) plus the candidate list and the LLM outcome.
+    /// THROWS on a CLI or decode failure (unlike `suggestTarget`, which
+    /// degrades to []): the caller must distinguish "the CLI said nothing
+    /// matches" from "the check itself failed" so a transient error is never
+    /// misclassified as a dead link.
+    func suggestTargetVerdict(target: String, sourcePath: String? = nil, limit: Int = 3) async throws -> SuggestVerdictEnvelope {
+        guard let vault else { throw CLIError.noVault }
+        let args = Self.suggestTargetArgs(target: target, sourcePath: sourcePath, limit: limit, llm: true, verdict: true)
+        do {
+            let data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
+            return try JSONDecoder().decode(SuggestVerdictEnvelope.self, from: data)
+        } catch {
+            // The bulk classifier swallows this throw into a "check failed"
+            // badge; persist the cause to the vault error log so a failing
+            // probe (throttling, stale CLI, bad JSON) is debuggable from
+            // .2ndbrain/logs rather than invisible.
+            errorLogger?.log("suggest-target --verdict probe failed for [[\(target)]]", error: error)
+            throw error
+        }
     }
 
     /// Repoint the broken wikilink `from` in `path` to the chosen existing note
@@ -3388,6 +3412,30 @@ struct SuggestTargetResult: Codable, Identifiable, Equatable {
         self.confidence = confidence
         self.reason = reason
     }
+}
+
+/// The `2nb suggest-target --verdict` envelope: one machine recommendation per
+/// broken link plus the ranked candidates and the LLM tier's outcome. Mirrors
+/// the Go `cli.SuggestTargetEnvelope`.
+struct SuggestVerdictEnvelope: Codable, Equatable {
+    let recommendation: SuggestRecommendation
+    /// What the LLM tier did: "off" | "skipped" | "promoted" | "declined" |
+    /// "error". "declined" is the model's explicit "no candidate is plausible"
+    /// — the strongest removal signal (measured trustworthy, see
+    /// docs/link-prompt-eval.md).
+    let llm: String
+    let candidates: [SuggestTargetResult]
+}
+
+/// The single machine recommendation for one broken link. "relink" repoints it
+/// at `to`; "unlink" removes the link and keeps the text. Create-the-note is
+/// never machine-recommended (a user choice the sheet offers alongside).
+struct SuggestRecommendation: Codable, Equatable {
+    let action: String // "relink" | "unlink"
+    let to: String?
+    let title: String?
+    let confidence: String?
+    let reason: String?
 }
 
 /// The note created by `2nb create --json` (`{id, path, title, type}`).

@@ -31,6 +31,12 @@ enum LinkFixClass: Equatable {
     /// Search / LLM found plausible notes but none is high-confidence. Top 2-3
     /// candidates for a human pick (inline on the list + the Fix link sheet).
     case recommend([SuggestTargetResult])
+    /// The CLI's verdict recommends REMOVING the link (nothing >= medium
+    /// matches, or the model explicitly declined every candidate). The
+    /// weak candidates, if any, ride along so the sheet can still offer them.
+    /// Removal is never one-click from Fix all — it goes through the
+    /// Remove-dead-links sheet or an explicit per-row button.
+    case removable(candidates: [SuggestTargetResult])
     /// The target maps to more than one note and no confident candidate stands
     /// out. Needs a pick.
     case ambiguous
@@ -41,8 +47,14 @@ enum LinkFixClass: Equatable {
     var isOneClick: Bool {
         switch self {
         case .repairable, .didYouMean: return true
-        case .recommend, .ambiguous, .missing: return false
+        case .recommend, .removable, .ambiguous, .missing: return false
         }
+    }
+
+    /// Whether the machine recommendation for this finding is removal.
+    var isRemovable: Bool {
+        if case .removable = self { return true }
+        return false
     }
 
     /// Up to three non-high candidates for inline recommendation UI. Empty for
@@ -50,6 +62,7 @@ enum LinkFixClass: Equatable {
     var recommendations: [SuggestTargetResult] {
         switch self {
         case .recommend(let cands): return Array(cands.prefix(FixAllPlanner.maxRecommendations))
+        case .removable(let cands): return Array(cands.prefix(FixAllPlanner.maxRecommendations))
         case .didYouMean(let c): return [c]
         case .repairable, .ambiguous, .missing: return []
         }
@@ -61,6 +74,7 @@ enum LinkFixClass: Equatable {
         case .repairable: return "auto-repairable"
         case .didYouMean: return "high confidence"
         case .recommend: return "top picks"
+        case .removable: return "remove?"
         case .ambiguous: return "matches several"
         case .missing: return "no matching note"
         }
@@ -104,12 +118,20 @@ struct PlannedRewrite: Identifiable, Equatable {
     }
 }
 
-/// Counts of one-click-fixable vs decision-needed broken findings, for the
-/// class-aware header.
+/// Counts of one-click-fixable vs decision-needed vs removal-recommended
+/// broken findings, for the class-aware header. `removable` is a subset
+/// carved out of the non-one-click findings, not an addition to them.
 struct ClassCounts: Equatable {
     let oneClick: Int
     let decision: Int
-    var total: Int { oneClick + decision }
+    let removable: Int
+    var total: Int { oneClick + decision + removable }
+
+    init(oneClick: Int, decision: Int, removable: Int = 0) {
+        self.oneClick = oneClick
+        self.decision = decision
+        self.removable = removable
+    }
 }
 
 /// Pure planning for the class-aware Validation flow: classify each broken
@@ -155,6 +177,40 @@ enum FixAllPlanner {
         classify(fix: fix, candidates: topCandidate.map { [$0] } ?? [], driftTarget: driftTarget)
     }
 
+    /// Classify from the CLI's `--verdict` envelope: the recommendation IS the
+    /// classification. Policy:
+    /// - drift fix → always one-click repairable (no envelope consulted)
+    /// - recommendation "unlink" → `.removable` (weak candidates ride along)
+    /// - recommendation "relink" at high confidence → one-click did-you-mean
+    /// - recommendation "relink" otherwise (medium) → `.recommend` top 2-3
+    /// - malformed/unknown action → degrade to the candidate-only classify.
+    static func classify(
+        fix: String?,
+        envelope: SuggestVerdictEnvelope,
+        driftTarget: String?
+    ) -> LinkFixClass {
+        if fix == "drift" {
+            return .repairable(driftTarget: driftTarget)
+        }
+        switch envelope.recommendation.action {
+        case "unlink":
+            return .removable(candidates: Array(envelope.candidates.prefix(maxRecommendations)))
+        case "relink":
+            // The CLI orders candidates best-first and recommends the top one,
+            // so candidates.first is the recommended note.
+            if envelope.recommendation.confidence == "high", let top = envelope.candidates.first {
+                return .didYouMean(top)
+            }
+            let recs = Array(envelope.candidates.prefix(maxRecommendations))
+            if !recs.isEmpty {
+                return .recommend(recs)
+            }
+            return fix == "ambiguous" ? .ambiguous : .missing
+        default:
+            return classify(fix: fix, candidates: envelope.candidates, driftTarget: driftTarget)
+        }
+    }
+
     /// The Fix-all plan projected from already-classified findings (synchronous,
     /// so the view derives it without re-running suggest-target): one-click
     /// classes become rewrites, decision classes are excluded.
@@ -180,7 +236,7 @@ enum FixAllPlanner {
                 rewrite = PlannedRewrite(
                     path: finding.path, target: finding.target,
                     action: .relink(chosenPath: to, chosenDisplay: cand.displayTitle))
-            case .recommend, .ambiguous, .missing:
+            case .recommend, .removable, .ambiguous, .missing:
                 continue
             }
             if seen.insert(rewrite.id).inserted {
@@ -188,6 +244,20 @@ enum FixAllPlanner {
             }
         }
         return plans
+    }
+
+    /// The Remove-dead-links plan: the `.removable` findings, deduped by id
+    /// (lint emits one finding per occurrence; unlink is whole-file by target).
+    /// Mirrors `plan(from:)`'s dedupe so the sheet count matches the button.
+    static func removalPlan(from classified: [(BrokenFinding, LinkFixClass)]) -> [BrokenFinding] {
+        var seen = Set<String>()
+        var out: [BrokenFinding] = []
+        for (finding, cls) in classified where cls.isRemovable {
+            if seen.insert(finding.id).inserted {
+                out.append(finding)
+            }
+        }
+        return out
     }
 
     /// End-to-end plan: classify each finding (fetching candidates only for the
@@ -209,18 +279,28 @@ enum FixAllPlanner {
         return plan(from: classified)
     }
 
-    /// One-click vs decision split over a set of classifications.
+    /// One-click vs decision vs removable split over a set of classifications.
     static func counts(_ classes: [LinkFixClass]) -> ClassCounts {
         let oneClick = classes.filter { $0.isOneClick }.count
-        return ClassCounts(oneClick: oneClick, decision: classes.count - oneClick)
+        let removable = classes.filter { $0.isRemovable }.count
+        return ClassCounts(
+            oneClick: oneClick,
+            decision: classes.count - oneClick - removable,
+            removable: removable)
     }
 
     /// The class-aware header line, e.g.
-    /// "7 broken links: 2 one-click fixable, 5 need a decision".
+    /// "7 broken links: 2 one-click fixable, 4 need a decision, 1 removable".
+    /// The removable clause is omitted when zero so the common case reads as
+    /// before.
     static func headerSummary(total: Int, counts: ClassCounts) -> String {
         let links = "\(total) broken link\(total == 1 ? "" : "s")"
         let decides = counts.decision == 1 ? "needs a decision" : "need a decision"
-        return "\(links): \(counts.oneClick) one-click fixable, \(counts.decision) \(decides)"
+        var line = "\(links): \(counts.oneClick) one-click fixable, \(counts.decision) \(decides)"
+        if counts.removable > 0 {
+            line += ", \(counts.removable) removable"
+        }
+        return line
     }
 
     /// Whether "Create the note" is a sensible fix for a target. A path-qualified
@@ -230,9 +310,9 @@ enum FixAllPlanner {
         !target.contains("/")
     }
 
-    /// The step-through queue for the "Fix each" walkthrough: the decision-class
-    /// findings (everything Fix-all cannot resolve in one click) in display
-    /// order, deduped by id. This is exactly the complement of `plan(from:)` over
+    /// The step-through queue for the "Fix each" walkthrough: the non-one-click
+    /// findings — decisions AND removals, everything Fix-all cannot resolve in
+    /// one click — in display order, deduped by id. This is exactly the complement of `plan(from:)` over
     /// the same classifications: a finding is in the Fix-all plan or this queue,
     /// never both and never neither. Deduping matches `plan(from:)` (lint emits
     /// one finding per link occurrence, but the sheet resolves a whole file by
