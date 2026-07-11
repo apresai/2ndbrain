@@ -119,6 +119,68 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 		poolLimit = llmPoolCap
 	}
 
+	ctx := context.Background()
+	cfg := v.Config.AI
+	results, contextSnippet := gatherSuggestions(ctx, v, target, sourcePath, poolLimit)
+
+	// Tier 4 (optional) — LLM re-rank when no candidate is already high-confidence.
+	// Fail-closed: any generation error leaves the deterministic list intact.
+	if suggestTargetLLM && !hasHighConfidence(results) && len(results) > 0 {
+		if reranked, rerr := rerankSuggestTargetLLM(ctx, cfg, suggestTargetRerankSystem, target, contextSnippet, results); rerr == nil && len(reranked) > 0 {
+			// A decline (the model returned a valid empty list) leaves every
+			// candidate reason-less; log it so "LLM ran and declined" is
+			// distinguishable from "LLM never consulted" in the file log.
+			if reranked[0].Reason == "" {
+				slog.Debug("suggest-target: llm declined to promote any candidate", "target", target)
+			}
+			results = reranked
+		} else if rerr != nil {
+			slog.Debug("suggest-target: llm re-rank skipped", "err", rerr)
+		}
+	}
+
+	// Trim to the caller's --limit after re-rank.
+	if len(results) > suggestTargetLimit {
+		results = results[:suggestTargetLimit]
+	}
+
+	if getFormat(cmd) == output.FormatJSON {
+		data, err := json.Marshal(results)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if len(results) == 0 {
+		fmt.Printf("No existing note matches [[%s]]. Create it or unlink it.\n", target)
+		return nil
+	}
+	for i, r := range results {
+		title := r.Title
+		if title == "" {
+			title = r.Path
+		}
+		conf := r.Confidence
+		if conf == "" {
+			conf = "?"
+		}
+		line := fmt.Sprintf("%d. %s (%s, score %.3f, %s)", i+1, title, r.Path, r.Score, conf)
+		if r.Reason != "" {
+			line += ": " + r.Reason
+		}
+		fmt.Println(line)
+	}
+	return nil
+}
+
+// gatherSuggestions runs the three deterministic tiers (drift, semantic, BM25)
+// for one broken target and returns the confidence-graded candidate pool plus
+// the context snippet used for LLM re-ranking. Shared by runSuggestTarget and
+// the link-fix prompt eval (linkfix_eval_test.go), so an eval case exercises
+// exactly the production pipeline.
+func gatherSuggestions(ctx context.Context, v *vault.Vault, target, sourcePath string, poolLimit int) ([]SuggestLinkResult, string) {
 	// Context-aware query: bare target when no --source, else target + prose
 	// around the broken link (or the head of the note if the link isn't found).
 	searchQuery, contextSnippet := buildSourceContextQuery(v.Root, sourcePath, target)
@@ -175,7 +237,6 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 	// Tier 2 — semantic: nearest notes by embedding. Query is context-aware when
 	// --source is set. Skipped (not an error) when no embedder is configured.
 	initAIProviders(v)
-	ctx := context.Background()
 	cfg := v.Config.AI
 	if embedder, eerr := ai.DefaultRegistry.Embedder(cfg.Provider); eerr == nil && embedder.Available(ctx) {
 		if qv, verr := embedder.Embed(ctx, []string{searchQuery}, ai.WithPurpose(ai.PurposeQuery)); verr == nil && len(qv) > 0 {
@@ -207,51 +268,7 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 	}
 
 	assignConfidence(results, target, uniqueDrift)
-
-	// Tier 4 (optional) — LLM re-rank when no candidate is already high-confidence.
-	// Fail-closed: any generation error leaves the deterministic list intact.
-	if suggestTargetLLM && !hasHighConfidence(results) && len(results) > 0 {
-		if reranked, rerr := rerankSuggestTargetLLM(ctx, cfg, target, contextSnippet, results); rerr == nil && len(reranked) > 0 {
-			results = reranked
-		} else if rerr != nil {
-			slog.Debug("suggest-target: llm re-rank skipped", "err", rerr)
-		}
-	}
-
-	// Trim to the caller's --limit after re-rank.
-	if len(results) > suggestTargetLimit {
-		results = results[:suggestTargetLimit]
-	}
-
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(results)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
-	}
-
-	if len(results) == 0 {
-		fmt.Printf("No existing note matches [[%s]]. Create it or unlink it.\n", target)
-		return nil
-	}
-	for i, r := range results {
-		title := r.Title
-		if title == "" {
-			title = r.Path
-		}
-		conf := r.Confidence
-		if conf == "" {
-			conf = "?"
-		}
-		line := fmt.Sprintf("%d. %s (%s, score %.3f, %s)", i+1, title, r.Path, r.Score, conf)
-		if r.Reason != "" {
-			line += ": " + r.Reason
-		}
-		fmt.Println(line)
-	}
-	return nil
+	return results, contextSnippet
 }
 
 // buildSourceContextQuery returns the search query and a short context snippet
@@ -432,16 +449,99 @@ func dominantAmong(i int, results []SuggestLinkResult) bool {
 }
 
 // llmPick is one entry in the generation model's re-rank JSON response.
+// Confidence is only emitted by prompts that ask for it (the eval's
+// per-pick-confidence variant); absent in the shipped prompt's output.
 type llmPick struct {
-	Path   string `json:"path"`
-	Reason string `json:"reason"`
+	Path       string `json:"path"`
+	Reason     string `json:"reason"`
+	Confidence string `json:"confidence"`
 }
 
+// suggestTargetRerankSystem is the shipped system prompt for the LLM re-rank
+// tier: the "strict_plausibility" winner of the link-fix prompt eval
+// (docs/link-prompt-eval.md; RUN_LINKFIX_EVAL=1 harness in
+// linkfix_eval_test.go). It beat the previous pick-3 prompt on promotion
+// precision (0.83 vs 0.75) with identical ranking metrics, by declining the
+// hopeless cases instead of guessing — and a decline is itself a signal (the
+// GUI recommends unlinking). Change it only with a fresh eval run.
+const suggestTargetRerankSystem = `You help fix broken Obsidian [[wikilinks]]. Decide which EXISTING note, if any, the author meant when they wrote the broken target.
+
+Decision test — a candidate qualifies ONLY if the broken target reads as a NAME for that candidate:
+- a typo, truncation, or misspelling of its title or filename;
+- its words reordered, dropped, or separated differently;
+- a paraphrase or abbreviation a person would naturally use for that specific note.
+Sharing a topic is NOT enough. If the target names a thing the candidate merely discusses, it does not qualify.
+
+The shortlist lines may include retrieval scores; they come from different retrievers and are NOT comparable with each other — judge by name and meaning, not score.
+
+Rules:
+- Return at most 3 qualifying candidates, best first.
+- You may ONLY return paths that appear in the shortlist. Never invent a path or title.
+- If no candidate qualifies, return [] — the author should remove or retype the link.
+- Each reason is one short plain sentence (no markdown).
+
+Respond with ONLY a JSON array, no prose:
+[{"path":"exact/path.md","reason":"why this note"}, ...]`
+
 // rerankSuggestTargetLLM asks the active generation model to order the grounded
-// shortlist. It never invents paths (unknown paths are dropped), never promotes
-// confidence above "medium" (LLM picks are recommendations, not auto-fixes),
-// and preserves any pre-existing high-confidence entries at the front.
-func rerankSuggestTargetLLM(ctx context.Context, cfg ai.AIConfig, target, contextSnippet string, candidates []SuggestLinkResult) ([]SuggestLinkResult, error) {
+// shortlist using the given system prompt (production passes
+// suggestTargetRerankSystem; the eval passes candidate variants). It never
+// invents paths (unknown paths are dropped), never promotes confidence above
+// "medium" (LLM picks are recommendations, not auto-fixes), and preserves any
+// pre-existing high-confidence entries at the front.
+func rerankSuggestTargetLLM(ctx context.Context, cfg ai.AIConfig, system, target, contextSnippet string, candidates []SuggestLinkResult) ([]SuggestLinkResult, error) {
+	byPath := make(map[string]SuggestLinkResult, len(candidates))
+	for _, c := range candidates {
+		byPath[c.Path] = c
+	}
+	user := buildRerankUser(target, contextSnippet, buildRerankCatalog(candidates, true))
+	picks, err := llmRerankPicks(ctx, cfg, system, user)
+	if err != nil {
+		return nil, err
+	}
+	return applyLLMPicks(candidates, picks, byPath), nil
+}
+
+// buildRerankCatalog renders the grounded shortlist for the model. With
+// includeScores the line carries the deterministic confidence + raw score
+// (current shipped format); without, only path and title — the eval compares
+// both because the raw scores are cross-tier-incomparable (drift 1.0 vs cosine
+// vs BM25) and can anchor the model.
+func buildRerankCatalog(candidates []SuggestLinkResult, includeScores bool) string {
+	var catalog strings.Builder
+	for i, c := range candidates {
+		title := c.Title
+		if title == "" {
+			title = c.Path
+		}
+		if includeScores {
+			fmt.Fprintf(&catalog, "%d. path=%s title=%q conf=%s score=%.3f\n", i+1, c.Path, title, c.Confidence, c.Score)
+		} else {
+			fmt.Fprintf(&catalog, "%d. path=%s title=%q\n", i+1, c.Path, title)
+		}
+	}
+	return catalog.String()
+}
+
+// buildRerankUser composes the re-rank user message from the broken target,
+// the optional source-note context window, and the rendered shortlist.
+func buildRerankUser(target, contextSnippet, catalog string) string {
+	var user strings.Builder
+	fmt.Fprintf(&user, "Broken wikilink target: %q\n", target)
+	if contextSnippet != "" {
+		fmt.Fprintf(&user, "Surrounding note context:\n%s\n\n", contextSnippet)
+	}
+	user.WriteString("Shortlist (grounded existing notes):\n")
+	user.WriteString(catalog)
+	return user.String()
+}
+
+// llmRerankPicks runs one re-rank generation and parses the picks. An empty
+// slice with a nil error is the model's explicit "none of these is plausible"
+// verdict (distinct from a generation/parse failure). ReasoningEffort is
+// suppressed so a reasoning-default model (mantle plane) cannot starve the
+// small MaxTokens budget and truncate the JSON.
+func llmRerankPicks(ctx context.Context, cfg ai.AIConfig, system, user string) ([]llmPick, error) {
 	gen, err := ai.DefaultRegistry.Generator(cfg.Provider)
 	if err != nil {
 		return nil, err
@@ -449,53 +549,16 @@ func rerankSuggestTargetLLM(ctx context.Context, cfg ai.AIConfig, target, contex
 	if !gen.Available(ctx) {
 		return nil, fmt.Errorf("generation provider %q unavailable", cfg.Provider)
 	}
-
-	// Build a path-keyed lookup of the grounded shortlist.
-	byPath := make(map[string]SuggestLinkResult, len(candidates))
-	var catalog strings.Builder
-	for i, c := range candidates {
-		byPath[c.Path] = c
-		title := c.Title
-		if title == "" {
-			title = c.Path
-		}
-		fmt.Fprintf(&catalog, "%d. path=%s title=%q conf=%s score=%.3f\n", i+1, c.Path, title, c.Confidence, c.Score)
-	}
-
-	system := `You help fix broken Obsidian [[wikilinks]] by picking the best EXISTING notes from a shortlist.
-
-Rules:
-- Choose at most 3 candidates from the shortlist, best first.
-- You may ONLY return paths that appear in the shortlist. Never invent a path or title.
-- If none of the shortlist notes is a plausible meaning for the broken target, return an empty list [].
-- Prefer notes the author likely meant (typo, rename, case/separator drift, related topic in context) over weak topical neighbors.
-- Each reason is one short plain sentence (no markdown).
-
-Respond with ONLY a JSON array, no prose:
-[{"path":"exact/path.md","reason":"why this note"}, ...]`
-
-	var user strings.Builder
-	fmt.Fprintf(&user, "Broken wikilink target: %q\n", target)
-	if contextSnippet != "" {
-		fmt.Fprintf(&user, "Surrounding note context:\n%s\n\n", contextSnippet)
-	}
-	user.WriteString("Shortlist (grounded existing notes):\n")
-	user.WriteString(catalog.String())
-
-	out, err := gen.Generate(ctx, user.String(), ai.GenOpts{
-		Temperature:  ai.Ptr(0.0),
-		MaxTokens:    400,
-		SystemPrompt: system,
+	out, err := gen.Generate(ctx, user, ai.GenOpts{
+		Temperature:     ai.Ptr(0.0),
+		MaxTokens:       400,
+		SystemPrompt:    system,
+		ReasoningEffort: "none",
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	picks, err := parseLLMPicks(out)
-	if err != nil {
-		return nil, err
-	}
-	return applyLLMPicks(candidates, picks, byPath), nil
+	return parseLLMPicks(out)
 }
 
 // parseLLMPicks extracts a JSON array of {path, reason} from a model response,

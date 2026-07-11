@@ -12,7 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/text v0.39.0
+	golang.org/x/text v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0
 )

@@ -23,6 +23,7 @@ The canonical `2nb` agent skill lives in this repo, so any agent (Warp, Claude C
 - [`mcp-integration.md`](docs/mcp-integration.md) — MCP setup snippets for Claude Code, Cursor, and other clients
 - [`templates.md`](docs/templates.md) — Built-in document type templates (adr, runbook, prd, prfaq, note, postmortem)
 - [`polish-prompt-eval.md`](docs/polish-prompt-eval.md) — How the `polish` copy-edit system prompt was chosen (LLM-as-judge), with the reproducible harness and rationale
+- [`link-prompt-eval.md`](docs/link-prompt-eval.md) — How the `suggest-target --llm` re-rank prompt was chosen (planted-truth corruption corpus + calibrated LLM judge), with the measured promotion-precision numbers behind the Fix-all auto-fix gate
 - [`adr/0001-vector-search.md`](docs/adr/0001-vector-search.md) — Vector-search architecture decision: per-chunk sqlite-vec (exact in-DB SIMD KNN over `vec_chunks`) is now the primary vector path, with the Go brute-force over whole-doc embeddings as the fallback until a vault is fully re-embedded; true ANN/HNSW stays deferred — with measured latency/memory numbers and the revisit trigger
 - [`vault-structure.md`](docs/vault-structure.md) — On-disk vault layout reference (Superseded for 0.5.0, see [docs/obsidian/README.md](docs/obsidian/README.md))
 - [`obsidian/README.md`](docs/obsidian/README.md) — Obsidian-native pivot documentation and architectural model
