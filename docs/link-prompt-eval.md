@@ -90,6 +90,12 @@ The judge (default Sonnet 4.6, temperature 0, strict-JSON verdict
 | `fewshot_decline` | baseline + three worked examples including an explicit decline |
 | `strict_plausibility` | a decision test ("the target must read as a NAME for the candidate"), explicit note that scores are incomparable — **the winner, now shipped as `suggestTargetRerankSystem`** |
 
+**Label mapping when re-running:** the harness always labels whatever is currently shipped as
+`current_shipped`, so a re-run today prints the winner under `current_shipped` (the variant list in
+`linkfix_eval_test.go` is `current_shipped` = strict_plausibility, plus `baseline_pick3` = the
+pre-eval prompt). The Results tables below keep the ORIGINAL selection run's labels, where
+`current_shipped` still meant the old pick-3 prompt.
+
 ## Results (2026-07-11, vault = 648 resolved links, generator = Haiku 4.5, judge = Sonnet 4.6)
 
 Corpus: 38 cases — 6 each of drift/typo/reorder/worddrop/paraphrase + 8 negatives, seed 42.
@@ -105,6 +111,10 @@ the truth reaching the pool, top-1 is 21/23 = 0.91):
 | `no_scores` | 0.70 | 0.73 | 0.717 | 0.75 (15/20) | 6/8 | 0 |
 | `fewshot_decline` | 0.70 | 0.73 | 0.717 | 0.75 (15/20) | 6/8 | 0 |
 | `confidence_verdict` | 0.70 | 0.73 | 0.711 | 0.79 (15/19) | 5/8 | **1** |
+
+`confidence_verdict` is the only variant that self-labels its picks, so **model-high precision**
+(the U1 auto-fix gate metric) has no column above; its measured value across all classes was
+**0.88 (14/16)** — the model marked 16 top picks "high", of which 14 were the intended note.
 
 Per-class (identical across variants except paraphrase declines): drift 6/6 top-1 with the LLM never
 invoked (the deterministic tier short-circuits it — the 100% sanity check held); reorder 6/6 (every

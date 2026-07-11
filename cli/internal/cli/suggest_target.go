@@ -127,6 +127,12 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 	// Fail-closed: any generation error leaves the deterministic list intact.
 	if suggestTargetLLM && !hasHighConfidence(results) && len(results) > 0 {
 		if reranked, rerr := rerankSuggestTargetLLM(ctx, cfg, suggestTargetRerankSystem, target, contextSnippet, results); rerr == nil && len(reranked) > 0 {
+			// A decline (the model returned a valid empty list) leaves every
+			// candidate reason-less; log it so "LLM ran and declined" is
+			// distinguishable from "LLM never consulted" in the file log.
+			if reranked[0].Reason == "" {
+				slog.Debug("suggest-target: llm declined to promote any candidate", "target", target)
+			}
 			results = reranked
 		} else if rerr != nil {
 			slog.Debug("suggest-target: llm re-rank skipped", "err", rerr)
