@@ -1,0 +1,206 @@
+# Reusable dependency hygiene job for Node (and multi-lang via OSV) repos.
+#
+# Option A — vendor into a repo (recommended, no private token):
+#   mkdir -p .github/workflows scripts
+#   cp github-actions/deps-audit.yml <repo>/.github/workflows/deps-audit.yml
+#   cp scripts/check-blocked-deps.sh <repo>/scripts/
+#   cp blocked-packages.txt <repo>/
+#
+# Option B — paste the `deps-audit` job into an existing workflow.
+#
+# Option C — checkout private chadneal/deps-hygiene (needs contents:read token).
+#
+# Pins: osv-scanner v2.4.0 (bump deliberately; never @latest for the primary install).
+# Default: blocked-deps fails hard; OSV is report-only via has_vulns + OSV_FAIL_ON_VULN (tool errors still fail).
+# Set env OSV_FAIL_ON_VULN=true on the job to fail CI on OSV findings.
+#
+# Requires network for osv-scanner DB. Blocked-deps is offline.
+
+name: deps-audit
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+  # workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps-audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OSV_SCANNER_VERSION: "2.4.0"
+  # Flip to "true" after the repo's baseline OSV findings are remediated.
+  OSV_FAIL_ON_VULN: "false"
+
+jobs:
+  deps-audit:
+    name: blocked-deps + OSV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # When this workflow is copied into a consumer repo, also copy:
+      #   scripts/check-blocked-deps.sh
+      #   blocked-packages.txt
+      # Or checkout deps-hygiene as a second path (below).
+      - name: Checkout shared hygiene scripts
+        uses: actions/checkout@v6
+        with:
+          repository: chadneal/deps-hygiene
+          path: .deps-hygiene
+          persist-credentials: false
+        continue-on-error: true
+        # If the private repo is not available, fall back to in-repo copies.
+
+      - name: Resolve hygiene scripts
+        id: hy
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f .deps-hygiene/scripts/check-blocked-deps.sh ]]; then
+            echo "root=${GITHUB_WORKSPACE}/.deps-hygiene" >> "$GITHUB_OUTPUT"
+          elif [[ -f scripts/check-blocked-deps.sh ]]; then
+            # In-repo copy (vendored)
+            echo "root=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Missing check-blocked-deps.sh — vendor scripts/ + blocked-packages.txt from deps-hygiene" >&2
+            exit 1
+          fi
+
+      - name: Setup Node (for npm audit optional)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install ripgrep + OSV-Scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
+          VER="${OSV_SCANNER_VERSION}"
+          TMP="$(mktemp -d)"
+          curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${VER}/osv-scanner_${VER}_linux_amd64.tar.gz" \
+            -o "$TMP/osv-scanner.tgz"
+          tar -xzf "$TMP/osv-scanner.tgz" -C "$TMP"
+          # Archive layout may be flat binary or nested; find the binary.
+          BIN="$(find "$TMP" -type f -name osv-scanner | head -1)"
+          if [[ -z "$BIN" ]]; then
+            # Some releases ship a bare binary named with the platform suffix.
+            BIN="$(find "$TMP" -type f -name 'osv-scanner*' | head -1)"
+          fi
+          sudo install -m 0755 "$BIN" /usr/local/bin/osv-scanner
+          osv-scanner --version
+          rg --version | head -1
+
+      - name: Blocked dependency denylist
+        shell: bash
+        run: |
+          set -euo pipefail
+          HY="${{ steps.hy.outputs.root }}"
+          chmod +x "$HY/scripts/check-blocked-deps.sh"
+          export BLOCKLIST_FILE="${BLOCKLIST_FILE:-$HY/blocked-packages.txt}"
+          if [[ ! -f "$BLOCKLIST_FILE" && -f blocked-packages.txt ]]; then
+            export BLOCKLIST_FILE="$PWD/blocked-packages.txt"
+          fi
+          "$HY/scripts/check-blocked-deps.sh" "$GITHUB_WORKSPACE"
+
+      - name: OSV-Scanner (two-pass)
+        id: osv
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tool errors fail the job. Vulns set has_vulns=true but exit 0 unless
+          # the follow-up enforce step is enabled (OSV_FAIL_ON_VULN).
+          has_vulns=0
+
+          # Pass 1: recursive walk (honors .gitignore). Never --no-ignore.
+          set +e
+          osv-scanner scan source -r \
+            --experimental-exclude=node_modules \
+            --experimental-exclude=cdk.out \
+            --experimental-exclude=.next \
+            --experimental-exclude=dist \
+            --experimental-exclude=build \
+            --experimental-exclude=.open-next \
+            --experimental-exclude=vendor \
+            --experimental-exclude=.git \
+            --experimental-exclude=.deps-hygiene \
+            --verbosity=info \
+            "$GITHUB_WORKSPACE"
+          rc1=$?
+          set -e
+          if [[ $rc1 -eq 1 ]]; then
+            has_vulns=1
+          elif [[ $rc1 -ne 0 ]]; then
+            echo "OSV pass 1 tool error exit $rc1" >&2
+            exit "$rc1"
+          fi
+
+          # Pass 2: gitignored lockfiles via explicit -L (one path per invoke).
+          LOCK_RE='(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|npm-shrinkwrap\.json|bun\.lock|go\.mod|Cargo\.lock|poetry\.lock|Pipfile\.lock|uv\.lock|pdm\.lock|Gemfile\.lock|composer\.lock|pubspec\.lock|Package\.resolved)$'
+          list="$(mktemp)"
+          git ls-files --others --ignored --exclude-standard 2>/dev/null \
+            | grep -E "$LOCK_RE" \
+            | grep -v -E '(^|/)node_modules/' \
+            >"$list" || true
+          if [[ -s "$list" ]]; then
+            while IFS= read -r f; do
+              [[ -z "$f" || ! -f "$f" ]] && continue
+              echo "OSV pass 2: $f"
+              set +e
+              osv-scanner scan source -L "$f" --verbosity=info
+              r=$?
+              set -e
+              if [[ $r -eq 1 ]]; then
+                has_vulns=1
+              elif [[ $r -ne 0 ]]; then
+                echo "OSV pass 2 tool error exit $r for $f" >&2
+                rm -f "$list"
+                exit "$r"
+              fi
+            done <"$list"
+          else
+            echo "OSV pass 2: no gitignored lockfiles"
+          fi
+          rm -f "$list"
+
+          if [[ $has_vulns -eq 1 ]]; then
+            echo "has_vulns=true" >> "$GITHUB_OUTPUT"
+            echo "OSV: vulnerabilities reported (report-only unless OSV_FAIL_ON_VULN=true)"
+          else
+            echo "has_vulns=false" >> "$GITHUB_OUTPUT"
+            echo "OSV: clean"
+          fi
+
+      - name: Enforce OSV fail-on-vuln when enabled
+        if: env.OSV_FAIL_ON_VULN == 'true' && steps.osv.outputs.has_vulns == 'true'
+        shell: bash
+        run: |
+          echo "OSV_FAIL_ON_VULN=true and vulnerabilities were reported" >&2
+          exit 1
+
+      - name: npm audit (optional, if package-lock present)
+        if: hashFiles('**/package-lock.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -name package-lock.json \
+            \( -path './node_modules/*' -o -path './.deps-hygiene/*' \) -prune -o \
+            -name package-lock.json -print | while read -r lock; do
+              dir=$(dirname "$lock")
+              echo "npm audit in $dir"
+              if [[ -f "$dir/package.json" ]]; then
+                npm audit --prefix "$dir" --audit-level=high || true
+              fi
+            done
+        # npm audit is advisory; primary gates are blocked-deps + OSV.
