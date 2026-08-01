@@ -87,18 +87,12 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ripgrep
+          # Release assets are bare binaries (not versioned tar.gz), e.g.
+          # osv-scanner_linux_amd64 under tag v2.4.0
           VER="${OSV_SCANNER_VERSION}"
-          TMP="$(mktemp -d)"
-          curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${VER}/osv-scanner_${VER}_linux_amd64.tar.gz" \
-            -o "$TMP/osv-scanner.tgz"
-          tar -xzf "$TMP/osv-scanner.tgz" -C "$TMP"
-          # Archive layout may be flat binary or nested; find the binary.
-          BIN="$(find "$TMP" -type f -name osv-scanner | head -1)"
-          if [[ -z "$BIN" ]]; then
-            # Some releases ship a bare binary named with the platform suffix.
-            BIN="$(find "$TMP" -type f -name 'osv-scanner*' | head -1)"
-          fi
-          sudo install -m 0755 "$BIN" /usr/local/bin/osv-scanner
+          URL="https://github.com/google/osv-scanner/releases/download/v${VER}/osv-scanner_linux_amd64"
+          curl -sSfL "$URL" -o /tmp/osv-scanner
+          sudo install -m 0755 /tmp/osv-scanner /usr/local/bin/osv-scanner
           osv-scanner --version
           rg --version | head -1
 
