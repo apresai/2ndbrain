@@ -1,0 +1,16 @@
+# Banned npm packages / versions (post-Miasma 2026-07).
+# Format (one per line):
+#   package                        # any version of this package
+#   package@version                # exact version
+#   package@^prefix                # version string contains prefix (e.g. 6.11.2)
+# Lines starting with # and blank lines are ignored.
+#
+# Source: https://research.jfrog.com/post/miasma-worm-returns-to-npm/
+# GHSA-5jj9-3vg7-7785 / AsyncAPI incident 2026-07
+
+@asyncapi/specs
+@asyncapi/specs@6.11.2
+@asyncapi/specs@6.11.2-alpha.1
+@asyncapi/generator@3.3.1
+@asyncapi/generator-components@0.7.1
+@asyncapi/generator-helpers@1.1.1
