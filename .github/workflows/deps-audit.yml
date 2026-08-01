@@ -141,6 +141,8 @@ jobs:
           set -e
           if [[ $rc1 -eq 1 ]]; then
             has_vulns=1
+          elif [[ $rc1 -eq 128 ]]; then
+            echo "OSV pass 1 found no packages (exit 128); continuing to pass 2"
           elif [[ $rc1 -ne 0 ]]; then
             echo "OSV pass 1 tool error exit $rc1" >&2
             exit "$rc1"
@@ -163,6 +165,8 @@ jobs:
               set -e
               if [[ $r -eq 1 ]]; then
                 has_vulns=1
+              elif [[ $r -eq 128 ]]; then
+                echo "OSV pass 2 no packages in $f (exit 128), skipping"
               elif [[ $r -ne 0 ]]; then
                 echo "OSV pass 2 tool error exit $r for $f" >&2
                 rm -f "$list"
