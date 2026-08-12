@@ -243,7 +243,14 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 func setupBedrock(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig) error {
 	fmt.Println("\nChecking AWS credentials...")
 
-	if ai.CheckBedrockCredentials(ctx, cfg.Bedrock) {
+	if tok, src := ai.ResolveBedrockToken(); tok != "" {
+		fmt.Printf("  Found Bedrock API key (%s)\n", src)
+		if promptYN(scanner, "Use this key?", true) {
+			printBedrockModelAccessHint(ai.ResolveBedrockConfig(cfg.Bedrock).Region)
+			return nil
+		}
+		// Declined the bearer token; do not re-detect it via CheckBedrockCredentials.
+	} else if ai.CheckBedrockCredentials(ctx, cfg.Bedrock) {
 		fmt.Printf("  Found credentials (profile: %s, region: %s)\n", cfg.Bedrock.Profile, cfg.Bedrock.Region)
 		if promptYN(scanner, "Use these?", true) {
 			printBedrockModelAccessHint(cfg.Bedrock.Region)
@@ -265,10 +272,12 @@ func setupBedrock(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig)
 	if !ai.CheckBedrockCredentials(ctx, cfg.Bedrock) {
 		return fmt.Errorf("AWS credentials not found for profile=%s region=%s.\n"+
 			"  Fix one of:\n"+
+			"    • paste a Bedrock API key in the dashboard Settings window\n"+
+			"    • 2nb config bedrock --set --region %s --token-stdin\n"+
+			"    • set AWS_BEARER_TOKEN_BEDROCK\n"+
 			"    • run `aws configure` (or `aws configure --profile %s`)\n"+
-			"    • set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (and AWS_REGION)\n"+
-			"    • set AWS_PROFILE to an existing profile",
-			cfg.Bedrock.Profile, cfg.Bedrock.Region, cfg.Bedrock.Profile)
+			"    • set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (and AWS_REGION)",
+			cfg.Bedrock.Profile, cfg.Bedrock.Region, cfg.Bedrock.Region, cfg.Bedrock.Profile)
 	}
 	fmt.Println("  AWS credentials validated.")
 	printBedrockModelAccessHint(cfg.Bedrock.Region)

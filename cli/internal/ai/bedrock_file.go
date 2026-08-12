@@ -166,12 +166,20 @@ func ResolveBedrockToken() (string, BedrockTokenSource) {
 	if t := readBedrockFileToken(); t != "" {
 		return t, BedrockTokenFile
 	}
-	if runtime.GOOS == "darwin" {
+	if keychainLookupEnabled() {
 		if t, err := keychainGet("bedrock"); err == nil && strings.TrimSpace(t) != "" {
 			return strings.TrimSpace(t), BedrockTokenKeychain
 		}
 	}
 	return "", BedrockTokenNone
+}
+
+// bedrockSkipKeychainEnv lets tests neutralize the login Keychain without
+// deleting the developer's real item. Production never sets this.
+const bedrockSkipKeychainEnv = "2NB_BEDROCK_SKIP_KEYCHAIN"
+
+func keychainLookupEnabled() bool {
+	return runtime.GOOS == "darwin" && os.Getenv(bedrockSkipKeychainEnv) == ""
 }
 
 func readBedrockFileToken() string {
@@ -188,7 +196,7 @@ func fileIsPrivate(mode fs.FileMode) bool {
 
 func hydrateBedrockBearerToken() {
 	var kc func(string) (string, error)
-	if runtime.GOOS == "darwin" {
+	if keychainLookupEnabled() {
 		kc = keychainGet
 	}
 	ensureBedrockBearerToken(os.Getenv, os.Setenv, readBedrockFileToken, kc)

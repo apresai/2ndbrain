@@ -103,6 +103,14 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	metaGet = ""
 	metaRemove = nil
 	configGetEffective = false
+	bedrockSet, bedrockClearToken, bedrockTokenStdin = false, false, false
+	bedrockRegion, bedrockToken = "", ""
+	for _, name := range []string{"set", "clear-token", "region", "token", "token-stdin"} {
+		if f := configBedrockCmd.Flags().Lookup(name); f != nil {
+			_ = configBedrockCmd.Flags().Set(name, f.DefValue)
+			f.Changed = false
+		}
+	}
 	deleteForce = false
 	initPath = ""
 	indexDocFlag, indexForceReembed = "", false
