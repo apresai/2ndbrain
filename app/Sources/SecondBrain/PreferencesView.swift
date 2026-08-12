@@ -1,93 +1,134 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct PreferencesView: View {
     @Environment(AppState.self) var appState
 
-    private let fontFamilies = [
-        "System Mono",
-        "SF Mono",
-        "Menlo",
-        "Monaco",
-        "Courier New",
-        "Andale Mono",
-    ]
+    @State private var region = ""
+    @State private var token = ""
+    @State private var status: BedrockMachineStatus?
+    @State private var loading = true
+    @State private var saving = false
+    @State private var message: String?
 
     var body: some View {
-        @Bindable var state = appState
-
         Form {
-            Section("Editor Font") {
-                Picker("Font Family", selection: Binding(
-                    get: { appState.editorFontFamily },
-                    set: { appState.setFontFamily($0) }
-                )) {
-                    ForEach(fontFamilies, id: \.self) { family in
-                        Text(family)
-                            .font(.custom(family == "System Mono" ? "Menlo" : family, size: 13))
-                            .tag(family)
-                    }
-                }
-
-                HStack {
-                    Text("Font Size")
-                    Spacer()
-                    Button {
-                        appState.decreaseFontSize()
-                    } label: {
-                        Image(systemName: "minus")
-                    }
-                    .buttonStyle(.borderless)
-
-                    Text("\(Int(appState.editorFontSize)) pt")
-                        .monospacedDigit()
-                        .frame(width: 44, alignment: .center)
-
-                    Button {
-                        appState.increaseFontSize()
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.borderless)
-
-                    Button("Reset") {
-                        appState.resetFontSize()
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
+            Section {
+                Text("Machine-local Bedrock credentials. Saved to ~/.config/2nb/bedrock.json so the dashboard and a terminal 2nb share the same key. The token is never written into a vault.")
                     .font(.caption)
-                }
-
-                // Live preview
-                Text("The quick brown fox jumps over the lazy dog.")
-                    .font(.custom(
-                        appState.editorFontFamily == "System Mono" ? "Menlo" : appState.editorFontFamily,
-                        size: appState.editorFontSize
-                    ))
                     .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section("Autosave") {
-                Toggle("Enable autosave", isOn: Binding(
-                    get: { appState.autosaveIntervalSeconds > 0 },
-                    set: { isOn in
-                        appState.setAutosaveInterval(isOn ? 30 : 0)
+            Section("AWS Bedrock") {
+                TextField("Region", text: $region, prompt: Text("us-east-1"))
+                    .textFieldStyle(.roundedBorder)
+
+                SecureField("API key (bearer token)", text: $token)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Button(saving ? "Saving…" : "Save") {
+                        Task { await save() }
                     }
-                ))
-                if appState.autosaveIntervalSeconds > 0 {
-                    Picker("Save every", selection: Binding(
-                        get: { appState.autosaveIntervalSeconds },
-                        set: { appState.setAutosaveInterval($0) }
-                    )) {
-                        Text("15 seconds").tag(15)
-                        Text("30 seconds").tag(30)
-                        Text("60 seconds").tag(60)
+                    .disabled(saving || (region.trimmingCharacters(in: .whitespaces).isEmpty && token.isEmpty))
+                    .keyboardShortcut(.defaultAction)
+
+                    Button("Clear token") {
+                        Task { await clearToken() }
                     }
-                    .pickerStyle(.menu)
+                    .disabled(saving || !(status?.tokenSet ?? false))
+
+                    Spacer()
+                }
+
+                if let status {
+                    Text(statusCaption(status))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                if let message {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400, height: 300)
+        .frame(minWidth: 440, minHeight: 280)
+        .task { await reload() }
+    }
+
+    private func statusCaption(_ status: BedrockMachineStatus) -> String {
+        let tokenLine: String
+        if status.tokenSet {
+            tokenLine = "Token set (\(status.tokenSource))"
+        } else {
+            tokenLine = "Token not set"
+        }
+        let regionLine = status.region.isEmpty
+            ? "Region not set in file (vault ai.bedrock.region is used)"
+            : "Region \(status.region)"
+        return "\(regionLine). \(tokenLine). File: \(status.path)"
+    }
+
+    private func reload() async {
+        loading = true
+        defer { loading = false }
+        do {
+            let st = try await appState.refreshBedrockMachineConfig()
+            status = st
+            if region.isEmpty {
+                region = st.region
+            }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func save() async {
+        saving = true
+        defer { saving = false }
+        do {
+            let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            let st = try await appState.saveBedrockMachineConfig(
+                region: region.trimmingCharacters(in: .whitespacesAndNewlines),
+                token: trimmedToken.isEmpty ? nil : trimmedToken
+            )
+            status = st
+            token = ""
+            message = "Saved."
+        } catch {
+            presentSaveError(error.localizedDescription)
+        }
+    }
+
+    private func clearToken() async {
+        saving = true
+        defer { saving = false }
+        do {
+            let st = try await appState.clearBedrockToken()
+            status = st
+            token = ""
+            message = "Token cleared."
+        } catch {
+            presentSaveError(error.localizedDescription)
+        }
+    }
+
+    private func presentSaveError(_ text: String) {
+        message = text
+        #if canImport(AppKit)
+        let alert = NSAlert()
+        alert.messageText = "Could not save Bedrock credentials"
+        alert.informativeText = text
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+        #endif
     }
 }

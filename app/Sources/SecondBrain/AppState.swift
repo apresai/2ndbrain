@@ -2371,6 +2371,32 @@ final class AppState {
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Machine-local Bedrock credentials (`2nb config bedrock --json`).
+    /// Does not require a bound vault.
+    func refreshBedrockMachineConfig() async throws -> BedrockMachineStatus {
+        let data = try await runCLIGlobal(["config", "bedrock", "--json", "--porcelain"])
+        return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
+    }
+
+    func saveBedrockMachineConfig(region: String, token: String?) async throws -> BedrockMachineStatus {
+        var args = ["config", "bedrock", "--set", "--json", "--porcelain"]
+        if !region.isEmpty {
+            args += ["--region", region]
+        }
+        var stdin: Data?
+        if let token, !token.isEmpty {
+            args.append("--token-stdin")
+            stdin = Data(token.utf8)
+        }
+        let data = try await runCLIGlobal(args, stdin: stdin)
+        return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
+    }
+
+    func clearBedrockToken() async throws -> BedrockMachineStatus {
+        let data = try await runCLIGlobal(["config", "bedrock", "--clear-token", "--json", "--porcelain"])
+        return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
+    }
+
     /// The full effective configuration (`2nb config show --json`), returned
     /// raw for the generic read-only viewer (no schema coupling in Swift).
     func fetchConfigShow() async throws -> Data {
@@ -2854,6 +2880,73 @@ final class AppState {
 
     // MARK: - CLI Execution
 
+    /// Vault-independent CLI spawn (machine-local commands such as
+    /// `config bedrock`). Never logs stdin.
+    func runCLIGlobal(_ args: [String], stdin: Data? = nil) async throws -> Data {
+        let cmd = "2nb " + args.joined(separator: " ")
+        log.info("CLI exec (global): \(cmd, privacy: .public)")
+        let errorLogger = self.errorLogger
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.arguments = args
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+            if let stdin {
+                let input = Pipe()
+                process.standardInput = input
+                input.fileHandleForWriting.write(stdin)
+                try? input.fileHandleForWriting.close()
+            }
+
+            let drain = PipeDrain()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    drain.appendStdout(chunk)
+                }
+            }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    drain.appendStderr(chunk)
+                }
+            }
+
+            process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
+                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: drain.stdoutData)
+                } else {
+                    let errMsg = String(data: drain.stderrData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !errMsg.isEmpty {
+                        log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
+                    }
+                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
+                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
+                errorLogger?.log("CLI \(cmd) launch failed", error: error)
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
     func runCLI(_ args: [String], cwd: URL) async throws -> Data {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
@@ -3103,6 +3196,7 @@ struct ProviderStatusInfo: Codable, Identifiable {
     let reachable: Bool
     let reason: String?
     let detail: String?
+    let tokenSource: String?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -3111,6 +3205,30 @@ struct ProviderStatusInfo: Codable, Identifiable {
         case reachable
         case reason
         case detail
+        case tokenSource = "token_source"
+    }
+}
+
+/// Redacted `2nb config bedrock --json` payload. The token itself is never present.
+struct BedrockMachineStatus: Codable, Equatable {
+    let path: String
+    let region: String
+    let tokenSet: Bool
+    let tokenSource: String
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case region
+        case tokenSet = "token_set"
+        case tokenSource = "token_source"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        region = try c.decodeIfPresent(String.self, forKey: .region) ?? ""
+        tokenSet = try c.decode(Bool.self, forKey: .tokenSet)
+        tokenSource = try c.decode(String.self, forKey: .tokenSource)
     }
 }
 

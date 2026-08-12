@@ -340,10 +340,10 @@ struct AIHubView: View {
         // Until the first `ai status` call lands, render placeholders
         // so the UI doesn't jank when the hub first opens.
         [
-            ProviderStatusInfo(name: "bedrock", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
-            ProviderStatusInfo(name: "openrouter", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
-            ProviderStatusInfo(name: "ollama", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
-            ProviderStatusInfo(name: "llama-local", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil),
+            ProviderStatusInfo(name: "bedrock", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil, tokenSource: nil),
+            ProviderStatusInfo(name: "openrouter", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil, tokenSource: nil),
+            ProviderStatusInfo(name: "ollama", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil, tokenSource: nil),
+            ProviderStatusInfo(name: "llama-local", configPresent: false, disabled: false, reachable: false, reason: nil, detail: nil, tokenSource: nil),
         ]
     }
 
@@ -365,6 +365,17 @@ struct AIHubView: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
+            if p.name == "bedrock" {
+                HStack(spacing: 6) {
+                    Text(bedrockTokenLabel(p))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    SettingsLink {
+                        Text("Settings…")
+                    }
+                    .controlSize(.mini)
+                }
+            }
             Spacer(minLength: 0)
             Button(p.disabled ? "Enable" : "Disable") {
                 Task { await toggleProvider(p) }
@@ -379,6 +390,16 @@ struct AIHubView: View {
         .opacity(p.disabled ? 0.55 : 1.0)
     }
 
+
+    private func bedrockTokenLabel(_ p: ProviderStatusInfo) -> String {
+        switch p.tokenSource {
+        case "env": return "API key: set (env)"
+        case "file": return "API key: set (file)"
+        case "keychain": return "API key: set (keychain)"
+        case "none", .none: return "API key: not set"
+        default: return "API key: set"
+        }
+    }
 
     private func providerStatusLabel(_ p: ProviderStatusInfo) -> String {
         if p.disabled { return "disabled" }
