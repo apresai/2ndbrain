@@ -197,7 +197,7 @@ func TestEnvVarName(t *testing.T) {
 		want     string
 	}{
 		{"openrouter", "OPENROUTER_API_KEY"},
-		{"bedrock", ""},
+		{"bedrock", "AWS_BEARER_TOKEN_BEDROCK"},
 		{"custom", "CUSTOM_API_KEY"},
 	}
 	for _, tt := range tests {
