@@ -124,14 +124,11 @@ func RemoveUserCatalogEntry(scope UserCatalogScope, vaultRoot, provider, id stri
 // globalCatalogPath returns the path to the per-user catalog file, respecting
 // $XDG_CONFIG_HOME if set.
 func globalCatalogPath() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "2nb", userCatalogFileName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	dir := globalConfigDir()
+	if dir == "" {
 		return ""
 	}
-	return filepath.Join(home, ".config", "2nb", userCatalogFileName)
+	return filepath.Join(dir, userCatalogFileName)
 }
 
 // vaultCatalogPath returns the per-vault catalog path, or "" when vaultRoot is empty.

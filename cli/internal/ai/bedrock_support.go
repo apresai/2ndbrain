@@ -173,6 +173,7 @@ func BedrockPreflightModel(ctx context.Context, cfg BedrockConfig, modelID, mode
 }
 
 func bedrockModelIsLegacy(ctx context.Context, cfg BedrockConfig, modelID string) (bool, error) {
+	cfg = ResolveBedrockConfig(cfg)
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return false, err

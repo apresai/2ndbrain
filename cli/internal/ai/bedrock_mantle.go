@@ -21,7 +21,6 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -48,7 +47,7 @@ const mantleMinOutputTokens = 256
 // errNoMantleTokenText is matched by ClassifyProbeError (bad_credentials), so
 // keep the "need a Bedrock API key" phrase stable.
 const errNoMantleTokenText = "mantle models need a Bedrock API key (bearer token): set " +
-	bedrockBearerTokenEnv + " or 2nb config set-key bedrock"
+	bedrockBearerTokenEnv + ", ~/.config/2nb/bedrock.json, or 2nb config set-key bedrock"
 
 // BedrockMantleGenerator implements GenerationProvider (and UsageGenerator)
 // for models on the Bedrock mantle plane. It is stdlib net/http only — no AWS
@@ -70,6 +69,7 @@ var (
 // vault is open (builtin entries still resolve). It errors when no bearer
 // token resolves, since the plane has no SigV4 fallback.
 func NewBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot string) (*BedrockMantleGenerator, error) {
+	cfg = ResolveBedrockConfig(cfg)
 	token := resolveMantleBearerToken()
 	if token == "" {
 		return nil, errors.New(errNoMantleTokenText)
@@ -87,14 +87,11 @@ func NewBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot string) (*Bed
 }
 
 // resolveMantleBearerToken returns the Bedrock API key the mantle plane
-// authenticates with: AWS_BEARER_TOKEN_BEDROCK, hydrated from the macOS
-// Keychain first via the same ensureBedrockBearerToken plumbing the SDK path
-// (loadBedrockAWSConfig) uses, so a `2nb config set-key bedrock` key works
-// for mantle models too.
+// authenticates with: AWS_BEARER_TOKEN_BEDROCK, hydrated from the machine
+// file then the macOS Keychain via the same ensureBedrockBearerToken
+// plumbing the SDK path (loadBedrockAWSConfig) uses.
 func resolveMantleBearerToken() string {
-	if runtime.GOOS == "darwin" {
-		ensureBedrockBearerToken(os.Getenv, os.Setenv, keychainGet)
-	}
+	hydrateBedrockBearerToken()
 	return os.Getenv(bedrockBearerTokenEnv)
 }
 
