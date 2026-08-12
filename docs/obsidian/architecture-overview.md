@@ -88,6 +88,7 @@ AWS SDK SigV4   ~/.aws, AWS_PROFILE, access keys
 - **Token precedence:** env, then the file, then Keychain, then SigV4. A bearer token wins over SigV4 because the AWS SDK prefers it.
 - **Region precedence:** file `region` (if non-empty), then vault `ai.bedrock.region`, then `us-east-1`.
 - **Writers:** dashboard Settings, `2nb config bedrock --set`, and `2nb config set-key bedrock` (file plus Keychain).
+- **Clear:** Settings Clear / `2nb config bedrock --clear-token` blanks the file token and deletes the Keychain item, so a leftover key cannot keep authenticating.
 - **Readers:** every Bedrock embed/generate/rerank/mantle call via `ensureBedrockBearerToken` / `ResolveBedrockConfig`. The dashboard and a terminal `2nb` share the file because the path is XDG/HOME-relative, not binary-relative.
 - The file is refused if it is group- or world-readable.
 

@@ -26,6 +26,7 @@ type bedrockMachineStatus struct {
 	Region      string `json:"region,omitempty"`
 	TokenSet    bool   `json:"token_set"`
 	TokenSource string `json:"token_source"`
+	Error       string `json:"error,omitempty"`
 }
 
 var configBedrockCmd = &cobra.Command{
@@ -58,8 +59,7 @@ func init() {
 
 func runConfigBedrock(cmd *cobra.Command, args []string) error {
 	if bedrockClearToken {
-		empty := ""
-		if err := ai.UpdateBedrockFile("", &empty, false); err != nil {
+		if err := ai.ClearBedrockStoredToken(); err != nil {
 			return err
 		}
 		if !flagPorcelain {
@@ -126,12 +126,16 @@ func writeBedrockStatus(cmd *cobra.Command) error {
 }
 
 func currentBedrockStatus() bedrockMachineStatus {
-	doc, _ := ai.ReadBedrockFile()
+	doc, err := ai.ReadBedrockFile()
 	_, src := ai.ResolveBedrockToken()
-	return bedrockMachineStatus{
+	st := bedrockMachineStatus{
 		Path:        ai.BedrockFilePath(),
 		Region:      doc.Region,
 		TokenSet:    src != ai.BedrockTokenNone,
 		TokenSource: string(src),
 	}
+	if err != nil {
+		st.Error = err.Error()
+	}
+	return st
 }

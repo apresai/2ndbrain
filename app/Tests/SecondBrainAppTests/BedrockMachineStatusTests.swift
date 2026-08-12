@@ -20,6 +20,13 @@ func bedrockMachineStatusDecode() throws {
     #expect(none.region == "")
     #expect(!none.tokenSet)
     #expect(none.tokenSource == "none")
+    #expect(none.error == nil)
+
+    let refused = """
+    {"path":"/tmp/bedrock.json","token_set":false,"token_source":"none","error":"refusing to read /tmp/bedrock.json: mode 0644 is not private (want 0600)"}
+    """
+    let bad = try JSONDecoder().decode(BedrockMachineStatus.self, from: Data(refused.utf8))
+    #expect(bad.error?.contains("not private") == true)
 }
 
 @Test("ProviderStatusInfo decodes additive token_source")

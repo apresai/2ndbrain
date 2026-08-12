@@ -127,10 +127,22 @@ func WriteBedrockFile(doc BedrockFile) error {
 // pointer leaves the stored token unchanged; a non-nil pointer (including
 // empty string) replaces it. A non-empty region replaces the stored region;
 // pass clearRegion to drop it.
+func isNotPrivateErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not private")
+}
+
 func UpdateBedrockFile(region string, token *string, clearRegion bool) error {
 	cur, err := ReadBedrockFile()
 	if err != nil {
-		return err
+		if BedrockFilePath() == "" {
+			return err
+		}
+		// A leaked (non-private) or corrupt file must still be replaceable:
+		// WriteBedrockFile writes a new 0600 document over it.
+		if !isNotPrivateErr(err) && !strings.Contains(err.Error(), "parse ") {
+			return err
+		}
+		cur = BedrockFile{}
 	}
 	if clearRegion {
 		cur.Region = ""
@@ -141,6 +153,20 @@ func UpdateBedrockFile(region string, token *string, clearRegion bool) error {
 		cur.Token = strings.TrimSpace(*token)
 	}
 	return WriteBedrockFile(cur)
+}
+
+// ClearBedrockStoredToken removes the file token and, on macOS, the Keychain
+// item so a Settings / `config bedrock --clear-token` action cannot leave a
+// fallback key in place.
+func ClearBedrockStoredToken() error {
+	empty := ""
+	if err := UpdateBedrockFile("", &empty, false); err != nil {
+		return err
+	}
+	if runtime.GOOS == "darwin" {
+		_ = DeleteAPIKey("bedrock")
+	}
+	return nil
 }
 
 // ResolveBedrockConfig overlays the machine-file region onto vault config

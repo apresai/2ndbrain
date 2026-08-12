@@ -3215,12 +3215,14 @@ struct BedrockMachineStatus: Codable, Equatable {
     let region: String
     let tokenSet: Bool
     let tokenSource: String
+    let error: String?
 
     enum CodingKeys: String, CodingKey {
         case path
         case region
         case tokenSet = "token_set"
         case tokenSource = "token_source"
+        case error
     }
 
     init(from decoder: Decoder) throws {
@@ -3229,6 +3231,7 @@ struct BedrockMachineStatus: Codable, Equatable {
         region = try c.decodeIfPresent(String.self, forKey: .region) ?? ""
         tokenSet = try c.decode(Bool.self, forKey: .tokenSet)
         tokenSource = try c.decode(String.self, forKey: .tokenSource)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
     }
 }
 

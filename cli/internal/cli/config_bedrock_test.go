@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,10 +12,9 @@ import (
 
 func isolateBedrockFile(t *testing.T) {
 	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
-	path := ai.BedrockFilePath()
-	_ = os.Remove(path)
-	t.Cleanup(func() { _ = os.Remove(path) })
+	t.Setenv("2NB_BEDROCK_SKIP_KEYCHAIN", "1")
 }
 
 func TestConfigBedrockShowEmpty(t *testing.T) {
@@ -133,5 +133,27 @@ func TestConfigBedrockEnvWinsSource(t *testing.T) {
 	}
 	if strings.Contains(string(out), "ABSK-from-env") || strings.Contains(string(out), "ABSK-file") {
 		t.Fatal("json leaked a token")
+	}
+}
+
+func TestConfigBedrockShowReportsUnprivateFile(t *testing.T) {
+	isolateBedrockFile(t)
+	path := ai.BedrockFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"region":"us-east-1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIArgs(t, t.TempDir(), "config", "bedrock", "--json")
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	var st bedrockMachineStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Error == "" || !strings.Contains(st.Error, "not private") {
+		t.Fatalf("expected not-private error, got %+v", st)
 	}
 }

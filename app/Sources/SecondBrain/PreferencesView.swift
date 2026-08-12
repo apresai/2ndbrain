@@ -73,6 +73,9 @@ struct PreferencesView: View {
         let regionLine = status.region.isEmpty
             ? "Region not set in file (vault ai.bedrock.region is used)"
             : "Region \(status.region)"
+        if let err = status.error, !err.isEmpty {
+            return "\(err). \(tokenLine). File: \(status.path)"
+        }
         return "\(regionLine). \(tokenLine). File: \(status.path)"
     }
 

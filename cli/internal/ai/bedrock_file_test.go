@@ -12,6 +12,7 @@ func setupBedrockHome(t *testing.T) string {
 	t.Helper()
 	home := setupHome(t)
 	t.Setenv(bedrockBearerTokenEnv, "")
+	t.Setenv(bedrockSkipKeychainEnv, "1")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	t.Setenv("AWS_SESSION_TOKEN", "")
@@ -160,7 +161,7 @@ func TestResolveBedrockTokenPrecedence(t *testing.T) {
 
 	tok, src := ResolveBedrockToken()
 	if tok != "" || src != BedrockTokenNone {
-		t.Fatalf("empty: token=%q source=%s", tok, src)
+		t.Fatalf("empty: source=%s token_len=%d", src, len(tok))
 	}
 
 	if err := WriteBedrockFile(BedrockFile{Token: "ABSK-file"}); err != nil {
@@ -168,13 +169,42 @@ func TestResolveBedrockTokenPrecedence(t *testing.T) {
 	}
 	tok, src = ResolveBedrockToken()
 	if tok != "ABSK-file" || src != BedrockTokenFile {
-		t.Fatalf("file: token=%q source=%s", tok, src)
+		t.Fatalf("file: source=%s token_len=%d", src, len(tok))
 	}
 
 	t.Setenv(bedrockBearerTokenEnv, "ABSK-env")
 	tok, src = ResolveBedrockToken()
 	if tok != "ABSK-env" || src != BedrockTokenEnv {
-		t.Fatalf("env: token=%q source=%s", tok, src)
+		t.Fatalf("env: source=%s token_len=%d", src, len(tok))
+	}
+}
+
+func TestUpdateBedrockFileOverwritesWorldReadable(t *testing.T) {
+	setupBedrockHome(t)
+	path := BedrockFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"token":"ABSK-leaked","region":"us-east-1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tok := "ABSK-new"
+	if err := UpdateBedrockFile("eu-west-1", &tok, false); err != nil {
+		t.Fatalf("update must replace a leaked file: %v", err)
+	}
+	got, err := ReadBedrockFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Token != "ABSK-new" || got.Region != "eu-west-1" {
+		t.Fatalf("got %+v", got)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %04o", fi.Mode().Perm())
 	}
 }
 
