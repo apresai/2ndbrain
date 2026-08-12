@@ -73,7 +73,7 @@ func runConfigBedrock(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if bedrockRegion == "" && token == nil {
-			return exitWithError(ExitValidation, "--set needs --region and/or a token (--token, --token-stdin, or stdin)")
+			return exitWithError(ExitValidation, "--set needs --region and/or a token (--token or --token-stdin)")
 		}
 		if err := ai.UpdateBedrockFile(bedrockRegion, token, false); err != nil {
 			return err
