@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.17.1] - 2026-08-12
+
+### Added
+- Machine-local Bedrock bearer token: set it in the macOS app Settings or via `2nb config bedrock --set`; stored in `~/.config/2nb/bedrock.json` (XDG-aware, optional region overlay, refused if world-readable) so the app and CLI reach Bedrock without shell credentials or vault config
+- `2nb config bedrock` command to show or set the machine-local token (`--json` redacts the token)
+- Dependency-audit CI workflow: blocked-package check (`blocked-packages.txt` + `scripts/check-blocked-deps.sh`) plus a two-pass OSV vulnerability scan
+
+### Fixed
+- CI dependency audit: corrected the osv-scanner release asset URL (404) and treat OSV exit code 128 as an empty result instead of a failure
+
+
 ## [0.17.0] - 2026-07-11
 
 ### Added
