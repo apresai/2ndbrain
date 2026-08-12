@@ -53,13 +53,13 @@ Search works immediately on keywords. The AI features (semantic ranking + Ask) n
 
 ## Step 3: Turn on AI (default: AWS Bedrock)
 
-By default 2ndbrain uses **AWS Bedrock** (Claude **Haiku 4.5** for answers and **Nova-2** for embeddings) with your existing AWS credentials. Run the wizard:
+By default 2ndbrain uses **AWS Bedrock** (Claude **Haiku 4.5** for answers and **Nova-2** for embeddings). Authenticate with a Bedrock API key (dashboard Settings, `2nb config bedrock`, or `AWS_BEARER_TOKEN_BEDROCK`) or with existing AWS SigV4 credentials. Run the wizard:
 
 ```bash
 2nb ai setup
 ```
 
-It detects your AWS credentials (`~/.aws/credentials`, `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), confirms the region, and verifies the models. One-time AWS gotcha: enable access to the Claude + Nova models in the AWS console under **Bedrock → Model access** for your region.
+It detects a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`, `~/.config/2nb/bedrock.json`, or the Keychain) or SigV4 credentials (`~/.aws/credentials`, `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), confirms the region, and verifies the models. One-time AWS gotcha: enable access to the Claude + Nova models in the AWS console under **Bedrock → Model access** for your region.
 
 **No AWS account?** The same wizard lets you opt into an alternative (these are off by default):
 

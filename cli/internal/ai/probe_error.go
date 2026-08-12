@@ -258,9 +258,9 @@ func RemediationFor(code TestErrorCode, provider, strategy string) string {
 		switch provider {
 		case "bedrock":
 			if mantle {
-				return "The Bedrock API key was rejected by the mantle plane (invalid or expired bearer token). Store a valid key with `2nb config set-key bedrock`; the mantle plane is bearer-token only and does not accept SigV4 credentials."
+				return "The Bedrock API key was rejected by the mantle plane (invalid or expired bearer token). Store a valid key in Settings (Cmd+,) or `2nb config bedrock --set` / `2nb config set-key bedrock`; the mantle plane is bearer-token only and does not accept SigV4 credentials."
 			}
-			return "AWS credentials are missing, expired, or invalid. Refresh your SSO session or run `aws configure`, or store a Bedrock API key with `2nb config set-key bedrock`."
+			return "AWS credentials are missing, expired, or invalid. Refresh your SSO session or run `aws configure`, or store a Bedrock API key in Settings (Cmd+,) or `2nb config bedrock --set` / `2nb config set-key bedrock`."
 		case "openrouter":
 			return "OpenRouter API key is missing or invalid. Set OPENROUTER_API_KEY or run `2nb config set-key openrouter`."
 		}

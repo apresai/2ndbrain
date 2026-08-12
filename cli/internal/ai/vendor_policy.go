@@ -60,14 +60,11 @@ var vendorPolicyMu sync.Mutex
 // globalVendorPolicyPath returns the per-user policy file path, respecting
 // $XDG_CONFIG_HOME if set (same resolution as globalCatalogPath).
 func globalVendorPolicyPath() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "2nb", vendorPolicyFileName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	dir := globalConfigDir()
+	if dir == "" {
 		return ""
 	}
-	return filepath.Join(home, ".config", "2nb", vendorPolicyFileName)
+	return filepath.Join(dir, vendorPolicyFileName)
 }
 
 // vaultVendorPolicyPath returns the per-vault policy path, or "" when

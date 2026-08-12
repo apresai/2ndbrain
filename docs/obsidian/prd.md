@@ -88,6 +88,7 @@ The functional requirements are grouped by core capabilities. They build upon an
 
 ### 8. macOS Configuration GUI (P1)
 * **OBN-GUI-001:** The macOS application shall be converted from an editor into a settings and monitoring dashboard.
+* **OBN-GUI-002:** (post-0.5.0) Machine-local Bedrock credentials live in `~/.config/2nb/bedrock.json` and are edited from Settings (Cmd+,). See `reqs.md` CLI-EV-020, CLI-EV-021, MAC-EV-020. This 0.5.0 PRD is otherwise unchanged.
 
 ### 9. Vault Migration (P0)
 * **OBN-MIG-001:** The CLI shall provide a `migrate` command to safely transition legacy 2nb vaults to the native format.

@@ -23,6 +23,7 @@ func neutralizeAWSCredentials(t *testing.T) {
 		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
 		"AWS_PROFILE", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE",
 		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+		"AWS_BEARER_TOKEN_BEDROCK",
 	} {
 		t.Setenv(k, "")
 	}
@@ -30,6 +31,11 @@ func neutralizeAWSCredentials(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(missing, "nonexistent-config"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(missing, "nonexistent-credentials"))
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	// Bearer token now also lives in ~/.config/2nb/bedrock.json and the login
+	// Keychain. Wipe the sandboxed file and skip the real Keychain so this
+	// helper still means "no Bedrock creds".
+	t.Setenv("2NB_BEDROCK_SKIP_KEYCHAIN", "1")
+	_ = os.Remove(ai.BedrockFilePath())
 }
 
 // TestContract_ModelsVerifyOfflineOllama drives the full verify pipeline

@@ -60,11 +60,39 @@ Legacy versions required injecting unique UUID fields into the YAML frontmatter 
 ### Go CLI (2nb) and MCP Server
 * Framework: Built with Cobra for CLI command definitions and mark3labs/mcp-go for Model Context Protocol integration.
 * Storage: SQLite database using fts5 extensions for hybrid keyword ranking.
-* AI Providers: Defaults to AWS Bedrock — Claude Haiku 4.5 for generation and Amazon Nova-2 for 1024-dimension embeddings — using your AWS credentials. Ollama (local) and OpenRouter are opt-in, disabled by default and enabled via `2nb ai setup` or the macOS AI Hub.
+* AI Providers: Defaults to AWS Bedrock — Claude Haiku 4.5 for generation and Amazon Nova-2 for 1024-dimension embeddings. Ollama (local) and OpenRouter are opt-in, disabled by default and enabled via `2nb ai setup` or the macOS AI Hub.
 
 ### macOS App (SecondBrain)
 * Architecture: Written in SwiftUI using Swift 6.0 concurrency. It uses GRDB to read the shared SQLite index.
-* Role: Repositioned as a configuration dashboard, not an editor. Obsidian remains the editing environment. The sidebar leads with **Home** (the default consolidated screen) and groups five power-user tabs under an **Advanced** section (Vault Status, AI Settings, MCP Server, Git Integration, Validation) to monitor indexing status, configure AI providers (AWS Bedrock by default; Ollama/OpenRouter opt-in), inspect git history, and track MCP server invocations.
+* Role: Repositioned as a configuration dashboard, not an editor. Obsidian remains the editing environment. The sidebar leads with **Home** (the default consolidated screen) and groups five power-user tabs under an **Advanced** section (Vault Status, AI Settings, MCP Server, Git Integration, Validation) to monitor indexing status, configure AI providers (AWS Bedrock by default; Ollama/OpenRouter opt-in), inspect git history, and track MCP server invocations. **Settings (Cmd+,)** holds the machine-local Bedrock API key and region.
+
+---
+
+## 3a. Machine-local AI credentials
+
+Bedrock authentication is machine-local. The token must never enter `<vault>/.2ndbrain/config.yaml` (that file can ride along when a vault is file-synced).
+
+```
+process env AWS_BEARER_TOKEN_BEDROCK
+        |
+        v (if unset)
+~/.config/2nb/bedrock.json     { "region", "token" }   0600
+        |                       same directory as models.yaml
+        v (if no token)
+macOS Keychain  dev.apresai.2ndbrain / bedrock
+        |
+        v (if no token)
+AWS SDK SigV4   ~/.aws, AWS_PROFILE, access keys
+```
+
+- **Token precedence:** env, then the file, then Keychain, then SigV4. A bearer token wins over SigV4 because the AWS SDK prefers it.
+- **Region precedence:** file `region` (if non-empty), then vault `ai.bedrock.region`, then `us-east-1`.
+- **Writers:** dashboard Settings, `2nb config bedrock --set`, and `2nb config set-key bedrock` (file plus Keychain).
+- **Clear:** Settings Clear / `2nb config bedrock --clear-token` blanks the file token and deletes the Keychain item, so a leftover key cannot keep authenticating.
+- **Readers:** every Bedrock embed/generate/rerank/mantle call via `ensureBedrockBearerToken` / `ResolveBedrockConfig`. The dashboard and a terminal `2nb` share the file because the path is XDG/HOME-relative, not binary-relative.
+- The file is refused if it is group- or world-readable.
+
+---
 
 ### Obsidian Community Plugin (obsidian-2ndbrain)
 * Integration: A thin TypeScript package built with esbuild.

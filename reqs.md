@@ -302,7 +302,13 @@
 
 **CLI-EV-018**: When the user runs `2nb config set <key> <value>`, the editor shall update the vault configuration file and persist the change.
 
-**CLI-EV-019**: When the user runs `2nb config set-key <provider>`, the editor shall prompt for an API key and store it securely in the macOS Keychain.
+**CLI-EV-019**: When the user runs `2nb config set-key <provider>` for a Keychain-backed provider (OpenRouter), the system shall prompt for an API key and store it in the macOS Keychain. For `bedrock`, the same command shall merge the token into `~/.config/2nb/bedrock.json` and, on macOS, also store it in the Keychain.
+
+**CLI-EV-020**: When `AWS_BEARER_TOKEN_BEDROCK` is set, the system shall use that value as the Bedrock API key and shall not override it from the machine file or the Keychain.
+
+**CLI-EV-021**: When `AWS_BEARER_TOKEN_BEDROCK` is unset, the system shall read a Bedrock API key and optional region from `~/.config/2nb/bedrock.json` (or `$XDG_CONFIG_HOME/2nb/bedrock.json`). The file shall be written mode `0600` and refused if it is group- or world-readable. The token shall never be written into vault `.2ndbrain/config.yaml`.
+
+**MAC-EV-020**: When the user saves a Bedrock region and/or API key in the dashboard Settings window, the app shall write `~/.config/2nb/bedrock.json` via `2nb config bedrock` so the dashboard and the CLI share the same store.
 
 **CLI-UB-004**: Read-only CLI commands shall resolve the active vault from `--vault` flag, `2NB_VAULT` environment variable, the vault Obsidian currently has open (read from Obsidian's own registry, e.g. `~/Library/Application Support/obsidian/obsidian.json`), or the current directory when it is inside a vault (walking up to the nearest vault root) — in that priority order. There is no 2nb-managed active-vault pointer file; the active vault is the vault you have open in Obsidian, so the CLI and the GUI follow the same source of truth.
 

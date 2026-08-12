@@ -82,7 +82,7 @@ The wizard detects your credentials and walks you through provider and model cho
 Notes:
 
 - The dashboard's AI card does the same thing graphically, with a readiness dot and a Test button.
-- The dashboard runs without your shell's environment. If you authenticate Bedrock with a bearer token rather than `~/.aws` credentials, store it in the Keychain so the app can use it: run `2nb config set-key bedrock` and paste the token at the prompt.
+- The dashboard runs without your shell's environment. Paste a Bedrock API key in **Settings (Cmd+,)**; that writes `~/.config/2nb/bedrock.json`, which both the app and a terminal `2nb` read. You can also `2nb config bedrock --set --region us-east-1 --token-stdin`, or set `AWS_BEARER_TOKEN_BEDROCK`. SigV4 via `~/.aws` still works.
 - For fully local AI: `2nb ai local` checks Ollama readiness, then `2nb ai setup` and pick Ollama.
 - Ollama and OpenRouter are opt-in; selection UIs show only Bedrock until you enable another provider.
 

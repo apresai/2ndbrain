@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -48,30 +47,39 @@ func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) bool {
 // Amazon Bedrock API key (bearer token).
 const bedrockBearerTokenEnv = "AWS_BEARER_TOKEN_BEDROCK"
 
-// ensureBedrockBearerToken makes a Keychain-stored Bedrock API key visible to
-// the AWS SDK by exporting it as AWS_BEARER_TOKEN_BEDROCK when that var is unset.
-// A GUI app that spawns 2nb has no shell environment, so without this its only
-// credential source would be ~/.aws (SigV4). When the env var is already set, or
-// no token is stored, this is a no-op. Accessors are injected so the logic is
-// testable without touching the real environment or Keychain.
-func ensureBedrockBearerToken(getenv func(string) string, setenv func(string, string) error, keychain func(string) (string, error)) {
+// ensureBedrockBearerToken makes a stored Bedrock API key visible to the AWS
+// SDK by exporting it as AWS_BEARER_TOKEN_BEDROCK when that var is unset.
+// Precedence: existing env, then ~/.config/2nb/bedrock.json, then the macOS
+// Keychain. A GUI app that spawns 2nb has no shell environment, so without
+// this its only credential source would be ~/.aws (SigV4). When the env var
+// is already set, or no token is stored, this is a no-op. Accessors are
+// injected so the logic is testable without touching the real environment,
+// file, or Keychain. fileToken and keychain may be nil.
+func ensureBedrockBearerToken(getenv func(string) string, setenv func(string, string) error, fileToken func() string, keychain func(string) (string, error)) {
 	if getenv(bedrockBearerTokenEnv) != "" {
 		return
 	}
-	if token, err := keychain("bedrock"); err == nil && token != "" {
-		_ = setenv(bedrockBearerTokenEnv, token)
-		// Make the source explicit: this overrides SigV4 for Bedrock (the SDK
-		// prefers a bearer token), so a stale stored key could mask working
-		// SigV4 creds. Visible in cli.log for diagnosis.
-		slog.Debug("bedrock: using API key from macOS Keychain", "env", bedrockBearerTokenEnv)
+	if fileToken != nil {
+		if token := strings.TrimSpace(fileToken()); token != "" {
+			_ = setenv(bedrockBearerTokenEnv, token)
+			// Make the source explicit: this overrides SigV4 for Bedrock (the SDK
+			// prefers a bearer token), so a stale stored key could mask working
+			// SigV4 creds. Visible in cli.log for diagnosis. Never log the token.
+			slog.Debug("bedrock: using API key from machine config file", "env", bedrockBearerTokenEnv)
+			return
+		}
+	}
+	if keychain != nil {
+		if token, err := keychain("bedrock"); err == nil && token != "" {
+			_ = setenv(bedrockBearerTokenEnv, token)
+			slog.Debug("bedrock: using API key from macOS Keychain", "env", bedrockBearerTokenEnv)
+		}
 	}
 }
 
 // loadBedrockAWSConfig builds an AWS config from BedrockConfig settings.
 func loadBedrockAWSConfig(ctx context.Context, cfg BedrockConfig) (aws.Config, error) {
-	if runtime.GOOS == "darwin" {
-		ensureBedrockBearerToken(os.Getenv, os.Setenv, keychainGet)
-	}
+	hydrateBedrockBearerToken()
 	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cfg.Region),
 	}
@@ -98,6 +106,7 @@ type BedrockEmbedder struct {
 
 // NewBedrockEmbedder creates a Bedrock embedding provider.
 func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, dims int) (*BedrockEmbedder, error) {
+	cfg = ResolveBedrockConfig(cfg)
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -620,6 +629,7 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 	if ResolveInvokeStrategy("bedrock", model, "") == StrategyBedrockMantleResponses {
 		return nil, fmt.Errorf("%s uses the bedrock mantle plane (%s); construct it via NewBedrockGeneration", model, StrategyBedrockMantleResponses)
 	}
+	cfg = ResolveBedrockConfig(cfg)
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -798,6 +808,7 @@ func (b *BedrockGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
 //
 // Results are returned with Tier=TierUnverified.
 func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInfo, error) {
+	cfg = ResolveBedrockConfig(cfg)
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -925,9 +936,16 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 	return append(models, inferenceProfiles...), nil
 }
 
-// CheckBedrockCredentials resolves AWS credentials from the SDK credential chain.
-// This may make network calls (STS, IMDS) if env vars and config files are absent.
+// CheckBedrockCredentials reports whether Bedrock can authenticate. A resolved
+// bearer token (env, machine file, or Keychain) counts as valid without a
+// SigV4 lookup. Otherwise this follows the SDK credential chain, which may
+// make network calls (STS, IMDS) if env vars and config files are absent.
 func CheckBedrockCredentials(ctx context.Context, cfg BedrockConfig) bool {
+	hydrateBedrockBearerToken()
+	if os.Getenv(bedrockBearerTokenEnv) != "" {
+		return true
+	}
+	cfg = ResolveBedrockConfig(cfg)
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return false

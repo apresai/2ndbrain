@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -223,10 +224,24 @@ func runConfigSetKey(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("empty key")
 	}
 
+	if provider == "bedrock" {
+		if err := ai.UpdateBedrockFile("", &key, false); err != nil {
+			return err
+		}
+	}
+
 	if err := ai.SetAPIKey(provider, key); err != nil {
+		if provider == "bedrock" && runtime.GOOS != "darwin" {
+			fmt.Fprintf(os.Stderr, "Stored bedrock API key in %s\n", ai.BedrockFilePath())
+			return nil
+		}
 		return err
 	}
 
+	if provider == "bedrock" {
+		fmt.Fprintf(os.Stderr, "Stored bedrock API key in %s and macOS Keychain\n", ai.BedrockFilePath())
+		return nil
+	}
 	fmt.Fprintf(os.Stderr, "Stored %s API key in macOS Keychain\n", provider)
 	return nil
 }

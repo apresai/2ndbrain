@@ -115,7 +115,7 @@ Run `2nb --help` for the full list and `--help` on any command for flags. The co
 | Quality & structure | `lint`, `stale`, `related`, `graph`, `backlinks`, `links`, `orphans`, `deadends`, `unresolved`, `outline`, `wordcount`, `folders`, `tags` (`list`/`rename`), `aliases` |
 | Integration | `setup` (skill + MCP + global-instructions block, `--all`/`--client`), `mcp-server`, `mcp-setup`, `mcp` (`status`/`configured`), `instructions` (`install`/`configured`/`uninstall`; writes the always-loaded 2nb block into `~/.claude/CLAUDE.md`), `plugin` (`status`/`install`), `git` (`activity`/`show`/`diff`/`status`, read-only), `export-context`, `skills` (`list`/`install`/`uninstall`/`show`) |
 | Import/Export | `import-obsidian`, `export-obsidian`, `migrate` |
-| Configuration | `config` (`show`/`get` (`--effective`)/`set`/`set-key`/`doctor`) |
+| Configuration | `config` (`show`/`get` (`--effective`)/`set`/`set-key`/`bedrock`/`doctor`) |
 
 **Global flags:** `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`, `--copy`. Also accepts obsidian-CLI-style `key=value` args, boolean tokens (`total`/`append`/`overwrite`), and colon-commands; `file=` fuzzy-resolves by title/alias/suffix while `path=` is strict-exact. Full mapping in [docs/obsidian-cli-mapping.md](docs/obsidian-cli-mapping.md).
 

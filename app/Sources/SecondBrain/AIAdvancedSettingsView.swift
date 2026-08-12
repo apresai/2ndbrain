@@ -165,7 +165,7 @@ struct AIAdvancedSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Provider endpoints").font(.subheadline.bold())
             knobRow(label: "Bedrock profile", key: "ai.bedrock.profile", text: $bedrockProfile, hint: "AWS profile name")
-            knobRow(label: "Bedrock region", key: "ai.bedrock.region", text: $bedrockRegion, hint: "e.g. us-east-1")
+            knobRow(label: "Bedrock region", key: "ai.bedrock.region", text: $bedrockRegion, hint: "vault fallback; Settings file region wins when set")
             knobRow(label: "Ollama endpoint", key: "ai.ollama.endpoint", text: $ollamaEndpoint, hint: "default http://localhost:11434")
         }
     }

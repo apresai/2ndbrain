@@ -16,7 +16,7 @@ func envVarName(provider string) string {
 	case "openrouter":
 		return "OPENROUTER_API_KEY"
 	case "bedrock":
-		return "" // uses AWS SDK credential chain, not an API key
+		return "AWS_BEARER_TOKEN_BEDROCK"
 	default:
 		return strings.ToUpper(provider) + "_API_KEY"
 	}

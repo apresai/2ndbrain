@@ -136,6 +136,8 @@ type ProviderStatus struct {
 	Reachable     bool   `json:"reachable"`        // cheap probe succeeded
 	Reason        string `json:"reason,omitempty"` // human-readable "why not ready" when relevant
 	Detail        string `json:"detail,omitempty"` // endpoint / region / env var name for UX
+	// TokenSource is bedrock-only: env | file | keychain | none.
+	TokenSource string `json:"token_source,omitempty"`
 }
 
 func runAIStatus(cmd *cobra.Command, args []string) error {
@@ -464,11 +466,18 @@ func llamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 }
 
 func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
+	resolved := ai.ResolveBedrockConfig(cfg.Bedrock)
+	_, src := ai.ResolveBedrockToken()
+	detail := resolved.Region
+	if src != ai.BedrockTokenNone {
+		detail = resolved.Region + " token:" + string(src)
+	}
 	s := ProviderStatus{
 		Name:          "bedrock",
 		Disabled:      cfg.Bedrock.Disabled,
-		ConfigPresent: cfg.Bedrock.Region != "",
-		Detail:        cfg.Bedrock.Region,
+		ConfigPresent: resolved.Region != "",
+		Detail:        detail,
+		TokenSource:   string(src),
 	}
 	if s.Disabled {
 		s.Reason = "disabled in vault config"

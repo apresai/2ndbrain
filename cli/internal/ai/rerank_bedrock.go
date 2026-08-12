@@ -36,6 +36,7 @@ type BedrockReranker struct {
 // embedder and generator, except that a catalog Region pin on the model
 // overrides the configured region (see rerankRegion).
 func NewBedrockReranker(ctx context.Context, cfg BedrockConfig, model string) (*BedrockReranker, error) {
+	cfg = ResolveBedrockConfig(cfg)
 	cfg.Region = rerankRegion(cfg, model)
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
