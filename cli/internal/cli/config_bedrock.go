@@ -102,27 +102,7 @@ func bedrockTokenFromFlags() (*string, error) {
 		tok := strings.TrimSpace(bedrockToken)
 		return &tok, nil
 	}
-	// A piped stdin with --set and no token flag is also accepted so a
-	// GUI can write `printf '%s' "$tok" | 2nb config bedrock --set`.
-	if bedrockSet && !isStdinTTY() {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return nil, fmt.Errorf("read token from stdin: %w", err)
-		}
-		tok := strings.TrimSpace(string(data))
-		if tok != "" {
-			return &tok, nil
-		}
-	}
 	return nil, nil
-}
-
-func isStdinTTY() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return true
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func writeBedrockStatus(cmd *cobra.Command) error {
