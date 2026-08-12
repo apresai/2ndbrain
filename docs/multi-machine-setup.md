@@ -22,9 +22,10 @@ catalog plus any saved calibration), `index.db` (BM25 + embeddings), and the loc
 ### Machine-local (outside the vault, never ports automatically)
 
 - The `2nb` binary, and the SecondBrain dashboard app. Install per machine via Homebrew.
-- **AI credentials:** the Bedrock bearer token in the macOS Keychain (`2nb config set-key
-  bedrock`), or `~/.aws` SigV4 credentials. Keychain items do not sync unless you enable iCloud
-  Keychain.
+- **AI credentials:** `~/.config/2nb/bedrock.json` (region + bearer token; written by
+  Settings or `2nb config bedrock`), or `AWS_BEARER_TOKEN_BEDROCK`, or the macOS Keychain
+  (`2nb config set-key bedrock`, still read as a fallback), or `~/.aws` SigV4 credentials.
+  The file is machine-local and is not part of the vault. Do not copy it into a git repo.
 - **MCP server wiring** in `~/.claude.json` and the equivalent client configs.
 - **The agent skill** in `~/.claude/skills` and other agent skill directories.
 
@@ -36,7 +37,8 @@ brew install apresai/tap/twonb
 brew install --cask apresai/tap/secondbrain   # optional
 
 # 2. Give it AI credentials (pick one)
-2nb config set-key bedrock                     # stores a Bedrock bearer token in the Keychain
+2nb config bedrock --set --region us-east-1 --token-stdin
+#   ...or paste the token in the dashboard Settings window (Cmd+,)
 #   ...or configure ~/.aws SigV4 credentials
 
 # 3. Wire up the skill + MCP server for your AI clients

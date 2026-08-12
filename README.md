@@ -81,11 +81,13 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 
 ## AI Providers
 
-2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token), set via `2nb config set-key bedrock`.
+2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token).
+
+Bedrock token precedence: `AWS_BEARER_TOKEN_BEDROCK`, then `~/.config/2nb/bedrock.json` (Settings, Cmd+, or `2nb config bedrock --set`), then the macOS Keychain (`2nb config set-key bedrock`), then SigV4 from `~/.aws`. File region, when set, overlays vault `ai.bedrock.region`. The token is never written into a vault.
 
 | Provider | Embeddings | Generation | Setup |
 |----------|-----------|------------|-------|
-| **AWS Bedrock** | Nova Embeddings v2 | Nova Micro, Claude, Llama, any model | Uses existing AWS SSO — zero new keys |
+| **AWS Bedrock** | Nova Embeddings v2 | Nova Micro, Claude, Llama, any model | Bearer token (Settings / `config bedrock`) or existing AWS SSO |
 | **OpenRouter** | Nemotron Embed (free) | Gemma 4 31B (free), GPT-4o, Claude, etc. | `OPENROUTER_API_KEY` env var |
 | **Ollama** | nomic-embed-text | qwen2.5, gemma3, llama3 | `brew install ollama` — fully local |
 | **llama-local** _(experimental, CLI-only)_ | EmbeddingGemma 300M | Gemma 4 E2B / E4B | fully offline via llama.cpp; needs `llama-server` on PATH (`brew install llama.cpp`) since the engine isn't bundled yet. Hidden in the app until it is. |
@@ -316,7 +318,8 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `config show` | Show full vault configuration (vault root + dir + name + all `ai.*` keys) |
 | `config get <key>` | Get a config value (e.g., `ai.provider`, `ai.similarity_threshold`). `--effective` on `ai.similarity_threshold` resolves the full chain (vault > calibration > model > default) instead of the raw stored value |
 | `config set <key> <value>` | Set a config value |
-| `config set-key <provider>` | Store API key in macOS Keychain |
+| `config bedrock` | Show or set machine-local Bedrock region + token (`~/.config/2nb/bedrock.json`). Does not need a vault. `--json` redacts the token |
+| `config set-key <provider>` | Store an API key (bedrock also writes the machine file; OpenRouter stays Keychain-only) |
 | `config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves) with one-line fix hints. Config defects fail (exit 2); an unreachable provider is a non-failing warning, so it stays usable offline/in CI |
 | `doctor` (alias `verify`) | Verify all three products — CLI, macOS app, Obsidian plugin — are installed and in sync with the latest release, with the exact fix command for any gap. The plugin is read from the open vault (or `--vault`); `--json` emits a `SuiteStatus` with a `ProductState` per component. Functional readiness stays in `config`/`mcp`/`skills doctor` |
 | `update` | Check whether a newer release is available; lists every component (CLI, app, plugin) that is behind the latest release. Offline-safe (24h cache), refetched when it's behind an install so a just-released version isn't reported stale; a component never shows a "latest" below its own version. `--json` adds `app`/`plugin` states |
