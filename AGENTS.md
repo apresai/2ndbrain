@@ -170,14 +170,17 @@ The app is a **configuration and companion dashboard, not an editor**: Obsidian 
 
 ### Dashboard Tabs
 
+Configuration lives in the **Settings window (Cmd+,)** — General / AI / Advanced /
+Integrations. The sidebar is five entries of pure status, grouped by the question
+they answer rather than by subsystem.
+
 | Tab | View | Purpose |
 |-----|------|---------|
-| **Home** (default) | HomeView.swift | Vault card (Obsidian-match badge + plugin Install/Update row), AI card (ready dot, Save-as-default, Test), Index card (Rebuild / Re-embed All), CLI-drift banner with Update CLI button |
-| Vault Status | VaultStatusView.swift | Unified health: index coverage, portability, AI reachability, stale docs |
-| AI Settings | AIHubView.swift | AI Hub: providers, active models, full catalog (Cmd+Shift+,) |
-| MCP Server | MCPStatusView.swift | Live MCP processes + recent tool invocations (Cmd+Shift+M) |
-| Git Integration | GitActivityView.swift | Recent commits (Cmd+Shift+G); click a row for per-file diffs |
-| Validation | LintResultsView.swift | Renders `2nb lint --json` findings |
+| **Home** (default) | HomeView.swift | Vault card (Obsidian-match badge + plugin Install/Update row), AI card (ready dot, Test, and a Settings link when not ready), AI Clients summary, Index card (Sync / Re-embed All), CLI-drift banner |
+| **Models** | AIHubView.swift | The model catalog: providers, active models, benchmarks, vendor policy (Cmd+Shift+,) |
+| **Notes** | LintResultsView.swift | Renders `2nb lint --json` findings with one-click and guided link fixes |
+| **Health** | HealthView (DashboardGroupViews.swift) | Vault · Performance · Updates — VaultStatusView, MetricsView, UpdatesView behind a segmented picker |
+| **Activity** | ActivityView (DashboardGroupViews.swift) | Git · MCP Server — GitActivityView (Cmd+Shift+G), MCPStatusView (Cmd+Shift+M) |
 
 ### macOS SwiftUI Gotchas
 

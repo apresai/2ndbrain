@@ -2,33 +2,37 @@ import SwiftUI
 import SecondBrainCore
 import UniformTypeIdentifiers
 
+/// The dashboard's sidebar.
+///
+/// This was eight entries, one per surface, which meant "is my vault healthy?"
+/// was answered across three of them and "what has been happening?" across two.
+/// Now that configuration lives in the Settings window (Cmd+,), everything left
+/// here is status, so it groups by the question rather than the subsystem.
+///
+/// `aiSettings` became `models` in name and scope: it is the model catalog, and
+/// calling a catalog browser "AI Settings" is what sent people looking for their
+/// API key in a 67-control grid instead of in Settings.
 enum DashboardTab: String, CaseIterable, Identifiable {
     case home = "Home"
-    case status = "Vault Status"
-    case aiSettings = "AI Settings"
-    case mcpServer = "MCP Server"
-    case gitIntegration = "Git Integration"
-    case validation = "Validation"
-    case metrics = "Metrics"
-    case updates = "Updates"
+    case models = "Models"
+    case notes = "Notes"
+    case health = "Health"
+    case activity = "Activity"
 
     var id: String { self.rawValue }
 
-    /// The power-user tabs, demoted under an "Advanced" sidebar section. Home
-    /// surfaces the common-case essentials (vault, AI, index); everything else
-    /// lives here.
-    static var advanced: [DashboardTab] { [.status, .aiSettings, .mcpServer, .gitIntegration, .validation, .metrics, .updates] }
+    /// Everything below Home. No longer labelled "Advanced": with the knobs
+    /// moved out, these are ordinary status views, and calling them advanced
+    /// discouraged people from opening the ones that answer real questions.
+    static var secondary: [DashboardTab] { [.models, .notes, .health, .activity] }
 
     var systemImage: String {
         switch self {
         case .home: return "house"
-        case .status: return "externaldrive"
-        case .aiSettings: return "bolt.horizontal"
-        case .mcpServer: return "server.rack"
-        case .gitIntegration: return "sourcecontrol"
-        case .validation: return "checkmark.seal"
-        case .metrics: return "speedometer"
-        case .updates: return "arrow.down.circle"
+        case .models: return "bolt.horizontal"
+        case .notes: return "checkmark.seal"
+        case .health: return "stethoscope"
+        case .activity: return "clock.arrow.circlepath"
         }
     }
 }
@@ -36,38 +40,30 @@ enum DashboardTab: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @Environment(AppState.self) var appState
     @State private var selection: DashboardTab = .home
+    // Owned here so a menu item can deep-link to a specific pane inside a group
+    // tab, and so the pane survives leaving and returning to the tab.
+    @State private var healthSection: HealthView.Section = .vault
+    @State private var activitySection: ActivityView.Section = .git
 
     var body: some View {
         mainLayout
+            // Routing lives in DashboardRoute so it is testable. Two of these
+            // land on the same tab and differ only in the pane, which is exactly
+            // the wiring that shipped wrong once.
             .onChange(of: appState.showAIHub) { _, show in
-                if show {
-                    selection = .aiSettings
-                    appState.showAIHub = false
-                }
+                if show { route(.aiHub); appState.showAIHub = false }
             }
             .onChange(of: appState.showMCPStatus) { _, show in
-                if show {
-                    selection = .mcpServer
-                    appState.showMCPStatus = false
-                }
+                if show { route(.mcpStatus); appState.showMCPStatus = false }
             }
             .onChange(of: appState.showGitActivity) { _, show in
-                if show {
-                    selection = .gitIntegration
-                    appState.showGitActivity = false
-                }
+                if show { route(.gitActivity); appState.showGitActivity = false }
             }
             .onChange(of: appState.showLintResults) { _, show in
-                if show {
-                    selection = .validation
-                    appState.showLintResults = false
-                }
+                if show { route(.lintResults); appState.showLintResults = false }
             }
             .onChange(of: appState.showVaultStatus) { _, show in
-                if show {
-                    selection = .status
-                    appState.showVaultStatus = false
-                }
+                if show { route(.vaultStatus); appState.showVaultStatus = false }
             }
             .sheet(isPresented: Binding(
                 get: { appState.showMCPSetup },
@@ -107,6 +103,15 @@ struct ContentView: View {
             }
     }
 
+    /// Select the tab a deep link names, and the pane inside it when that tab
+    /// is a group. Setting the pane BEFORE the tab means the group renders with
+    /// the right section already selected rather than flashing its default.
+    private func route(_ target: DashboardRoute.Target) {
+        if let health = DashboardRoute.healthSection(for: target) { healthSection = health }
+        if let activity = DashboardRoute.activitySection(for: target) { activitySection = activity }
+        selection = DashboardRoute.tab(for: target)
+    }
+
     @ViewBuilder
     private var mainLayout: some View {
         if appState.vault == nil {
@@ -117,11 +122,9 @@ struct ContentView: View {
                     NavigationLink(value: DashboardTab.home) {
                         Label(DashboardTab.home.rawValue, systemImage: DashboardTab.home.systemImage)
                     }
-                    Section("Advanced") {
-                        ForEach(DashboardTab.advanced) { tab in
-                            NavigationLink(value: tab) {
-                                Label(tab.rawValue, systemImage: tab.systemImage)
-                            }
+                    ForEach(DashboardTab.secondary) { tab in
+                        NavigationLink(value: tab) {
+                            Label(tab.rawValue, systemImage: tab.systemImage)
                         }
                     }
                 }
@@ -132,20 +135,14 @@ struct ContentView: View {
                     switch selection {
                     case .home:
                         HomeView()
-                    case .status:
-                        VaultStatusView(isPresented: .constant(true), isInline: true)
-                    case .aiSettings:
+                    case .models:
                         AIHubView(onClose: {}, isInline: true)
-                    case .mcpServer:
-                        MCPStatusView(isPresented: .constant(true), isInline: true)
-                    case .gitIntegration:
-                        GitActivityView(isPresented: .constant(true), isInline: true)
-                    case .validation:
+                    case .notes:
                         LintResultsView(isPresented: .constant(true), isInline: true)
-                    case .metrics:
-                        MetricsView(isPresented: .constant(true), isInline: true)
-                    case .updates:
-                        UpdatesView()
+                    case .health:
+                        HealthView(section: $healthSection)
+                    case .activity:
+                        ActivityView(section: $activitySection)
                     }
                 }
                 .navigationTitle(selection.rawValue)

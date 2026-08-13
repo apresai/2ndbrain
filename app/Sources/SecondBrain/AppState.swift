@@ -808,8 +808,9 @@ final class AppState {
     }
 
     // When true, the next startIndex() pass runs `2nb index --force-reembed`
-    // to invalidate all stored embeddings. Set by VaultStatusView's Re-embed
-    // button and cleared once the run begins.
+    // to invalidate all stored embeddings. Set by Home's Re-embed All button
+    // and by the catalog picker's Set Active + Re-embed — the two remaining
+    // entry points — and cleared once the run begins.
     var pendingForceReembed: Bool = false
 
     func rebuildIndex(forceReembed: Bool = false) {
