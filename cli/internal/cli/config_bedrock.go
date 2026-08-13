@@ -22,11 +22,29 @@ var (
 // bedrockMachineStatus is the redacted view of machine-local Bedrock creds.
 // The token itself is never included.
 type bedrockMachineStatus struct {
-	Path        string `json:"path"`
-	Region      string `json:"region,omitempty"`
-	TokenSet    bool   `json:"token_set"`
+	Path     string `json:"path"`
+	Region   string `json:"region,omitempty"`
+	TokenSet bool   `json:"token_set"`
+	// TokenSuffix is the last 4 characters of the resolved token, so a UI can
+	// render a masked value the user can actually recognize ("••••••••9f2a")
+	// and tell two keys apart. Standard BYOK practice: enough to identify,
+	// useless to an attacker. Empty when no token is set.
+	TokenSuffix string `json:"token_suffix,omitempty"`
 	TokenSource string `json:"token_source"`
 	Error       string `json:"error,omitempty"`
+}
+
+// tokenSuffix returns the last 4 characters of a token, or "" when the token is
+// too short to reveal a suffix without leaking a meaningful fraction of it.
+func tokenSuffix(token string) string {
+	const revealed = 4
+	// Require a comfortable margin over the revealed length: showing the tail of
+	// an 6-character secret is a leak, not a hint.
+	r := []rune(token)
+	if len(r) < revealed*3 {
+		return ""
+	}
+	return string(r[len(r)-revealed:])
 }
 
 var configBedrockCmd = &cobra.Command{
@@ -118,7 +136,11 @@ func writeBedrockStatus(cmd *cobra.Command) error {
 		fmt.Printf("Region: (not set in file; vault ai.bedrock.region is used)\n")
 	}
 	if st.TokenSet {
-		fmt.Printf("Token:  set (%s)\n", st.TokenSource)
+		if st.TokenSuffix != "" {
+			fmt.Printf("Token:  set (%s, ends %s)\n", st.TokenSource, st.TokenSuffix)
+		} else {
+			fmt.Printf("Token:  set (%s)\n", st.TokenSource)
+		}
 	} else {
 		fmt.Printf("Token:  not set\n")
 	}
@@ -127,11 +149,12 @@ func writeBedrockStatus(cmd *cobra.Command) error {
 
 func currentBedrockStatus() bedrockMachineStatus {
 	doc, err := ai.ReadBedrockFile()
-	_, src := ai.ResolveBedrockToken()
+	tok, src := ai.ResolveBedrockToken()
 	st := bedrockMachineStatus{
 		Path:        ai.BedrockFilePath(),
 		Region:      doc.Region,
 		TokenSet:    src != ai.BedrockTokenNone,
+		TokenSuffix: tokenSuffix(tok),
 		TokenSource: string(src),
 	}
 	if err != nil {
