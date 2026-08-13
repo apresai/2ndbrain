@@ -13,6 +13,50 @@ import SwiftUI
 /// losing detail these views already render correctly, and the point of the
 /// change is fewer places to look, not less to see.
 
+/// Where a menu item lands: a tab, plus the pane inside it when that tab is a
+/// group.
+///
+/// Extracted from ContentView's onChange closures so it can be tested. Grouping
+/// two tabs into one made this routing load-bearing — "MCP Server Status…" and
+/// "Recent Activity" now select the same tab and differ only in the pane — and
+/// the first version of that wiring shipped wrong, opening Git for both.
+enum DashboardRoute {
+    /// Every deep link the menus and status bar can fire.
+    enum Target {
+        case aiHub
+        case mcpStatus
+        case gitActivity
+        case lintResults
+        case vaultStatus
+    }
+
+    static func tab(for target: Target) -> DashboardTab {
+        switch target {
+        case .aiHub: return .models
+        case .mcpStatus, .gitActivity: return .activity
+        case .lintResults: return .notes
+        case .vaultStatus: return .health
+        }
+    }
+
+    /// The Activity pane a target wants, or nil when it does not land there.
+    static func activitySection(for target: Target) -> ActivityView.Section? {
+        switch target {
+        case .mcpStatus: return .mcp
+        case .gitActivity: return .git
+        default: return nil
+        }
+    }
+
+    /// The Health pane a target wants, or nil when it does not land there.
+    static func healthSection(for target: Target) -> HealthView.Section? {
+        switch target {
+        case .vaultStatus: return .vault
+        default: return nil
+        }
+    }
+}
+
 /// Health: the state of this vault and of the three installed products.
 ///
 /// The selected section is owned by ContentView, not by @State here, for two

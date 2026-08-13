@@ -47,40 +47,23 @@ struct ContentView: View {
 
     var body: some View {
         mainLayout
+            // Routing lives in DashboardRoute so it is testable. Two of these
+            // land on the same tab and differ only in the pane, which is exactly
+            // the wiring that shipped wrong once.
             .onChange(of: appState.showAIHub) { _, show in
-                if show {
-                    selection = .models
-                    appState.showAIHub = false
-                }
+                if show { route(.aiHub); appState.showAIHub = false }
             }
-            // Both land on Activity, so each must also name its pane — otherwise
-            // "MCP Server Status…" (Cmd+Shift+M) would open the Git view.
             .onChange(of: appState.showMCPStatus) { _, show in
-                if show {
-                    activitySection = .mcp
-                    selection = .activity
-                    appState.showMCPStatus = false
-                }
+                if show { route(.mcpStatus); appState.showMCPStatus = false }
             }
             .onChange(of: appState.showGitActivity) { _, show in
-                if show {
-                    activitySection = .git
-                    selection = .activity
-                    appState.showGitActivity = false
-                }
+                if show { route(.gitActivity); appState.showGitActivity = false }
             }
             .onChange(of: appState.showLintResults) { _, show in
-                if show {
-                    selection = .notes
-                    appState.showLintResults = false
-                }
+                if show { route(.lintResults); appState.showLintResults = false }
             }
             .onChange(of: appState.showVaultStatus) { _, show in
-                if show {
-                    healthSection = .vault
-                    selection = .health
-                    appState.showVaultStatus = false
-                }
+                if show { route(.vaultStatus); appState.showVaultStatus = false }
             }
             .sheet(isPresented: Binding(
                 get: { appState.showMCPSetup },
@@ -118,6 +101,15 @@ struct ContentView: View {
                 ))
                 .environment(appState)
             }
+    }
+
+    /// Select the tab a deep link names, and the pane inside it when that tab
+    /// is a group. Setting the pane BEFORE the tab means the group renders with
+    /// the right section already selected rather than flashing its default.
+    private func route(_ target: DashboardRoute.Target) {
+        if let health = DashboardRoute.healthSection(for: target) { healthSection = health }
+        if let activity = DashboardRoute.activitySection(for: target) { activitySection = activity }
+        selection = DashboardRoute.tab(for: target)
     }
 
     @ViewBuilder

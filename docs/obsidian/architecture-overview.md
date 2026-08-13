@@ -64,7 +64,7 @@ Legacy versions required injecting unique UUID fields into the YAML frontmatter 
 
 ### macOS App (SecondBrain)
 * Architecture: Written in SwiftUI using Swift 6.0 concurrency. It uses GRDB to read the shared SQLite index.
-* Role: Repositioned as a configuration dashboard, not an editor. Obsidian remains the editing environment. The sidebar leads with **Home** (the default consolidated screen) and groups five power-user tabs under an **Advanced** section (Vault Status, AI Settings, MCP Server, Git Integration, Validation) to monitor indexing status, configure AI providers (AWS Bedrock by default; Ollama/OpenRouter opt-in), inspect git history, and track MCP server invocations. **Settings (Cmd+,)** holds the machine-local Bedrock API key and region.
+* Role: Repositioned as a configuration dashboard, not an editor. Obsidian remains the editing environment. Configuration lives in **Settings (Cmd+,)** — General, AI (connection, API key, active models, and a Test-everything button), Advanced (the tuning knobs), and Integrations (AI client wiring). The sidebar is five status tabs: **Home**, **Models** (the catalog), **Notes** (lint findings), **Health** (Vault · Performance · Updates), and **Activity** (Git · MCP Server).
 
 ---
 

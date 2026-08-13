@@ -6,7 +6,7 @@ This guide covers setting up, configuring, and using the 2ndbrain companion ecos
 
 The 2ndbrain ecosystem consists of three parts:
 * Go CLI: Command line tool and MCP server that indexes your vault and runs the AI (AWS Bedrock by default; Ollama/OpenRouter opt-in).
-* macOS App: Companion status and configuration dashboard (Home, plus Advanced: Vault Status, AI Settings, MCP Server, Git Integration, Validation). It is not an editor and never modifies your notes. Obsidian is the editor.
+* macOS App: Companion status dashboard (Home, Models, Notes, Health, Activity) with configuration in the Settings window (Cmd+,). It is not an editor and never modifies your notes. Obsidian is the editor.
 * Obsidian Plugin: Thin community plugin that connects the Obsidian UI with the CLI.
 
 ---
@@ -54,14 +54,19 @@ open /Applications/SecondBrain.app
 
 ### Configuration and Status
 
-Once launched, use the sidebar to switch between panels. The sidebar leads with **Home** (the default) and groups the rest under an **Advanced** section:
+Configuration lives in the Settings window (**Cmd+,**): General, AI, Advanced, and Integrations. The sidebar holds the status panels:
 * Home: Consolidated common-case screen with a vault card (an Obsidian-match badge and a plugin install/update row), an AI card (Bedrock + Claude Haiku 4.5 + Nova-2 with a ready dot and Test), a Claude Code card (skill + MCP-configured rows), and an index card (doc/embedding counts, an "awaiting embedding" hint, and Sync / Re-embed All; notes edited in Obsidian re-index automatically).
-* Settings (Cmd+,): Machine-local Bedrock region and API key. Writes `~/.config/2nb/bedrock.json`, which the dashboard and a terminal `2nb` both read. The token never enters the vault.
-* Vault Status: Shows the loaded vault path, document count, and index updates.
-* AI Settings: Connects to your AI provider (AWS Bedrock by default: Claude Haiku 4.5 + Nova-2 embeddings; Ollama/OpenRouter are opt-in) and configures embedding and generation models.
-* MCP Server: Tracks connected clients (like Cursor or Claude Code) and lists tool execution logs.
-* Git Integration: Displays recent commit histories and uncommitted modifications.
-* Validation: Scans for broken wikilinks and YAML frontmatter schema errors.
+* Models: The model catalog — provider cards, the active embedding/generation/rerank slots, per-model test and benchmark, and vendor policy.
+* Notes: Scans for broken wikilinks and YAML frontmatter schema errors, with one-click repairs and guided link fixes.
+* Health: **Vault** (path, document count, index coverage, embedding portability, stale notes) · **Performance** (index and query timings) · **Updates** (app, CLI, and plugin versions against the latest release).
+* Activity: **Git** (recent commits and uncommitted changes) · **MCP Server** (connected clients like Cursor or Claude Code, and their tool execution logs).
+
+Settings (**Cmd+,**) is where configuration lives:
+
+* General: the active vault (it follows Obsidian) and the Obsidian plugin.
+* AI: your provider, region, and API key — stored in `~/.config/2nb/bedrock.json`, which the dashboard and a terminal `2nb` both read, never in the vault — plus the two active models and a **Test everything** button that calls them for real and tells you whether your key was accepted.
+* Advanced: the tuning knobs (similarity threshold, hybrid weights, RAG budgets, embed concurrency, and more).
+* Integrations: which AI tools can reach this vault, with a one-click Configure per client.
 
 ---
 

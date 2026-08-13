@@ -487,18 +487,18 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 
 - **Vault card**: active vault name and path, a badge confirming it matches the vault Obsidian has open, and an Obsidian plugin row showing the installed plugin version with an Install/Update button (runs `2nb plugin install`)
 - **AI card**: provider and models (AWS Bedrock with Claude Haiku 4.5 + Amazon Nova-2 by default) with a readiness dot, Save-as-default, and Test buttons
-- **AI Clients card**: per-client rows (Claude Code, Warp, Claude Desktop, Codex) showing skill-installed, MCP-configured, and (for Claude Code / Claude Desktop) global-instructions status, each with a one-click **Configure** button (runs `2nb setup --client …`, backup-safe; Codex without its CLI shows the manual `codex mcp add` step instead of a false success)
+- **AI Clients card**: a summary of how many clients can reach this vault, linking to Settings > Integrations, where each client (Claude Code, Warp, Claude Desktop, Codex) shows skill-installed, MCP-configured, and global-instructions status with a one-click **Configure** button (runs `2nb setup --client …`, backup-safe; Codex without its CLI shows the manual `codex mcp add` step instead of a false success)
 - **Index card**: document and embedding counts, a "N notes awaiting embedding" hint, and Sync (incremental, embeds only what changed) and Re-embed All buttons. Notes edited in Obsidian sync automatically
 - The app bundles its own version-matched `2nb` CLI and prefers it, so its AI/indexing calls never run a stale Homebrew copy. An orange banner only appears on dev builds that fall back to an older PATH `2nb`; when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` to refresh the terminal/plugin's copy
 
-**Advanced** tabs for the power-user depth:
+Configuration lives in the **Settings window (Cmd+,)**: General, AI (connection, API key, the two active models, and a **Test everything** button that calls them for real), Advanced (every tuning knob), and Integrations (which AI tools can reach this vault).
 
-- **Vault Status**: unified health (vault info, index coverage, embedding portability, AI reachability, stale docs)
-- **AI Settings**: the AI Hub (Cmd+Shift+,) with provider cards, active model slots, and the full model catalog with per-model test, benchmark, and enable/disable
-- **MCP Server** (Cmd+Shift+M): live MCP server processes and recent tool invocations
-- **Git Integration** (Cmd+Shift+G): recent commits with a 1/3/7/30-day window; click a commit for per-file diffs
-- **Validation**: `2nb lint` findings rendered with file and line detail
-- **Updates**: app, CLI, and Obsidian-plugin versions against the latest release (`2nb update`), with one-click upgrades for the CLI and plugin
+The sidebar is the remaining four status tabs:
+
+- **Models**: the model catalog with provider cards, active model slots, per-model test and benchmark, and vendor policy (Cmd+Shift+,)
+- **Notes**: `2nb lint` findings with one-click repairs, guided link fixes, and bulk dead-link removal
+- **Health**: **Vault** (index coverage, embedding portability, AI reachability, stale docs) · **Performance** (`2nb metrics`) · **Updates** (app, CLI, and plugin versions against the latest release, with one-click upgrades)
+- **Activity**: **Git** (recent commits, 1/3/7/30-day window; click for per-file diffs — Cmd+Shift+G) · **MCP Server** (live server processes and recent tool invocations — Cmd+Shift+M)
 
 Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Sync Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
 

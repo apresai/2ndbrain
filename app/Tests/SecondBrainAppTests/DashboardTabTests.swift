@@ -39,16 +39,39 @@ func dashboardTabCount() {
     #expect(DashboardTab.allCases.count == 5)
 }
 
-/// Every menu deep link must land on a tab that still exists. `ContentView`
-/// maps five AppState flags onto tabs; when `.status`, `.metrics`, `.updates`,
-/// `.mcpServer`, and `.gitIntegration` were folded into Health and Activity,
-/// a missed remap would have pointed a menu item at a deleted case.
-@Test("DashboardTab: the grouping tabs that absorb the old ones exist")
-func dashboardGroupingTabsExist() {
-    #expect(DashboardTab.allCases.contains(.health))   // absorbed Vault Status, Metrics, Updates
-    #expect(DashboardTab.allCases.contains(.activity)) // absorbed Git Integration, MCP Server
-    #expect(DashboardTab.allCases.contains(.models))   // renamed from AI Settings
-    #expect(DashboardTab.allCases.contains(.notes))    // renamed from Validation
+/// Every menu deep link lands on the right tab AND the right pane.
+///
+/// This is the regression test for a bug this change shipped: folding MCP
+/// Server and Git Integration into one Activity tab made both links select
+/// `.activity`, and with the pane defaulting to Git, "MCP Server Status…"
+/// (Cmd+Shift+M) opened the Git view. Two targets now differ ONLY in the pane,
+/// so the pane is the part worth asserting.
+@Test("DashboardRoute: every deep link lands on the right tab and pane")
+func deepLinksRouteToTabAndPane() {
+    #expect(DashboardRoute.tab(for: .aiHub) == .models)
+    #expect(DashboardRoute.tab(for: .lintResults) == .notes)
+
+    // The two that share a tab.
+    #expect(DashboardRoute.tab(for: .mcpStatus) == .activity)
+    #expect(DashboardRoute.tab(for: .gitActivity) == .activity)
+    #expect(DashboardRoute.activitySection(for: .mcpStatus) == .mcp)
+    #expect(DashboardRoute.activitySection(for: .gitActivity) == .git)
+
+    #expect(DashboardRoute.tab(for: .vaultStatus) == .health)
+    #expect(DashboardRoute.healthSection(for: .vaultStatus) == .vault)
+}
+
+/// A target that does not land in a group must not carry a pane, or routing
+/// would silently move a pane the user is not looking at.
+@Test("DashboardRoute: non-group targets request no pane")
+func deepLinksWithoutPanesRequestNone() {
+    for target in [DashboardRoute.Target.aiHub, .lintResults] {
+        #expect(DashboardRoute.activitySection(for: target) == nil)
+        #expect(DashboardRoute.healthSection(for: target) == nil)
+    }
+    // A target lands in at most one group.
+    #expect(DashboardRoute.healthSection(for: .mcpStatus) == nil)
+    #expect(DashboardRoute.activitySection(for: .vaultStatus) == nil)
 }
 
 /// The group containers host the existing inline views behind a segmented
