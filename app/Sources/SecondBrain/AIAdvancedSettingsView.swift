@@ -164,8 +164,22 @@ struct AIAdvancedSettingsView: View {
     private var providerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Provider endpoints").font(.subheadline.bold())
-            knobRow(label: "Bedrock profile", key: "ai.bedrock.profile", text: $bedrockProfile, hint: "AWS profile name")
-            knobRow(label: "Bedrock region", key: "ai.bedrock.region", text: $bedrockRegion, hint: "vault fallback; Settings file region wins when set")
+            knobRow(label: "Bedrock profile", key: "ai.bedrock.profile", text: $bedrockProfile, hint: "AWS profile name; ignored whenever a bearer token resolves")
+            // Read-only on purpose. Region has two stores with INVERTED
+            // precedence — the machine-local ~/.config/2nb/bedrock.json beats
+            // vault config, the only setting in this product that works that
+            // way — so two editable fields meant a user could set the vault
+            // value, watch nothing change, and have no way to tell why. The AI
+            // tab owns the one that wins; this shows the fallback it shadows.
+            HStack(spacing: 8) {
+                Text("Bedrock region").frame(width: 170, alignment: .leading)
+                Text(bedrockRegion.isEmpty ? "(unset)" : bedrockRegion)
+                    .font(.body.monospaced())
+                    .foregroundStyle(.secondary)
+                Text("vault fallback, read-only — the region in Settings > AI wins and is edited there")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             knobRow(label: "Ollama endpoint", key: "ai.ollama.endpoint", text: $ollamaEndpoint, hint: "default http://localhost:11434")
         }
     }

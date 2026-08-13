@@ -377,11 +377,19 @@ struct AIHubView: View {
                 }
             }
             Spacer(minLength: 0)
-            Button(p.disabled ? "Enable" : "Disable") {
+            // "Enable"/"Disable" overstated what this does. `ai.<provider>.disabled`
+            // only hides that provider's models from the selection lists; it does
+            // NOT stop an explicitly-chosen active provider from running (see
+            // ai/config.go). A user who "disabled" Bedrock and watched it keep
+            // answering had every reason to think the button was broken.
+            Button(p.disabled ? "Show models" : "Hide models") {
                 Task { await toggleProvider(p) }
             }
             .controlSize(.small)
             .buttonStyle(.bordered)
+            .help(p.disabled
+                  ? "Show this provider's models in the selection lists again"
+                  : "Hide this provider's models from the selection lists. This does not stop it running if it is the active provider.")
         }
         .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
         .padding(10)
