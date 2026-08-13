@@ -14,6 +14,12 @@ import SwiftUI
 /// change is fewer places to look, not less to see.
 
 /// Health: the state of this vault and of the three installed products.
+///
+/// The selected section is owned by ContentView, not by @State here, for two
+/// reasons. A menu item that names a specific pane ("MCP Server Status…") has to
+/// be able to land on it — otherwise grouping two tabs into one silently breaks
+/// the deep link, which would be an odd thing for a change about labels matching
+/// behavior to do. And @State would reset the pane every time you left the tab.
 struct HealthView: View {
     enum Section: String, CaseIterable, Identifiable {
         case vault = "Vault"
@@ -22,7 +28,7 @@ struct HealthView: View {
         var id: String { rawValue }
     }
 
-    @State private var section: Section = .vault
+    @Binding var section: Section
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,6 +53,7 @@ struct HealthView: View {
 }
 
 /// Activity: what has been happening in and around the vault.
+/// Section ownership matches HealthView, and for the same reasons.
 struct ActivityView: View {
     enum Section: String, CaseIterable, Identifiable {
         case git = "Git"
@@ -54,7 +61,7 @@ struct ActivityView: View {
         var id: String { rawValue }
     }
 
-    @State private var section: Section = .git
+    @Binding var section: Section
 
     var body: some View {
         VStack(spacing: 0) {

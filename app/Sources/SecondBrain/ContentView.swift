@@ -40,6 +40,10 @@ enum DashboardTab: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @Environment(AppState.self) var appState
     @State private var selection: DashboardTab = .home
+    // Owned here so a menu item can deep-link to a specific pane inside a group
+    // tab, and so the pane survives leaving and returning to the tab.
+    @State private var healthSection: HealthView.Section = .vault
+    @State private var activitySection: ActivityView.Section = .git
 
     var body: some View {
         mainLayout
@@ -49,14 +53,18 @@ struct ContentView: View {
                     appState.showAIHub = false
                 }
             }
+            // Both land on Activity, so each must also name its pane — otherwise
+            // "MCP Server Status…" (Cmd+Shift+M) would open the Git view.
             .onChange(of: appState.showMCPStatus) { _, show in
                 if show {
+                    activitySection = .mcp
                     selection = .activity
                     appState.showMCPStatus = false
                 }
             }
             .onChange(of: appState.showGitActivity) { _, show in
                 if show {
+                    activitySection = .git
                     selection = .activity
                     appState.showGitActivity = false
                 }
@@ -69,6 +77,7 @@ struct ContentView: View {
             }
             .onChange(of: appState.showVaultStatus) { _, show in
                 if show {
+                    healthSection = .vault
                     selection = .health
                     appState.showVaultStatus = false
                 }
@@ -139,9 +148,9 @@ struct ContentView: View {
                     case .notes:
                         LintResultsView(isPresented: .constant(true), isInline: true)
                     case .health:
-                        HealthView()
+                        HealthView(section: $healthSection)
                     case .activity:
-                        ActivityView()
+                        ActivityView(section: $activitySection)
                     }
                 }
                 .navigationTitle(selection.rawValue)
