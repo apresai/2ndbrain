@@ -377,11 +377,19 @@ struct AIHubView: View {
                 }
             }
             Spacer(minLength: 0)
-            Button(p.disabled ? "Enable" : "Disable") {
+            // "Enable"/"Disable" overstated what this does. `ai.<provider>.disabled`
+            // only hides that provider's models from the selection lists; it does
+            // NOT stop an explicitly-chosen active provider from running (see
+            // ai/config.go). A user who "disabled" Bedrock and watched it keep
+            // answering had every reason to think the button was broken.
+            Button(p.disabled ? "Show models" : "Hide models") {
                 Task { await toggleProvider(p) }
             }
             .controlSize(.small)
             .buttonStyle(.bordered)
+            .help(p.disabled
+                  ? "Show this provider's models in the selection lists again"
+                  : "Hide this provider's models from the selection lists. This does not stop it running if it is the active provider.")
         }
         .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
         .padding(10)
@@ -437,8 +445,14 @@ struct AIHubView: View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text("Active provider \(ProviderDisplay.name(provider)) is disabled — re-enable it or pick another active model.")
+            // Says what the state actually is. "Disabled — re-enable it" implied
+            // the provider had been switched off and was not answering; it is
+            // still answering, because ai.<provider>.disabled only hides models
+            // from the lists. The confusing part is the inconsistency, not an
+            // outage, so the banner names that.
+            Text("\(ProviderDisplay.name(provider)) is your active provider but its models are hidden — it still answers, it just won't appear in the lists. Show its models again, or pick an active model from a visible provider.")
                 .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(8)
         .background(Color.orange.opacity(0.12))

@@ -67,27 +67,17 @@ final class AppState {
     var openDocuments: [DocumentTab] = []
     var activeTabIndex: Int = 0
 
-    // AI Hub is the single merged sheet for provider control, active
-    // model selection, and the model catalog. Replaces three earlier
-    // flags (showAISetupWizard, showModelWizard, showAITest), kept
-    // here as computed aliases so existing callers (Command Palette,
-    // status-bar popover, Vault Status, etc.) don't all need updates
-    // in this commit — they all open the same sheet regardless.
+    // AI Hub: provider control, active model selection, and the model catalog.
+    //
+    // This used to carry three computed aliases — showAISetupWizard,
+    // showModelWizard, showAITest — all of which got and set this same
+    // property. They were a migration shim that outlived its migration: four
+    // names for one flag meant a button labelled "Test Connection…" and one
+    // labelled "AI Setup…" were the same no-op navigation, and reading the
+    // call site told you nothing about what would happen. Both callers now use
+    // SettingsLink, so the aliases are gone.
     var showAIHub = false
-    var showAISetupWizard: Bool {
-        get { showAIHub }
-        set { showAIHub = newValue }
-    }
-    var showModelWizard: Bool {
-        get { showAIHub }
-        set { showAIHub = newValue }
-    }
-    var editorFontSize: CGFloat = UserDefaults.standard.object(forKey: "editorFontSize") as? CGFloat ?? 14
-    var editorFontFamily: String = UserDefaults.standard.string(forKey: "editorFontFamily") ?? "System Mono"
 
-    // Autosave
-    var autosaveIntervalSeconds: Int = UserDefaults.standard.object(forKey: "autosaveIntervalSeconds") as? Int ?? 30
-    private var autosaveTimer: Timer?
     private static let lowDiskThreshold: Int64 = 50 * 1024 * 1024
 
     // Merge conflict controllers (one per active dialog, retained so the NSWindow stays alive)
@@ -134,15 +124,6 @@ final class AppState {
     // Home compares this against `appVersion` to warn on a stale CLI — see
     // CLIVersion and refreshCLIVersion().
     var cliVersion: String?
-    // showAITest is kept as an alias for the AI Hub so the status bar
-    // AI popover and Vault Status's "Test Connection" button open the
-    // same unified sheet. Retiring the name entirely would force those
-    // call sites to change too; the alias keeps them working.
-    var showAITest: Bool {
-        get { showAIHub }
-        set { showAIHub = newValue }
-    }
-
     // Portability warnings from the most recent CLI search/ask. When
     // non-empty, the vault is in a degraded state (dimension mismatch,
     // provider unavailable, model mismatch, etc.) and views should show
@@ -352,9 +333,6 @@ final class AppState {
             syncOnBindIfStale()
         }
 
-        // Start autosave timer for this vault
-        startAutosaveTimer()
-
         // Start polling MCP server status (used by status bar indicator)
         startMCPStatusTimer()
 
@@ -453,40 +431,6 @@ final class AppState {
         }
 
         self.files = items
-    }
-
-    // MARK: - Font Size
-
-    func increaseFontSize() {
-        editorFontSize = min(editorFontSize + 1, 32)
-        UserDefaults.standard.set(editorFontSize, forKey: "editorFontSize")
-    }
-
-    func decreaseFontSize() {
-        editorFontSize = max(editorFontSize - 1, 10)
-        UserDefaults.standard.set(editorFontSize, forKey: "editorFontSize")
-    }
-
-    func resetFontSize() {
-        editorFontSize = 14
-        UserDefaults.standard.set(editorFontSize, forKey: "editorFontSize")
-    }
-
-    func setFontFamily(_ family: String) {
-        editorFontFamily = family
-        UserDefaults.standard.set(family, forKey: "editorFontFamily")
-    }
-
-    /// Resolve the stored font family name to an NSFont for the editor.
-    func resolvedEditorFont(size: CGFloat? = nil) -> NSFont {
-        let sz = size ?? editorFontSize
-        switch editorFontFamily {
-        case "System Mono":
-            return NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
-        default:
-            return NSFont(name: editorFontFamily, size: sz)
-                ?? NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
-        }
     }
 
     func openDocument(at url: URL) {
@@ -1082,7 +1026,7 @@ final class AppState {
     func saveCurrentDocument() {
         let idx = activeTabIndex
         guard idx >= 0, idx < openDocuments.count else { return }
-        _ = performSave(tabIdx: idx, isAutosave: false)
+        _ = performSave(tabIdx: idx)
     }
 
     func saveSnapshotForCurrentDocument() {
@@ -1090,27 +1034,29 @@ final class AppState {
         crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
     }
 
-    /// Core save path used by both manual save and autosave.
-    /// Returns true on success. When isAutosave is true, skips the low-disk modal
-    /// (which would block the UI unexpectedly on a background timer tick).
+    /// Core save path. Returns true on success.
+    ///
+    /// The `isAutosave` parameter is gone with the autosave timer that was its
+    /// only `true` caller: every branch it guarded (suppressing the merge and
+    /// low-disk modals, and the log wording) existed for a background tick that
+    /// no longer happens, so keeping it meant four dead paths and a signature
+    /// that implied a caller which does not exist.
     @discardableResult
-    private func performSave(tabIdx: Int, isAutosave: Bool) -> Bool {
+    private func performSave(tabIdx: Int) -> Bool {
         guard tabIdx >= 0, tabIdx < openDocuments.count else { return false }
         let tab = openDocuments[tabIdx]
 
         if tab.hasExternalConflict {
-            if !isAutosave {
-                let alert = NSAlert()
-                alert.messageText = "Unresolved merge conflict"
-                alert.informativeText = "\(tab.url.lastPathComponent) has unresolved external changes. Resolve the conflict before saving."
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "OK")
-                alert.runModal()
-            }
+            let alert = NSAlert()
+            alert.messageText = "Unresolved merge conflict"
+            alert.informativeText = "\(tab.url.lastPathComponent) has unresolved external changes. Resolve the conflict before saving."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
             return false
         }
 
-        if !isAutosave, let avail = availableDiskSpace(at: tab.url), avail < Self.lowDiskThreshold {
+        if let avail = availableDiskSpace(at: tab.url), avail < Self.lowDiskThreshold {
             let alert = NSAlert()
             alert.messageText = "Low disk space"
             alert.informativeText = "Only \(Self.formatBytes(avail)) free on this volume. Saving may fail."
@@ -1134,44 +1080,19 @@ final class AppState {
             openDocuments[tabIdx].lastSavedContent = tab.content
             markSelfWrite(path: tab.url.path)
             crashJournal?.clearSnapshotSync(documentID: tab.document.id)
-            log.debug("\(isAutosave ? "Autosaved" : "Saved"): \(tab.url.lastPathComponent)")
+            log.debug("Saved: \(tab.url.lastPathComponent)")
             triggerIncrementalReindex(for: tab.url)
             if vaultIsGitRepo {
                 Task { await refreshGitStatus() }
             }
             return true
         } catch {
-            log.error("\(isAutosave ? "Autosave" : "Save") failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
+            log.error("Save failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
             errorLogger?.log("Failed to save document", error: error)
             return false
         }
     }
 
-    // MARK: - Autosave
-
-    func startAutosaveTimer() {
-        autosaveTimer?.invalidate()
-        autosaveTimer = nil
-        guard autosaveIntervalSeconds > 0 else { return }
-        let interval = TimeInterval(autosaveIntervalSeconds)
-        autosaveTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.runAutosave()
-            }
-        }
-    }
-
-    func setAutosaveInterval(_ seconds: Int) {
-        autosaveIntervalSeconds = seconds
-        UserDefaults.standard.set(seconds, forKey: "autosaveIntervalSeconds")
-        startAutosaveTimer()
-    }
-
-    private func runAutosave() {
-        for idx in openDocuments.indices where openDocuments[idx].isDirty {
-            performSave(tabIdx: idx, isAutosave: true)
-        }
-    }
 
     // MARK: - Filesystem Helpers
 
@@ -1354,7 +1275,7 @@ final class AppState {
             // next FSEvents tick from our own write isn't mistaken for another
             // external change. We overwrite the external edits with ours.
             openDocuments[idx].lastSavedContent = diskContent
-            performSave(tabIdx: idx, isAutosave: false)
+            performSave(tabIdx: idx)
         case .useTheirs:
             openDocuments[idx].content = diskContent
             openDocuments[idx].lastSavedContent = diskContent

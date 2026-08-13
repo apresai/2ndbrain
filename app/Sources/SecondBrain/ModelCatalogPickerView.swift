@@ -340,10 +340,19 @@ struct ModelCatalogPickerView: View {
                     Button {
                         Task { await setActive(model, reembed: false) }
                     } label: {
-                        Label("Set Active", systemImage: "checkmark.circle")
+                        // Picking a rerank model also writes ai.rerank.enabled=true.
+                        // That is a reasonable default — you would not choose a
+                        // reranker to leave it off — but the old "Set Active"
+                        // label gave no hint that it flipped a second setting.
+                        Label(model.modelType == "rerank" ? "Set Active + Turn On" : "Set Active",
+                              systemImage: "checkmark.circle")
                     }
                     .disabled(model.compatible == false || appState.isIndexing)
-                    .help(appState.isIndexing ? "Wait for the index rebuild to finish" : "Set as active \(model.modelType)")
+                    .help(appState.isIndexing
+                          ? "Wait for the index rebuild to finish"
+                          : (model.modelType == "rerank"
+                             ? "Set as the active reranker AND turn reranking on (ai.rerank.enabled). Reranking is off by default because it measured worse on a vault this size."
+                             : "Set as active \(model.modelType)"))
 
                     if model.modelType == "embedding" {
                         Button {

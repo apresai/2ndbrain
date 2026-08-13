@@ -253,17 +253,18 @@ struct VaultStatusView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // These were two buttons, "Test Connection…" and "AI Setup…", and
+            // neither did what it said: both set aliases of the same
+            // `showAIHub` flag, so both merely selected the AI Settings tab.
+            // Nothing tested a connection and no setup wizard existed.
+            //
+            // Both now exist for real, in one place — the Settings window's AI
+            // tab holds the credentials and a Test everything button that
+            // actually calls the models — so this is one honest link to it.
             HStack {
-                Button("Test Connection...") {
-                    isPresented = false
-                    appState.showAITest = true
+                SettingsLink {
+                    Text("Open AI settings…")
                 }
-                .disabled(appState.vault == nil)
-                Button("AI Setup...") {
-                    isPresented = false
-                    appState.showAISetupWizard = true
-                }
-                .disabled(appState.vault == nil)
                 Spacer()
             }
         }

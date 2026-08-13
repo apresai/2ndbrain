@@ -258,6 +258,16 @@ struct HomeView: View {
                 Text(HomeAI.statusLine(status))
             }
             .font(.callout)
+            // The onboarding dead end: this card told a first-run user their
+            // credentials were missing and then offered nowhere to put them.
+            // The only routes were Cmd+, (undiscoverable from here) and a
+            // mini link buried two clicks deep in the Hub.
+            if !ready {
+                SettingsLink {
+                    Text("Add your API key in Settings…")
+                }
+                .controlSize(.small)
+            }
             HStack {
                 // The reset path only appears when the config has drifted from
                 // the recommended defaults, and always confirms first: the old
