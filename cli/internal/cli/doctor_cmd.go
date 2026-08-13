@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
@@ -109,6 +110,15 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 }
 
+// doctorSelfTestTimeout bounds the whole self-test. Every probe inside it
+// already carries its own cap (TestProbeModel 30s per model), but the vault
+// tier reuses mcp doctor's engine checks, which standalone `2nb mcp doctor`
+// bounds at 15s and would otherwise run unbounded here. A diagnostic that can
+// hang forever against an unreachable provider is worse than one that gives up
+// and says so — especially since the macOS Settings window shells this command
+// behind a button.
+const doctorSelfTestTimeout = 90 * time.Second
+
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	ctx := context.Background()
 	suite := gatherSuiteStatus(ctx)
@@ -124,7 +134,9 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	self := runSelfTest(ctx)
+	selfCtx, cancel := context.WithTimeout(ctx, doctorSelfTestTimeout)
+	defer cancel()
+	self := runSelfTest(selfCtx)
 	report := DoctorReport{SuiteStatus: suite, OK: self.OK, SelfTest: &self}
 
 	if format := getFormat(cmd); format != "" {
