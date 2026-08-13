@@ -26,7 +26,7 @@ struct SecondBrainApp: App {
         }
 
         Settings {
-            PreferencesView()
+            SettingsView()
                 .environment(appState)
         }
 
