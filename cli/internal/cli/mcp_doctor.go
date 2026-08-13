@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -202,6 +203,9 @@ func buildMCPDoctorReport(ctx context.Context, v *vault.Vault) MCPDoctorReport {
 func engineCheck(ctx context.Context, eng *mcppkg.Engine, name, tool string, args map[string]any, failFix string) DoctorCheck {
 	text, isErr, err := eng.Call(ctx, tool, args)
 	if err != nil || isErr {
+		if c, timedOut := deadlineCheck(ctx, name, err); timedOut {
+			return c
+		}
 		detail := tool + " errored"
 		if err != nil {
 			detail = trimDetail(err.Error())
@@ -211,6 +215,26 @@ func engineCheck(ctx context.Context, eng *mcppkg.Engine, name, tool string, arg
 		return DoctorCheck{Name: name, OK: false, Detail: detail, Fix: failFix}
 	}
 	return DoctorCheck{Name: name, OK: true, Detail: tool + " answered"}
+}
+
+// deadlineCheck converts an expired context into a check that blames the clock
+// rather than the subsystem under inspection.
+//
+// Without it, a check whose budget ran out renders `context deadline exceeded`
+// underneath its static fix text — telling the user the search index or the
+// vault DB is broken when the only thing that actually happened is that the
+// self-test gave up waiting. Misdiagnosis is the worst failure mode available
+// to a command whose entire job is accurate diagnosis.
+func deadlineCheck(ctx context.Context, name string, err error) (DoctorCheck, bool) {
+	if ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) {
+		return DoctorCheck{}, false
+	}
+	return DoctorCheck{
+		Name:   name,
+		OK:     false,
+		Detail: "timed out — the self-test gave up waiting, so this check is inconclusive",
+		Fix:    "re-run `2nb doctor`; if it times out again the provider or vault is very slow, not necessarily broken",
+	}, true
 }
 
 // engineSearchCheck runs kb_search and inspects the PAYLOAD, not just the error.
@@ -228,6 +252,9 @@ func engineSearchCheck(ctx context.Context, eng *mcppkg.Engine, v *vault.Vault) 
 
 	text, isErr, err := eng.Call(ctx, "kb_search", map[string]any{"query": "knowledge", "limit": 1})
 	if err != nil || isErr {
+		if c, timedOut := deadlineCheck(ctx, name, err); timedOut {
+			return c
+		}
 		detail := "kb_search errored"
 		if err != nil {
 			detail = trimDetail(err.Error())

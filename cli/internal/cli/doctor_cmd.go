@@ -110,14 +110,22 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 }
 
-// doctorSelfTestTimeout bounds the whole self-test. Every probe inside it
-// already carries its own cap (TestProbeModel 30s per model), but the vault
-// tier reuses mcp doctor's engine checks, which standalone `2nb mcp doctor`
-// bounds at 15s and would otherwise run unbounded here. A diagnostic that can
-// hang forever against an unreachable provider is worse than one that gives up
-// and says so — especially since the macOS Settings window shells this command
-// behind a button.
-const doctorSelfTestTimeout = 90 * time.Second
+// The self-test is bounded PER TIER rather than by one shared deadline.
+//
+// A single budget looks simpler and is wrong: tier 1's two model probes run
+// sequentially and each carries its own 30s cap, so a degraded provider — the
+// exact condition this command exists to diagnose — can eat ~60s before tier 2
+// starts. Whatever is left then expires mid-check, and the vault tier reports
+// "the search index is unusable" when the truth is that the self-test ran out
+// of time. A diagnostic that misattributes its own timeout to the subsystem it
+// was inspecting is worse than one that is merely slow.
+//
+// So each tier gets a floor it cannot be starved out of. Tier 2 mirrors the 15s
+// standalone `2nb mcp doctor` already uses, plus room for the config checks.
+const (
+	doctorModelTierTimeout = 70 * time.Second // 2 sequential probes at 30s + slack
+	doctorVaultTierTimeout = 20 * time.Second // mcp doctor's 15s + the config checks
+)
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	ctx := context.Background()
@@ -134,9 +142,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	selfCtx, cancel := context.WithTimeout(ctx, doctorSelfTestTimeout)
-	defer cancel()
-	self := runSelfTest(selfCtx)
+	self := runSelfTest(ctx)
 	report := DoctorReport{SuiteStatus: suite, OK: self.OK, SelfTest: &self}
 
 	if format := getFormat(cmd); format != "" {

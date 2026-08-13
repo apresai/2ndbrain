@@ -64,10 +64,17 @@ func runSelfTest(ctx context.Context) SelfTestReport {
 	// precisely so tier 1 can run without opening one.
 	initAIProvidersFor(cfg, root)
 
-	tier1, creds := selfTestModels(ctx, cfg, root)
+	// Each tier carries its own deadline so a slow provider in tier 1 cannot
+	// starve tier 2 into reporting a timeout as an index defect.
+	modelCtx, cancelModels := context.WithTimeout(ctx, doctorModelTierTimeout)
+	tier1, creds := selfTestModels(modelCtx, cfg, root)
+	cancelModels()
 	r.Credentials = creds
 	r.Checks = append(r.Checks, tier1...)
-	r.Checks = append(r.Checks, selfTestVault(ctx, root, hasSidecar)...)
+
+	vaultCtx, cancelVault := context.WithTimeout(ctx, doctorVaultTierTimeout)
+	defer cancelVault()
+	r.Checks = append(r.Checks, selfTestVault(vaultCtx, root, hasSidecar)...)
 
 	r.OK = true
 	for _, c := range r.Checks {
