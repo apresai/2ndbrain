@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.18.0] - 2026-08-13
+
+### Added
+- macOS Settings window (Cmd+,) with General, AI, Advanced, and Integrations tabs — the first configuration surface that works with no vault bound, including a masked Bedrock key field that verifies a key before accepting it and a "Test everything" button wired to the new doctor self-test.
+- `2nb doctor` now runs a real end-to-end self-test in two tiers: tier 1 probes the active embedding and generation models and reports a plain credential verdict (accepted/rejected/unreachable/unknown) with no vault required; tier 2 folds in `config doctor` and `mcp doctor` checks when a 2nb-indexed vault resolves. Each tier is bounded separately, and an expired check reports an inconclusive timeout rather than blaming the subsystem it was inspecting. `--json` adds `ok` and `selftest{...}`.
+- `2nb doctor --versions` restores the free, parity-only behavior (no model calls, always exits 0) for automatic callers; the Obsidian plugin's Components section now uses it.
+- `mcp doctor`'s `kb_search` check inspects the result payload, so a vault with embeddings that answers in keyword-only mode is a hard failure instead of a silent pass.
+- `config bedrock --json` returns `token_suffix` (last 4 characters, suppressed under 12) so a GUI can render a recognizable masked key.
+- `BedrockRegions.risk` gates the region picker with three verdicts — safe, breaks, and unverifiable — so a breaking region can't be saved silently when no vault is bound.
+
+### Changed
+- Dashboard sidebar goes from eight entries to five: Home, Models, Notes, Health, and Activity. Health groups Vault, Performance, and Updates; Activity groups Git and MCP Server. The existing views are hosted behind a segmented picker, so nothing was rewritten or dropped, and the group is no longer labelled "Advanced".
+- "AI Settings" tab renamed to "Models" — it is the model catalog, not where an API key goes.
+- Provider cards say "Show models / Hide models" instead of Enable/Disable, matching what `ai.<provider>.disabled` actually does (hides models from selection lists; does not stop an explicitly-chosen active provider).
+- The rerank slot's picker action reads "Set Active + Turn On", since selecting a rerank model also writes `ai.rerank.enabled=true`.
+- Home's AI card is provider-generic (names the active provider, shows raw active model IDs) and replaces the always-visible "Save as default" with a drift-gated "Reset to recommended defaults" that confirms exactly what it writes. When AI isn't ready, the card now links straight to the AI settings tab instead of dead-ending.
+- Home's AI Clients card is a read-only summary; all client skill/MCP/instructions writes happen only on the Settings Integrations tab.
+- Sync and Re-embed All are owned by Home; Vault status reports state instead of running operations.
+
+### Removed
+- Dead editor settings and the no-op "Test Connection…" / "AI Setup…" actions (`showAITest`, `showAISetupWizard`, `showModelWizard` were computed aliases that merely selected a tab); both actions now exist for real on the Settings AI tab.
+- `PreferencesView.swift`, superseded by the native Settings window.
+
+
 ## [0.17.1] - 2026-08-12
 
 ### Added
