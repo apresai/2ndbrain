@@ -422,8 +422,12 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		}
 		cfg.RAGNoteBudgetRunes = n
 	case "ai.embed_concurrency":
+		// 0 is accepted, not rejected: it is the documented "unset" value that
+		// ResolveEmbedConcurrency maps back to the per-provider default. The old
+		// `n < 1` guard promised that in its own error text while making it
+		// unreachable, so the only way back to automatic was hand-editing YAML.
 		n, err := strconv.Atoi(value)
-		if err != nil || n < 1 || n > 64 {
+		if err != nil || n < 0 || n > 64 {
 			return fmt.Errorf("embed_concurrency must be an integer between 1 and 64 (got %q); 0/unset resolves to the per-provider default", value)
 		}
 		cfg.EmbedConcurrency = n
