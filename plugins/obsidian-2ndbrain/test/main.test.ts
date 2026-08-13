@@ -123,10 +123,34 @@ import {
 	firstExistingSystem,
 	trimChatHistory,
 	mcpSnippetFor,
+	isUnknownFlagError,
 	MCP_CLIENTS,
 	type ChatTurn,
 	type DiffRow,
 } from '../main.ts';
+
+// isUnknownFlagError gates whether suiteStatus() retries the legacy `2nb doctor`
+// form. That matters because bare `doctor` now runs a self-test that CALLS THE
+// ACTIVE MODELS: retrying on the wrong class of error would spend money every
+// time a user opened the settings tab. Only a genuine unknown-flag rejection
+// from an older CLI may trigger the retry.
+describe('isUnknownFlagError', () => {
+	it('matches cobra unknown-flag rejections, the only case that may retry', () => {
+		// Verbatim stderr from 2nb 0.17.1 given `doctor --versions`.
+		expect(isUnknownFlagError(new Error('Error: unknown flag: --versions'))).toBe(true);
+		expect(isUnknownFlagError(new Error('unknown shorthand flag: \'x\' in -x'))).toBe(true);
+		expect(isUnknownFlagError('Error: unknown flag: --versions')).toBe(true);
+	});
+
+	it('does NOT match unrelated failures, which must never retry a paid command', () => {
+		expect(isUnknownFlagError(new Error('Could not find 2nb CLI at "/usr/local/bin/2nb"'))).toBe(false);
+		expect(isUnknownFlagError(new Error('2nb doctor timed out.'))).toBe(false);
+		expect(isUnknownFlagError(new Error('vault not found'))).toBe(false);
+		expect(isUnknownFlagError(new Error(''))).toBe(false);
+		expect(isUnknownFlagError(undefined)).toBe(false);
+		expect(isUnknownFlagError(null)).toBe(false);
+	});
+});
 
 describe('trimChatHistory', () => {
 	const turn = (role: ChatTurn['role'], content: string): ChatTurn => ({ role, content });

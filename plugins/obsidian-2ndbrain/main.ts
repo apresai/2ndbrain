@@ -264,6 +264,20 @@ export function resolveCliPath(
 // the open Obsidian vault's path so 2nb can never resolve a different vault from
 // the Obsidian registry or the process cwd. The Obsidian vault and the 2nb vault
 // stay joined at the hip.
+// isUnknownFlagError reports whether a failed CLI invocation failed BECAUSE the
+// installed 2nb does not know a flag we passed, as opposed to failing for any
+// other reason. Cobra's wording is "unknown flag: --x" / "unknown shorthand
+// flag"; it is stable across cobra 1.x and is what a pre-0.18 binary emits for
+// `doctor --versions`.
+//
+// This distinction is load-bearing rather than cosmetic: it is the only thing
+// separating "retry the older, free command form" from "retry a command that
+// now costs money on every settings-tab render".
+export function isUnknownFlagError(err: unknown): boolean {
+	const text = err instanceof Error ? err.message : String(err ?? '');
+	return /unknown (flag|shorthand flag)/i.test(text);
+}
+
 export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
 	return ['--vault', vaultPath, ...args];
 }
@@ -1094,18 +1108,27 @@ export default class BrainPlugin extends Plugin {
 	// isn't reachable / lacks the `doctor` subcommand (pre-0.10.x CLI).
 	//
 	// --versions is required, not cosmetic: bare `2nb doctor` now runs a real
-	// self-test that calls the active models. This runs on every settings-tab
-	// render, so it must stay free and side-effect-free. The flag is ignored by
-	// a pre-0.18 CLI's flag parser only if unknown flags are permitted, so a
-	// failure falls back to the plain form below.
+	// self-test that CALLS THE ACTIVE MODELS, which costs money. This method
+	// runs on every settings-tab render, so it must stay free.
+	//
+	// Hence the narrow fallback. A pre-0.18 CLI has no --versions flag and
+	// cobra rejects it outright (verified: 2nb 0.17.1 exits 1 with
+	// "unknown flag: --versions"), and on THAT CLI bare `doctor` is the free
+	// parity-only report. Any other failure — a missing binary, a bad vault, a
+	// transient error — must NOT retry, because on a current CLI the retry
+	// would spend real money every time a user opened this tab.
 	async suiteStatus(): Promise<SuiteStatus | null> {
 		try {
 			return JSON.parse(await this.runCommand(['doctor', '--versions', '--json'])) as SuiteStatus;
-		} catch {
-			// Older CLI: no --versions flag, and bare `doctor` was parity-only.
+		} catch (err) {
+			if (!isUnknownFlagError(err)) {
+				console.debug('2ndbrain: doctor --versions failed', err);
+				return null;
+			}
 			try {
 				return JSON.parse(await this.runCommand(['doctor', '--json'])) as SuiteStatus;
-			} catch {
+			} catch (fallbackErr) {
+				console.debug('2ndbrain: legacy doctor fallback failed', fallbackErr);
 				return null;
 			}
 		}
