@@ -22,7 +22,6 @@ struct VaultStatusView: View {
 
     @State private var staleCount: Int = 0
     @State private var staleLoading: Bool = true
-    @State private var showReembedConfirm: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,19 +49,6 @@ struct VaultStatusView: View {
         .frame(width: isInline ? nil : 560, height: isInline ? nil : 620)
         .task {
             await refresh()
-        }
-        .confirmationDialog(
-            "Re-embed all documents?",
-            isPresented: $showReembedConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Re-embed All", role: .destructive) {
-                appState.rebuildIndex(forceReembed: true)
-                isPresented = false
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This invalidates every stored embedding and regenerates them from scratch. Useful when switching embedding models or fixing dimension/model mismatches. May take several minutes.")
         }
     }
 
@@ -150,15 +136,6 @@ struct VaultStatusView: View {
                 LabeledContent("State", value: "Up to date")
             }
 
-            HStack {
-                Button("Sync") {
-                    appState.rebuildIndex()
-                    isPresented = false
-                }
-                .disabled(appState.vault == nil || appState.isIndexing)
-                .help("Index new and changed notes and embed only what changed (reconciles notes added, edited, or deleted in Obsidian). Notes edited while the app is open sync automatically.")
-                Spacer()
-            }
         }
     }
 
@@ -194,14 +171,13 @@ struct VaultStatusView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack {
-                Button("Re-embed All...") {
-                    showReembedConfirm = true
-                }
-                .disabled(appState.vault == nil || appState.isIndexing)
-                .help("Invalidate and regenerate all embeddings")
-                Spacer()
-            }
+            // Sync and Re-embed All used to live here too, duplicating Home's
+            // buttons. Five entry points wrapped the same two operations, so a
+            // destructive full re-embed was reachable from wherever you happened
+            // to be standing. This view reports state; Home runs the operations.
+            Text("Run Sync or Re-embed All from Home.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

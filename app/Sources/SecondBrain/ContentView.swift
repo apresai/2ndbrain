@@ -2,33 +2,37 @@ import SwiftUI
 import SecondBrainCore
 import UniformTypeIdentifiers
 
+/// The dashboard's sidebar.
+///
+/// This was eight entries, one per surface, which meant "is my vault healthy?"
+/// was answered across three of them and "what has been happening?" across two.
+/// Now that configuration lives in the Settings window (Cmd+,), everything left
+/// here is status, so it groups by the question rather than the subsystem.
+///
+/// `aiSettings` became `models` in name and scope: it is the model catalog, and
+/// calling a catalog browser "AI Settings" is what sent people looking for their
+/// API key in a 67-control grid instead of in Settings.
 enum DashboardTab: String, CaseIterable, Identifiable {
     case home = "Home"
-    case status = "Vault Status"
-    case aiSettings = "AI Settings"
-    case mcpServer = "MCP Server"
-    case gitIntegration = "Git Integration"
-    case validation = "Validation"
-    case metrics = "Metrics"
-    case updates = "Updates"
+    case models = "Models"
+    case notes = "Notes"
+    case health = "Health"
+    case activity = "Activity"
 
     var id: String { self.rawValue }
 
-    /// The power-user tabs, demoted under an "Advanced" sidebar section. Home
-    /// surfaces the common-case essentials (vault, AI, index); everything else
-    /// lives here.
-    static var advanced: [DashboardTab] { [.status, .aiSettings, .mcpServer, .gitIntegration, .validation, .metrics, .updates] }
+    /// Everything below Home. No longer labelled "Advanced": with the knobs
+    /// moved out, these are ordinary status views, and calling them advanced
+    /// discouraged people from opening the ones that answer real questions.
+    static var secondary: [DashboardTab] { [.models, .notes, .health, .activity] }
 
     var systemImage: String {
         switch self {
         case .home: return "house"
-        case .status: return "externaldrive"
-        case .aiSettings: return "bolt.horizontal"
-        case .mcpServer: return "server.rack"
-        case .gitIntegration: return "sourcecontrol"
-        case .validation: return "checkmark.seal"
-        case .metrics: return "speedometer"
-        case .updates: return "arrow.down.circle"
+        case .models: return "bolt.horizontal"
+        case .notes: return "checkmark.seal"
+        case .health: return "stethoscope"
+        case .activity: return "clock.arrow.circlepath"
         }
     }
 }
@@ -41,31 +45,31 @@ struct ContentView: View {
         mainLayout
             .onChange(of: appState.showAIHub) { _, show in
                 if show {
-                    selection = .aiSettings
+                    selection = .models
                     appState.showAIHub = false
                 }
             }
             .onChange(of: appState.showMCPStatus) { _, show in
                 if show {
-                    selection = .mcpServer
+                    selection = .activity
                     appState.showMCPStatus = false
                 }
             }
             .onChange(of: appState.showGitActivity) { _, show in
                 if show {
-                    selection = .gitIntegration
+                    selection = .activity
                     appState.showGitActivity = false
                 }
             }
             .onChange(of: appState.showLintResults) { _, show in
                 if show {
-                    selection = .validation
+                    selection = .notes
                     appState.showLintResults = false
                 }
             }
             .onChange(of: appState.showVaultStatus) { _, show in
                 if show {
-                    selection = .status
+                    selection = .health
                     appState.showVaultStatus = false
                 }
             }
@@ -117,11 +121,9 @@ struct ContentView: View {
                     NavigationLink(value: DashboardTab.home) {
                         Label(DashboardTab.home.rawValue, systemImage: DashboardTab.home.systemImage)
                     }
-                    Section("Advanced") {
-                        ForEach(DashboardTab.advanced) { tab in
-                            NavigationLink(value: tab) {
-                                Label(tab.rawValue, systemImage: tab.systemImage)
-                            }
+                    ForEach(DashboardTab.secondary) { tab in
+                        NavigationLink(value: tab) {
+                            Label(tab.rawValue, systemImage: tab.systemImage)
                         }
                     }
                 }
@@ -132,20 +134,14 @@ struct ContentView: View {
                     switch selection {
                     case .home:
                         HomeView()
-                    case .status:
-                        VaultStatusView(isPresented: .constant(true), isInline: true)
-                    case .aiSettings:
+                    case .models:
                         AIHubView(onClose: {}, isInline: true)
-                    case .mcpServer:
-                        MCPStatusView(isPresented: .constant(true), isInline: true)
-                    case .gitIntegration:
-                        GitActivityView(isPresented: .constant(true), isInline: true)
-                    case .validation:
+                    case .notes:
                         LintResultsView(isPresented: .constant(true), isInline: true)
-                    case .metrics:
-                        MetricsView(isPresented: .constant(true), isInline: true)
-                    case .updates:
-                        UpdatesView()
+                    case .health:
+                        HealthView()
+                    case .activity:
+                        ActivityView()
                     }
                 }
                 .navigationTitle(selection.rawValue)
