@@ -445,8 +445,14 @@ struct AIHubView: View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text("Active provider \(ProviderDisplay.name(provider)) is disabled — re-enable it or pick another active model.")
+            // Says what the state actually is. "Disabled — re-enable it" implied
+            // the provider had been switched off and was not answering; it is
+            // still answering, because ai.<provider>.disabled only hides models
+            // from the lists. The confusing part is the inconsistency, not an
+            // outage, so the banner names that.
+            Text("\(ProviderDisplay.name(provider)) is your active provider but its models are hidden — it still answers, it just won't appear in the lists. Show its models again, or pick an active model from a visible provider.")
                 .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(8)
         .background(Color.orange.opacity(0.12))

@@ -1026,7 +1026,7 @@ final class AppState {
     func saveCurrentDocument() {
         let idx = activeTabIndex
         guard idx >= 0, idx < openDocuments.count else { return }
-        _ = performSave(tabIdx: idx, isAutosave: false)
+        _ = performSave(tabIdx: idx)
     }
 
     func saveSnapshotForCurrentDocument() {
@@ -1034,27 +1034,29 @@ final class AppState {
         crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
     }
 
-    /// Core save path used by both manual save and autosave.
-    /// Returns true on success. When isAutosave is true, skips the low-disk modal
-    /// (which would block the UI unexpectedly on a background timer tick).
+    /// Core save path. Returns true on success.
+    ///
+    /// The `isAutosave` parameter is gone with the autosave timer that was its
+    /// only `true` caller: every branch it guarded (suppressing the merge and
+    /// low-disk modals, and the log wording) existed for a background tick that
+    /// no longer happens, so keeping it meant four dead paths and a signature
+    /// that implied a caller which does not exist.
     @discardableResult
-    private func performSave(tabIdx: Int, isAutosave: Bool) -> Bool {
+    private func performSave(tabIdx: Int) -> Bool {
         guard tabIdx >= 0, tabIdx < openDocuments.count else { return false }
         let tab = openDocuments[tabIdx]
 
         if tab.hasExternalConflict {
-            if !isAutosave {
-                let alert = NSAlert()
-                alert.messageText = "Unresolved merge conflict"
-                alert.informativeText = "\(tab.url.lastPathComponent) has unresolved external changes. Resolve the conflict before saving."
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "OK")
-                alert.runModal()
-            }
+            let alert = NSAlert()
+            alert.messageText = "Unresolved merge conflict"
+            alert.informativeText = "\(tab.url.lastPathComponent) has unresolved external changes. Resolve the conflict before saving."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
             return false
         }
 
-        if !isAutosave, let avail = availableDiskSpace(at: tab.url), avail < Self.lowDiskThreshold {
+        if let avail = availableDiskSpace(at: tab.url), avail < Self.lowDiskThreshold {
             let alert = NSAlert()
             alert.messageText = "Low disk space"
             alert.informativeText = "Only \(Self.formatBytes(avail)) free on this volume. Saving may fail."
@@ -1078,14 +1080,14 @@ final class AppState {
             openDocuments[tabIdx].lastSavedContent = tab.content
             markSelfWrite(path: tab.url.path)
             crashJournal?.clearSnapshotSync(documentID: tab.document.id)
-            log.debug("\(isAutosave ? "Autosaved" : "Saved"): \(tab.url.lastPathComponent)")
+            log.debug("Saved: \(tab.url.lastPathComponent)")
             triggerIncrementalReindex(for: tab.url)
             if vaultIsGitRepo {
                 Task { await refreshGitStatus() }
             }
             return true
         } catch {
-            log.error("\(isAutosave ? "Autosave" : "Save") failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
+            log.error("Save failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
             errorLogger?.log("Failed to save document", error: error)
             return false
         }
@@ -1273,7 +1275,7 @@ final class AppState {
             // next FSEvents tick from our own write isn't mistaken for another
             // external change. We overwrite the external edits with ours.
             openDocuments[idx].lastSavedContent = diskContent
-            performSave(tabIdx: idx, isAutosave: false)
+            performSave(tabIdx: idx)
         case .useTheirs:
             openDocuments[idx].content = diskContent
             openDocuments[idx].lastSavedContent = diskContent
