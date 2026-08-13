@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -239,8 +240,13 @@ func engineSearchCheck(ctx context.Context, eng *mcppkg.Engine, v *vault.Vault) 
 	mode, observable := firstSearchMode(text)
 	embedded, cerr := v.DB.EmbeddingCount()
 	if cerr != nil {
-		// Can't tell whether BM25 is legitimate; don't manufacture a failure
-		// out of a DB read error the portability checks will report properly.
+		// Degrade to 0 so a DB read error cannot manufacture a spurious
+		// "vector channel is down" failure — but SAY SO. Silence here would
+		// render a real DB fault as a benign "no embeddings yet" warn, in the
+		// one command whose whole purpose is proving things actually work.
+		// Standalone `2nb mcp doctor` runs no portability check that would
+		// catch it separately, so this log is the only signal.
+		slog.Warn("mcp doctor: embedding-count query failed; kb_search mode check degraded", "err", cerr)
 		embedded = 0
 	}
 	return classifySearchMode(name, mode, observable, embedded)
