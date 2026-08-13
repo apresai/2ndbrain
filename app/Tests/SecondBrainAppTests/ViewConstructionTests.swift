@@ -60,3 +60,22 @@ func primaryViewsConstruct() {
     #expect(String(describing: type(of: home)) == "HomeView")
     #expect(String(describing: type(of: vendorPolicy)) == "VendorPolicyView")
 }
+
+@Test("Settings window views can be constructed")
+@MainActor
+func settingsViewsConstruct() {
+    // The Settings scene is now the app's primary configuration surface, so its
+    // views belong in the same smoke test as the rest: a body that fails to
+    // type-check or a bad @Environment wiring should fail here, not on Cmd+,.
+    let settings = SettingsView()
+    let general = SettingsGeneralView()
+    let ai = SettingsAIView()
+    let advanced = SettingsAdvancedView()
+    let integrations = SettingsIntegrationsView()
+
+    #expect(String(describing: type(of: settings)) == "SettingsView")
+    #expect(String(describing: type(of: general)) == "SettingsGeneralView")
+    #expect(String(describing: type(of: ai)) == "SettingsAIView")
+    #expect(String(describing: type(of: advanced)) == "SettingsAdvancedView")
+    #expect(String(describing: type(of: integrations)) == "SettingsIntegrationsView")
+}

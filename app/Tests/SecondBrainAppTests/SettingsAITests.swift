@@ -2,6 +2,46 @@ import Foundation
 import Testing
 @testable import SecondBrain
 
+// MARK: - Raw CLI runner (real subprocess, no mocks)
+
+// runCLIGlobalRaw is the reason `2nb doctor`'s verdict survives a non-zero
+// exit, and the refactor it required touched every runCLIGlobal caller. A
+// decode test over a JSON literal cannot catch a regression in the process
+// plumbing, so this spawns the real binary — matching AppStateCLITests, and
+// the project's no-mock policy.
+
+@Test("runCLIGlobalRaw returns stdout AND a non-zero status instead of throwing")
+@MainActor
+func runCLIGlobalRawKeepsStdoutOnFailure() async throws {
+    let state = AppState()
+    // An unknown subcommand: cobra exits non-zero and writes to stderr. The
+    // point is that the call RETURNS rather than throwing, so a caller can
+    // still read what the process produced.
+    let result = try await state.runCLIGlobalRaw(["definitely-not-a-subcommand"])
+    #expect(result.status != 0)
+    #expect(!result.stderrText.isEmpty)
+}
+
+@Test("runCLIGlobal still throws on a non-zero exit, carrying stderr")
+@MainActor
+func runCLIGlobalStillThrows() async throws {
+    let state = AppState()
+    // The wrapper's contract must be unchanged for the existing callers: a
+    // failure throws, and the message is the CLI's own stderr.
+    await #expect(throws: (any Error).self) {
+        _ = try await state.runCLIGlobal(["definitely-not-a-subcommand"])
+    }
+}
+
+@Test("runCLIGlobal returns stdout on success")
+@MainActor
+func runCLIGlobalReturnsStdout() async throws {
+    let state = AppState()
+    let data = try await state.runCLIGlobal(["--version"])
+    let text = String(decoding: data, as: UTF8.self)
+    #expect(text.contains("2nb"))
+}
+
 // MARK: - Region guard
 
 // The region field was free text nobody edited. As a dropdown it is one click,
@@ -10,32 +50,52 @@ import Testing
 // is what makes the dropdown safe to ship, so it is pinned here.
 
 @Test("A region change that would break the active embedding model is flagged")
-func regionConstraintBlocksBreakingChange() {
-    let breakage = BedrockRegions.constraint(
+func regionRiskBlocksBreakingChange() {
+    let risk = BedrockRegions.risk(
         forRegion: "eu-west-1",
         embeddingModel: "amazon.nova-2-multimodal-embeddings-v1:0"
     )
-    #expect(breakage != nil)
+    guard case .breaks(let text) = risk else {
+        Issue.record("expected .breaks, got \(risk)")
+        return
+    }
     // The message must name both the required region and the consequence, or it
     // is just a scary dialog with no information in it.
-    #expect(breakage?.contains("us-east-1") == true)
-    #expect(breakage?.contains("re-embed") == true)
+    #expect(text.contains("us-east-1"))
+    #expect(text.contains("re-embed"))
 }
 
-@Test("Staying in the model's required region is not flagged")
-func regionConstraintAllowsRequiredRegion() {
-    #expect(BedrockRegions.constraint(
+@Test("Staying in the model's required region is safe")
+func regionRiskAllowsRequiredRegion() {
+    #expect(BedrockRegions.risk(
         forRegion: "us-east-1",
         embeddingModel: "amazon.nova-2-multimodal-embeddings-v1:0"
-    ) == nil)
+    ) == .safe)
 }
 
 @Test("An unconstrained embedding model can move region freely")
-func regionConstraintIgnoresUnpinnedModels() {
-    #expect(BedrockRegions.constraint(
+func regionRiskIgnoresUnpinnedModels() {
+    #expect(BedrockRegions.risk(
         forRegion: "eu-central-1",
         embeddingModel: "cohere.embed-english-v3"
-    ) == nil)
+    ) == .safe)
+}
+
+@Test("An unknown embedding model FAILS CLOSED rather than waving the change through")
+func regionRiskFailsClosedWhenModelUnknown() {
+    // This is the regression that matters. `ai status` needs a vault, so with
+    // none bound — the first-run state this page exists for — the active model
+    // is nil. An earlier version treated that as "no constraint found" and
+    // saved a breaking region silently: the guard failed OPEN in exactly the
+    // case it was written for.
+    for unknown in [nil, ""] {
+        let risk = BedrockRegions.risk(forRegion: "eu-west-1", embeddingModel: unknown)
+        guard case .unverifiable(let text) = risk else {
+            Issue.record("expected .unverifiable for \(String(describing: unknown)), got \(risk)")
+            return
+        }
+        #expect(text.contains("us-east-1")) // still names the common trap
+    }
 }
 
 @Test("Mantle models are called out as ignoring the region setting")
@@ -121,6 +181,28 @@ func headlineDoesNotOverclaimUnknown() {
     let text = SelfTestPresentation.headline(unknown)
     #expect(text.contains("Could not confirm"))
     #expect(!text.contains("rejected"))
+}
+
+@Test("A network failure is reported as a network failure, not a bad key")
+func headlineSeparatesNetworkFromCredentials() {
+    // "unreachable" means we never got an answer either way. Telling the user
+    // their key was rejected on a dropped connection sends them to rotate a
+    // perfectly good credential.
+    let offline = SelfTestReport(
+        ok: false, vaultBound: true, vaultPath: "/v", provider: "bedrock",
+        credentials: "unreachable", checks: []
+    )
+    let text = SelfTestPresentation.headline(offline)
+    #expect(text.contains("reach"))
+    #expect(!text.contains("rejected"))
+}
+
+@Test("An unrecognized credential value degrades to unknown rather than crashing")
+func credentialVerdictTolersatesUnknownVocabulary() {
+    // A newer CLI could add a verdict this build has never heard of; the UI
+    // must not force-unwrap its way into a crash on a settings page.
+    #expect(CredentialVerdict("something-new") == .unknown)
+    #expect(CredentialVerdict("accepted") == .accepted)
 }
 
 @Test("Warnings are distinguished from failures in the row symbols")

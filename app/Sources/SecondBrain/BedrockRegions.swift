@@ -51,16 +51,38 @@ enum BedrockRegions {
         "xai.grok-4.3": "us-west-2",
     ]
 
-    /// What a region change would break, or nil when it is safe.
+    /// The risk of switching to a region, as three distinct answers rather than
+    /// a nullable string.
     ///
-    /// Only the embedding model is treated as blocking. An embedding model that
-    /// stops answering makes every stored vector unreachable and needs a full
-    /// re-embed to recover, whereas a generation model that goes quiet is an
+    /// The third case is the reason this is an enum. An earlier version
+    /// returned `String?` and the view passed `status?.embeddingModel ?? ""`,
+    /// so when the active model could not be read — which is exactly what
+    /// happens with no vault bound, since `ai status` needs one — the lookup
+    /// missed, the guard returned nil, and a breaking region saved silently.
+    /// The guard failed OPEN in the first-run case it was written for. A safety
+    /// check that cannot see its input must say so, not wave the change through.
+    enum ChangeRisk: Equatable {
+        /// The active embedding model can serve this region.
+        case safe
+        /// Known to break: the model answers only in another region.
+        case breaks(String)
+        /// The active embedding model is unknown, so nothing can be verified.
+        case unverifiable(String)
+    }
+
+    /// What switching to `region` would do to the active embedding model.
+    ///
+    /// Only the embedding model is treated as blocking. One that stops
+    /// answering makes every stored vector unreachable and needs a full
+    /// re-embed to recover, whereas a generation model going quiet is an
     /// immediately obvious, immediately reversible mistake.
-    static func constraint(forRegion region: String, embeddingModel: String) -> String? {
-        guard let required = inRegionOnly[embeddingModel] else { return nil }
-        guard region != required else { return nil }
-        return "\(embeddingModel) only answers in \(required). Switching to \(region) will stop embeddings and semantic search from working until you either switch back or pick a different embedding model and re-embed the vault."
+    static func risk(forRegion region: String, embeddingModel: String?) -> ChangeRisk {
+        guard let embeddingModel, !embeddingModel.isEmpty else {
+            return .unverifiable("2ndbrain could not read your active embedding model, so it cannot check whether \(region) can serve it. Some models answer in only one region (Nova-2 embeddings are us-east-1 only), and switching away from it stops semantic search until you switch back or re-embed.")
+        }
+        guard let required = inRegionOnly[embeddingModel] else { return .safe }
+        guard region != required else { return .safe }
+        return .breaks("\(embeddingModel) only answers in \(required). Switching to \(region) will stop embeddings and semantic search from working until you either switch back or pick a different embedding model and re-embed the vault.")
     }
 
     /// A note for the region row when the active generation model ignores the

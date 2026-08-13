@@ -29,17 +29,7 @@ struct SettingsIntegrationsView: View {
 
             ForEach(ClientDescriptor.all) { client in
                 Section(client.displayName) {
-                    if let slug = client.skillSlug {
-                        statusRow("Agent skill", ClientConfig.skillRow(appState.skillStatuses.first { $0.slug == slug }))
-                    }
-                    statusRow("MCP server", ClientConfig.mcpRow(appState.mcpConfigured(forClient: client.mcpClientKey)))
-                    if let instructions = appState.globalInstructions(forClient: client.mcpClientKey) {
-                        statusRow("Global instructions", ClientConfig.globalInstructionsRow(instructions))
-                    }
-                    Button(busyClient == client.id ? "Configuring…" : "Configure") {
-                        Task { await configure(client) }
-                    }
-                    .disabled(busyClient != nil || appState.vault == nil)
+                    clientBody(client)
                 }
             }
 
@@ -54,6 +44,67 @@ struct SettingsIntegrationsView: View {
         }
         .formStyle(.grouped)
         .task { await reload() }
+    }
+
+    /// One client's rows. Carries everything the Home card used to, so removing
+    /// that card loses nothing: the written config path, Claude Code's
+    /// cross-dependency callout, the setup-snippet fallback, and the end-to-end
+    /// Verify panel.
+    @ViewBuilder
+    private func clientBody(_ client: ClientDescriptor) -> some View {
+        let mcp = appState.mcpConfigured(forClient: client.mcpClientKey)
+        let mcpState = ClientConfig.mcpRow(mcp)
+
+        if let slug = client.skillSlug {
+            statusRow("Agent skill", ClientConfig.skillRow(appState.skillStatus(forSlug: slug)))
+        }
+        statusRow("MCP server", mcpState)
+        if mcpState.ok, let path = mcp?.configPath, !path.isEmpty {
+            Text(path)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        if let instructions = appState.globalInstructions(forClient: client.mcpClientKey) {
+            statusRow("Global instructions", ClientConfig.globalInstructionsRow(instructions))
+        }
+        if let note = client.note, !note.isEmpty {
+            Text(note).font(.caption).foregroundStyle(.secondary)
+        }
+
+        Button(busyClient == client.id ? "Configuring…" : "Configure") {
+            Task { await configure(client) }
+        }
+        .disabled(busyClient != nil || appState.vault == nil)
+
+        // Claude Code keeps the richer affordances: it is the only client that
+        // needs BOTH a skill and an MCP entry, so a half-configured state is
+        // worth calling out, and it is the one the Verify panel exercises.
+        if client.id == ClientDescriptor.claudeCode.id {
+            if let dep = crossDepMessage {
+                Label(dep, systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            Button("Show setup snippet") {
+                Task {
+                    await appState.loadMCPSetup()
+                    appState.showMCPSetup = true
+                }
+            }
+            .controlSize(.small)
+            ClaudeCodeHealthView()
+        }
+    }
+
+    /// Warns when exactly one of {skill, MCP} is configured for Claude Code:
+    /// either alone looks configured but does not work. The wording lives in
+    /// ClaudeCodeHealth so this reads identically to the Verify panel below it.
+    private var crossDepMessage: String? {
+        let skill = appState.skillStatus(forSlug: "claude-code")
+        let skillInstalled = (skill?.userInstalled ?? false) || (skill?.projectInstalled ?? false)
+        let mcpConfigured = ClientConfig.mcpRow(appState.mcpConfigured(forClient: "claude-code")).ok
+        return ClaudeCodeHealth.crossDependency(skillInstalled: skillInstalled, mcpConfigured: mcpConfigured)
     }
 
     @ViewBuilder

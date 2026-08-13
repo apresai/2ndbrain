@@ -2413,7 +2413,10 @@ final class AppState {
     /// result to render, not an error to swallow. Only an unparseable payload
     /// is a genuine failure, and then the CLI's stderr is the message.
     func runDoctorSelfTest() async throws -> SelfTestReport {
-        let result = try await runCLIGlobalRaw(["doctor", "--json", "--porcelain"])
+        let result = try await runCLIGlobalRaw(
+            ["doctor", "--json", "--porcelain"],
+            expectNonZeroExit: true
+        )
         guard let report = try? JSONDecoder().decode(DoctorReport.self, from: result.stdout),
               let selftest = report.selftest else {
             let detail = result.stderrText.isEmpty
@@ -2936,7 +2939,12 @@ final class AppState {
     /// the self-test finds something wrong, and its JSON verdict — the thing
     /// the user needs to read — is on stdout. Throwing away stdout on failure
     /// would discard the payload in exactly the case it matters most.
-    func runCLIGlobalRaw(_ args: [String], stdin: Data? = nil) async throws -> CLIRawResult {
+    /// - Parameter expectNonZeroExit: suppresses the error logging for commands
+    ///   where a non-zero exit is a normal verdict. `2nb doctor` returning 2
+    ///   because your key is wrong is the tool working, not the tool failing;
+    ///   logging it as "CLI failed" would fill the vault's error log with
+    ///   entries that are not faults, and bury the ones that are.
+    func runCLIGlobalRaw(_ args: [String], stdin: Data? = nil, expectNonZeroExit: Bool = false) async throws -> CLIRawResult {
         let cmd = "2nb " + args.joined(separator: " ")
         log.info("CLI exec (global): \(cmd, privacy: .public)")
         let errorLogger = self.errorLogger
@@ -2978,13 +2986,13 @@ final class AppState {
                 stderr.fileHandleForReading.readabilityHandler = nil
                 drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
                 drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
-                if proc.terminationStatus != 0 {
+                if proc.terminationStatus != 0 && !expectNonZeroExit {
                     let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !errMsg.isEmpty {
                         log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
+                        errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
                     }
-                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
                 }
                 continuation.resume(returning: CLIRawResult(
                     stdout: drain.stdoutData,

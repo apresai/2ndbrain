@@ -19,6 +19,7 @@ struct SettingsAIView: View {
     @State private var regionSelection = ""
     @State private var customRegion = ""
     @State private var vaultRegion = ""
+    @State private var suppressRegionChange = false
     @State private var newToken = ""
     @State private var enteringToken = false
     @State private var busy = false
@@ -26,6 +27,7 @@ struct SettingsAIView: View {
     @State private var selfTest: SelfTestReport?
     @State private var testing = false
     @State private var testError: String?
+    @State private var loadError: String?
 
     var body: some View {
         Form {
@@ -63,7 +65,13 @@ struct SettingsAIView: View {
             }
             Text("Other…").tag(SettingsAIView.customRegionTag)
         }
+        // `suppressRegionChange` guards the reentrancy: applyRegion and reload
+        // both write regionSelection, which re-fires this handler. Without it,
+        // cancelling the confirm dialog reverted the picker, the revert fired
+        // onChange again, and the user got a redundant write plus a cheerful
+        // "Region set to us-east-1." right after declining to change anything.
         .onChange(of: regionSelection) { old, new in
+            guard !suppressRegionChange else { return }
             guard new != SettingsAIView.customRegionTag, new != old, !old.isEmpty else { return }
             Task { await applyRegion(new) }
         }
@@ -88,6 +96,11 @@ struct SettingsAIView: View {
 
     private var credentialSection: some View {
         Section("API key") {
+            if let loadError {
+                Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
             if enteringToken || !(bedrock?.tokenSet ?? false) {
                 SecureField("Bearer token", text: $newToken)
                     .textFieldStyle(.roundedBorder)
@@ -192,12 +205,25 @@ struct SettingsAIView: View {
     // MARK: - Actions
 
     private func reload() async {
-        bedrock = try? await appState.refreshBedrockMachineConfig()
+        // The credential row is the reason this page exists, so a failure to
+        // read it is reported rather than rendered as "no key". The AI status
+        // and vault region legitimately fail with no vault bound, which is a
+        // supported state here, so those stay quiet.
+        do {
+            bedrock = try await appState.refreshBedrockMachineConfig()
+            loadError = nil
+        } catch {
+            bedrock = nil
+            loadError = "Could not read stored credentials: \(error.localizedDescription)"
+        }
         status = try? await appState.fetchAIStatus()
         vaultRegion = (try? await appState.getConfigValue("ai.bedrock.region")) ?? ""
+
         let current = effectiveRegion
+        suppressRegionChange = true
         regionSelection = BedrockRegions.isCommon(current) ? current : SettingsAIView.customRegionTag
         if regionSelection == SettingsAIView.customRegionTag { customRegion = current }
+        suppressRegionChange = false
     }
 
     /// The region actually in force. The machine-local file wins over vault
@@ -217,11 +243,23 @@ struct SettingsAIView: View {
         // Refuse-and-explain rather than caption-and-hope. A picker makes this
         // a one-click change; without the guard, one click can take embeddings
         // offline and the only recovery is a full re-embed.
-        if let breakage = BedrockRegions.constraint(forRegion: target, embeddingModel: status?.embeddingModel ?? "") {
+        //
+        // `unverifiable` warns too. The active model is unreadable exactly when
+        // no vault is bound — the first-run state this page is built for — and
+        // a guard that waves the change through whenever it cannot see its
+        // input is worse than no guard, because it looks like one.
+        let explanation: String?
+        switch BedrockRegions.risk(forRegion: target, embeddingModel: status?.embeddingModel) {
+        case .safe:
+            explanation = nil
+        case .breaks(let text), .unverifiable(let text):
+            explanation = text
+        }
+        if let explanation {
             #if canImport(AppKit)
             let alert = NSAlert()
             alert.messageText = "Switch region to \(target)?"
-            alert.informativeText = breakage
+            alert.informativeText = explanation
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Cancel")
             alert.addButton(withTitle: "Switch anyway")
