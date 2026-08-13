@@ -2,13 +2,18 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
@@ -125,8 +130,7 @@ func buildMCPDoctorReport(ctx context.Context, v *vault.Vault) MCPDoctorReport {
 		"kb_list failed — the document index is unreadable"))
 
 	r.ToolsExercised = append(r.ToolsExercised, "kb_search")
-	add(engineCheck(ctx, eng, "kb_search round-trip", "kb_search", map[string]any{"query": "knowledge", "limit": 1},
-		"kb_search failed — the search index (FTS5/embeddings) is unusable"))
+	add(engineSearchCheck(ctx, eng, v))
 
 	// WARN: AI readiness (a lightweight probe; the GUI runs a real model test).
 	embedder, eerr := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
@@ -199,6 +203,9 @@ func buildMCPDoctorReport(ctx context.Context, v *vault.Vault) MCPDoctorReport {
 func engineCheck(ctx context.Context, eng *mcppkg.Engine, name, tool string, args map[string]any, failFix string) DoctorCheck {
 	text, isErr, err := eng.Call(ctx, tool, args)
 	if err != nil || isErr {
+		if c, timedOut := deadlineCheck(ctx, name, err); timedOut {
+			return c
+		}
 		detail := tool + " errored"
 		if err != nil {
 			detail = trimDetail(err.Error())
@@ -208,6 +215,115 @@ func engineCheck(ctx context.Context, eng *mcppkg.Engine, name, tool string, arg
 		return DoctorCheck{Name: name, OK: false, Detail: detail, Fix: failFix}
 	}
 	return DoctorCheck{Name: name, OK: true, Detail: tool + " answered"}
+}
+
+// deadlineCheck converts an expired context into a check that blames the clock
+// rather than the subsystem under inspection.
+//
+// Without it, a check whose budget ran out renders `context deadline exceeded`
+// underneath its static fix text — telling the user the search index or the
+// vault DB is broken when the only thing that actually happened is that the
+// self-test gave up waiting. Misdiagnosis is the worst failure mode available
+// to a command whose entire job is accurate diagnosis.
+func deadlineCheck(ctx context.Context, name string, err error) (DoctorCheck, bool) {
+	if ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) {
+		return DoctorCheck{}, false
+	}
+	return DoctorCheck{
+		Name:   name,
+		OK:     false,
+		Detail: "timed out — the self-test gave up waiting, so this check is inconclusive",
+		Fix:    "re-run `2nb doctor`; if it times out again the provider or vault is very slow, not necessarily broken",
+	}, true
+}
+
+// engineSearchCheck runs kb_search and inspects the PAYLOAD, not just the error.
+//
+// retrieve.Retrieve degrades to BM25 whenever the vector channel is unusable
+// (expired credentials, dimension break, provider unreachable) and reports that
+// only through the per-result search_mode field. A check that looked at the
+// error alone therefore passed with a straight face on a vault whose semantic
+// search was completely dead — the exact false confidence this command exists
+// to prevent. So: a vault that HAS embeddings and still answers in BM25 is a
+// hard failure, not a green tick.
+func engineSearchCheck(ctx context.Context, eng *mcppkg.Engine, v *vault.Vault) DoctorCheck {
+	const name = "kb_search round-trip"
+	const failFix = "kb_search failed — the search index (FTS5/embeddings) is unusable"
+
+	text, isErr, err := eng.Call(ctx, "kb_search", map[string]any{"query": "knowledge", "limit": 1})
+	if err != nil || isErr {
+		if c, timedOut := deadlineCheck(ctx, name, err); timedOut {
+			return c
+		}
+		detail := "kb_search errored"
+		if err != nil {
+			detail = trimDetail(err.Error())
+		} else if text != "" {
+			detail = trimDetail(text)
+		}
+		return DoctorCheck{Name: name, OK: false, Detail: detail, Fix: failFix}
+	}
+
+	mode, observable := firstSearchMode(text)
+	embedded, cerr := v.DB.EmbeddingCount()
+	if cerr != nil {
+		// Degrade to 0 so a DB read error cannot manufacture a spurious
+		// "vector channel is down" failure — but SAY SO. Silence here would
+		// render a real DB fault as a benign "no embeddings yet" warn, in the
+		// one command whose whole purpose is proving things actually work.
+		// Standalone `2nb mcp doctor` runs no portability check that would
+		// catch it separately, so this log is the only signal.
+		slog.Warn("mcp doctor: embedding-count query failed; kb_search mode check degraded", "err", cerr)
+		embedded = 0
+	}
+	return classifySearchMode(name, mode, observable, embedded)
+}
+
+// classifySearchMode is the verdict half of engineSearchCheck, split out so the
+// BM25-fallback rule is unit-testable without a live provider (the no-mock
+// policy rules out faking a dead vector channel through the real engine).
+func classifySearchMode(name, mode string, observable bool, embedded int) DoctorCheck {
+	switch {
+	case !observable:
+		// No rows came back, so the payload carries no mode to judge. The engine
+		// answered, which is what this check is nominally about.
+		return DoctorCheck{
+			Name:   name,
+			OK:     true,
+			Detail: "kb_search answered (no results for the probe query; search mode not observable)",
+		}
+	case mode == string(search.ModeHybrid):
+		return DoctorCheck{Name: name, OK: true, Detail: "kb_search answered via hybrid search (vector channel live)"}
+	case embedded == 0:
+		// BM25 is the correct and only possible answer for a vault with no
+		// vectors. Worth saying, not worth failing.
+		return DoctorCheck{
+			Name:   name,
+			OK:     true,
+			Warn:   true,
+			Detail: fmt.Sprintf("kb_search answered in %s mode — this vault has no embeddings yet", mode),
+			Fix:    "run `2nb index` to embed the vault and enable semantic search",
+		}
+	default:
+		return DoctorCheck{
+			Name:   name,
+			OK:     false,
+			Detail: fmt.Sprintf("kb_search silently fell back to %s despite %d embedded documents — the vector channel is down", mode, embedded),
+			Fix:    "run `2nb ai status` to see why (expired credentials, dimension break, or an unreachable provider)",
+		}
+	}
+}
+
+// firstSearchMode pulls search_mode off the first kb_search result. Reports
+// false when the payload has no rows to read it from.
+func firstSearchMode(payload string) (string, bool) {
+	var rows []struct {
+		SearchMode string `json:"search_mode"`
+	}
+	if err := json.Unmarshal([]byte(payload), &rows); err != nil || len(rows) == 0 {
+		return "", false
+	}
+	return rows[0].SearchMode, rows[0].SearchMode != ""
 }
 
 func aiReadinessDetail(provider string, ready bool) string {
@@ -243,16 +359,15 @@ func fileBytes(path string) int64 {
 
 func trimDetail(s string) string {
 	const max = 160
-	s = string([]rune(s))
-	if len(s) > max {
-		return s[:max] + "…"
-	}
+	// Drop trailing newlines first, for one-line display.
+	s = strings.TrimRight(s, "\r\n")
 	if s == "" {
 		return "(no detail)"
 	}
-	// Drop a trailing newline for one-line display.
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
+	// Truncate by runes, not bytes: a byte slice would split a multi-byte rune
+	// and emit invalid UTF-8 into the JSON payload.
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
 	}
 	return s
 }
