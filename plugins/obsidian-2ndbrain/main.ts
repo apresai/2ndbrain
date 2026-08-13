@@ -264,6 +264,10 @@ export function resolveCliPath(
 // the open Obsidian vault's path so 2nb can never resolve a different vault from
 // the Obsidian registry or the process cwd. The Obsidian vault and the 2nb vault
 // stay joined at the hip.
+export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
+	return ['--vault', vaultPath, ...args];
+}
+
 // isUnknownFlagError reports whether a failed CLI invocation failed BECAUSE the
 // installed 2nb does not know a flag we passed, as opposed to failing for any
 // other reason. Cobra's wording is "unknown flag: --x" / "unknown shorthand
@@ -276,10 +280,6 @@ export function resolveCliPath(
 export function isUnknownFlagError(err: unknown): boolean {
 	const text = err instanceof Error ? err.message : String(err ?? '');
 	return /unknown (flag|shorthand flag)/i.test(text);
-}
-
-export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
-	return ['--vault', vaultPath, ...args];
 }
 
 // formatIndexState turns embedding coverage into a plain-language verdict for
