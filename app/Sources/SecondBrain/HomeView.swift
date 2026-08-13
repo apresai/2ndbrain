@@ -19,7 +19,6 @@ struct HomeView: View {
     // The id of the client currently being configured (nil = none in flight), so
     // only that row's button shows "Configuring…" and all Configure buttons
     // disable while one runs.
-    @State private var configuringClient: String?
     @State private var actionMessage: String?
     @State private var actionIsError = false
     // The vault Obsidian has open, loaded once in `.task` instead of read from
@@ -42,7 +41,7 @@ struct HomeView: View {
                 Divider()
                 aiCard
                 Divider()
-                aiClientsCard
+                aiClientsSummary
                 Divider()
                 indexCard
                 if let actionMessage {
@@ -380,75 +379,30 @@ struct HomeView: View {
     /// from the Obsidian plugin row on the Vault card (a vault artifact), so they
     /// get their own card. The Claude Code Verify panel + cross-dependency
     /// callout live under the Claude Code row only.
-    private var aiClientsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    /// Read-only summary. The configuration itself — per-client status, the
+    /// Configure buttons, the setup snippet, the Verify panel — now lives on the
+    /// Settings window's Integrations tab.
+    ///
+    /// This card used to carry all of that, and the Settings tab briefly
+    /// duplicated it. Two surfaces writing the same external config files is
+    /// precisely the drift this whole change exists to remove, so Home keeps
+    /// only the count and a way to get there.
+    private var aiClientsSummary: some View {
+        VStack(alignment: .leading, spacing: 8) {
             SheetSectionHeader(title: "AI Clients", systemImage: "sparkles")
-            ForEach(ClientDescriptor.all) { client in
-                clientRow(client)
+            statusLine(ok: configuredClientCount > 0,
+                       text: "\(configuredClientCount) of \(ClientDescriptor.all.count) clients can reach this vault")
+            SettingsLink {
+                Text("Set up in Settings…")
             }
+            .controlSize(.small)
         }
     }
 
-    @ViewBuilder
-    private func clientRow(_ client: ClientDescriptor) -> some View {
-        let skill = client.skillSlug.flatMap { appState.skillStatus(forSlug: $0) }
-        let mcp = appState.mcpConfigured(forClient: client.mcpClientKey)
-        let mcpState = ClientConfig.mcpRow(mcp)
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Label(client.displayName, systemImage: client.systemImage)
-                    .font(.callout.weight(.medium))
-                Spacer()
-                Button(configuringClient == client.id ? "Configuring…" : "Configure") {
-                    Task { await configureClient(client) }
-                }
-                .controlSize(.small)
-                .disabled(configuringClient != nil || appState.vault == nil)
-            }
-            if client.skillSlug != nil {
-                let skillState = ClientConfig.skillRow(skill)
-                statusLine(ok: skillState.ok, text: "Skill: \(skillState.label)")
-            }
-            statusLine(ok: mcpState.ok, text: "MCP server: \(mcpState.label)")
-            // The config file path, once configured, so the user can find what
-            // was written (e.g. ~/.claude.json, ~/.warp/.mcp.json).
-            if mcpState.ok, let path = mcp?.configPath, !path.isEmpty {
-                Text(path)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            // Global-instructions row: only for clients with a memory file
-            // (claude-code, claude-desktop), which are the only ones the CLI
-            // returns from `instructions configured --all`.
-            if let gi = appState.globalInstructions(forClient: client.mcpClientKey) {
-                let giState = ClientConfig.globalInstructionsRow(gi)
-                statusLine(ok: giState.ok, text: "Global instructions: \(giState.label)")
-            }
-            if let note = client.note, !note.isEmpty {
-                Text(note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            // Claude Code keeps the richer affordances: the cross-dependency
-            // callout (it needs BOTH skill + MCP), a Show-setup snippet fallback,
-            // and the end-to-end Verify panel.
-            if client.id == ClientDescriptor.claudeCode.id {
-                if let dep = crossDepMessage {
-                    Label(dep, systemImage: "link")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                Button("Show setup") {
-                    Task {
-                        await appState.loadMCPSetup()
-                        appState.showMCPSetup = true
-                    }
-                }
-                .controlSize(.small)
-                ClaudeCodeHealthView()
-            }
-        }
+    private var configuredClientCount: Int {
+        ClientDescriptor.all.filter {
+            ClientConfig.mcpRow(appState.mcpConfigured(forClient: $0.mcpClientKey)).ok
+        }.count
     }
 
     @ViewBuilder
@@ -461,56 +415,6 @@ struct HomeView: View {
         .font(.callout)
     }
 
-    /// Claude Code needs BOTH the skill and the MCP server; warn when only one
-    /// is set up.
-    private var crossDepMessage: String? {
-        let skill = appState.skillStatus(forSlug: "claude-code")
-        let skillInstalled = (skill?.userInstalled ?? false) || (skill?.projectInstalled ?? false)
-        let mcpConfigured = appState.mcpConfigured?.configured ?? false
-        return ClaudeCodeHealth.crossDependency(skillInstalled: skillInstalled, mcpConfigured: mcpConfigured)
-    }
-
-    /// Install the skill (where applicable) + configure the MCP server for one
-    /// client behind a confirm (it edits an external config; a backup is saved),
-    /// then re-check both statuses.
-    private func configureClient(_ client: ClientDescriptor) async {
-        #if canImport(AppKit)
-        let confirm = ClientConfig.configureConfirm(client)
-        let alert = NSAlert()
-        alert.messageText = confirm.title
-        alert.informativeText = confirm.info
-        alert.addButton(withTitle: "Configure")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        #endif
-        configuringClient = client.id
-        actionMessage = nil
-        defer { configuringClient = nil }
-        do {
-            let results = try await appState.setupClient(client.mcpClientKey)
-            await appState.refreshSkillStatus()
-            await appState.refreshMCPConfigured()
-            await appState.refreshGlobalInstructions()
-            // `2nb setup` always exits 0, so trust the per-client result, not the
-            // exit code: surface a real error or a still-needed manual step
-            // instead of a false "Configured" (e.g. Codex with no `codex` CLI).
-            let result = results.first { $0.client == client.mcpClientKey }
-            switch ClientConfig.configureOutcome(client, result: result) {
-            case .success(let msg):
-                actionIsError = false
-                actionMessage = msg
-            case .manual(let msg):
-                actionIsError = false
-                actionMessage = msg
-            case .failure(let msg):
-                actionIsError = true
-                actionMessage = msg
-            }
-        } catch {
-            actionIsError = true
-            actionMessage = "Configure failed: \(error.localizedDescription)"
-        }
-    }
 
     // MARK: - Index
 

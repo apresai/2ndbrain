@@ -2397,6 +2397,36 @@ final class AppState {
         return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
     }
 
+    /// Runs the real end-to-end self-test (`2nb doctor --json`) and returns its
+    /// selftest block.
+    ///
+    /// Deliberately `runCLIGlobal`, not the vault-scoped runner: the CLI's tier
+    /// 1 (credentials + both active models) needs no vault, which is what makes
+    /// this usable from the Settings window during first-run setup — the exact
+    /// moment a user's key is wrong and no vault is bound yet. The CLI resolves
+    /// the vault itself, read-only, and skips its vault tier when none is
+    /// available.
+    ///
+    /// The command exits NON-ZERO exactly when the self-test finds a problem,
+    /// and the verdict the user needs is on stdout. So this reads stdout
+    /// regardless of exit status via runCLIGlobalRaw; a failing self-test is a
+    /// result to render, not an error to swallow. Only an unparseable payload
+    /// is a genuine failure, and then the CLI's stderr is the message.
+    func runDoctorSelfTest() async throws -> SelfTestReport {
+        let result = try await runCLIGlobalRaw(
+            ["doctor", "--json", "--porcelain"],
+            expectNonZeroExit: true
+        )
+        guard let report = try? JSONDecoder().decode(DoctorReport.self, from: result.stdout),
+              let selftest = report.selftest else {
+            let detail = result.stderrText.isEmpty
+                ? "the installed 2nb may predate `doctor --json`'s selftest block; run `brew upgrade apresai/tap/twonb`"
+                : result.stderrText
+            throw CLIError.nonZeroExit(result.status, message: detail)
+        }
+        return selftest
+    }
+
     /// The full effective configuration (`2nb config show --json`), returned
     /// raw for the generic read-only viewer (no schema coupling in Swift).
     func fetchConfigShow() async throws -> Data {
@@ -2882,7 +2912,39 @@ final class AppState {
 
     /// Vault-independent CLI spawn (machine-local commands such as
     /// `config bedrock`). Never logs stdin.
+    /// Runs a vault-independent `2nb` command, throwing on a non-zero exit.
     func runCLIGlobal(_ args: [String], stdin: Data? = nil) async throws -> Data {
+        let result = try await runCLIGlobalRaw(args, stdin: stdin)
+        guard result.status == 0 else {
+            throw CLIError.nonZeroExit(result.status, message: result.stderrText)
+        }
+        return result.stdout
+    }
+
+    /// stdout, stderr, and the exit status of a `2nb` invocation.
+    struct CLIRawResult {
+        let stdout: Data
+        let stderr: Data
+        let status: Int32
+
+        var stderrText: String {
+            String(decoding: stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// runCLIGlobal without the throw-on-failure policy, for the callers where
+    /// a non-zero exit is a RESULT rather than an error.
+    ///
+    /// `2nb doctor` is the reason this exists: it exits non-zero precisely when
+    /// the self-test finds something wrong, and its JSON verdict — the thing
+    /// the user needs to read — is on stdout. Throwing away stdout on failure
+    /// would discard the payload in exactly the case it matters most.
+    /// - Parameter expectNonZeroExit: suppresses the error logging for commands
+    ///   where a non-zero exit is a normal verdict. `2nb doctor` returning 2
+    ///   because your key is wrong is the tool working, not the tool failing;
+    ///   logging it as "CLI failed" would fill the vault's error log with
+    ///   entries that are not faults, and bury the ones that are.
+    func runCLIGlobalRaw(_ args: [String], stdin: Data? = nil, expectNonZeroExit: Bool = false) async throws -> CLIRawResult {
         let cmd = "2nb " + args.joined(separator: " ")
         log.info("CLI exec (global): \(cmd, privacy: .public)")
         let errorLogger = self.errorLogger
@@ -2924,17 +2986,19 @@ final class AppState {
                 stderr.fileHandleForReading.readabilityHandler = nil
                 drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
                 drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
-                if proc.terminationStatus == 0 {
-                    continuation.resume(returning: drain.stdoutData)
-                } else {
+                if proc.terminationStatus != 0 && !expectNonZeroExit {
                     let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !errMsg.isEmpty {
                         log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
+                        errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
                     }
-                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
-                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
                 }
+                continuation.resume(returning: CLIRawResult(
+                    stdout: drain.stdoutData,
+                    stderr: drain.stderrData,
+                    status: proc.terminationStatus
+                ))
             }
 
             do {
@@ -3214,6 +3278,11 @@ struct BedrockMachineStatus: Codable, Equatable {
     let path: String
     let region: String
     let tokenSet: Bool
+    /// Last 4 characters of the resolved token, or "" when unset or when the
+    /// CLI suppressed it (tokens under 12 chars) — or when running against a
+    /// pre-0.18 CLI that predates the field. Lets the UI render a masked value
+    /// the user can recognize without the app ever holding the secret.
+    let tokenSuffix: String
     let tokenSource: String
     let error: String?
 
@@ -3221,6 +3290,7 @@ struct BedrockMachineStatus: Codable, Equatable {
         case path
         case region
         case tokenSet = "token_set"
+        case tokenSuffix = "token_suffix"
         case tokenSource = "token_source"
         case error
     }
@@ -3230,8 +3300,16 @@ struct BedrockMachineStatus: Codable, Equatable {
         path = try c.decode(String.self, forKey: .path)
         region = try c.decodeIfPresent(String.self, forKey: .region) ?? ""
         tokenSet = try c.decode(Bool.self, forKey: .tokenSet)
+        tokenSuffix = try c.decodeIfPresent(String.self, forKey: .tokenSuffix) ?? ""
         tokenSource = try c.decode(String.self, forKey: .tokenSource)
         error = try c.decodeIfPresent(String.self, forKey: .error)
+    }
+
+    /// A masked rendering of the stored key: dots plus enough tail to tell two
+    /// keys apart, or a plain "set" when the CLI withheld a suffix.
+    var maskedToken: String {
+        guard tokenSet else { return "not set" }
+        return tokenSuffix.isEmpty ? "••••••••" : "••••••••\(tokenSuffix)"
     }
 }
 
