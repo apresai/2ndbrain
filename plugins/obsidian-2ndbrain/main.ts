@@ -1090,13 +1090,24 @@ export default class BrainPlugin extends Plugin {
 	}
 
 	// suiteStatus reports the CLI, macOS app, and Obsidian plugin against the
-	// latest release (`2nb doctor --json`). Returns null if the CLI isn't
-	// reachable / lacks the `doctor` subcommand (pre-0.10.x CLI).
+	// latest release (`2nb doctor --versions --json`). Returns null if the CLI
+	// isn't reachable / lacks the `doctor` subcommand (pre-0.10.x CLI).
+	//
+	// --versions is required, not cosmetic: bare `2nb doctor` now runs a real
+	// self-test that calls the active models. This runs on every settings-tab
+	// render, so it must stay free and side-effect-free. The flag is ignored by
+	// a pre-0.18 CLI's flag parser only if unknown flags are permitted, so a
+	// failure falls back to the plain form below.
 	async suiteStatus(): Promise<SuiteStatus | null> {
 		try {
-			return JSON.parse(await this.runCommand(['doctor', '--json'])) as SuiteStatus;
+			return JSON.parse(await this.runCommand(['doctor', '--versions', '--json'])) as SuiteStatus;
 		} catch {
-			return null;
+			// Older CLI: no --versions flag, and bare `doctor` was parity-only.
+			try {
+				return JSON.parse(await this.runCommand(['doctor', '--json'])) as SuiteStatus;
+			} catch {
+				return null;
+			}
 		}
 	}
 

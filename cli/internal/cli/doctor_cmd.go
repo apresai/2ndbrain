@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/output"
-	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -68,35 +67,107 @@ type SuiteStatus struct {
 	Plugin  ProductState `json:"plugin"`
 }
 
+// DoctorReport is the `2nb doctor --json` contract. SuiteStatus is embedded, so
+// every field the version-parity payload has always carried stays at the top
+// level and existing decoders keep working; `ok` and `selftest` are additive.
+type DoctorReport struct {
+	SuiteStatus
+	OK       bool            `json:"ok"`
+	SelfTest *SelfTestReport `json:"selftest,omitempty"`
+}
+
+var flagDoctorVersions bool
+
 var doctorCmd = &cobra.Command{
 	Use:     "doctor",
 	Aliases: []string{"verify"},
-	Short:   "Verify the CLI, macOS app, and Obsidian plugin are installed and in sync",
-	Long: `Reports each 2ndbrain component — the CLI, the macOS app, and the
-Obsidian plugin — with its installed version, whether it is current against the
-latest published release, and the command to run to fix any gap.
+	Short:   "Prove the current setup actually works (credentials, models, retrieval, versions)",
+	Long: `Runs a real end-to-end self-test of this machine's 2ndbrain setup and
+exits non-zero when something is broken.
 
-The plugin is read from the open Obsidian vault (or --vault); with no vault
-resolvable the plugin row is reported as unknown rather than failing. The latest
-release is cached for 24h and an offline check degrades gracefully, so this is
-safe in scripts and air-gapped environments.`,
+It calls the active models for real, because that is the only thing that
+detects the failures that matter: a rejected API key, a model this account is
+not entitled to reach, or a vault whose semantic search has silently degraded
+to keyword-only. Static configuration checks pass happily through all three.
+
+The credential and model checks need no vault, so this is usable during
+first-run setup. The index and retrieval checks are skipped, not failed, when
+no 2nb-indexed vault resolves — and nothing here ever creates a vault as a side
+effect of running a diagnostic.
+
+Use --versions for the version-parity report on its own: the CLI, the macOS
+app, and the Obsidian plugin against the latest published release. That form is
+free, makes no model calls, and always exits 0, so it is the one to use in
+scripts and on a settings screen that refreshes.`,
 	RunE: runDoctor,
 }
 
 func init() {
 	doctorCmd.GroupID = "config"
+	doctorCmd.Flags().BoolVar(&flagDoctorVersions, "versions", false,
+		"only report component version parity (no model calls, always exits 0)")
 	rootCmd.AddCommand(doctorCmd)
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
-	suite := gatherSuiteStatus(context.Background())
+	ctx := context.Background()
+	suite := gatherSuiteStatus(ctx)
 
-	if format := getFormat(cmd); format != "" {
-		return output.Write(os.Stdout, format, suite)
+	// --versions is the historical behavior, preserved byte-for-byte for
+	// callers that only want parity (the Obsidian plugin's Components section,
+	// scripts, CI).
+	if flagDoctorVersions {
+		if format := getFormat(cmd); format != "" {
+			return output.Write(os.Stdout, format, suite)
+		}
+		renderSuiteStatus(os.Stdout, suite)
+		return nil
 	}
 
+	self := runSelfTest(ctx)
+	report := DoctorReport{SuiteStatus: suite, OK: self.OK, SelfTest: &self}
+
+	if format := getFormat(cmd); format != "" {
+		if err := output.Write(os.Stdout, format, report); err != nil {
+			return err
+		}
+		if !report.OK {
+			return exitWithError(ExitValidation, "doctor: self-test failed")
+		}
+		return nil
+	}
+
+	renderSelfTest(os.Stdout, self)
+	fmt.Fprintln(os.Stdout)
 	renderSuiteStatus(os.Stdout, suite)
+	if !report.OK {
+		return exitWithError(ExitValidation, "doctor: self-test failed")
+	}
 	return nil
+}
+
+// renderSelfTest prints the functional checklist above the version rows.
+func renderSelfTest(w *os.File, s SelfTestReport) {
+	fmt.Fprintf(w, "2ndbrain self-test (provider: %s)\n\n", s.Provider)
+	for _, c := range s.Checks {
+		mark := "✓"
+		if c.Warn {
+			mark = "!"
+		}
+		if !c.OK {
+			mark = "✗"
+		}
+		fmt.Fprintf(w, "  %s %s: %s\n", mark, c.Name, c.Detail)
+		if c.Fix != "" && (!c.OK || c.Warn) {
+			fmt.Fprintf(w, "      %s\n", c.Fix)
+		}
+	}
+	fmt.Fprintln(w)
+	if s.OK {
+		fmt.Fprintln(w, "Everything works.")
+		return
+	}
+	fmt.Fprintln(w, "Something is broken — see the ✗ lines above.")
 }
 
 // gatherSuiteStatus fetches the latest release, reads each installed version
@@ -173,17 +244,8 @@ func maxInstalledVersion(cliVer, appVer string, appApplicable bool, pluginVer st
 // from cwd) and reads only the plugin manifest. Returns ("", false) when no
 // vault resolves, so the plugin is reported "unknown" rather than "missing".
 func resolvePluginVersion() (version string, vaultKnown bool) {
-	dir, source := resolveVaultDir()
-	if source == sourceCwd {
-		// resolveVaultDir returns "." for the cwd case; openResolvedVault would
-		// normally walk up via vault.Open. Do that walk read-only instead.
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			return "", false
-		}
-		dir = vault.FindVaultRoot(abs)
-	}
-	if dir == "" || !vault.IsVaultRoot(dir) {
+	dir := resolveVaultRootReadOnly()
+	if dir == "" {
 		return "", false
 	}
 	v, err := installedPluginVersion(dir)

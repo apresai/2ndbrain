@@ -70,28 +70,7 @@ func runConfigDoctor(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	// Observe DB embedding facts directly (source of truth), mirroring
-	// runAIStatus, so the portability check reflects reality not config cache.
-	// Unlike a plain status command, doctor's whole job is catching problems,
-	// so we slog.Warn on a DB read error rather than silently degrading to
-	// zero counts (which would read as a misleading "empty_vault" / clean run).
-	totalDocs, embeddedDocs, embeddableUnembedded, errCounts := v.DB.EmbeddingCounts()
-	if errCounts != nil {
-		slog.Warn("config doctor: embedding-counts query failed; portability check may be inaccurate", "err", errCounts)
-	}
-	vaultDim, errDim := v.DB.SampleEmbeddingDim()
-	if errDim != nil {
-		slog.Warn("config doctor: sample-embedding-dim query failed", "err", errDim)
-	}
-	vaultModels, errModels := v.DB.DistinctEmbeddingModels()
-	if errModels != nil {
-		slog.Warn("config doctor: distinct-embedding-models query failed", "err", errModels)
-	}
-	st := doctorVaultState{
-		totalDocs: totalDocs, embeddedDocs: embeddedDocs, embeddableUnembedded: embeddableUnembedded,
-		vaultDim: vaultDim, vaultModels: vaultModels,
-		freshness: vault.CheckIndexFreshness(v.DB),
-	}
+	st := gatherDoctorVaultState(v)
 
 	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
 	report := ConfigDoctorReport{Checks: buildDoctorChecks(ctx, v.Root, cfg, embedder, st)}
@@ -134,6 +113,32 @@ func runConfigDoctor(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return exitWithError(ExitValidation, "config doctor found problems")
+}
+
+// gatherDoctorVaultState observes DB embedding facts directly (source of
+// truth), mirroring runAIStatus, so the portability check reflects reality and
+// not a config cache. Unlike a plain status command, doctor's whole job is
+// catching problems, so a DB read error is slog.Warn'd rather than silently
+// degrading to zero counts (which would read as a misleading "empty_vault" /
+// clean run). Shared with `2nb doctor`'s vault tier.
+func gatherDoctorVaultState(v *vault.Vault) doctorVaultState {
+	totalDocs, embeddedDocs, embeddableUnembedded, errCounts := v.DB.EmbeddingCounts()
+	if errCounts != nil {
+		slog.Warn("config doctor: embedding-counts query failed; portability check may be inaccurate", "err", errCounts)
+	}
+	vaultDim, errDim := v.DB.SampleEmbeddingDim()
+	if errDim != nil {
+		slog.Warn("config doctor: sample-embedding-dim query failed", "err", errDim)
+	}
+	vaultModels, errModels := v.DB.DistinctEmbeddingModels()
+	if errModels != nil {
+		slog.Warn("config doctor: distinct-embedding-models query failed", "err", errModels)
+	}
+	return doctorVaultState{
+		totalDocs: totalDocs, embeddedDocs: embeddedDocs, embeddableUnembedded: embeddableUnembedded,
+		vaultDim: vaultDim, vaultModels: vaultModels,
+		freshness: vault.CheckIndexFreshness(v.DB),
+	}
 }
 
 // doctorVaultState holds the observed DB embedding facts the portability check
