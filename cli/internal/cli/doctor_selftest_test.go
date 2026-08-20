@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -234,5 +235,38 @@ func TestTrimDetailKeepsValidUTF8(t *testing.T) {
 	}
 	if got := trimDetail("done\n"); got != "done" {
 		t.Errorf("trailing newline not stripped: %q", got)
+	}
+}
+
+func TestBedrockKeySourceCheck(t *testing.T) {
+	// No divergence: no check at all.
+	if c := bedrockKeySourceCheck(ai.TokenDivergence{Diverges: false}); c != nil {
+		t.Fatalf("no divergence should render no check: %+v", c)
+	}
+	// Divergence without prefer: the split-brain WARNING with both suffixes
+	// and the prefer-stored fix hint.
+	warn := bedrockKeySourceCheck(ai.TokenDivergence{
+		Diverges: true, EnvSuffix: "dkE9", StoredSuffix: "RT0=",
+	})
+	if warn == nil || !warn.Warn || !warn.OK {
+		t.Fatalf("divergence should warn: %+v", warn)
+	}
+	for _, want := range []string{"dkE9", "RT0=", "overrides"} {
+		if !strings.Contains(warn.Detail, want) {
+			t.Errorf("warn detail missing %q: %s", want, warn.Detail)
+		}
+	}
+	if !strings.Contains(warn.Fix, "prefer-stored-token") {
+		t.Errorf("warn fix should name the prefer flag: %s", warn.Fix)
+	}
+	// Divergence WITH prefer: informational (no Warn), stored key leads.
+	info := bedrockKeySourceCheck(ai.TokenDivergence{
+		Diverges: true, PreferStored: true, EnvSuffix: "dkE9", StoredSuffix: "RT0=",
+	})
+	if info == nil || info.Warn || !info.OK {
+		t.Fatalf("prefer divergence should be informational: %+v", info)
+	}
+	if !strings.Contains(info.Detail, "prefer_stored_token is on") || !strings.Contains(info.Detail, "RT0=") {
+		t.Errorf("info detail wrong: %s", info.Detail)
 	}
 }

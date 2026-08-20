@@ -66,8 +66,9 @@ var configBedrockCmd = &cobra.Command{
 	Long: `Read or write ~/.config/2nb/bedrock.json (XDG-aware).
 
 This file is machine-local and is never written into a vault. The bearer
-token is never printed. AWS_BEARER_TOKEN_BEDROCK wins over the file; the
-macOS Keychain is a legacy fallback.
+token is never printed. AWS_BEARER_TOKEN_BEDROCK wins over the file unless
+--prefer-stored-token inverts that for 2nb; the macOS Keychain is a legacy
+fallback.
 
 Does not require an open vault.`,
 	Example: `  2nb config bedrock
@@ -222,11 +223,11 @@ func currentBedrockStatus() bedrockMachineStatus {
 	doc, err := ai.ReadBedrockFile()
 	tok, src := ai.ResolveBedrockToken()
 	st := bedrockMachineStatus{
-		Path:           ai.BedrockFilePath(),
-		Region:         doc.Region,
-		TokenSet:       src != ai.BedrockTokenNone,
-		TokenSuffix:    tokenSuffix(tok),
-		TokenSource:    string(src),
+		Path:              ai.BedrockFilePath(),
+		Region:            doc.Region,
+		TokenSet:          src != ai.BedrockTokenNone,
+		TokenSuffix:       tokenSuffix(tok),
+		TokenSource:       string(src),
 		Regions:           doc.Regions,
 		TokenUpdatedAt:    doc.TokenUpdatedAt,
 		PreferStoredToken: doc.PreferStoredToken,
