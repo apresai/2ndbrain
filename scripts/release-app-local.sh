@@ -160,7 +160,29 @@ notarize() {
     --output-format json 2>/dev/null || true)"
   sub_id="$(printf '%s' "$submit_json" | jq -r '.id // empty' 2>/dev/null || true)"
   if [ -z "$sub_id" ]; then
-    echo "  ERROR: notarytool submit returned no id: $submit_json" >&2
+    # notarytool sometimes returns EMPTY output from a submit whose upload
+    # actually landed (observed live twice on 2026-08-20, on consecutive
+    # releases: `notarytool history` showed the submission In Progress moments
+    # after the "failed" submit). Failing here would abort a release whose
+    # notarization is already running, so before giving up, adopt the newest
+    # submission in history that matches this artifact's name and was created
+    # in the last 10 minutes — then fall into the normal poll loop, which
+    # needs only the id.
+    echo "  submit returned no id — checking history for a just-landed submission ..."
+    sleep 10
+    sub_id="$(xcrun notarytool history \
+      --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+      --output-format json 2>/dev/null \
+      | jq -r --arg name "$(basename "$artifact")" '
+          [.history[]? | select(.name == $name)
+            | select((.createdDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > (now - 600))]
+          | sort_by(.createdDate) | last | .id // empty' 2>/dev/null || true)"
+    if [ -n "$sub_id" ]; then
+      echo "  adopted submission $sub_id from history (the upload landed; only the submit output was lost)"
+    fi
+  fi
+  if [ -z "$sub_id" ]; then
+    echo "  ERROR: notarytool submit returned no id and history shows no matching recent submission: $submit_json" >&2
     return 1
   fi
   echo "  submission $sub_id — polling to completion (retries through any notarytool crash, no re-upload) ..."
