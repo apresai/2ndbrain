@@ -140,7 +140,8 @@ if [ "${1:-}" = "--status" ]; then
     else
       sub="$(state_get '.app_sub_id')"
       if [ -n "$sub" ] && [ "$(state_get '.app_sha')" = "$(bundle_sha)" ]; then
-        echo "  app    : built + signed; notarization ${sub} → $(notary_status "$sub" || echo unknown)"
+        st="$(notary_status "$sub")"
+        echo "  app    : built + signed; notarization ${sub} → ${st:-unknown}"
       else
         echo "  app    : built + signed; not yet submitted"
       fi
@@ -154,7 +155,8 @@ if [ "${1:-}" = "--status" ]; then
     else
       sub="$(state_get '.dmg_sub_id')"
       if [ -n "$sub" ] && [ "$(state_get '.dmg_sha')" = "$(artifact_sha "$DMG")" ]; then
-        echo "  dmg    : built + signed; notarization ${sub} → $(notary_status "$sub" || echo unknown)"
+        st="$(notary_status "$sub")"
+        echo "  dmg    : built + signed; notarization ${sub} → ${st:-unknown}"
       else
         echo "  dmg    : built + signed; not yet submitted"
       fi
@@ -194,7 +196,9 @@ trap 'rm -rf "$TMP"' EXIT
 # RELEASE_NOWAIT=1 an In-Progress submission prints how to resume and exits
 # the SCRIPT successfully instead of blocking on Apple.
 notarize() {
-  local artifact="$1" prefix="$2" sha="$3"
+  local artifact="${1:?notarize: artifact path required}"
+  local prefix="${2:?notarize: state prefix required}"
+  local sha="${3:?notarize: artifact sha required}"
   local sub_id
 
   # Resume: a pending submission for this exact artifact needs no re-upload.
@@ -354,7 +358,10 @@ else
   # ── Phase 2: notarize + staple the app ─────────────────────────────────────
   echo "==> Notarizing the app (checkpointed; survives crashes, sleeps, and lost submits)"
   APP_SHA="$(bundle_sha)"
-  NOTARY_ZIP="$TMP/notarize.zip"
+  # Version-scoped name: history-adoption matches by basename, and a generic
+  # name could adopt an orphan submission from a DIFFERENT release attempt
+  # within the window (two attempts sat 3 minutes apart today).
+  NOTARY_ZIP="$TMP/notarize-${VERSION}.zip"
   # The zip is only needed for a NEW submission; a resumed one polls by id.
   # The submission is keyed to the BUNDLE hash (stable across runs), not the
   # zip (ditto output is not byte-reproducible).
@@ -395,7 +402,7 @@ else
 
   # ── Phase 4: notarize + staple the DMG ─────────────────────────────────────
   echo "==> Notarizing the DMG (checkpointed)"
-  notarize "$DMG" dmg
+  notarize "$DMG" dmg "$(artifact_sha "$DMG")"
 
   echo "==> Stapling the DMG"
   xcrun stapler staple "$DMG"

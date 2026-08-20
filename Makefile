@@ -1,4 +1,4 @@
-.PHONY: test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-app-status release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
+.PHONY: test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-app-status release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-release-script test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -197,7 +197,10 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-vault-switch.sh
 	SKIP_BUILD=1 ./tests/gui-test-polish.sh
 
-test-all: test test-battery test-usage test-swift test-gui
+test-release-script:
+	@bash tests/release-script-test.sh
+
+test-all: test test-battery test-usage test-swift test-gui test-release-script
 
 bump-build:
 	@echo "$(MAJOR).$(MINOR).$(shell echo $$(($(BUILD)+1)))" > VERSION
