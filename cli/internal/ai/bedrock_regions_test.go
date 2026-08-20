@@ -194,28 +194,28 @@ func TestBedrockTokenDivergence(t *testing.T) {
 	longB := "ABSK-token-value-bravo-5678"
 
 	// Env and file agree: no divergence.
-	d := bedrockTokenDivergence(env(longA), file(longA), nil)
+	d := bedrockTokenDivergence(env(longA), file(longA), nil, false)
 	if d.Diverges {
 		t.Fatal("identical tokens must not diverge")
 	}
 	// Env set, file different: divergence with both suffixes.
-	d = bedrockTokenDivergence(env(longA), file(longB), nil)
+	d = bedrockTokenDivergence(env(longA), file(longB), nil, false)
 	if !d.Diverges || d.EnvSuffix != "1234" || d.StoredSuffix != "5678" {
 		t.Fatalf("divergence = %+v", d)
 	}
 	// Env only: not divergence (nothing stored to be shadowed).
-	d = bedrockTokenDivergence(env(longA), file(""), nil)
+	d = bedrockTokenDivergence(env(longA), file(""), nil, false)
 	if d.Diverges || !d.EnvSet || d.StoredSet {
 		t.Fatalf("env-only = %+v", d)
 	}
 	// File only: not divergence.
-	d = bedrockTokenDivergence(env(""), file(longB), nil)
+	d = bedrockTokenDivergence(env(""), file(longB), nil, false)
 	if d.Diverges || d.EnvSet || !d.StoredSet {
 		t.Fatalf("file-only = %+v", d)
 	}
 	// Keychain acts as the stored fallback when the file is empty.
 	kc := func(string) (string, error) { return longB, nil }
-	d = bedrockTokenDivergence(env(longA), file(""), kc)
+	d = bedrockTokenDivergence(env(longA), file(""), kc, false)
 	if !d.Diverges || d.StoredSuffix != "5678" {
 		t.Fatalf("keychain-stored = %+v", d)
 	}
@@ -247,6 +247,71 @@ func TestRegionAttempts(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+func TestResolveBedrockTokenPreferStored(t *testing.T) {
+	setupBedrockHome(t)
+	const envTok = "ABSK-environment-key-alpha"
+	const fileTok = "ABSK-stored-file-key-bravo"
+
+	// Default precedence: env wins.
+	if err := WriteBedrockFile(BedrockFile{Token: fileTok}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(bedrockBearerTokenEnv, envTok)
+	if tok, src := ResolveBedrockToken(); tok != envTok || src != BedrockTokenEnv {
+		t.Fatalf("default: got %q from %s, want env", TokenSuffix(tok), src)
+	}
+
+	// prefer_stored_token inverts it: the file wins over a set env var.
+	if err := UpdateBedrockPreferStored(true); err != nil {
+		t.Fatal(err)
+	}
+	if tok, src := ResolveBedrockToken(); tok != fileTok || src != BedrockTokenFile {
+		t.Fatalf("prefer: got %q from %s, want file", TokenSuffix(tok), src)
+	}
+
+	// The escape hatch restores env-first for a candidate-key probe.
+	t.Setenv(bedrockIgnorePreferStoredEnv, "1")
+	if tok, src := ResolveBedrockToken(); tok != envTok || src != BedrockTokenEnv {
+		t.Fatalf("escape hatch: got %q from %s, want env", TokenSuffix(tok), src)
+	}
+	t.Setenv(bedrockIgnorePreferStoredEnv, "")
+
+	// Prefer with NO stored key falls back to the env var (never bricks).
+	empty := ""
+	if err := UpdateBedrockFile("", &empty, false); err != nil {
+		t.Fatal(err)
+	}
+	if tok, src := ResolveBedrockToken(); tok != envTok || src != BedrockTokenEnv {
+		t.Fatalf("prefer without stored: got %q from %s, want env fallback", TokenSuffix(tok), src)
+	}
+}
+
+func TestEnsureBedrockBearerTokenPreferOverwrites(t *testing.T) {
+	env := map[string]string{bedrockBearerTokenEnv: "ABSK-old-environment-token"}
+	getenv := func(k string) string { return env[k] }
+	setenv := func(k, v string) error { env[k] = v; return nil }
+	fileTok := func() string { return "ABSK-stored-file-key-bravo" }
+
+	// Default: an already-set env var is left alone.
+	ensureBedrockBearerTokenPrefer(getenv, setenv, fileTok, nil, false)
+	if env[bedrockBearerTokenEnv] != "ABSK-old-environment-token" {
+		t.Fatalf("default overwrote the env var: %q", env[bedrockBearerTokenEnv])
+	}
+	// Prefer: the stored key overwrites it in-process, so the classic SDK
+	// path AND the mantle plane (which reads the env var after this shim)
+	// both follow the saved key.
+	ensureBedrockBearerTokenPrefer(getenv, setenv, fileTok, nil, true)
+	if env[bedrockBearerTokenEnv] != "ABSK-stored-file-key-bravo" {
+		t.Fatalf("prefer did not overwrite: %q", env[bedrockBearerTokenEnv])
+	}
+	// Prefer with no stored key: the env var stands.
+	env[bedrockBearerTokenEnv] = "ABSK-old-environment-token"
+	ensureBedrockBearerTokenPrefer(getenv, setenv, func() string { return "" }, nil, true)
+	if env[bedrockBearerTokenEnv] != "ABSK-old-environment-token" {
+		t.Fatalf("prefer without stored clobbered the env var: %q", env[bedrockBearerTokenEnv])
 	}
 }
 

@@ -59,6 +59,16 @@ func runSelfTest(ctx context.Context) SelfTestReport {
 		Provider:   cfg.Provider,
 	}
 
+	// Capture the token divergence BEFORE providers initialize: with
+	// prefer_stored_token on, provider init hydrates the bearer token and
+	// OVERWRITES AWS_BEARER_TOKEN_BEDROCK with the stored key, after which
+	// env == stored and a later divergence read reports nothing — hiding
+	// the key-source check in exactly the scenario it exists to surface.
+	var keyDivergence ai.TokenDivergence
+	if cfg.Provider == "bedrock" {
+		keyDivergence = ai.BedrockTokenDivergence()
+	}
+
 	// Providers must be registered against the resolved config before any
 	// probe. initAIProvidersFor takes config + root rather than a *vault.Vault
 	// precisely so tier 1 can run without opening one.
@@ -67,7 +77,7 @@ func runSelfTest(ctx context.Context) SelfTestReport {
 	// Each tier carries its own deadline so a slow provider in tier 1 cannot
 	// starve tier 2 into reporting a timeout as an index defect.
 	modelCtx, cancelModels := context.WithTimeout(ctx, doctorModelTierTimeout)
-	tier1, creds := selfTestModels(modelCtx, cfg, root)
+	tier1, creds := selfTestModels(modelCtx, cfg, root, keyDivergence)
 	cancelModels()
 	r.Credentials = creds
 	r.Checks = append(r.Checks, tier1...)
@@ -88,7 +98,9 @@ func runSelfTest(ctx context.Context) SelfTestReport {
 // selfTestModels is tier 1: a real embed call and a real generation call
 // against the ACTIVE models, plus the credential verdict derived from how they
 // failed. No vault required.
-func selfTestModels(ctx context.Context, cfg ai.AIConfig, vaultRoot string) ([]DoctorCheck, string) {
+// keyDivergence must be captured by the caller BEFORE provider init (see
+// runSelfTest): reading it here would race the hydrate shim's env overwrite.
+func selfTestModels(ctx context.Context, cfg ai.AIConfig, vaultRoot string, keyDivergence ai.TokenDivergence) ([]DoctorCheck, string) {
 	embed := probeActiveModel(ctx, cfg, cfg.EmbeddingModel, "embedding", vaultRoot)
 	gen := probeActiveModel(ctx, cfg, cfg.GenerationModel, "generation", vaultRoot)
 
@@ -105,22 +117,40 @@ func selfTestModels(ctx context.Context, cfg ai.AIConfig, vaultRoot string) ([]D
 		modelCheck("answer model", cfg.GenerationModel, gen),
 	}
 	if cfg.Provider == "bedrock" {
-		if div := ai.BedrockTokenDivergence(); div.Diverges {
-			// Zero-network: pure env + file/Keychain comparison. This is where
-			// "the app works but my terminal still 403s" gets diagnosed — the
-			// env token outranks the saved key for every process that inherits
-			// this shell's environment.
-			checks = append(checks, DoctorCheck{
-				Name: "bedrock key source",
-				OK:   true,
-				Warn: true,
-				Detail: fmt.Sprintf("AWS_BEARER_TOKEN_BEDROCK (ends %s) overrides the saved key (ends %s) in this environment",
-					suffixOrUnknown(div.EnvSuffix), suffixOrUnknown(div.StoredSuffix)),
-				Fix: "unset AWS_BEARER_TOKEN_BEDROCK (or update its source, e.g. your shell profile) so this shell and its MCP servers use the saved key",
-			})
+		if check := bedrockKeySourceCheck(keyDivergence); check != nil {
+			checks = append(checks, *check)
 		}
 	}
 	return checks, creds
+}
+
+// bedrockKeySourceCheck renders the env-vs-stored key divergence. Zero
+// network: pure env + file/Keychain comparison, computed by the caller before
+// provider init. This is where "the app works but my terminal still 403s"
+// gets diagnosed — the env token outranks the saved key for every process
+// that inherits this shell's environment. With prefer_stored_token on the
+// saved key wins everywhere in 2nb, so the same divergence is merely
+// informational. Nil when the keys don't diverge.
+func bedrockKeySourceCheck(div ai.TokenDivergence) *DoctorCheck {
+	if !div.Diverges {
+		return nil
+	}
+	if div.PreferStored {
+		return &DoctorCheck{
+			Name: "bedrock key source",
+			OK:   true,
+			Detail: fmt.Sprintf("prefer_stored_token is on: 2nb uses the saved key (ends %s); AWS_BEARER_TOKEN_BEDROCK (ends %s) still serves other tools",
+				suffixOrUnknown(div.StoredSuffix), suffixOrUnknown(div.EnvSuffix)),
+		}
+	}
+	return &DoctorCheck{
+		Name: "bedrock key source",
+		OK:   true,
+		Warn: true,
+		Detail: fmt.Sprintf("AWS_BEARER_TOKEN_BEDROCK (ends %s) overrides the saved key (ends %s) in this environment",
+			suffixOrUnknown(div.EnvSuffix), suffixOrUnknown(div.StoredSuffix)),
+		Fix: "unset AWS_BEARER_TOKEN_BEDROCK, or run `2nb config bedrock --set --prefer-stored-token` to make the saved key win for all 2nb use",
+	}
 }
 
 // probeActiveModel runs one real provider call. A nil result means the probe

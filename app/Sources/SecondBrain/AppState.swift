@@ -2333,7 +2333,7 @@ final class AppState {
     /// `verifyRegions` semantics: nil leaves the stored region list untouched,
     /// an empty array clears it (`--clear-regions`), a non-empty array
     /// replaces it (`--regions a,b`).
-    nonisolated static func bedrockSetArgs(region: String, hasToken: Bool, verifyRegions: [String]?) -> [String] {
+    nonisolated static func bedrockSetArgs(region: String, hasToken: Bool, verifyRegions: [String]?, preferStored: Bool? = nil) -> [String] {
         var args = ["config", "bedrock", "--set", "--json", "--porcelain"]
         if !region.isEmpty {
             args += ["--region", region]
@@ -2345,15 +2345,18 @@ final class AppState {
                 args += ["--regions", verifyRegions.joined(separator: ",")]
             }
         }
+        if let preferStored {
+            args.append(preferStored ? "--prefer-stored-token" : "--no-prefer-stored-token")
+        }
         if hasToken {
             args.append("--token-stdin")
         }
         return args
     }
 
-    func saveBedrockMachineConfig(region: String, token: String?, verifyRegions: [String]? = nil) async throws -> BedrockMachineStatus {
+    func saveBedrockMachineConfig(region: String, token: String?, verifyRegions: [String]? = nil, preferStored: Bool? = nil) async throws -> BedrockMachineStatus {
         let hasToken = !(token ?? "").isEmpty
-        let args = Self.bedrockSetArgs(region: region, hasToken: hasToken, verifyRegions: verifyRegions)
+        let args = Self.bedrockSetArgs(region: region, hasToken: hasToken, verifyRegions: verifyRegions, preferStored: preferStored)
         let stdin: Data? = hasToken ? Data(token!.utf8) : nil
         let data = try await runCLIGlobal(args, stdin: stdin)
         return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
@@ -2403,7 +2406,14 @@ final class AppState {
     /// page verify a key BEFORE accepting it — the claim its caption makes —
     /// instead of overwriting a working credential and having no way back.
     func probeBedrockToken(_ token: String) async throws -> SelfTestReport {
-        try await runDoctorSelfTest(extraEnvironment: ["AWS_BEARER_TOKEN_BEDROCK": token])
+        // The CANDIDATE key rides in via the env var; the ignore flag makes
+        // the env win even when prefer_stored_token is on — otherwise the
+        // probe would silently test the STORED key instead of the candidate
+        // and verify-before-accept would approve the wrong key.
+        try await runDoctorSelfTest(extraEnvironment: [
+            "AWS_BEARER_TOKEN_BEDROCK": token,
+            "2NB_BEDROCK_IGNORE_PREFER_STORED": "1",
+        ])
     }
 
     /// The full effective configuration (`2nb config show --json`), returned
@@ -3323,8 +3333,11 @@ struct BedrockMachineStatus: Codable, Equatable {
     /// predate the current key.
     let tokenUpdatedAt: String
     /// True when AWS_BEARER_TOKEN_BEDROCK in the CLI's environment overrides
-    /// a DIFFERENT saved key (the terminal/app split-brain).
+    /// a DIFFERENT saved key (the terminal/app split-brain). Never true when
+    /// preferStoredToken is on.
     let envOverridesStored: Bool
+    /// Inverted precedence: the saved key wins over the env var for all 2nb use.
+    let preferStoredToken: Bool
     /// Suffix of the STORED key when it diverges from the env token.
     let storedTokenSuffix: String
     let error: String?
@@ -3339,6 +3352,7 @@ struct BedrockMachineStatus: Codable, Equatable {
         case tokenUpdatedAt = "token_updated_at"
         case envOverridesStored = "env_overrides_stored"
         case storedTokenSuffix = "stored_token_suffix"
+        case preferStoredToken = "prefer_stored_token"
         case error
     }
 
@@ -3353,6 +3367,7 @@ struct BedrockMachineStatus: Codable, Equatable {
         tokenUpdatedAt = try c.decodeIfPresent(String.self, forKey: .tokenUpdatedAt) ?? ""
         envOverridesStored = try c.decodeIfPresent(Bool.self, forKey: .envOverridesStored) ?? false
         storedTokenSuffix = try c.decodeIfPresent(String.self, forKey: .storedTokenSuffix) ?? ""
+        preferStoredToken = try c.decodeIfPresent(Bool.self, forKey: .preferStoredToken) ?? false
         error = try c.decodeIfPresent(String.self, forKey: .error)
     }
 

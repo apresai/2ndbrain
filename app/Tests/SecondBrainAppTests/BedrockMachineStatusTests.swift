@@ -62,6 +62,24 @@ func bedrockSetArgsBuilder() {
     // Empty array means CLEAR, never an empty --regions value.
     #expect(AppState.bedrockSetArgs(region: "", hasToken: false, verifyRegions: [])
         == ["config", "bedrock", "--set", "--json", "--porcelain", "--clear-regions"])
+    // Tri-state prefer flag: nil untouched, true/false map to the flag pair.
+    #expect(AppState.bedrockSetArgs(region: "", hasToken: false, verifyRegions: nil, preferStored: true)
+        == ["config", "bedrock", "--set", "--json", "--porcelain", "--prefer-stored-token"])
+    #expect(AppState.bedrockSetArgs(region: "", hasToken: false, verifyRegions: nil, preferStored: false)
+        == ["config", "bedrock", "--set", "--json", "--porcelain", "--no-prefer-stored-token"])
+}
+
+@Test("BedrockMachineStatus decodes prefer_stored_token, absent on older CLIs")
+func bedrockMachineStatusPreferStored() throws {
+    let on = try JSONDecoder().decode(BedrockMachineStatus.self, from: Data("""
+    {"path":"/tmp/bedrock.json","token_set":true,"token_source":"file","prefer_stored_token":true}
+    """.utf8))
+    #expect(on.preferStoredToken)
+
+    let legacy = try JSONDecoder().decode(BedrockMachineStatus.self, from: Data("""
+    {"path":"/tmp/bedrock.json","token_set":true,"token_source":"file"}
+    """.utf8))
+    #expect(!legacy.preferStoredToken)
 }
 
 @Test("ProviderStatusInfo decodes additive token_source")

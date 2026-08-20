@@ -233,6 +233,55 @@ func TestConfigBedrockEnvOverridesStoredWarning(t *testing.T) {
 	}
 }
 
+func TestConfigBedrockPreferStoredToken(t *testing.T) {
+	isolateBedrockFile(t)
+	root := t.TempDir()
+
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--token", "ABSK-stored-key-value-alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--prefer-stored-token"); err != nil {
+		t.Fatalf("set prefer: %v", err)
+	}
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSK-environ-key-value-bravo")
+
+	out, err := runCLIArgs(t, root, "config", "bedrock", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st bedrockMachineStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.PreferStoredToken {
+		t.Fatalf("prefer_stored_token not reported: %+v", st)
+	}
+	// With prefer on: the RESOLVED token is the stored one, and the
+	// split-brain warning is suppressed (the env no longer overrides 2nb).
+	if st.TokenSource != string(ai.BedrockTokenFile) || st.TokenSuffix != "lpha" {
+		t.Fatalf("resolved token should be the stored key: %+v", st)
+	}
+	if st.EnvOverridesStored {
+		t.Fatalf("env_overrides_stored must be suppressed under prefer: %+v", st)
+	}
+
+	// --no-prefer-stored-token restores env-first.
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--no-prefer-stored-token"); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runCLIArgs(t, root, "config", "bedrock", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = bedrockMachineStatus{}
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.PreferStoredToken || st.TokenSource != string(ai.BedrockTokenEnv) || !st.EnvOverridesStored {
+		t.Fatalf("no-prefer should restore env-first + warning: %+v", st)
+	}
+}
+
 func TestConfigBedrockShowReportsUnprivateFile(t *testing.T) {
 	isolateBedrockFile(t)
 	path := ai.BedrockFilePath()

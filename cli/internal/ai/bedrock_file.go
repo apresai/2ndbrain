@@ -27,6 +27,28 @@ type BedrockFile struct {
 	// changed, so a UI can flag model-access verdicts that predate the
 	// current key. Stamped only on token writes, never on region edits.
 	TokenUpdatedAt string `json:"token_updated_at,omitempty"`
+	// PreferStoredToken inverts the token precedence for 2nb only: the
+	// STORED key (file, then Keychain) wins over AWS_BEARER_TOKEN_BEDROCK,
+	// which keeps serving every other tool in the shell (aws CLI, codex).
+	// Off by default — env-first matches the AWS SDK convention.
+	PreferStoredToken bool `json:"prefer_stored_token,omitempty"`
+}
+
+// bedrockIgnorePreferStoredEnv is the internal escape hatch for callers that
+// deliberately probe a CANDIDATE key via the env var (the app's
+// verify-before-accept flow): with it set to "1" the env token wins even when
+// prefer_stored_token is on, otherwise the probe would silently test the
+// stored key instead of the candidate. Not a user-facing surface.
+const bedrockIgnorePreferStoredEnv = "2NB_BEDROCK_IGNORE_PREFER_STORED"
+
+// preferStoredTokenActive reports whether the stored-key preference is both
+// configured and not escaped for this process.
+func preferStoredTokenActive() bool {
+	if os.Getenv(bedrockIgnorePreferStoredEnv) == "1" {
+		return false
+	}
+	f, err := ReadBedrockFile()
+	return err == nil && f.PreferStoredToken
 }
 
 // BedrockTokenSource names where ResolveBedrockToken found a bearer token.
@@ -209,6 +231,23 @@ func UpdateBedrockRegions(regions []string, clear bool) error {
 	return WriteBedrockFile(cur)
 }
 
+// UpdateBedrockPreferStored sets or clears the prefer-stored-token flag,
+// leaving everything else in the file untouched.
+func UpdateBedrockPreferStored(prefer bool) error {
+	cur, err := ReadBedrockFile()
+	if err != nil {
+		if BedrockFilePath() == "" {
+			return err
+		}
+		if !isNotPrivateErr(err) && !strings.Contains(err.Error(), "parse ") {
+			return err
+		}
+		cur = BedrockFile{}
+	}
+	cur.PreferStoredToken = prefer
+	return WriteBedrockFile(cur)
+}
+
 // ResolveBedrockRegions returns the full included region set for multi-region
 // verification and discovery: the primary region first (today's single-region
 // resolution, unchanged), then the machine file's additional regions, deduped
@@ -263,21 +302,37 @@ func ResolveBedrockConfig(vault BedrockConfig) BedrockConfig {
 }
 
 // ResolveBedrockToken returns the bearer token and where it came from.
-// Precedence: AWS_BEARER_TOKEN_BEDROCK, then the machine file, then the
-// macOS Keychain. It does not consult SigV4.
+// Default precedence: AWS_BEARER_TOKEN_BEDROCK, then the machine file, then
+// the macOS Keychain. With prefer_stored_token set in the machine file, the
+// stored key (file, then Keychain) wins and the env var is only the final
+// fallback — so 2nb follows the saved key while the env var keeps serving
+// other tools. It does not consult SigV4.
 func ResolveBedrockToken() (string, BedrockTokenSource) {
-	if t := strings.TrimSpace(os.Getenv(bedrockBearerTokenEnv)); t != "" {
-		return t, BedrockTokenEnv
-	}
-	if t := readBedrockFileToken(); t != "" {
-		return t, BedrockTokenFile
-	}
-	if keychainLookupEnabled() {
-		if t, err := keychainGet("bedrock"); err == nil && strings.TrimSpace(t) != "" {
-			return strings.TrimSpace(t), BedrockTokenKeychain
+	stored := func() (string, BedrockTokenSource) {
+		if t := readBedrockFileToken(); t != "" {
+			return t, BedrockTokenFile
 		}
+		if keychainLookupEnabled() {
+			if t, err := keychainGet("bedrock"); err == nil && strings.TrimSpace(t) != "" {
+				return strings.TrimSpace(t), BedrockTokenKeychain
+			}
+		}
+		return "", BedrockTokenNone
 	}
-	return "", BedrockTokenNone
+	env := strings.TrimSpace(os.Getenv(bedrockBearerTokenEnv))
+	if preferStoredTokenActive() {
+		if t, src := stored(); t != "" {
+			return t, src
+		}
+		if env != "" {
+			return env, BedrockTokenEnv
+		}
+		return "", BedrockTokenNone
+	}
+	if env != "" {
+		return env, BedrockTokenEnv
+	}
+	return stored()
 }
 
 // TokenSuffix returns the last 4 characters of a token, or "" when the token
@@ -302,6 +357,10 @@ type TokenDivergence struct {
 	Diverges     bool // env token set AND stored token set AND they differ
 	EnvSuffix    string
 	StoredSuffix string
+	// PreferStored reports the prefer_stored_token flag, so a diverging pair
+	// renders as informational ("the saved key wins in 2nb; the env var
+	// still serves other tools") rather than as the split-brain warning.
+	PreferStored bool
 }
 
 // BedrockTokenDivergence detects the split-brain state where
@@ -313,10 +372,14 @@ func BedrockTokenDivergence() TokenDivergence {
 	if keychainLookupEnabled() {
 		kc = keychainGet
 	}
-	return bedrockTokenDivergence(os.Getenv, readBedrockFileToken, kc)
+	prefer := false
+	if f, err := ReadBedrockFile(); err == nil {
+		prefer = f.PreferStoredToken
+	}
+	return bedrockTokenDivergence(os.Getenv, readBedrockFileToken, kc, prefer)
 }
 
-func bedrockTokenDivergence(getenv func(string) string, fileToken func() string, keychain func(string) (string, error)) TokenDivergence {
+func bedrockTokenDivergence(getenv func(string) string, fileToken func() string, keychain func(string) (string, error), preferStored bool) TokenDivergence {
 	env := strings.TrimSpace(getenv(bedrockBearerTokenEnv))
 	stored := ""
 	if fileToken != nil {
@@ -333,6 +396,7 @@ func bedrockTokenDivergence(getenv func(string) string, fileToken func() string,
 		Diverges:     env != "" && stored != "" && env != stored,
 		EnvSuffix:    TokenSuffix(env),
 		StoredSuffix: TokenSuffix(stored),
+		PreferStored: preferStored,
 	}
 }
 
@@ -361,5 +425,5 @@ func hydrateBedrockBearerToken() {
 	if keychainLookupEnabled() {
 		kc = keychainGet
 	}
-	ensureBedrockBearerToken(os.Getenv, os.Setenv, readBedrockFileToken, kc)
+	ensureBedrockBearerTokenPrefer(os.Getenv, os.Setenv, readBedrockFileToken, kc, preferStoredTokenActive())
 }

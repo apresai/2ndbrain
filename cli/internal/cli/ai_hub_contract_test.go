@@ -107,7 +107,8 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	bedrockSet, bedrockClearToken, bedrockTokenStdin = false, false, false
 	bedrockRegion, bedrockToken = "", ""
 	bedrockRegions, bedrockClearRegions = "", false
-	for _, name := range []string{"set", "clear-token", "region", "token", "token-stdin", "regions", "clear-regions"} {
+	bedrockPreferStored, bedrockNoPrefer = false, false
+	for _, name := range []string{"set", "clear-token", "region", "token", "token-stdin", "regions", "clear-regions", "prefer-stored-token", "no-prefer-stored-token"} {
 		if f := configBedrockCmd.Flags().Lookup(name); f != nil {
 			_ = configBedrockCmd.Flags().Set(name, f.DefValue)
 			f.Changed = false
