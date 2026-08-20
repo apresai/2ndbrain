@@ -3,6 +3,7 @@ package ai
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // AIConfig holds AI provider configuration from vault config.yaml.
@@ -31,10 +32,16 @@ type AIConfig struct {
 	// EmbedConcurrency caps simultaneous in-flight embedding requests during a
 	// bulk embed / re-embed. 0 (unset) resolves to ProviderEmbedConcurrencyDefault
 	// for the active provider; resolved via ResolveEmbedConcurrency.
-	EmbedConcurrency int              `yaml:"embed_concurrency,omitempty" json:"embed_concurrency,omitempty"`
-	Ollama           OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
-	Bedrock          BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
-	OpenRouter       OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
+	EmbedConcurrency int `yaml:"embed_concurrency,omitempty" json:"embed_concurrency,omitempty"`
+	// ReasoningEffort is the thinking depth a reasoning-capable generation model
+	// spends on a production request: "none", "low", "medium" or "high". Empty
+	// (the default) sends no reasoning field at all, so the model's own default
+	// applies. Only the bedrock-mantle models read it today; every other
+	// provider ignores it. Resolved via ResolveReasoningEffort.
+	ReasoningEffort string           `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	Ollama          OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
+	Bedrock         BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
+	OpenRouter      OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
 	// Rerank configures the optional cross-encoder rerank stage (default OFF);
 	// resolved via RerankEnabled / ResolveRerankModel / ResolveRerankCandidateDocs.
 	Rerank RerankConfig `yaml:"rerank,omitempty" json:"rerank,omitempty"`
@@ -101,6 +108,37 @@ func (c AIConfig) ResolveEmbedConcurrency(provider string) int {
 		n = 1
 	}
 	return n
+}
+
+// ReasoningEfforts is the accepted set of ai.reasoning_effort values, in
+// increasing depth. Empty is also accepted by config set and means "leave it
+// to the model", which is why it is not a member here.
+var ReasoningEfforts = []string{"none", "low", "medium", "high"}
+
+// IsValidReasoningEffort reports whether v names a reasoning depth, ignoring
+// surrounding space and case. Empty is deliberately NOT valid: callers handle
+// it separately as "unset, use the model default".
+func IsValidReasoningEffort(v string) bool {
+	v = strings.ToLower(strings.TrimSpace(v))
+	for _, e := range ReasoningEfforts {
+		if v == e {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveReasoningEffort returns the configured reasoning depth for a
+// production generation, or "" when it is unset or unrecognized. "" is
+// meaningful rather than an error: GenOpts then omits the reasoning field
+// entirely and the model's own default applies, so a hand-edited config.yaml
+// carrying a typo degrades to the default instead of breaking `ask`.
+func (c AIConfig) ResolveReasoningEffort() string {
+	v := strings.ToLower(strings.TrimSpace(c.ReasoningEffort))
+	if IsValidReasoningEffort(v) {
+		return v
+	}
+	return ""
 }
 
 // RAG context (parent-document) budget defaults — generous within Claude Haiku

@@ -136,7 +136,7 @@ struct ContentView: View {
                     case .home:
                         HomeView()
                     case .models:
-                        AIHubView(onClose: {}, isInline: true)
+                        SimpleModelsView()
                     case .notes:
                         LintResultsView(isPresented: .constant(true), isInline: true)
                     case .health:

@@ -261,6 +261,7 @@ var settableConfigKeys = []string{
 	"ai.rag_context_budget",
 	"ai.rag_note_budget",
 	"ai.embed_concurrency",
+	"ai.reasoning_effort",
 	"ai.rerank.enabled",
 	"ai.rerank.model",
 	"ai.rerank.candidate_docs",
@@ -304,6 +305,8 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return strconv.Itoa(cfg.RAGNoteBudgetRunes), nil
 	case "ai.embed_concurrency":
 		return strconv.Itoa(cfg.EmbedConcurrency), nil
+	case "ai.reasoning_effort":
+		return cfg.ReasoningEffort, nil
 	case "ai.rerank.enabled":
 		return strconv.FormatBool(cfg.Rerank.Enabled), nil
 	case "ai.rerank.model":
@@ -431,6 +434,16 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("embed_concurrency must be an integer between 1 and 64 (got %q); 0/unset resolves to the per-provider default", value)
 		}
 		cfg.EmbedConcurrency = n
+	case "ai.reasoning_effort":
+		// Empty clears the setting: no reasoning field is sent and the model's
+		// own default applies. Anything else must name a real depth, since a
+		// value the provider rejects would fail every generation, and one it
+		// silently ignores would look like the setting did nothing.
+		v := strings.ToLower(strings.TrimSpace(value))
+		if v != "" && !ai.IsValidReasoningEffort(v) {
+			return fmt.Errorf("reasoning_effort must be one of %s (got %q); empty clears it and leaves the model's default", strings.Join(ai.ReasoningEfforts, ", "), value)
+		}
+		cfg.ReasoningEffort = v
 	case "ai.rerank.enabled":
 		b, err := parseConfigBool(key, value)
 		if err != nil {

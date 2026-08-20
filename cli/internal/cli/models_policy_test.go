@@ -45,6 +45,121 @@ func TestModelsPolicy_UnknownVendorSlugListsKnown(t *testing.T) {
 	}
 }
 
+// TestModelsPolicy_ShowReportsKnownVendors covers the checkbox vocabulary a
+// vendor-policy UI renders from: known_vendors must carry every slug the
+// policy MAY name, including vendors with no row in this account's catalog —
+// a policy states intent about future models, so xAI has to be checkable on
+// an account that has never seen a Grok model.
+func TestModelsPolicy_ShowReportsKnownVendors(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if _, err := runCLIArgs(t, root,
+		"models", "policy", "set",
+		"--provider", "bedrock", "--enable-only", "anthropic",
+		"--scope", "vault"); err != nil {
+		t.Fatalf("policy set: %v", err)
+	}
+
+	got, err := runCLIArgs(t, root, "models", "policy", "show", "--provider", "bedrock", "--json")
+	if err != nil {
+		t.Fatalf("policy show: %v (out=%s)", err, truncate(got, 300))
+	}
+	var results []policyResult
+	if err := json.Unmarshal(got, &results); err != nil {
+		t.Fatalf("policy show parse: %v (body=%s)", err, truncate(got, 500))
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one bedrock policy, got %d", len(results))
+	}
+	res := results[0]
+
+	known := map[string]bool{}
+	for _, v := range res.KnownVendors {
+		known[v] = true
+	}
+	for _, slug := range []string{"anthropic", "amazon", "xai", "openai", "deepseek"} {
+		if !known[slug] {
+			t.Errorf("known_vendors missing %q: %v", slug, res.KnownVendors)
+		}
+	}
+	// deepseek is the "no catalog row" case: it is a nameable vendor with no
+	// model in the merged catalog, which is exactly why the static vocabulary
+	// is unioned in.
+	if _, charted := res.Effect.ByVendor["deepseek"]; charted {
+		t.Errorf("deepseek unexpectedly has catalog rows; this test needs a vendor with none: %v", res.Effect.ByVendor)
+	}
+	// Existing fields are untouched.
+	if res.Provider != "bedrock" || res.Mode != "enable_only" {
+		t.Errorf("show broke its existing contract: %+v", res)
+	}
+	if len(res.Vendors) != 1 || res.Vendors[0] != "anthropic" {
+		t.Errorf("vendors = %v, want [anthropic]", res.Vendors)
+	}
+
+	// `set` reports the same vocabulary, so a UI can render checkboxes from
+	// the response it already has instead of a second round-trip.
+	got, err = runCLIArgs(t, root,
+		"models", "policy", "set",
+		"--provider", "bedrock", "--enable-only", "anthropic,xai",
+		"--scope", "vault", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("policy set --dry-run: %v (out=%s)", err, truncate(got, 300))
+	}
+	setRes := decodePolicyResult(t, got)
+	if len(setRes.KnownVendors) != len(res.KnownVendors) {
+		t.Errorf("set known_vendors (%d) disagrees with show (%d)", len(setRes.KnownVendors), len(res.KnownVendors))
+	}
+}
+
+// TestModelsPolicy_ShowWithoutPolicyReportsKnownVendors is the first-run
+// contract: with nothing configured, --json must still name the Bedrock
+// vendor vocabulary (DeepSeek, Meta, Mistral, …) so the GUI does not fall
+// back to a four-slug hardcoded list.
+func TestModelsPolicy_ShowWithoutPolicyReportsKnownVendors(t *testing.T) {
+	_, root := newContractVault(t)
+
+	got, err := runCLIArgs(t, root, "models", "policy", "show", "--provider", "bedrock", "--json")
+	if err != nil {
+		t.Fatalf("policy show: %v (out=%s)", err, truncate(got, 300))
+	}
+	var results []policyResult
+	if err := json.Unmarshal(got, &results); err != nil {
+		t.Fatalf("policy show parse: %v (body=%s)", err, truncate(got, 500))
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one synthetic bedrock row, got %d: %+v", len(results), results)
+	}
+	res := results[0]
+	if res.Provider != "bedrock" {
+		t.Errorf("provider = %q, want bedrock", res.Provider)
+	}
+	if res.Mode == "enable_only" || len(res.Vendors) > 0 {
+		t.Errorf("synthetic row must not look configured: mode=%q vendors=%v", res.Mode, res.Vendors)
+	}
+	known := map[string]bool{}
+	for _, v := range res.KnownVendors {
+		known[v] = true
+	}
+	for _, slug := range []string{"anthropic", "amazon", "xai", "openai", "deepseek", "meta", "mistral"} {
+		if !known[slug] {
+			t.Errorf("known_vendors missing %q: %v", slug, res.KnownVendors)
+		}
+	}
+	if len(res.KnownVendors) < 10 {
+		t.Errorf("bedrock vocabulary should be the static set (~19), got %d: %v", len(res.KnownVendors), res.KnownVendors)
+	}
+
+	// Unfiltered show is also non-empty, and human output stays the empty-state
+	// sentence (synthetics are JSON-only).
+	human, err := runCLIArgs(t, root, "models", "policy", "show")
+	if err != nil {
+		t.Fatalf("human show: %v", err)
+	}
+	if !strings.Contains(string(human), "No vendor policies configured") {
+		t.Errorf("human show should keep the empty-state sentence, got: %s", truncate(human, 300))
+	}
+}
+
 func TestModelsPolicy_SetClearsSameScopeOverrides(t *testing.T) {
 	_, root := newContractVault(t)
 
@@ -196,7 +311,8 @@ func TestModelsPolicy_ClearRoundTrip(t *testing.T) {
 		t.Errorf("no other-scope policy exists, warnings should be empty: %v", res.Warnings)
 	}
 
-	// Show is empty again.
+	// Show has no configured policy, but JSON still carries synthetic
+	// known_vendors rows so a first-run UI can render checkboxes.
 	got, err = runCLIArgs(t, root, "models", "policy", "show", "--json")
 	if err != nil {
 		t.Fatalf("policy show after clear: %v", err)
@@ -205,8 +321,13 @@ func TestModelsPolicy_ClearRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(got, &parsed); err != nil {
 		t.Fatalf("show parse: %v (body=%s)", err, truncate(got, 300))
 	}
-	if len(parsed) != 0 {
-		t.Fatalf("expected no policies after clear, got %+v", parsed)
+	if len(parsed) == 0 {
+		t.Fatal("expected synthetic known_vendors rows after clear, got []")
+	}
+	for _, r := range parsed {
+		if r.Mode == "enable_only" || len(r.Vendors) > 0 {
+			t.Fatalf("cleared policy leaked as configured: %+v", r)
+		}
 	}
 
 	// Clearing again reports cleared=false without error.

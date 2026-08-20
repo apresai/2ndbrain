@@ -93,7 +93,7 @@ const condenseSystemPrompt = "You rewrite follow-up questions into standalone qu
 // deploy rotation?"). With empty history the question is returned unchanged
 // and no API call is made, so single-shot asks are unaffected. Callers must
 // treat an error as non-fatal: fall back to the raw question and warn.
-func CondenseQuestion(ctx context.Context, gen GenerationProvider, history []ChatTurn, question string) (string, error) {
+func CondenseQuestion(ctx context.Context, gen GenerationProvider, history []ChatTurn, question string, opts ...GenOption) (string, error) {
 	if len(history) == 0 {
 		return question, nil
 	}
@@ -109,11 +109,11 @@ Follow-up question: %s
 
 Rewrite the follow-up question as a single standalone question that can be understood with no conversation context. Keep all specific names, paths, and terms. If it is already standalone, return it exactly unchanged.`, serializeHistory(tail), question)
 
-	raw, err := gen.Generate(ctx, prompt, GenOpts{
+	raw, err := gen.Generate(ctx, prompt, applyGenOptions(GenOpts{
 		MaxTokens:    128,
 		Temperature:  Ptr(0.0),
 		SystemPrompt: condenseSystemPrompt,
-	})
+	}, opts))
 	if err != nil {
 		return "", err
 	}

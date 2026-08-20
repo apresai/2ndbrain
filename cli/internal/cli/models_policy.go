@@ -134,9 +134,16 @@ type policyEffect struct {
 // policyResult is the JSON contract for `models policy set` and each element
 // of `models policy show`.
 type policyResult struct {
-	Provider              string       `json:"provider"`
-	Mode                  string       `json:"mode"`
-	Vendors               []string     `json:"vendors"`
+	Provider string   `json:"provider"`
+	Mode     string   `json:"mode"`
+	Vendors  []string `json:"vendors"`
+	// KnownVendors is every vendor slug this provider's policy may name:
+	// the vendors present in the merged catalog UNION the provider's static
+	// vocabulary. A UI renders one checkbox per slug, which is why the union
+	// matters — a policy states intent about FUTURE models, so xAI and
+	// OpenAI must be checkable on an account whose catalog shows no Grok or
+	// GPT row yet (mantle entitlement, vendor policy, filters).
+	KnownVendors          []string     `json:"known_vendors"`
 	Scope                 string       `json:"scope"`
 	DryRun                bool         `json:"dry_run"`
 	Effect                policyEffect `json:"effect"`
@@ -252,6 +259,7 @@ func runModelsPolicySet(cmd *cobra.Command, args []string) error {
 		Provider:              policy.Provider,
 		Mode:                  policy.Mode,
 		Vendors:               vendors,
+		KnownVendors:          sortedSlugs(known),
 		Scope:                 string(scope),
 		DryRun:                policySetDryRun,
 		Effect:                effect,
@@ -313,11 +321,16 @@ func runModelsPolicyShow(cmd *cobra.Command, args []string) error {
 			Vendors:  append([]string{}, p.Vendors...),
 			Scope:    string(p.Scope),
 		}
+		// known_vendors is reported for every policy, including one with an
+		// unsupported mode: a UI needs the checkbox vocabulary to let the
+		// user replace that policy, which is exactly when the effect below
+		// cannot be computed.
+		providerModels, err := policyProviderModelsLenient(ctx, cfg, vaultRoot, p.Provider)
+		if err != nil {
+			return err
+		}
+		res.KnownVendors = sortedSlugs(ai.KnownVendorSlugs(p.Provider, providerModels))
 		if p.Mode == ai.VendorPolicyModeEnableOnly {
-			providerModels, err := policyProviderModelsLenient(ctx, cfg, vaultRoot, p.Provider)
-			if err != nil {
-				return err
-			}
 			overrides := map[string]bool{}
 			if globalOv, err := ai.ModelEnabledOverrides(ai.ScopeGlobal, vaultRoot, p.Provider); err == nil {
 				mergeOverrides(overrides, globalOv)
@@ -340,6 +353,14 @@ func runModelsPolicyShow(cmd *cobra.Command, args []string) error {
 	}
 
 	if format := getFormat(cmd); format != "" {
+		// First-run / no-policy: still emit per-provider rows so a UI can
+		// render the full checkbox vocabulary (known_vendors) without
+		// hardcoding slugs. These are not configured policies — Mode and
+		// Vendors stay empty, so active-policy filters that key on
+		// enable_only ignore them.
+		if len(results) == 0 {
+			results = syntheticPolicyVocabulary(ctx, cfg, vaultRoot, policyShowProvider)
+		}
 		return output.Write(os.Stdout, format, results)
 	}
 
@@ -577,6 +598,31 @@ func sortedOverrideIDs(overrides map[string]bool) []string {
 	return out
 }
 
+// syntheticPolicyVocabulary is the no-policy JSON for `models policy show`:
+// one row per provider (or the --provider filter) carrying known_vendors
+// and an empty enable-only statement. Additive: configured-row semantics
+// are unchanged; this only fills the previously empty array.
+func syntheticPolicyVocabulary(ctx context.Context, cfg ai.AIConfig, vaultRoot, providerFilter string) []policyResult {
+	providers := []string{"bedrock", "openrouter", "ollama"}
+	if providerFilter != "" {
+		providers = []string{providerFilter}
+	}
+	out := make([]policyResult, 0, len(providers))
+	for _, p := range providers {
+		models, err := policyProviderModelsLenient(ctx, cfg, vaultRoot, p)
+		if err != nil {
+			models = nil
+		}
+		res := policyResult{
+			Provider:     p,
+			KnownVendors: sortedSlugs(ai.KnownVendorSlugs(p, models)),
+		}
+		ensurePolicyResultSlices(&res)
+		out = append(out, res)
+	}
+	return out
+}
+
 // ensurePolicyResultSlices keeps the JSON contract free of nulls: warnings,
 // cleared_model_overrides, and vendors always serialize as arrays.
 func ensurePolicyResultSlices(res *policyResult) {
@@ -588,6 +634,9 @@ func ensurePolicyResultSlices(res *policyResult) {
 	}
 	if res.ClearedModelOverrides == nil {
 		res.ClearedModelOverrides = []string{}
+	}
+	if res.KnownVendors == nil {
+		res.KnownVendors = []string{}
 	}
 	if res.Effect.ByVendor == nil {
 		res.Effect.ByVendor = map[string]policyVendorEffect{}

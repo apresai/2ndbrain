@@ -104,10 +104,9 @@ struct SecondBrainApp: App {
             // AI menu — all AI-related actions (ask, suggest, polish, setup,
             // test, skills, MCP). Replaces the previous Tools menu.
             CommandMenu("AI") {
-                // Merged AI Hub — replaces AI Setup, Test AI Connection,
-                // and Model Wizard. Single surface for providers, active
+                // Models tab — single surface for providers, active
                 // models, and the catalog.
-                Button("AI...") {
+                Button("Models...") {
                     appState.showAIHub = true
                 }
                 .keyboardShortcut(",", modifiers: [.command, .shift])

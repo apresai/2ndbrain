@@ -327,7 +327,7 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		return mcplib.NewToolResultError("failed to build RAG context from search results"), nil
 	}
 
-	result, err := ai.RAG(ctx, generator, question, chunks)
+	result, err := ai.RAG(ctx, generator, question, chunks, ai.WithReasoningEffort(cfg.ResolveReasoningEffort()))
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("RAG failed: %v", err)), nil
 	}
@@ -808,9 +808,10 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	}
 
 	opts := ai.GenOpts{
-		Temperature:  ai.Ptr(0.2),
-		MaxTokens:    4096,
-		SystemPrompt: systemPrompt,
+		Temperature:     ai.Ptr(0.2),
+		MaxTokens:       4096,
+		SystemPrompt:    systemPrompt,
+		ReasoningEffort: cfg.ResolveReasoningEffort(),
 	}
 	polished, err := generator.Generate(ctx, userMessage, opts)
 	if err != nil {

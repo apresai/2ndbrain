@@ -24,6 +24,7 @@ var (
 	verifyYes         bool
 	verifyEnabledOnly bool
 	verifyEvents      bool
+	verifyDiscover    bool
 )
 
 var modelsVerifyCmd = &cobra.Command{
@@ -57,6 +58,7 @@ func init() {
 	modelsVerifyCmd.Flags().BoolVar(&verifyYes, "yes", false, "Skip the interactive confirmation")
 	modelsVerifyCmd.Flags().BoolVar(&verifyEnabledOnly, "enabled-only", false, "Restrict candidates to effectively-enabled models (post-policy; explicit model IDs still win)")
 	modelsVerifyCmd.Flags().BoolVar(&verifyEvents, "events", false, "Stream line-delimited JSON progress events to stdout (requires --yes; mutually exclusive with --json)")
+	modelsVerifyCmd.Flags().BoolVar(&verifyDiscover, "discover", false, "Also probe vendor-discovered models (policy-enabled discoveries), not just the merged catalog")
 	_ = modelsVerifyCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsVerifyCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 	modelsCmd.AddCommand(modelsVerifyCmd)
@@ -237,12 +239,27 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 // catalog to effectively-enabled models (post vendor policy, the same filter
 // `models list --enabled-only` applies), so "validate what I just enabled"
 // probes exactly the dropdown set; an explicitly named ID still wins.
+//
+// --discover widens the candidate pool to the vendor-discovered (Unverified)
+// half of the list. Without it, "validate what I enabled" could not reach a
+// model the user enabled through a vendor policy but that has no builtin
+// catalog entry: the policy pre-enables future discoveries, and those only
+// exist in merged.Unverified. Off by default so the CLI's candidate set is
+// unchanged for existing callers.
 func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, args []string) ([]ai.ModelInfo, error) {
-	merged, err := ai.BuildModelList(ctx, ai.MergedListOptions{Config: cfg, VaultRoot: vaultRoot, EnabledOnly: verifyEnabledOnly})
+	merged, err := ai.BuildModelList(ctx, ai.MergedListOptions{
+		Config:      cfg,
+		VaultRoot:   vaultRoot,
+		EnabledOnly: verifyEnabledOnly,
+		Discover:    verifyDiscover,
+		// Verify runs on every GUI validation pass, so it reads discovery
+		// through the 24h cache rather than re-walking the control plane.
+		DiscoverCached: verifyDiscover,
+	})
 	if err != nil {
 		return nil, err
 	}
-	catalog := merged.Verified
+	catalog := verifyCandidatePool(merged, verifyDiscover)
 
 	if len(args) > 0 {
 		var out []ai.ModelInfo
@@ -269,7 +286,11 @@ func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, ar
 		return skipUnprobeable(out), nil
 	}
 
-	defaultSet := !verifyAll && !verifyRecommended && verifyVendor == ""
+	// --discover counts as a selector, like --all/--recommended/--vendor: the
+	// default set keeps only recommended-or-active models, and every
+	// discovered model is by definition neither, so leaving the narrowing on
+	// would silently drop the whole point of the flag.
+	defaultSet := !verifyAll && !verifyRecommended && !verifyDiscover && verifyVendor == ""
 	credOK := map[string]bool{}
 	if defaultSet {
 		for _, s := range probeProviderStatus(ctx, cfg) {
@@ -302,6 +323,22 @@ func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, ar
 		out = append(out, m)
 	}
 	return skipUnprobeable(out), nil
+}
+
+// verifyCandidatePool is the catalog verify filters over. Without discovery
+// that is the merged (builtin + user) catalog. With discovery it also covers
+// the vendor-discovered half, which is where a model the user enabled through
+// a vendor policy lives until something probes it: BuildModelList has already
+// applied the policy verdict and the --enabled-only filter to that slice, so
+// a discovery from a non-chosen vendor never reaches here.
+func verifyCandidatePool(merged *ai.MergedModelList, discover bool) []ai.ModelInfo {
+	if !discover || len(merged.Unverified) == 0 {
+		return merged.Verified
+	}
+	pool := make([]ai.ModelInfo, 0, len(merged.Verified)+len(merged.Unverified))
+	pool = append(pool, merged.Verified...)
+	pool = append(pool, merged.Unverified...)
+	return pool
 }
 
 // skipUnprobeable drops rerank models (no probe exists) and entries the static

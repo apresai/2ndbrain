@@ -177,7 +177,7 @@ they answer rather than by subsystem.
 | Tab | View | Purpose |
 |-----|------|---------|
 | **Home** (default) | HomeView.swift | Vault card (Obsidian-match badge + plugin Install/Update row), AI card (ready dot, Test, and a Settings link when not ready), AI Clients summary, Index card (Sync / Re-embed All), CLI-drift banner |
-| **Models** | AIHubView.swift | The model catalog: providers, active models, benchmarks, vendor policy (Cmd+Shift+,) |
+| **Models** | SimpleModelsView.swift | Sticky vendors → Validate → Answers/Search from the CLI working set (Cmd+Shift+,). Full catalog stays behind a disclosure. |
 | **Notes** | LintResultsView.swift | Renders `2nb lint --json` findings with one-click and guided link fixes |
 | **Health** | HealthView (DashboardGroupViews.swift) | Vault · Performance · Updates — VaultStatusView, MetricsView, UpdatesView behind a segmented picker |
 | **Activity** | ActivityView (DashboardGroupViews.swift) | Git · MCP Server — GitActivityView (Cmd+Shift+G), MCPStatusView (Cmd+Shift+M) |

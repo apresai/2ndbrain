@@ -2237,15 +2237,21 @@ final class AppState {
         return try JSONDecoder().decode([CatalogModelInfo].self, from: data)
     }
 
-    /// Fetches the full merged catalog including discovered-but-unverified
-    /// vendor models. Used by the Model Wizard where the user explicitly
-    /// wants to see everything available, verified or not.
-    func fetchModelsForWizard() async throws -> [CatalogModelInfo] {
+    /// Argv for `models list --json`. `--discover` walks the vendor control
+    /// plane; omit it after a policy checkbox so we only re-read the merged
+    /// catalog.
+    nonisolated static func modelsListArgs(discover: Bool) -> [String] {
+        var args = ["models", "list", "--json", "--porcelain"]
+        if discover { args.append("--discover") }
+        return args
+    }
+
+    /// Fetches the merged catalog. `discover: true` is the Hub / first-load
+    /// / Validate path; after a vendor-policy write, pass false so a
+    /// checkbox does not re-walk Bedrock.
+    func fetchModelsCatalog(discover: Bool) async throws -> [CatalogModelInfo] {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(
-            ["models", "list", "--json", "--porcelain", "--discover"],
-            cwd: vault.rootURL
-        )
+        let data = try await runCLI(Self.modelsListArgs(discover: discover), cwd: vault.rootURL)
         struct MergedList: Decodable {
             let verified: [CatalogModelInfo]
             let unverified: [CatalogModelInfo]?
@@ -2259,11 +2265,24 @@ final class AppState {
         return try JSONDecoder().decode([CatalogModelInfo].self, from: data)
     }
 
-    func costPreview(modelIDs: [String], probe: String) async throws -> CostPreviewResponse {
-        guard let vault else { throw CLIError.noVault }
+    /// Fetches the full merged catalog including discovered-but-unverified
+    /// vendor models. Used by the Model Wizard / Hub where the user
+    /// explicitly wants to see everything available, verified or not.
+    func fetchModelsForWizard() async throws -> [CatalogModelInfo] {
+        try await fetchModelsCatalog(discover: true)
+    }
+
+    /// Argv for `models cost-preview --probe`. Extracted so Validate can pin
+    /// the same IDs the confirm showed onto `verifyModelsArgs`.
+    nonisolated static func costPreviewArgs(modelIDs: [String], probe: String) -> [String] {
         var args = ["models", "cost-preview", "--json", "--porcelain", "--probe", probe]
         args.append(contentsOf: modelIDs)
-        let data = try await runCLI(args, cwd: vault.rootURL)
+        return args
+    }
+
+    func costPreview(modelIDs: [String], probe: String) async throws -> CostPreviewResponse {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(Self.costPreviewArgs(modelIDs: modelIDs, probe: probe), cwd: vault.rootURL)
         return try JSONDecoder().decode(CostPreviewResponse.self, from: data)
     }
 
@@ -2334,10 +2353,11 @@ final class AppState {
     /// regardless of exit status via runCLIGlobalRaw; a failing self-test is a
     /// result to render, not an error to swallow. Only an unparseable payload
     /// is a genuine failure, and then the CLI's stderr is the message.
-    func runDoctorSelfTest() async throws -> SelfTestReport {
+    func runDoctorSelfTest(extraEnvironment: [String: String]? = nil) async throws -> SelfTestReport {
         let result = try await runCLIGlobalRaw(
             ["doctor", "--json", "--porcelain"],
-            expectNonZeroExit: true
+            expectNonZeroExit: true,
+            extraEnvironment: extraEnvironment
         )
         guard let report = try? JSONDecoder().decode(DoctorReport.self, from: result.stdout),
               let selftest = report.selftest else {
@@ -2347,6 +2367,17 @@ final class AppState {
             throw CLIError.nonZeroExit(result.status, message: detail)
         }
         return selftest
+    }
+
+    /// Runs the self-test against a candidate bearer token WITHOUT storing it.
+    ///
+    /// `AWS_BEARER_TOKEN_BEDROCK` is the first rung of the CLI's token
+    /// precedence, so an env-only probe reaches Bedrock with the typed key while
+    /// `~/.config/2nb/bedrock.json` is untouched. That is what lets the Settings
+    /// page verify a key BEFORE accepting it — the claim its caption makes —
+    /// instead of overwriting a working credential and having no way back.
+    func probeBedrockToken(_ token: String) async throws -> SelfTestReport {
+        try await runDoctorSelfTest(extraEnvironment: ["AWS_BEARER_TOKEN_BEDROCK": token])
     }
 
     /// The full effective configuration (`2nb config show --json`), returned
@@ -2652,18 +2683,7 @@ final class AppState {
         onEvent: @escaping @Sendable @MainActor (VerifyEvent) -> Void
     ) async throws {
         guard let vault else { throw CLIError.noVault }
-        var verifyArgs = [
-            "models", "verify",
-            "--provider", provider,
-            "--scope", "vault",
-            "--yes", "--events",
-            "--cost-cap", String(format: "%.4f", costCap),
-        ]
-        if modelIDs.isEmpty {
-            verifyArgs.append("--enabled-only")
-        } else {
-            verifyArgs.append(contentsOf: modelIDs)
-        }
+        let verifyArgs = Self.verifyModelsArgs(provider: provider, costCap: costCap, modelIDs: modelIDs)
         let fullArgs = CLIPath.args(verifyArgs, vault: vault.rootURL)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("AI Hub action: \(cmd, privacy: .public)")
@@ -2741,6 +2761,31 @@ final class AppState {
 
     // MARK: - Vendor policy (enable-only per provider)
 
+    /// GUI vendor policy is machine-local and sticky across vaults. Vault
+    /// scope fully overrides global in the CLI, so a leftover vault policy
+    /// would shadow every GUI write unless we clear it on apply.
+    nonisolated static let guiVendorPolicyScope = "global"
+
+    /// Argv for `models verify --events`. Empty IDs add `--enabled-only
+    /// --discover` (the CLI rebuilds the pool). Validate must pass the same
+    /// explicit IDs it cost-previewed so the confirm cannot under-state spend.
+    nonisolated static func verifyModelsArgs(provider: String, costCap: Double, modelIDs: [String]) -> [String] {
+        var args = [
+            "models", "verify",
+            "--provider", provider,
+            "--scope", "vault",
+            "--yes", "--events",
+            "--cost-cap", String(format: "%.4f", costCap),
+        ]
+        if modelIDs.isEmpty {
+            args.append("--enabled-only")
+            args.append("--discover")
+        } else {
+            args.append(contentsOf: modelIDs)
+        }
+        return args
+    }
+
     /// Argv for `models policy show` (every configured policy). Extracted so
     /// the argv is unit-testable without spawning a subprocess.
     nonisolated static func vendorPolicyShowArgs() -> [String] {
@@ -2782,27 +2827,57 @@ final class AppState {
 
     /// Sets an enable-only vendor policy for a provider (`models policy set`),
     /// returning the effect so the caller can show "N enabled, M disabled".
-    /// Bumps `modelsCatalogVersion` so the AI Hub reloads: policies live in
+    /// Defaults to global (sticky across vaults). A global write also clears
+    /// any vault-scope policy so it cannot shadow. Bumps
+    /// `modelsCatalogVersion` so the AI Hub reloads: policies live in
     /// models-policy.yaml, which the FSEvents catalog watcher doesn't track.
     @discardableResult
-    func setVendorPolicy(provider: String, vendors: [String], scope: String = "vault") async throws -> VendorPolicyResult {
+    func setVendorPolicy(provider: String, vendors: [String], scope: String = guiVendorPolicyScope) async throws -> VendorPolicyResult {
         guard let vault else { throw CLIError.noVault }
         let args = Self.vendorPolicySetArgs(provider: provider, vendors: vendors, scope: scope)
         log.info("AI Hub action: models policy set --provider \(provider, privacy: .public) --enable-only \(vendors.joined(separator: ","), privacy: .public) scope=\(scope, privacy: .public)")
         let data = try await runCLI(args, cwd: vault.rootURL)
         let res = try JSONDecoder().decode(VendorPolicyResult.self, from: data)
+        if scope == Self.guiVendorPolicyScope {
+            // Vault fully overrides global. Clear a leftover vault policy
+            // (idempotent when none exists) so the GUI write is the one that
+            // list/verify honor.
+            let clearArgs = Self.vendorPolicyClearArgs(provider: provider, scope: "vault")
+            log.info("AI Hub action: models policy clear --provider \(provider, privacy: .public) scope=vault (unshadow global)")
+            _ = try await runCLI(clearArgs, cwd: vault.rootURL)
+        }
         modelsCatalogVersion += 1
         return res
     }
 
     /// Removes the vendor policy for a provider (`models policy clear`). Bumps
     /// `modelsCatalogVersion` so the Hub reloads (see `setVendorPolicy`).
-    func clearVendorPolicy(provider: String, scope: String = "vault") async throws {
+    func clearVendorPolicy(provider: String, scope: String = guiVendorPolicyScope) async throws {
         guard let vault else { throw CLIError.noVault }
         let args = Self.vendorPolicyClearArgs(provider: provider, scope: scope)
         log.info("AI Hub action: models policy clear --provider \(provider, privacy: .public) scope=\(scope, privacy: .public)")
         _ = try await runCLI(args, cwd: vault.rootURL)
         modelsCatalogVersion += 1
+    }
+
+    /// Clears both GUI (global) and vault policies so neither remains to
+    /// restrict the catalog. Used by Manage vendors' Clear, which must undo
+    /// a GUI write and any leftover vault shadow.
+    func clearGUIVendorPolicies(provider: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        let argv = Self.guiVendorPolicyClearArgv(provider: provider)
+        log.info("AI Hub action: models policy clear --provider \(provider, privacy: .public) scope=global+vault")
+        _ = try await runCLI(argv.global, cwd: vault.rootURL)
+        _ = try await runCLI(argv.vault, cwd: vault.rootURL)
+        modelsCatalogVersion += 1
+    }
+
+    /// Argv pair for clearing the GUI policy and its vault-scope shadow.
+    nonisolated static func guiVendorPolicyClearArgv(provider: String) -> (global: [String], vault: [String]) {
+        (
+            vendorPolicyClearArgs(provider: provider, scope: guiVendorPolicyScope),
+            vendorPolicyClearArgs(provider: provider, scope: "vault")
+        )
     }
 
     /// Fetches the full AIStatusInfo envelope including providers[] for
@@ -2866,7 +2941,10 @@ final class AppState {
     ///   because your key is wrong is the tool working, not the tool failing;
     ///   logging it as "CLI failed" would fill the vault's error log with
     ///   entries that are not faults, and bury the ones that are.
-    func runCLIGlobalRaw(_ args: [String], stdin: Data? = nil, expectNonZeroExit: Bool = false) async throws -> CLIRawResult {
+    /// - Parameter extraEnvironment: overlaid onto the inherited environment, so
+    ///   a caller can hand the CLI a credential for one invocation without
+    ///   writing it anywhere. Never logged.
+    func runCLIGlobalRaw(_ args: [String], stdin: Data? = nil, expectNonZeroExit: Bool = false, extraEnvironment: [String: String]? = nil) async throws -> CLIRawResult {
         let cmd = "2nb " + args.joined(separator: " ")
         log.info("CLI exec (global): \(cmd, privacy: .public)")
         let errorLogger = self.errorLogger
@@ -2874,6 +2952,11 @@ final class AppState {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
             process.arguments = args
+            if let extraEnvironment, !extraEnvironment.isEmpty {
+                var env = ProcessInfo.processInfo.environment
+                for (key, value) in extraEnvironment { env[key] = value }
+                process.environment = env
+            }
             let stdout = Pipe()
             let stderr = Pipe()
             process.standardOutput = stdout
@@ -3640,6 +3723,10 @@ struct CatalogModelInfo: Codable, Identifiable {
     // Matryoshka output widths the model accepts (e.g. Nova-2:
     // 256/384/1024/3072). Optional: absent for fixed-width models.
     let supportedDimensions: [Int]?
+    /// CLI working-set flag: this account probed the model successfully,
+    /// or it is an *untested* active embed/gen slot. A failed probe on the
+    /// active model is `false`. Absent on older CLIs (key missing).
+    let working: Bool?
 
     enum CodingKeys: String, CodingKey {
         case modelID = "id"
@@ -3677,6 +3764,7 @@ struct CatalogModelInfo: Codable, Identifiable {
         case compatibilityReason = "compatibility_reason"
         case recommended
         case supportedDimensions = "supported_dimensions"
+        case working
     }
 }
 
@@ -3857,11 +3945,15 @@ struct VendorPolicyResult: Codable, Identifiable {
     let effect: VendorPolicyEffect
     let warnings: [String]
     let clearedModelOverrides: [String]
+    /// Slugs the user may enable-only for this provider, including vendors
+    /// with zero catalog rows yet (xai, openai). Absent on older CLIs.
+    let knownVendors: [String]?
 
     enum CodingKeys: String, CodingKey {
         case provider, mode, vendors, scope, effect, warnings
         case dryRun = "dry_run"
         case clearedModelOverrides = "cleared_model_overrides"
+        case knownVendors = "known_vendors"
     }
 }
 

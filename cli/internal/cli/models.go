@@ -26,6 +26,7 @@ var (
 	modelsPromoteScope string
 	modelsEnabledOnly  bool
 	modelsRecommended  bool
+	modelsWorkingSet   bool
 	modelsSort         string
 )
 
@@ -140,6 +141,7 @@ func init() {
 	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "vault", "Catalog scope for --promote: vault or global")
 	modelsListCmd.Flags().BoolVar(&modelsEnabledOnly, "enabled-only", false, "Exclude models explicitly disabled by the user (use for GUI dropdowns)")
 	modelsListCmd.Flags().BoolVar(&modelsRecommended, "recommended", false, "Show only the curated recommended models")
+	modelsListCmd.Flags().BoolVar(&modelsWorkingSet, "working-set", false, "Show only models with a passing probe on record (plus untested active models); a failed active probe is excluded")
 	modelsListCmd.Flags().StringVar(&modelsSort, "sort", "", "Sort order: best (bench quality, then tested, recommended, tier, latency). Default keeps provider/type/ID order")
 	_ = modelsListCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
@@ -380,6 +382,9 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 			continue
 		}
 		if modelsRecommended && !m.Recommended {
+			continue
+		}
+		if modelsWorkingSet && !m.Working {
 			continue
 		}
 		out = append(out, m)

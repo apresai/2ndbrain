@@ -125,6 +125,34 @@ type GenOpts struct {
 	ReasoningEffort string
 }
 
+// GenOption tunes the GenOpts a pipeline helper builds internally (RAG,
+// CondenseQuestion), so a caller can pass through a user setting without the
+// helper growing a parameter per knob or exposing its measured prompt/token
+// choices to override.
+type GenOption func(*GenOpts)
+
+// WithReasoningEffort sets the reasoning depth of a pipeline generation. An
+// empty effort is a no-op, leaving the reasoning field unset so the model's
+// default applies — so callers pass AIConfig.ResolveReasoningEffort()
+// unconditionally without special-casing "unset".
+func WithReasoningEffort(effort string) GenOption {
+	return func(o *GenOpts) {
+		if effort != "" {
+			o.ReasoningEffort = effort
+		}
+	}
+}
+
+// applyGenOptions applies opts to a base GenOpts and returns the result.
+func applyGenOptions(base GenOpts, opts []GenOption) GenOpts {
+	for _, o := range opts {
+		if o != nil {
+			o(&base)
+		}
+	}
+	return base
+}
+
 // ModelTier indicates whether a model has a verified API harness in 2nb.
 type ModelTier string
 
@@ -261,6 +289,21 @@ type ModelInfo struct {
 	// declared provider/type path. CompatibilityReason explains false values.
 	Compatible          bool   `json:"compatible" yaml:"-"`
 	CompatibilityReason string `json:"compatibility_reason,omitempty" yaml:"-"`
+
+	// Working is the "this account can actually use it" flag: a model with a
+	// PASSING probe on record that is not disabled and not statically
+	// incompatible, plus UNTESTED active embedding/generation models so a
+	// picker is never empty on a freshly bound vault. A failed probe
+	// (TestError set) is never working, even when the model is active —
+	// "current" and "working" are different; the GUI keeps actives
+	// selectable separately. A builtin tier=verified entry alone is NOT
+	// enough — verified means 2nb has a harness, not that this account is
+	// entitled (AWS's staged frontier rollout lists models the account
+	// still 403s on). Derived at list time like Vendor/Compatible, so it
+	// is never persisted to models.yaml. Always serialized (true and
+	// false), matching Compatible: omitempty would make working==nil
+	// mean both "old CLI" and "not working".
+	Working bool `json:"working" yaml:"-"`
 }
 
 // BenchmarkSummary is the most-recent benchmark snapshot for a model,

@@ -55,6 +55,26 @@ func vendorPolicyResultDecodes() throws {
     #expect(res.clearedModelOverrides == ["amazon.titan-embed-text-v2:0"])
     // Two scopes for one provider stay distinct via the id.
     #expect(res.id == "bedrock|vault")
+    #expect(res.knownVendors == nil)
+}
+
+@Test("VendorPolicyResult decodes known_vendors when the CLI sends it")
+func vendorPolicyDecodesKnownVendors() throws {
+    let json = """
+    {
+      "provider":"bedrock",
+      "mode":"enable_only",
+      "vendors":["anthropic","xai"],
+      "scope":"global",
+      "dry_run":false,
+      "effect":{"enabled":0,"disabled":0,"overridden":0,"by_vendor":{}},
+      "warnings":[],
+      "cleared_model_overrides":[],
+      "known_vendors":["amazon","anthropic","openai","xai"]
+    }
+    """
+    let res = try JSONDecoder().decode(VendorPolicyResult.self, from: Data(json.utf8))
+    #expect(res.knownVendors == ["amazon", "anthropic", "openai", "xai"])
 }
 
 @Test("models policy show decodes as an array, and the empty case is an empty array")
@@ -122,6 +142,14 @@ func initialCheckedVendorsRules() throws {
     // No policy: every vendor starts checked (nothing restricted).
     let allChecked = VendorPolicyBuilder.initialCheckedVendors(section: bedrock, policy: nil)
     #expect(allChecked == Set(["anthropic", "amazon", "deepseek"]))
+
+    // Synthetic vocabulary row (no enable_only) is not a restriction.
+    let synthetic = try JSONDecoder().decode(VendorPolicyResult.self, from: Data(#"""
+    {"provider":"bedrock","mode":"","vendors":[],"scope":"","dry_run":false,
+     "effect":{"enabled":0,"disabled":0,"overridden":0,"by_vendor":{}},"warnings":[],"cleared_model_overrides":[],
+     "known_vendors":["anthropic","amazon","deepseek"]}
+    """#.utf8))
+    #expect(VendorPolicyBuilder.initialCheckedVendors(section: bedrock, policy: synthetic) == Set(["anthropic", "amazon", "deepseek"]))
 
     // Policy present: only its vendors start checked.
     let policy = try JSONDecoder().decode(VendorPolicyResult.self, from: Data(#"""
@@ -203,4 +231,96 @@ func vendorPolicyArgvConstruction() {
 
     #expect(AppState.vendorPolicyClearArgs(provider: "bedrock", scope: "vault")
         == ["models", "policy", "clear", "--provider", "bedrock", "--scope", "vault", "--json", "--porcelain"])
+}
+
+@Test("GUI vendor-policy writes use global scope so they stick across vaults")
+func guiVendorPolicyScopeIsGlobal() {
+    #expect(AppState.guiVendorPolicyScope == "global")
+    // Simple Models and Hub Apply both pass this constant; Hub no longer
+    // relies on a vault default.
+    #expect(AppState.vendorPolicySetArgs(
+        provider: "bedrock",
+        vendors: ["anthropic"],
+        scope: AppState.guiVendorPolicyScope
+    ) == [
+        "models", "policy", "set",
+        "--provider", "bedrock",
+        "--enable-only", "anthropic",
+        "--scope", "global",
+        "--json", "--porcelain",
+    ])
+}
+
+@Test("GUI policy apply also clears a vault-scope policy so it cannot shadow")
+func guiPolicyApplyClearsVaultShadow() {
+    let clearVault = AppState.vendorPolicyClearArgs(provider: "bedrock", scope: "vault")
+    #expect(clearVault == [
+        "models", "policy", "clear",
+        "--provider", "bedrock",
+        "--scope", "vault",
+        "--json", "--porcelain",
+    ])
+    let both = AppState.guiVendorPolicyClearArgv(provider: "bedrock")
+    #expect(both.global == AppState.vendorPolicyClearArgs(provider: "bedrock", scope: "global"))
+    #expect(both.vault == clearVault)
+}
+
+@Test("Last-vendor uncheck is refused so checkboxes cannot desync from policy")
+func lastVendorUncheckIsRefused() {
+    #expect(VendorSelection.toggling(["anthropic"], slug: "anthropic", on: false) == .refusedEmpty)
+    #expect(VendorSelection.toggling(["anthropic"], slug: "amazon", on: true) == .applied(["anthropic", "amazon"]))
+    #expect(VendorSelection.toggling(["anthropic", "amazon"], slug: "amazon", on: false) == .applied(["anthropic"]))
+    #expect(VendorSelection.keepAtLeastOneMessage.contains("at least one"))
+}
+
+@Test("No-policy checkboxes show the fallback vendors and do not claim they hide")
+func noPolicyDisplayDoesNotClaimHidden() {
+    let fallback = ["anthropic", "amazon", "xai", "openai"]
+    #expect(VendorSelection.displayVendors(policy: nil, fallback: fallback) == Set(fallback))
+    #expect(!VendorSelection.restrictionCaption(hasPolicy: false).localizedCaseInsensitiveContains("hidden"))
+    #expect(VendorSelection.restrictionCaption(hasPolicy: true).localizedCaseInsensitiveContains("hidden"))
+
+    let policy = try! JSONDecoder().decode(VendorPolicyResult.self, from: Data(#"""
+    {"provider":"bedrock","mode":"enable_only","vendors":["anthropic"],"scope":"global","dry_run":false,
+     "effect":{"enabled":1,"disabled":0,"overridden":0,"by_vendor":{}},"warnings":[],"cleared_model_overrides":[]}
+    """#.utf8))
+    #expect(VendorSelection.displayVendors(policy: policy, fallback: fallback) == ["anthropic"])
+}
+
+@Test("Vendor checkboxes prefer CLI known_vendors and keep the 4-slug list as last resort")
+func vendorChoicesPreferKnownVendors() {
+    #expect(VendorSelection.fallbackSlugs == ["anthropic", "amazon", "xai", "openai"])
+    let synthetic = try! JSONDecoder().decode(VendorPolicyResult.self, from: Data(#"""
+    {"provider":"bedrock","mode":"","vendors":[],"scope":"","dry_run":false,
+     "effect":{"enabled":0,"disabled":0,"overridden":0,"by_vendor":{}},"warnings":[],"cleared_model_overrides":[],
+     "known_vendors":["amazon","anthropic","deepseek","meta","mistral","openai","xai"]}
+    """#.utf8))
+    #expect(synthetic.knownVendors?.contains("deepseek") == true)
+    #expect(CatalogSummary.activePolicy([synthetic], provider: "bedrock") == nil)
+    let slugs = synthetic.knownVendors ?? VendorSelection.fallbackSlugs
+    let choices = VendorSelection.choices(slugs: slugs)
+    #expect(choices.map(\.slug).contains("deepseek"))
+    #expect(choices.map(\.display).contains("DeepSeek"))
+}
+
+@Test("Shared vendor display names keep the canonical shorter slug")
+func vendorChoicesDedupesMoonshot() {
+    let choices = VendorSelection.choices(slugs: ["moonshotai", "moonshot", "anthropic"])
+    #expect(choices.map(\.slug) == ["moonshot", "anthropic"])
+    #expect(choices.map(\.display) == ["Moonshot", "Anthropic"])
+    #expect(VendorSelection.label(for: "moonshotai") == "Moonshot")
+    let aliases = VendorSelection.slugsSharingDisplay(with: "moonshot", among: ["moonshot", "moonshotai", "anthropic"])
+    #expect(Set(aliases) == ["moonshot", "moonshotai"])
+    #expect(VendorSelection.toggling(
+        ["moonshot", "moonshotai", "anthropic"],
+        slug: "moonshot",
+        on: false,
+        together: aliases
+    ) == .applied(["anthropic"]))
+}
+
+@Test("Policy-after-write list args omit --discover")
+func modelsListArgsDiscoverToggle() {
+    #expect(AppState.modelsListArgs(discover: true) == ["models", "list", "--json", "--porcelain", "--discover"])
+    #expect(AppState.modelsListArgs(discover: false) == ["models", "list", "--json", "--porcelain"])
 }

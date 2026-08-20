@@ -152,7 +152,9 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 	// the whole output budget and returns a reasoning-only "incomplete"
 	// response (no answer text). Turning reasoning off for the probe yields a
 	// reliable short answer; non-mantle providers ignore the field. MaxTokens
-	// is still floored internally by the mantle client.
+	// is still floored internally by the mantle client. This deliberately
+	// ignores cfg.ReasoningEffort: a user's thinking-depth preference applies to
+	// real answers, not to an access check whose only job is to come back.
 	opts := GenOpts{MaxTokens: 32, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
 
 	switch provider {
