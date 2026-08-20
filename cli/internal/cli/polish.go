@@ -145,9 +145,10 @@ func runPolish(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := ai.GenOpts{
-		Temperature:  ai.Ptr(0.2),
-		MaxTokens:    polishMaxTokens,
-		SystemPrompt: systemPrompt,
+		Temperature:     ai.Ptr(0.2),
+		MaxTokens:       polishMaxTokens,
+		SystemPrompt:    systemPrompt,
+		ReasoningEffort: cfg.ResolveReasoningEffort(),
 	}
 
 	start := time.Now()

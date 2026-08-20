@@ -187,6 +187,10 @@ func runAsk(cmd *cobra.Command, args []string) (err error) {
 // REPL so the two surfaces cannot drift.
 func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvider, question string, history []ai.ChatTurn) (AskResponse, error) {
 	cfg := v.Config.AI
+	// User-configured thinking depth, applied to every generation this turn
+	// makes (the condense rewrite and the answer). Empty leaves the model's
+	// default, so an unset config is byte-identical to before.
+	reasoning := ai.WithReasoningEffort(cfg.ResolveReasoningEffort())
 	var warnings []string
 	addWarning := func(msg string) {
 		fmt.Fprintln(os.Stderr, "  "+msg)
@@ -198,7 +202,7 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 	// the raw question still retrieves, just without coreference resolution.
 	retrievalQuery := question
 	if len(history) > 0 {
-		rewritten, err := ai.CondenseQuestion(ctx, generator, history, question)
+		rewritten, err := ai.CondenseQuestion(ctx, generator, history, question, reasoning)
 		if err != nil {
 			slog.Warn("ask condense failed, using raw question", "err", err)
 			addWarning(fmt.Sprintf("question rewrite failed, searching with the question as asked: %v", err))
@@ -271,7 +275,7 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		fmt.Fprintf(os.Stderr, "Found %d relevant chunks. Generating answer...\n", len(chunks))
 	}
 
-	result, err := ai.RAGWithHistory(ctx, generator, question, history, chunks)
+	result, err := ai.RAGWithHistory(ctx, generator, question, history, chunks, reasoning)
 	if err != nil {
 		slog.Error("RAG failed", "question", question, "err", err)
 		return AskResponse{}, fmt.Errorf("RAG failed: %w", err)

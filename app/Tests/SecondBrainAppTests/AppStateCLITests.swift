@@ -101,7 +101,8 @@ func appStateSetModelSimilarityThreshold() async throws {
             compatible: nil,
             compatibilityReason: nil,
             recommended: nil,
-            supportedDimensions: nil
+            supportedDimensions: nil,
+            working: nil
         )
         try await state.setModelSimilarityThreshold(model, threshold: 0.42, scope: "vault")
         let yaml = try String(contentsOf: root.appendingPathComponent(".2ndbrain/models.yaml"), encoding: .utf8)

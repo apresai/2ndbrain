@@ -315,6 +315,146 @@ func TestVerifyCandidates_EnabledOnlyFiltersDisabled(t *testing.T) {
 	}
 }
 
+// TestVerifyCandidatePool_DiscoverAddsUnverified pins the candidate-pool
+// merge: verify used to walk only merged.Verified, so a model the user
+// enabled through a vendor policy — which exists nowhere but the discovered
+// half until something probes it — could never be validated.
+func TestVerifyCandidatePool_DiscoverAddsUnverified(t *testing.T) {
+	merged := &ai.MergedModelList{
+		Verified: []ai.ModelInfo{
+			{ID: "us.anthropic.claude-haiku-4-5", Provider: "bedrock", Type: "generation", Compatible: true},
+		},
+		Unverified: []ai.ModelInfo{
+			{ID: "us.deepseek.r2-v1:0", Provider: "bedrock", Type: "generation", Compatible: true, Tier: ai.TierUnverified},
+		},
+	}
+
+	without := verifyCandidatePool(merged, false)
+	if len(without) != 1 || without[0].ID != "us.anthropic.claude-haiku-4-5" {
+		t.Fatalf("without --discover the pool must stay the merged catalog, got %+v", without)
+	}
+
+	with := verifyCandidatePool(merged, true)
+	if len(with) != 2 {
+		t.Fatalf("with --discover the pool must include discoveries, got %d entries", len(with))
+	}
+	found := false
+	for _, m := range with {
+		if m.ID == "us.deepseek.r2-v1:0" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("policy-enabled discovery missing from the --discover pool: %+v", with)
+	}
+	// The merged slice must not be mutated: BuildModelList's caller may still
+	// read Verified afterwards.
+	if len(merged.Verified) != 1 {
+		t.Errorf("pool build appended into merged.Verified: %+v", merged.Verified)
+	}
+}
+
+// TestVerifyCandidates_DiscoverWidensBeyondRecommended asserts --discover
+// counts as a selector. Every discovered model is by definition neither
+// recommended nor active, so if the default "recommended + active" narrowing
+// stayed on, --discover would probe nothing new and the flag would be a
+// silent no-op. Runs offline: AWS credentials are neutralized so live
+// discovery contributes nothing and only the builtin catalog is exercised.
+func TestVerifyCandidates_DiscoverWidensBeyondRecommended(t *testing.T) {
+	_, root := newContractVault(t)
+	neutralizeAWSCredentials(t)
+	cfg := ai.DefaultAIConfig()
+
+	// Mantle-plane models are builtin but deliberately NOT curated: they are
+	// also invisible to ListFoundationModels, so they can only ever come from
+	// the builtin catalog, never from discovery.
+	const mantleID = "openai.gpt-5.5"
+	ids := func(models []ai.ModelInfo) map[string]bool {
+		out := map[string]bool{}
+		for _, m := range models {
+			out[m.ID] = true
+		}
+		return out
+	}
+
+	verifyProvider = "bedrock"
+	defer func() { verifyProvider, verifyRecommended, verifyDiscover = "", false, false }()
+
+	verifyRecommended, verifyDiscover = true, false
+	curated, err := verifyCandidates(t.Context(), cfg, root, nil)
+	if err != nil {
+		t.Fatalf("verifyCandidates --recommended: %v", err)
+	}
+	if ids(curated)[mantleID] {
+		t.Fatalf("%s is not curated; --recommended must not select it", mantleID)
+	}
+
+	verifyRecommended, verifyDiscover = false, true
+	discovered, err := verifyCandidates(t.Context(), cfg, root, nil)
+	if err != nil {
+		t.Fatalf("verifyCandidates --discover: %v", err)
+	}
+	if len(discovered) <= len(curated) {
+		t.Fatalf("--discover must widen the candidate set (%d) beyond the curated one (%d)", len(discovered), len(curated))
+	}
+	if !ids(discovered)[mantleID] {
+		t.Errorf("--discover dropped the non-curated mantle builtin %s: %v", mantleID, ids(discovered))
+	}
+	// The mantle plane is generation-only in 2nb, and every candidate must
+	// still clear the probeability filter.
+	for _, m := range discovered {
+		if m.Type == "rerank" || !m.Compatible {
+			t.Errorf("unprobeable candidate leaked in: %+v", m)
+		}
+	}
+}
+
+// TestContract_ModelsVerifyEventsEnvelopeWithDiscover asserts --discover does
+// not disturb the NDJSON contract the GUI decodes: the GUI's real invocation
+// is `--provider bedrock --enabled-only --discover --yes --events`, and with
+// no credentials that must still be exactly start+done at exit 0.
+func TestContract_ModelsVerifyEventsEnvelopeWithDiscover(t *testing.T) {
+	_, root := newContractVault(t)
+	neutralizeAWSCredentials(t)
+
+	got, err := runCLIArgs(t, root,
+		"models", "verify", "--provider", "bedrock",
+		"--enabled-only", "--discover", "--yes", "--events",
+		"--cost-cap", "0")
+	if err == nil {
+		// With no credentials the builtin bedrock line is still a candidate
+		// set (--discover drops the cred gate), so a zero cap must abort
+		// before any spend rather than stream a probe.
+		t.Fatalf("expected the cost cap to abort the spend, got success: %s", truncate(got, 300))
+	}
+	if !strings.Contains(err.Error(), "cost-cap") {
+		t.Fatalf("error should be the cost-cap refusal, got %v", err)
+	}
+
+	// With the cap raised the envelope must be intact: start, zero or more
+	// results, done — one decodable JSON object per line, nothing else.
+	got, err = runCLIArgs(t, root,
+		"models", "verify", "--provider", "bedrock", "--vendor", "nosuchvendor",
+		"--discover", "--yes", "--events")
+	if err != nil {
+		t.Fatalf("models verify --discover --events: %v (out=%s)", err, truncate(got, 300))
+	}
+	lines := bytes.Split(bytes.TrimSpace(got), []byte("\n"))
+	if len(lines) != 2 {
+		t.Fatalf("expected start+done for an empty vendor filter, got %d lines:\n%s", len(lines), got)
+	}
+	var start, done verifyEvent
+	if err := json.Unmarshal(lines[0], &start); err != nil || start.Event != "start" || start.Total != 0 {
+		t.Fatalf("bad start event %s (err=%v)", lines[0], err)
+	}
+	if err := json.Unmarshal(lines[1], &done); err != nil || done.Event != "done" {
+		t.Fatalf("bad done event %s (err=%v)", lines[1], err)
+	}
+	if done.SavedScope != "vault" {
+		t.Fatalf("done saved_scope = %q, want vault", done.SavedScope)
+	}
+}
+
 // TestContract_ModelsVerifyAnthropicLine_CredGated runs the real batch probe
 // against Bedrock: every Anthropic result must be either OK or classified to
 // something more specific than unknown. This is the test that catches the AWS

@@ -18,8 +18,8 @@ type RAGResult struct {
 
 // RAG executes a retrieval-augmented generation pipeline.
 // contextChunks are pre-retrieved document excerpts with titles and paths.
-func RAG(ctx context.Context, gen GenerationProvider, question string, contextChunks []RAGChunk) (*RAGResult, error) {
-	return RAGWithHistory(ctx, gen, question, nil, contextChunks)
+func RAG(ctx context.Context, gen GenerationProvider, question string, contextChunks []RAGChunk, opts ...GenOption) (*RAGResult, error) {
+	return RAGWithHistory(ctx, gen, question, nil, contextChunks, opts...)
 }
 
 const ragSystemPrompt = "You are a helpful assistant answering questions about a knowledge base. Use only the provided context to answer."
@@ -37,7 +37,7 @@ const historySystemSuffix = " The conversation history in the prompt is context,
 // should be the user's original wording; history-aware retrieval rewriting
 // happens upstream via CondenseQuestion. With nil history the behavior is
 // byte-identical to the original single-shot RAG (pinned by a golden test).
-func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string, history []ChatTurn, contextChunks []RAGChunk) (*RAGResult, error) {
+func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string, history []ChatTurn, contextChunks []RAGChunk, opts ...GenOption) (*RAGResult, error) {
 	if len(contextChunks) == 0 {
 		return nil, fmt.Errorf("no context chunks provided")
 	}
@@ -60,13 +60,7 @@ func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string
 		system += historySystemSuffix
 	}
 
-	genOpts := GenOpts{
-		// 1024 so a fuller answer (now backed by full-note parent-document
-		// context) isn't itself truncated mid-thought.
-		MaxTokens:    1024,
-		Temperature:  Ptr(0.1),
-		SystemPrompt: system,
-	}
+	genOpts := ragGenOpts(system, opts)
 	// Capture real token usage when the provider reports it (UsageGenerator —
 	// Bedrock), else fall back to the plain Generate (usage stays 0; the caller
 	// estimates from chars).
@@ -88,6 +82,20 @@ func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens,
 	}, nil
+}
+
+// ragGenOpts assembles the answer generation's options. The measured
+// MaxTokens/Temperature are fixed here; caller options carry only user settings
+// that legitimately vary per vault (the configured reasoning effort), so a
+// caller cannot override the tuned values by passing a GenOpts of its own.
+func ragGenOpts(system string, opts []GenOption) GenOpts {
+	return applyGenOptions(GenOpts{
+		// 1024 so a fuller answer (now backed by full-note parent-document
+		// context) isn't itself truncated mid-thought.
+		MaxTokens:    1024,
+		Temperature:  Ptr(0.1),
+		SystemPrompt: system,
+	}, opts)
 }
 
 // buildRAGPrompt assembles the generation prompt. The closing instruction is

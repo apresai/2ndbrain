@@ -77,7 +77,11 @@ enum VendorPolicyBuilder {
     /// when a policy exists, else every vendor (no policy = nothing restricted,
     /// so everything is enabled).
     static func initialCheckedVendors(section: ProviderSection, policy: VendorPolicyResult?) -> Set<String> {
-        if let policy { return Set(policy.vendors) }
+        // Synthetic no-policy rows (empty mode / empty vendors) are vocabulary
+        // only — treat them as no restriction, not "enable nothing".
+        if let policy, policy.mode == "enable_only", !policy.vendors.isEmpty {
+            return Set(policy.vendors)
+        }
         return Set(section.vendors.map(\.vendor))
     }
 
@@ -313,8 +317,7 @@ struct VendorPolicyView: View {
     // MARK: - State
 
     private func policyFor(_ provider: String) -> VendorPolicyResult? {
-        let matching = policies.filter { $0.provider == provider }
-        return matching.first { $0.scope == "vault" } ?? matching.first
+        CatalogSummary.activePolicy(policies, provider: provider)
     }
 
     private func vendorBinding(provider: String, vendor: String) -> Binding<Bool> {
@@ -358,7 +361,11 @@ struct VendorPolicyView: View {
         Task {
             defer { busyProvider = nil }
             do {
-                let res = try await appState.setVendorPolicy(provider: provider, vendors: vendors)
+                let res = try await appState.setVendorPolicy(
+                    provider: provider,
+                    vendors: vendors,
+                    scope: AppState.guiVendorPolicyScope
+                )
                 results[provider] = res.effect
                 validateOffer = provider
                 policies = (try? await appState.fetchVendorPolicy()) ?? policies
@@ -375,7 +382,7 @@ struct VendorPolicyView: View {
         Task {
             defer { busyProvider = nil }
             do {
-                try await appState.clearVendorPolicy(provider: provider)
+                try await appState.clearGUIVendorPolicies(provider: provider)
                 results[provider] = nil
                 validateOffer = nil
                 policies = (try? await appState.fetchVendorPolicy()) ?? []

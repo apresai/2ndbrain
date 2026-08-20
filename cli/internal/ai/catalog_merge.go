@@ -15,6 +15,13 @@ type MergedListOptions struct {
 	Config      AIConfig // current vault config
 	Discover    bool     // include vendor-discovered models
 	CheckStatus bool     // probe reachability and credentials
+	// DiscoverCached serves Bedrock discovery from the 24h disk cache when
+	// one is warm (see discovery_cache.go). Callers that run discovery
+	// repeatedly on a hot path set it — `models verify --discover` does, so
+	// a validation pass doesn't re-walk the whole Bedrock control plane. A
+	// caller whose entire purpose is showing the current vendor catalog
+	// (`models list --discover`) leaves it off and gets a live listing.
+	DiscoverCached bool
 	// VaultRoot, if set, loads the per-vault user catalog from
 	// <VaultRoot>/.2ndbrain/models.yaml in addition to the global one.
 	VaultRoot string
@@ -96,7 +103,7 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 
 	// Layer 4: vendor discovery. Only add entries not already in the merged catalog.
 	if opts.Discover {
-		vendorModels, warnings := discoverVendorModels(ctx, opts.Config)
+		vendorModels, warnings := discoverVendorModels(ctx, opts.Config, opts.DiscoverCached)
 		result.Warnings = append(result.Warnings, warnings...)
 		idx := catalogIndex(catalog)
 		for _, m := range vendorModels {
@@ -118,8 +125,8 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
 	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)
 
-	applyCatalogUIFields(result.Verified)
-	applyCatalogUIFields(result.Unverified)
+	applyCatalogUIFields(result.Verified, opts.Config)
+	applyCatalogUIFields(result.Unverified, opts.Config)
 
 	sortModels(result.Verified)
 	sortModels(result.Unverified)
@@ -191,7 +198,7 @@ func applyStatusChecks(ctx context.Context, catalog []ModelInfo, cfg AIConfig) {
 // discoverVendorModels queries all provider APIs for their full model catalogs
 // in parallel. Errors are returned as warnings so callers can explain why a
 // provider contributed no discovered rows.
-func discoverVendorModels(ctx context.Context, cfg AIConfig) ([]ModelInfo, []string) {
+func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]ModelInfo, []string) {
 	var (
 		mu       sync.Mutex
 		all      []ModelInfo
@@ -213,7 +220,11 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig) ([]ModelInfo, []str
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		models, err := ListBedrockVendorModels(ctx, cfg.Bedrock)
+		list := ListBedrockVendorModels
+		if useCache {
+			list = ListBedrockVendorModelsCached
+		}
+		models, err := list(ctx, cfg.Bedrock)
 		if err != nil {
 			addWarning("bedrock", err)
 			return
@@ -318,7 +329,7 @@ func sortModels(models []ModelInfo) {
 	})
 }
 
-func applyCatalogUIFields(models []ModelInfo) {
+func applyCatalogUIFields(models []ModelInfo, cfg AIConfig) {
 	for i := range models {
 		vendor := VendorOf(models[i].ID, models[i].Provider)
 		models[i].Vendor = vendor.Vendor
@@ -326,7 +337,37 @@ func applyCatalogUIFields(models []ModelInfo) {
 		models[i].Family = vendor.Family
 		models[i].VersionSortKey = VersionSortKey(models[i].ID)
 		models[i].Compatible, models[i].CompatibilityReason = catalogCompatibility(models[i])
+		// Working reads Compatible, so it must come after the line above.
+		models[i].Working = catalogWorking(models[i], cfg)
 	}
+}
+
+// catalogWorking decides membership in the working set: models this account
+// has PROVEN it can invoke. A passing probe on record (TestedAt with no
+// TestError) is the evidence; an explicit disable or a static incompatibility
+// removes it. Tier is deliberately not consulted — a builtin verified entry
+// only means 2nb has a harness for the model, which says nothing about
+// whether AWS has entitled this account to it.
+//
+// Untested active embedding/generation models are members so a working-set
+// picker is never empty on a freshly bound vault. A FAILED probe is not:
+// working means "this account can invoke it", and access_denied on the
+// active slot must not look like success. The GUI keeps actives selectable
+// separately from the working flag.
+func catalogWorking(m ModelInfo, cfg AIConfig) bool {
+	if m.TestError != "" {
+		return false
+	}
+	if m.Active || isActiveModel(m, cfg) {
+		return true
+	}
+	if m.TestedAt == "" {
+		return false
+	}
+	if m.Enabled != nil && !*m.Enabled {
+		return false
+	}
+	return m.Compatible
 }
 
 func catalogCompatibility(m ModelInfo) (bool, string) {

@@ -42,6 +42,80 @@ func runCLIGlobalReturnsStdout() async throws {
     #expect(text.contains("2nb"))
 }
 
+@Test("extraEnvironment overlays the inherited environment rather than replacing it")
+@MainActor
+func extraEnvironmentOverlaysInheritedEnvironment() async throws {
+    // The probe-before-save path hands the CLI a candidate credential for one
+    // invocation. If the overlay replaced the environment wholesale the child
+    // would lose PATH and HOME, so the merge is what makes the probe usable at
+    // all — and the CLI still has to run normally with the extra key present.
+    let state = AppState()
+    let result = try await state.runCLIGlobalRaw(
+        ["--version"],
+        extraEnvironment: ["TWONB_PROBE_CANARY": "1"]
+    )
+    #expect(result.status == 0)
+    #expect(String(decoding: result.stdout, as: UTF8.self).contains("2nb"))
+}
+
+// MARK: - Probe before save
+
+// The credential caption promises the key is verified BEFORE it is accepted.
+// The save path used to write bedrock.json and only then run the self-test, so
+// a mistyped replacement destroyed a working key with no rollback. These pin
+// the rules that make the promise true.
+
+@Test("A rejected key is never written to disk")
+func rejectedKeyIsNotPersisted() {
+    #expect(!BedrockKeyPersistence.shouldPersistProbedKey(verdict: .rejected, hasExistingKey: true))
+    #expect(!BedrockKeyPersistence.shouldPersistProbedKey(verdict: .rejected, hasExistingKey: false))
+}
+
+@Test("An accepted key is written whether or not one already exists")
+func acceptedKeyIsPersisted() {
+    #expect(BedrockKeyPersistence.shouldPersistProbedKey(verdict: .accepted, hasExistingKey: true))
+    #expect(BedrockKeyPersistence.shouldPersistProbedKey(verdict: .accepted, hasExistingKey: false))
+}
+
+@Test("Choose models is disabled without a bound vault")
+func chooseModelsRequiresVault() {
+    #expect(!SettingsAIView.canChooseModels(vaultBound: false))
+    #expect(SettingsAIView.canChooseModels(vaultBound: true))
+}
+
+@Test("An unconfirmed key is still written, because unknown is not a rejection")
+func unknownKeyIsPersisted() {
+    // "unknown" means every model answered access_denied, which is a missing
+    // entitlement at least as often as a bad key. Refusing to store it would
+    // strand a user whose credential is perfectly good.
+    #expect(BedrockKeyPersistence.shouldPersistProbedKey(verdict: .unknown, hasExistingKey: true))
+    #expect(BedrockKeyPersistence.shouldPersistProbedKey(verdict: .unknown, hasExistingKey: false))
+}
+
+@Test("An unreachable provider never clobbers a working key, but does not block first run")
+func unreachableKeyPersistsOnlyWhenNothingToLose() {
+    #expect(!BedrockKeyPersistence.shouldPersistProbedKey(verdict: .unreachable, hasExistingKey: true))
+    #expect(BedrockKeyPersistence.shouldPersistProbedKey(verdict: .unreachable, hasExistingKey: false))
+}
+
+@Test("A refusal to save says so, and says the old key survived")
+func notPersistedMessageExplainsItself() throws {
+    // Silently discarding the typed key is the worst outcome here: the user
+    // believes it was stored and finds out at first use.
+    let rejected = try #require(BedrockKeyPersistence.message(verdict: .rejected, persisted: false, provider: "bedrock"))
+    #expect(rejected.contains("not saved"))
+    #expect(rejected.contains("untouched"))
+
+    let offline = try #require(BedrockKeyPersistence.message(verdict: .unreachable, persisted: false, provider: "bedrock"))
+    #expect(offline.contains("not saved"))
+
+    let unverified = try #require(BedrockKeyPersistence.message(verdict: .unreachable, persisted: true, provider: "bedrock"))
+    #expect(unverified.contains("without confirmation"))
+
+    // An accepted key needs no caption; the headline already reads "works".
+    #expect(BedrockKeyPersistence.message(verdict: .accepted, persisted: true, provider: "bedrock") == nil)
+}
+
 // MARK: - Region guard
 
 // The region field was free text nobody edited. As a dropdown it is one click,

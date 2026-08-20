@@ -92,6 +92,10 @@ struct SettingsAIView: View {
 
     static let customRegionTag = "__custom__"
 
+    /// The Models tab lives in the main window, which is WelcomeView when no
+    /// vault is bound. The button is a dead end until a vault is open.
+    static func canChooseModels(vaultBound: Bool) -> Bool { vaultBound }
+
     // MARK: - Credentials
 
     private var credentialSection: some View {
@@ -151,9 +155,12 @@ struct SettingsAIView: View {
             LabeledContent("Search") {
                 Text(status?.embeddingModel ?? "—").font(.body.monospaced())
             }
-            Button("Browse all models…") { appState.showAIHub = true }
+            Button("Choose models…") { appState.showAIHub = true }
                 .controlSize(.small)
-            Text("The full catalog, per-model tests, and vendor rules live in the Models tab — it needs more room than a settings window.")
+                .disabled(!Self.canChooseModels(vaultBound: appState.vault != nil))
+            Text(Self.canChooseModels(vaultBound: appState.vault != nil)
+                 ? "Vendors, validation, and Answers/Search live in the Models tab."
+                 : "Bind an Obsidian vault to choose vendors and models.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -282,17 +289,59 @@ struct SettingsAIView: View {
         }
     }
 
+    /// Probes the typed key through the environment, then stores it only if the
+    /// verdict warrants it.
+    ///
+    /// The order is the point. `AWS_BEARER_TOKEN_BEDROCK` outranks the stored
+    /// file in the CLI's precedence, so the probe exercises the candidate key
+    /// against the active models while the existing credential stays on disk. A
+    /// save-then-test would already have destroyed a working key by the time it
+    /// learned the replacement was mistyped, with nothing to roll back to.
     private func saveToken() async {
         busy = true
         defer { busy = false }
         let token = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hadKey = bedrock?.tokenSet ?? false
+
+        testing = true
+        testError = nil
+        let report: SelfTestReport
+        do {
+            report = try await appState.probeBedrockToken(token)
+        } catch {
+            testing = false
+            selfTest = nil
+            testError = error.localizedDescription
+            message = "The key was not saved — it could not be checked."
+            return
+        }
+        testing = false
+        selfTest = report
+
+        let verdict = CredentialVerdict(report.credentials)
+        let persist = BedrockKeyPersistence.shouldPersistProbedKey(
+            verdict: verdict,
+            hasExistingKey: hadKey
+        )
+        guard persist else {
+            message = BedrockKeyPersistence.message(
+                verdict: verdict,
+                persisted: false,
+                provider: report.provider
+            )
+            return
+        }
+
         do {
             bedrock = try await appState.saveBedrockMachineConfig(region: "", token: token)
             newToken = ""
             enteringToken = false
-            // Verify immediately. A key that is silently wrong is the whole
-            // failure mode this page exists to prevent.
-            await runTest()
+            message = BedrockKeyPersistence.message(
+                verdict: verdict,
+                persisted: true,
+                provider: report.provider
+            )
+            status = try? await appState.fetchAIStatus()
         } catch {
             message = error.localizedDescription
         }
@@ -321,5 +370,42 @@ struct SettingsAIView: View {
             testError = error.localizedDescription
         }
         status = try? await appState.fetchAIStatus()
+    }
+}
+
+/// Whether a probed Bedrock key earns a place on disk, and what to tell the
+/// user about it. Pure logic so the rules are unit-testable without a key.
+enum BedrockKeyPersistence {
+    /// - `rejected`: never stored. The provider answered, and the answer was no.
+    /// - `accepted` / `unknown`: stored. `unknown` means every model returned
+    ///   access_denied, which is a missing entitlement at least as often as a
+    ///   bad key — refusing to store it would strand a user whose key is fine.
+    /// - `unreachable`: stored ONLY when there is nothing to lose. We never got
+    ///   an answer either way, so overwriting a key that already works on a
+    ///   dropped connection trades a working setup for an unverified one; but on
+    ///   first run, refusing would leave the user with no key and no way past it.
+    static func shouldPersistProbedKey(verdict: CredentialVerdict, hasExistingKey: Bool) -> Bool {
+        switch verdict {
+        case .accepted, .unknown:
+            return true
+        case .rejected:
+            return false
+        case .unreachable:
+            return !hasExistingKey
+        }
+    }
+
+    /// The caption under the verdict, or nil when the headline already says it.
+    static func message(verdict: CredentialVerdict, persisted: Bool, provider: String) -> String? {
+        switch (verdict, persisted) {
+        case (.rejected, false):
+            return "\(provider) rejected that key, so it was not saved. Your existing key is untouched."
+        case (.unreachable, false):
+            return "That key could not be checked, so it was not saved. Your existing key is untouched."
+        case (.unreachable, true):
+            return "Saved without confirmation — \(provider) could not be reached to check it."
+        default:
+            return nil
+        }
     }
 }

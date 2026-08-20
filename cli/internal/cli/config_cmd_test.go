@@ -146,6 +146,66 @@ func TestConfigSetProvider_WarnsButSavesAndRejectsUnknown(t *testing.T) {
 	}
 }
 
+// TestSetConfigValue_ReasoningEffort pins the accepted vocabulary for the
+// thinking-depth setting. Only the four provider-recognized depths (plus empty,
+// which clears it) may be stored, and they are normalized to lowercase so
+// ResolveReasoningEffort and the provider request agree on the spelling.
+func TestSetConfigValue_ReasoningEffort(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr string // empty = success
+		wantVal string
+	}{
+		{"none", "none", "", "none"},
+		{"low", "low", "", "low"},
+		{"medium", "medium", "", "medium"},
+		{"high", "high", "", "high"},
+		{"uppercase normalizes", "HIGH", "", "high"},
+		{"surrounding space trimmed", "  medium  ", "", "medium"},
+		{"empty clears", "", "", ""},
+		{"whitespace-only clears", "   ", "", ""},
+		{"unknown depth", "maximum", "must be one of", ""},
+		{"numeric", "3", "must be one of", ""},
+		{"typo", "hgih", "must be one of", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ai.AIConfig{ReasoningEffort: "low"} // pre-set, so a clear is observable
+			err := setConfigValue(&cfg, "ai.reasoning_effort", tt.value)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil (stored %q)", tt.wantErr, cfg.ReasoningEffort)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %q, want to contain %q", err.Error(), tt.wantErr)
+				}
+				if cfg.ReasoningEffort != "low" {
+					t.Errorf("rejected value must leave the config untouched, got %q", cfg.ReasoningEffort)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.ReasoningEffort != tt.wantVal {
+				t.Errorf("cfg.ReasoningEffort = %q, want %q", cfg.ReasoningEffort, tt.wantVal)
+			}
+			// Whatever set stored must round-trip through get and resolve.
+			got, err := getConfigValue(cfg, "ai.reasoning_effort")
+			if err != nil {
+				t.Fatalf("getConfigValue: %v", err)
+			}
+			if got != tt.wantVal {
+				t.Errorf("getConfigValue = %q, want %q", got, tt.wantVal)
+			}
+			if resolved := cfg.ResolveReasoningEffort(); resolved != tt.wantVal {
+				t.Errorf("ResolveReasoningEffort() = %q, want %q", resolved, tt.wantVal)
+			}
+		})
+	}
+}
+
 func TestSettableConfigKeys_includesThreshold(t *testing.T) {
 	var found bool
 	for _, k := range settableConfigKeys {
@@ -177,6 +237,8 @@ func dummyConfigValue(key string) string {
 		return "30000"
 	case "ai.embed_concurrency":
 		return "8"
+	case "ai.reasoning_effort":
+		return "medium"
 	case "ai.rerank.enabled":
 		return "true"
 	case "ai.rerank.candidate_docs":

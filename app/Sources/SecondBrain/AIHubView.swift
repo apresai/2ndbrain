@@ -74,25 +74,12 @@ struct AIHubView: View {
             VStack(spacing: 0) {
                 header
                 Divider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        providersSection
-                        if localEngineFeatureEnabled {
-                            localModelsSection
-                        }
-                        activeSection
-                        catalogSection
-                        DisclosureGroup("Advanced settings") {
-                            AIAdvancedSettingsView(
-                                aiStatus: aiStatus,
-                                models: models,
-                                onReload: { await reload() }
-                            )
-                            .padding(.top, 8)
-                        }
-                        .font(.subheadline.bold())
-                    }
-                    .padding()
+                // Inline (Models → Full catalog) sits inside SimpleModelsView's
+                // ScrollView; a second ScrollView traps the gesture.
+                if isInline {
+                    hubSections
+                } else {
+                    ScrollView { hubSections }
                 }
                 Divider()
                 footer
@@ -135,6 +122,18 @@ struct AIHubView: View {
             actions: { Button("OK") { errorMessage = nil } },
             message: { Text(errorMessage ?? "") }
         )
+    }
+
+    private var hubSections: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            providersSection
+            if localEngineFeatureEnabled {
+                localModelsSection
+            }
+            activeSection
+            catalogSection
+        }
+        .padding()
     }
 
     // MARK: - Header / footer
@@ -1015,12 +1014,13 @@ struct AIHubView: View {
         verifyProgress = VerifyProgress(current: 0, total: candidateIDs.count)
         defer { verifyProgress = nil }
         do {
-            // Default path streams --enabled-only (post-policy enabled set);
-            // the vendor path passes explicit IDs so it targets exactly the group.
+            // Same IDs as the cost-preview confirm. Empty IDs would add
+            // --discover and let the CLI rebuild a larger pool than the user
+            // approved. Discoveries already live in `models` (list --discover).
             try await appState.verifyModels(
                 provider: provider,
                 costCap: cap,
-                modelIDs: isVendorScoped ? candidateIDs : []
+                modelIDs: candidateIDs
             ) { event in
                 applyVerifyEvent(event)
             }

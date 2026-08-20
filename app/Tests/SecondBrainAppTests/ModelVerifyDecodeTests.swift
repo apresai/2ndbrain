@@ -171,6 +171,29 @@ func classifyFailureWithStderr() {
     #expect(outcome == .failure("refusing to spend: estimated cost exceeds cap"))
 }
 
+@Test("Validate cost-preview and verify share explicit IDs; verify does not widen")
+func validateSpendUsesSameIDs() {
+    let ids = [
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "amazon.nova-2-multimodal-embeddings-v1:0",
+    ]
+    let preview = AppState.costPreviewArgs(modelIDs: ids, probe: "test")
+    let verify = AppState.verifyModelsArgs(provider: "bedrock", costCap: 0.10, modelIDs: ids)
+    for id in ids {
+        #expect(preview.contains(id))
+        #expect(verify.contains(id))
+    }
+    #expect(!verify.contains("--discover"))
+    #expect(!verify.contains("--enabled-only"))
+}
+
+@Test("Empty verify IDs still add --discover for non-Validate callers")
+func verifyEmptyIDsStillDiscover() {
+    let verify = AppState.verifyModelsArgs(provider: "bedrock", costCap: 0.05, modelIDs: [])
+    #expect(verify.contains("--discover"))
+    #expect(verify.contains("--enabled-only"))
+}
+
 @Test("classify still fails on a non-zero exit with an empty stream (cost-cap trip)")
 func classifyFailureEmptyStream() {
     // Stream-contract note 1: a cost-cap-exceeded --events run exits non-zero
