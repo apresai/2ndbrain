@@ -136,6 +136,103 @@ func TestConfigBedrockEnvWinsSource(t *testing.T) {
 	}
 }
 
+func TestConfigBedrockRegionsSetShowClear(t *testing.T) {
+	isolateBedrockFile(t)
+	root := t.TempDir()
+
+	out, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--regions", "us-west-2, us-east-2")
+	if err != nil {
+		t.Fatalf("set regions: %v\n%s", err, out)
+	}
+	out, err = runCLIArgs(t, root, "config", "bedrock", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st bedrockMachineStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Regions) != 2 || st.Regions[0] != "us-west-2" || st.Regions[1] != "us-east-2" {
+		t.Fatalf("regions = %+v", st.Regions)
+	}
+
+	// A non-bare label is refused with a validation exit, file untouched.
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--regions", "us-west-2,http://evil"); err == nil {
+		t.Fatal("expected refusal of a non-bare region label")
+	}
+	got, _ := ai.ReadBedrockFile()
+	if len(got.Regions) != 2 {
+		t.Fatalf("refused set must not modify regions: %+v", got.Regions)
+	}
+
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--clear-regions"); err != nil {
+		t.Fatalf("clear regions: %v", err)
+	}
+	got, _ = ai.ReadBedrockFile()
+	if len(got.Regions) != 0 {
+		t.Fatalf("clear left regions: %+v", got.Regions)
+	}
+}
+
+func TestConfigBedrockTokenUpdatedAtInStatus(t *testing.T) {
+	isolateBedrockFile(t)
+	root := t.TempDir()
+
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--token", "ABSK-token-updated-check"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLIArgs(t, root, "config", "bedrock", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st bedrockMachineStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.TokenUpdatedAt == "" {
+		t.Fatalf("token write should surface token_updated_at: %+v", st)
+	}
+}
+
+func TestConfigBedrockEnvOverridesStoredWarning(t *testing.T) {
+	isolateBedrockFile(t)
+	root := t.TempDir()
+
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--token", "ABSK-stored-key-value-alpha"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSK-environ-key-value-bravo")
+
+	out, err := runCLIArgs(t, root, "config", "bedrock", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st bedrockMachineStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.EnvOverridesStored {
+		t.Fatalf("expected env_overrides_stored: %+v", st)
+	}
+	if st.StoredTokenSuffix != "lpha" || st.TokenSuffix != "ravo" {
+		t.Fatalf("suffixes should identify both keys: %+v", st)
+	}
+
+	// Same key in both places: no divergence flag.
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSK-stored-key-value-alpha")
+	out, err = runCLIArgs(t, root, "config", "bedrock", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = bedrockMachineStatus{}
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.EnvOverridesStored {
+		t.Fatalf("identical env and stored keys must not diverge: %+v", st)
+	}
+}
+
 func TestConfigBedrockShowReportsUnprivateFile(t *testing.T) {
 	isolateBedrockFile(t)
 	path := ai.BedrockFilePath()

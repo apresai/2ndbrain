@@ -81,6 +81,26 @@ func verifyEventDecodesResult() throws {
     #expect(r.code == nil)
 }
 
+@Test("VerifyEvent tolerates the additive multi-region fields (regions on start, region on result)")
+func verifyEventTolerantOfRegionFields() throws {
+    // A region-aware CLI adds `regions` to the start header and `region` to
+    // each result. Codable ignores unknown keys, so an app built before those
+    // fields must keep decoding these payloads unchanged — this is the
+    // additive-contract proof for the multi-region verify release.
+    let start = #"{"event":"start","total":2,"estimated_usd":0.0002,"regions":["us-east-1","us-west-2"]}"#
+    let s = try JSONDecoder().decode(VerifyEvent.self, from: Data(start.utf8))
+    #expect(s.event == "start")
+    #expect(s.total == 2)
+
+    let result = #"""
+    {"event":"result","n":1,"total":2,"result":{"model_id":"us.anthropic.claude-sonnet-5","provider":"bedrock","type":"generation","ok":true,"latency":"410ms","region":"us-west-2"}}
+    """#
+    let e = try JSONDecoder().decode(VerifyEvent.self, from: Data(result.utf8))
+    let r = try #require(e.result)
+    #expect(r.ok == true)
+    #expect(r.modelID == "us.anthropic.claude-sonnet-5")
+}
+
 @Test("VerifyEvent decodes a failing result carrying the classified code")
 func verifyEventDecodesFailingResult() throws {
     let json = #"""

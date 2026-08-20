@@ -346,6 +346,14 @@ const probeConcurrency = 5
 // from) with n as the 1-based completion counter. vaultRoot scopes the
 // user-catalog invoke-strategy lookups inside each probe.
 func probeModelsConcurrently(ctx context.Context, cfg ai.AIConfig, vaultRoot string, models []ai.ModelInfo, onResult func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error)) {
+	probeModelsConcurrentlyRegions(ctx, cfg, vaultRoot, models, nil, onResult)
+}
+
+// probeModelsConcurrentlyRegions is probeModelsConcurrently with a region set:
+// each failing classic-Bedrock probe retries sequentially in the next included
+// region inside its own worker slot (see ai.TestProbeModelInRegions). A nil or
+// single-region set is exactly the old behavior.
+func probeModelsConcurrentlyRegions(ctx context.Context, cfg ai.AIConfig, vaultRoot string, models []ai.ModelInfo, regions []string, onResult func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error)) {
 	sem := make(chan struct{}, probeConcurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -359,7 +367,7 @@ func probeModelsConcurrently(ctx context.Context, cfg ai.AIConfig, vaultRoot str
 			defer func() { <-sem }()
 
 			n := int(counter.Add(1))
-			result, err := ai.TestProbeModel(ctx, cfg, m.ID, m.Provider, m.Type, vaultRoot)
+			result, err := ai.TestProbeModelInRegions(ctx, cfg, m.ID, m.Provider, m.Type, vaultRoot, regions)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -536,7 +544,10 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Testing %s...\n", modelID)
 	}
 
-	result, err := ai.TestProbeModel(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root)
+	// Region-aware like verify: a pinned model re-checks primary (self-heal)
+	// and the included regions apply, so `models test --save` can never
+	// freeze a stale pin that verify would have cleared.
+	result, err := ai.TestProbeModelInRegions(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
 	if err != nil {
 		return err
 	}
@@ -922,7 +933,29 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 		entry.TestError = result.Detail
 		entry.TestErrorCode = string(result.Code)
 	}
+	persistProbedRegion(&entry, result, ai.ResolveBedrockConfig(cfg.Bedrock).Region)
 	return entry
+}
+
+// persistProbedRegion records where a classic-Bedrock model actually passed so
+// future generation/embedding invokes route there (EffectiveBedrockRegion
+// honors the pin). A pass in the PRIMARY region clears any stale pin — every
+// verify re-checks primary first, so a model that regains primary access
+// self-heals back to the default route. Failures leave the pin untouched, and
+// mantle models are excluded (their builtin endpoint pins must never be
+// clobbered by a probe that never used them).
+func persistProbedRegion(entry *ai.ModelInfo, result *ai.TestProbeResult, primaryRegion string) {
+	if !result.OK || result.Provider != "bedrock" || result.Region == "" {
+		return
+	}
+	if result.Strategy == ai.StrategyBedrockMantleResponses {
+		return
+	}
+	if result.Region == primaryRegion {
+		entry.Region = ""
+		return
+	}
+	entry.Region = result.Region
 }
 
 func findModelInfo(ctx context.Context, cfg ai.AIConfig, vaultRoot, provider, id string) (ai.ModelInfo, bool) {

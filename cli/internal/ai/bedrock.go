@@ -104,9 +104,12 @@ type BedrockEmbedder struct {
 	avail    availableCache
 }
 
-// NewBedrockEmbedder creates a Bedrock embedding provider.
+// NewBedrockEmbedder creates a Bedrock embedding provider. A catalog Region
+// pin on the model (or an in-memory RegionOverride) routes just this client,
+// mirroring NewBedrockReranker.
 func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, dims int) (*BedrockEmbedder, error) {
 	cfg = ResolveBedrockConfig(cfg)
+	cfg.Region = EffectiveBedrockRegion(cfg, model, "")
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -616,6 +619,7 @@ func NewBedrockGeneration(ctx context.Context, cfg BedrockConfig, model, vaultRo
 		slog.Debug("bedrock generation: dispatching to the mantle plane", "model", model)
 		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
 	}
+	carryVaultRegionPin(&cfg, model, vaultRoot)
 	return NewBedrockGenerator(ctx, cfg, model)
 }
 
@@ -630,6 +634,7 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 		return nil, fmt.Errorf("%s uses the bedrock mantle plane (%s); construct it via NewBedrockGeneration", model, StrategyBedrockMantleResponses)
 	}
 	cfg = ResolveBedrockConfig(cfg)
+	cfg.Region = EffectiveBedrockRegion(cfg, model, "")
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -958,7 +963,9 @@ func CheckBedrockCredentials(ctx context.Context, cfg BedrockConfig) bool {
 // vaultRoot scopes user-catalog invoke-strategy lookups (a vault-scoped mantle
 // entry must dispatch to the mantle client); pass "" when no vault is open.
 func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AIConfig, vaultRoot string) error {
-	embedder, err := NewBedrockEmbedder(ctx, cfg, aiCfg.EmbeddingModel, aiCfg.Dimensions)
+	embedCfg := cfg
+	carryVaultRegionPin(&embedCfg, aiCfg.EmbeddingModel, vaultRoot)
+	embedder, err := NewBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions)
 	if err != nil {
 		return fmt.Errorf("init bedrock embedder: %w", err)
 	}

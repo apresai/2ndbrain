@@ -353,14 +353,15 @@ func runModelsPolicyShow(cmd *cobra.Command, args []string) error {
 	}
 
 	if format := getFormat(cmd); format != "" {
-		// First-run / no-policy: still emit per-provider rows so a UI can
-		// render the full checkbox vocabulary (known_vendors) without
-		// hardcoding slugs. These are not configured policies — Mode and
-		// Vendors stay empty, so active-policy filters that key on
-		// enable_only ignore them.
-		if len(results) == 0 {
-			results = syntheticPolicyVocabulary(ctx, cfg, vaultRoot, policyShowProvider)
-		}
+		// Emit a synthetic vocabulary row for every provider that has no
+		// configured policy (not only when NO policies exist), so a UI can
+		// always render the full checkbox vocabulary (known_vendors) without
+		// hardcoding slugs. Previously a policy on one provider suppressed
+		// the vocabulary rows for all the others, silently shrinking a
+		// bedrock vendor list to the UI's fallback. Synthetic rows are not
+		// configured policies — Mode and Vendors stay empty, so
+		// active-policy filters that key on enable_only ignore them.
+		results = fillPolicyVocabularyGaps(ctx, cfg, vaultRoot, policyShowProvider, results)
 		return output.Write(os.Stdout, format, results)
 	}
 
@@ -621,6 +622,22 @@ func syntheticPolicyVocabulary(ctx context.Context, cfg ai.AIConfig, vaultRoot, 
 		out = append(out, res)
 	}
 	return out
+}
+
+// fillPolicyVocabularyGaps appends a synthetic vocabulary row for each
+// provider (respecting the --provider filter) that has no configured policy
+// row, leaving configured rows untouched and first.
+func fillPolicyVocabularyGaps(ctx context.Context, cfg ai.AIConfig, vaultRoot, providerFilter string, results []policyResult) []policyResult {
+	have := map[string]bool{}
+	for _, r := range results {
+		have[r.Provider] = true
+	}
+	for _, synth := range syntheticPolicyVocabulary(ctx, cfg, vaultRoot, providerFilter) {
+		if !have[synth.Provider] {
+			results = append(results, synth)
+		}
+	}
+	return results
 }
 
 // ensurePolicyResultSlices keeps the JSON contract free of nulls: warnings,

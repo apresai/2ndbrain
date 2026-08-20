@@ -111,6 +111,62 @@ func TestModelsPolicy_ShowReportsKnownVendors(t *testing.T) {
 	}
 }
 
+// TestModelsPolicy_ShowFillsVocabularyGapsPerProvider: a policy configured
+// for ONE provider must not suppress the synthetic vocabulary rows for the
+// others. Previously synthetics were emitted only when zero policies existed,
+// so an openrouter policy silently shrank the bedrock vendor list to the
+// GUI's hardcoded fallback.
+func TestModelsPolicy_ShowFillsVocabularyGapsPerProvider(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if _, err := runCLIArgs(t, root,
+		"models", "policy", "set",
+		"--provider", "openrouter", "--enable-only", "anthropic",
+		"--scope", "vault", "--json"); err != nil {
+		t.Fatalf("seed openrouter policy: %v", err)
+	}
+
+	got, err := runCLIArgs(t, root, "models", "policy", "show", "--json")
+	if err != nil {
+		t.Fatalf("policy show: %v (out=%s)", err, truncate(got, 300))
+	}
+	var results []policyResult
+	if err := json.Unmarshal(got, &results); err != nil {
+		t.Fatalf("parse: %v (body=%s)", err, truncate(got, 500))
+	}
+	byProvider := map[string]policyResult{}
+	for _, r := range results {
+		byProvider[r.Provider] = r
+	}
+	or, ok := byProvider["openrouter"]
+	if !ok || or.Mode != "enable_only" || len(or.Vendors) != 1 {
+		t.Fatalf("configured openrouter row wrong: %+v", or)
+	}
+	br, ok := byProvider["bedrock"]
+	if !ok {
+		t.Fatalf("bedrock synthetic row missing when another provider has a policy: %+v", results)
+	}
+	if br.Mode == "enable_only" || len(br.Vendors) > 0 {
+		t.Errorf("bedrock gap row must not look configured: %+v", br)
+	}
+	if len(br.KnownVendors) < 10 {
+		t.Errorf("bedrock known_vendors should be the full static vocabulary, got %d: %v", len(br.KnownVendors), br.KnownVendors)
+	}
+
+	// The --provider filter keeps working for the unconfigured provider.
+	got, err = runCLIArgs(t, root, "models", "policy", "show", "--provider", "bedrock", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	results = nil
+	if err := json.Unmarshal(got, &results); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Provider != "bedrock" || len(results[0].KnownVendors) < 10 {
+		t.Fatalf("filtered gap row wrong: %+v", results)
+	}
+}
+
 // TestModelsPolicy_ShowWithoutPolicyReportsKnownVendors is the first-run
 // contract: with nothing configured, --json must still name the Bedrock
 // vendor vocabulary (DeepSeek, Meta, Mistral, …) so the GUI does not fall
