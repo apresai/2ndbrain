@@ -16,6 +16,10 @@ front_door: make release-all
 version_source: { type: file, path: VERSION }
 tests: { gate: front-door }            # the test gate runs inside `make release-all`
 
+# Local gitignored files the release needs; preflight fails if missing/empty.
+# sign.env holds the Developer ID / notarization identifiers for release-app.
+env_files: [scripts/sign.env]
+
 products:
   - name: cli
     channels:
