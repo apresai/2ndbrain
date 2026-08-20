@@ -86,6 +86,40 @@ func TestLiveProbeModelInRegionsStopsAtFirstPass(t *testing.T) {
 	}
 }
 
+// TestLiveStalePinSelfHeals: a model carrying a stale non-primary catalog
+// Region pin must still re-check PRIMARY on a single-region probe — the
+// self-heal that lets persistProbedRegion clear the pin the moment primary
+// access works. Before the fix, a single-region probe honored the pin and
+// primary was never re-checked.
+func TestLiveStalePinSelfHeals(t *testing.T) {
+	requireBedrockLiveIsolatedFile(t)
+	vaultRoot := t.TempDir()
+	ctx := context.Background()
+	const model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+	// Seed a vault-scoped stale pin to a non-primary region.
+	if err := SaveUserCatalogEntry(ScopeVault, vaultRoot, ModelInfo{
+		ID: model, Provider: "bedrock", Type: "generation", Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveModelRegion("bedrock", model, vaultRoot); got != "us-west-2" {
+		t.Fatalf("pin not seeded: %q", got)
+	}
+
+	cfg := AIConfig{Provider: "bedrock", Bedrock: BedrockConfig{Profile: "default", Region: "us-east-1"}}
+	res, err := TestProbeModelInRegions(ctx, cfg, model, "bedrock", "generation", vaultRoot, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !res.OK {
+		t.Skipf("account cannot invoke %s (%s); cannot assert self-heal", model, res.Code)
+	}
+	if res.Region != "us-east-1" {
+		t.Fatalf("pinned model probed %q, want the PRIMARY us-east-1 (self-heal re-check)", res.Region)
+	}
+}
+
 // TestLiveDiscoveryUnionTwoRegions: with an included second region, the
 // bedrock discovery listing must be a superset of the single-region listing
 // with no duplicate IDs. Control-plane calls only (free).

@@ -45,6 +45,19 @@ func EffectiveBedrockRegion(cfg BedrockConfig, modelID, vaultRoot string) string
 	return ResolveBedrockConfig(cfg).Region
 }
 
+// carryVaultRegionPin copies a vault-scoped catalog Region pin for modelID
+// into cfg.RegionOverride when no override is already set. It exists because
+// the classic constructors resolve pins with vaultRoot "" (builtin + global
+// catalog only); callers that DO hold a vault root use this to hand the
+// vault-scoped pin down without a signature change.
+func carryVaultRegionPin(cfg *BedrockConfig, modelID, vaultRoot string) {
+	if cfg.RegionOverride == "" {
+		if pinned := ResolveModelRegion("bedrock", modelID, vaultRoot); pinned != "" {
+			cfg.RegionOverride = pinned
+		}
+	}
+}
+
 // ResolveModelEndpoint returns the per-model endpoint URL override for
 // (provider, modelID), resolved through the same user-catalog-over-builtin
 // chain as ResolveInvokeStrategy. Returns "" when no catalog entry pins an

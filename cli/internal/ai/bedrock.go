@@ -619,14 +619,7 @@ func NewBedrockGeneration(ctx context.Context, cfg BedrockConfig, model, vaultRo
 		slog.Debug("bedrock generation: dispatching to the mantle plane", "model", model)
 		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
 	}
-	// Carry a vault-scoped catalog Region pin into the classic constructor
-	// (which resolves with vaultRoot "" and would only see builtin/global
-	// pins) without changing its signature.
-	if cfg.RegionOverride == "" {
-		if pinned := ResolveModelRegion("bedrock", model, vaultRoot); pinned != "" {
-			cfg.RegionOverride = pinned
-		}
-	}
+	carryVaultRegionPin(&cfg, model, vaultRoot)
 	return NewBedrockGenerator(ctx, cfg, model)
 }
 
@@ -971,13 +964,7 @@ func CheckBedrockCredentials(ctx context.Context, cfg BedrockConfig) bool {
 // entry must dispatch to the mantle client); pass "" when no vault is open.
 func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AIConfig, vaultRoot string) error {
 	embedCfg := cfg
-	// Carry a vault-scoped catalog Region pin into the embedder (which
-	// resolves with vaultRoot "" and would only see builtin/global pins).
-	if embedCfg.RegionOverride == "" {
-		if pinned := ResolveModelRegion("bedrock", aiCfg.EmbeddingModel, vaultRoot); pinned != "" {
-			embedCfg.RegionOverride = pinned
-		}
-	}
+	carryVaultRegionPin(&embedCfg, aiCfg.EmbeddingModel, vaultRoot)
 	embedder, err := NewBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions)
 	if err != nil {
 		return fmt.Errorf("init bedrock embedder: %w", err)

@@ -544,7 +544,10 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Testing %s...\n", modelID)
 	}
 
-	result, err := ai.TestProbeModel(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root)
+	// Region-aware like verify: a pinned model re-checks primary (self-heal)
+	// and the included regions apply, so `models test --save` can never
+	// freeze a stale pin that verify would have cleared.
+	result, err := ai.TestProbeModelInRegions(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
 	if err != nil {
 		return err
 	}

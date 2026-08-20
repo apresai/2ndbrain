@@ -101,13 +101,7 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) error {
 	switch provider {
 	case "bedrock":
-		// Carry a vault-scoped catalog Region pin into the embedder (which
-		// resolves with vaultRoot "" and would only see builtin/global pins).
-		if cfg.Bedrock.RegionOverride == "" {
-			if pinned := ResolveModelRegion("bedrock", modelID, vaultRoot); pinned != "" {
-				cfg.Bedrock.RegionOverride = pinned
-			}
-		}
+		carryVaultRegionPin(&cfg.Bedrock, modelID, vaultRoot)
 		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding", vaultRoot); err != nil {
 			return err
 		}
@@ -173,13 +167,7 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 
 	switch provider {
 	case "bedrock":
-		// Same vault-pin carry as probeEmbedding, so the preflight and the
-		// invoke agree on the region NewBedrockGeneration will route to.
-		if cfg.Bedrock.RegionOverride == "" {
-			if pinned := ResolveModelRegion("bedrock", modelID, vaultRoot); pinned != "" {
-				cfg.Bedrock.RegionOverride = pinned
-			}
-		}
+		carryVaultRegionPin(&cfg.Bedrock, modelID, vaultRoot)
 		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation", vaultRoot); err != nil {
 			return "", err
 		}
@@ -223,13 +211,40 @@ func regionRetryable(code TestErrorCode) bool {
 	return false
 }
 
+// regionAttempts builds the ordered attempt list for a region-aware probe:
+// the included regions (primary first), with the model's catalog Region pin
+// appended when it is not already present. Including the pin keeps a
+// pinned-but-working model reachable, and putting primary FIRST is the
+// self-heal: a pinned model always re-checks primary, even when the included
+// set has collapsed back to a single region, so a stale pin cannot outlive
+// the entitlement gap that created it. A nil result means "no fan-out".
+func regionAttempts(regions []string, pinned string) []string {
+	if pinned != "" {
+		found := false
+		for _, r := range regions {
+			if r == pinned {
+				found = true
+				break
+			}
+		}
+		if !found {
+			regions = append(append([]string{}, regions...), pinned)
+		}
+	}
+	if len(regions) <= 1 {
+		return nil
+	}
+	return regions
+}
+
 // TestProbeModelInRegions probes modelID across the included region set,
-// stopping at the first pass. Region 0 (the primary) always goes first, so a
-// stale non-primary pin self-heals the moment the account gains primary
-// access. Only classic-plane Bedrock models fan out: non-bedrock providers
-// have no AWS region, mantle models are endpoint-pinned per model, and a
-// single-region set keeps today's exact behavior (no override at all, so a
-// catalog Region pin still routes the probe).
+// stopping at the first pass. Region 0 (the primary) always goes first, and a
+// model carrying a catalog Region pin gets the pin appended to the attempt
+// list — so a pinned model re-checks primary on EVERY probe (self-heal: a
+// primary pass clears the pin via persistProbedRegion) while remaining
+// reachable in its pinned region. Only classic-plane Bedrock models fan out:
+// non-bedrock providers have no AWS region, mantle models are endpoint-pinned
+// per model, and an unpinned single-region probe keeps the plain path.
 //
 // On exhaustion the PRIMARY region's failure is returned — keeping the
 // reported classification stable for existing consumers — with the other
@@ -238,14 +253,21 @@ func TestProbeModelInRegions(ctx context.Context, cfg AIConfig, modelID, provide
 	if provider == "" {
 		provider = InferProvider(modelID)
 	}
-	if provider != "bedrock" || len(regions) <= 1 ||
+	if provider != "bedrock" ||
 		ResolveInvokeStrategy(provider, modelID, vaultRoot) == StrategyBedrockMantleResponses {
+		return TestProbeModel(ctx, cfg, modelID, provider, modelType, vaultRoot)
+	}
+	if len(regions) == 0 {
+		regions = []string{ResolveBedrockConfig(cfg.Bedrock).Region}
+	}
+	attempts := regionAttempts(regions, ResolveModelRegion("bedrock", modelID, vaultRoot))
+	if attempts == nil {
 		return TestProbeModel(ctx, cfg, modelID, provider, modelType, vaultRoot)
 	}
 
 	var primary *TestProbeResult
 	var alsoFailed []string
-	for i, region := range regions {
+	for i, region := range attempts {
 		attempt := cfg
 		attempt.Bedrock.RegionOverride = region
 		result, err := TestProbeModel(ctx, attempt, modelID, provider, modelType, vaultRoot)

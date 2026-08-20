@@ -221,6 +221,35 @@ func TestBedrockTokenDivergence(t *testing.T) {
 	}
 }
 
+func TestRegionAttempts(t *testing.T) {
+	cases := []struct {
+		name    string
+		regions []string
+		pinned  string
+		want    []string // nil = no fan-out (plain single probe)
+	}{
+		{"single region, no pin", []string{"us-east-1"}, "", nil},
+		{"single region, pin equals it", []string{"us-east-1"}, "us-east-1", nil},
+		{"single region, differing pin fans out primary-first", []string{"us-east-1"}, "us-west-2", []string{"us-east-1", "us-west-2"}},
+		{"multi region, no pin", []string{"us-east-1", "us-west-2"}, "", []string{"us-east-1", "us-west-2"}},
+		{"multi region, pin already included", []string{"us-east-1", "us-west-2"}, "us-west-2", []string{"us-east-1", "us-west-2"}},
+		{"multi region, new pin appended last", []string{"us-east-1", "us-west-2"}, "eu-west-1", []string{"us-east-1", "us-west-2", "eu-west-1"}},
+	}
+	for _, tc := range cases {
+		got := regionAttempts(tc.regions, tc.pinned)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+			continue
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+				break
+			}
+		}
+	}
+}
+
 func TestRegionRetryable(t *testing.T) {
 	retry := []TestErrorCode{TestErrNotFound, TestErrInvalidRequest, TestErrAccessDenied}
 	stop := []TestErrorCode{TestErrBadCredentials, TestErrThrottled, TestErrTimeout, TestErrProviderUnreachable, TestErrIncompatible, TestErrUnknown, ""}
