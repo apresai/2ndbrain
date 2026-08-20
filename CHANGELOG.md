@@ -7,9 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.18.1] - 2026-08-20
+
+### Added
+
+- Multi-region Bedrock verification: `config bedrock --set --regions` / `--clear-regions` manage additional included regions; `models verify` and `models test` retry region-shaped failures (`not_found`, `invalid_request`, `access_denied`) across included regions, persist a passing non-primary region onto the catalog entry, and self-heal stale pins when the primary region passes again. Discovery unions listings across included regions, and generation/embedding now honor catalog region pins.
+- New Models tab (`SimpleModelsView`) as the default Bedrock setup surface: sticky vendor checkboxes, one Validate action (cost preview + verify), and Answers/Search pickers limited to the working set of models this account has actually invoked. The full AI Hub moves behind a "Full catalog" disclosure.
+- Working-set signal in the CLI: `models list --working-set` and a per-row `working` field expose which models carry a passing probe for this account.
+- Bedrock key observability: token writes stamp `token_updated_at` in `bedrock.json`; `config bedrock` and `doctor` warn when an environment `AWS_BEARER_TOKEN_BEDROCK` overrides a different saved key (suffixes shown for both). The app surfaces the same warning and flags model-access verdicts that predate the current key.
+- Always-visible Bedrock key-state chip on the Models tab, an "Open AI settings" action on bad-credentials failures, and an "Also verify in" region control on the Settings AI tab.
+- Check all / Uncheck all bulk vendor toggles on both the Models tab and the Manage-vendors sheet.
+- 24h disk cache for Bedrock model discovery so repeated GUI validation passes do not re-walk the control plane.
+- `.release.yaml` declares `scripts/sign.env` as a required env file so release preflight fails fast on a fresh checkout.
+
+### Changed
+
+- Settings window tabs are now selection-bound (`SettingsTab`), so links from Home and the Models tab land on the intended tab instead of whatever macOS last restored.
+- Home's AI card replaces the always-visible "Save as default" with a drift-gated "Reset to recommended defaults", and the AI settings link is no longer hidden once credentials work.
+- `models policy show --json` emits a synthetic `known_vendors` row for every provider missing a configured policy, so one provider's policy can no longer shrink another provider's checkbox vocabulary.
+- Dependencies: modernc.org/sqlite 1.53.0 to 1.57.0 (with libc and memory in range); Obsidian plugin lockfile refreshed.
+
 ### Fixed
-- Fenced code blocks are exempt from heading parsing: a `# comment` inside ``` or `~~~` is no longer treated as an ATX heading, so it cannot create a phantom section or reparent later chunks. Affects `heading_path`, `outline` / `kb_structure`, and `replace --section` / `kb_replace_section`.
-- ⚠ reindex recommended: `2nb index --force-reembed`
+
+- ATX headings inside fenced code blocks (``` / ~~~) are no longer parsed as headings, which created phantom H1s and reparented later sections in chunking and section replace. `EmbedGeneration` is bumped; existing vaults are prompted to run `2nb index --force-reembed`.
+- Stale catalog region pins now re-check the primary region on every probe instead of persisting after the extra regions are removed.
+- The re-validate request issued before the Models tab mounted was silently dropped; it now fires on mount.
+
 
 ## [0.18.0] - 2026-08-13
 
