@@ -56,7 +56,16 @@ const bedrockBearerTokenEnv = "AWS_BEARER_TOKEN_BEDROCK"
 // injected so the logic is testable without touching the real environment,
 // file, or Keychain. fileToken and keychain may be nil.
 func ensureBedrockBearerToken(getenv func(string) string, setenv func(string, string) error, fileToken func() string, keychain func(string) (string, error)) {
-	if getenv(bedrockBearerTokenEnv) != "" {
+	ensureBedrockBearerTokenPrefer(getenv, setenv, fileToken, keychain, false)
+}
+
+// ensureBedrockBearerTokenPrefer is ensureBedrockBearerToken with the
+// prefer-stored inversion: when preferStored is true a stored key OVERWRITES
+// an already-set env var in this process, so both the classic SDK path and
+// the mantle plane (which reads the env var after this shim) follow the
+// saved key. With no stored key the env var stands either way.
+func ensureBedrockBearerTokenPrefer(getenv func(string) string, setenv func(string, string) error, fileToken func() string, keychain func(string) (string, error), preferStored bool) {
+	if getenv(bedrockBearerTokenEnv) != "" && !preferStored {
 		return
 	}
 	if fileToken != nil {

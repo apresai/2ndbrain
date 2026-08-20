@@ -109,15 +109,26 @@ func selfTestModels(ctx context.Context, cfg ai.AIConfig, vaultRoot string) ([]D
 			// Zero-network: pure env + file/Keychain comparison. This is where
 			// "the app works but my terminal still 403s" gets diagnosed — the
 			// env token outranks the saved key for every process that inherits
-			// this shell's environment.
-			checks = append(checks, DoctorCheck{
-				Name: "bedrock key source",
-				OK:   true,
-				Warn: true,
-				Detail: fmt.Sprintf("AWS_BEARER_TOKEN_BEDROCK (ends %s) overrides the saved key (ends %s) in this environment",
-					suffixOrUnknown(div.EnvSuffix), suffixOrUnknown(div.StoredSuffix)),
-				Fix: "unset AWS_BEARER_TOKEN_BEDROCK (or update its source, e.g. your shell profile) so this shell and its MCP servers use the saved key",
-			})
+			// this shell's environment. With prefer_stored_token on the saved
+			// key wins everywhere in 2nb, so the same divergence is merely
+			// informational.
+			if div.PreferStored {
+				checks = append(checks, DoctorCheck{
+					Name: "bedrock key source",
+					OK:   true,
+					Detail: fmt.Sprintf("prefer_stored_token is on: 2nb uses the saved key (ends %s); AWS_BEARER_TOKEN_BEDROCK (ends %s) still serves other tools",
+						suffixOrUnknown(div.StoredSuffix), suffixOrUnknown(div.EnvSuffix)),
+				})
+			} else {
+				checks = append(checks, DoctorCheck{
+					Name: "bedrock key source",
+					OK:   true,
+					Warn: true,
+					Detail: fmt.Sprintf("AWS_BEARER_TOKEN_BEDROCK (ends %s) overrides the saved key (ends %s) in this environment",
+						suffixOrUnknown(div.EnvSuffix), suffixOrUnknown(div.StoredSuffix)),
+					Fix: "unset AWS_BEARER_TOKEN_BEDROCK, or run `2nb config bedrock --set --prefer-stored-token` to make the saved key win for all 2nb use",
+				})
+			}
 		}
 	}
 	return checks, creds

@@ -177,9 +177,21 @@ struct SettingsAIView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if bedrock.envOverridesStored {
-                    Label("AWS_BEARER_TOKEN_BEDROCK in your shell (ends \(bedrock.tokenSuffix)) overrides this saved key (ends \(bedrock.storedTokenSuffix)) for terminal and MCP use. The app uses the saved key.", systemImage: "exclamationmark.triangle.fill")
+                    Label("AWS_BEARER_TOKEN_BEDROCK in your shell (ends \(bedrock.tokenSuffix)) overrides this saved key (ends \(bedrock.storedTokenSuffix)) for terminal and MCP use. The app uses the saved key. Turn on the option below to make the saved key win everywhere in 2nb.", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
+                }
+                Toggle("Always use the saved key in 2nb (ignore AWS_BEARER_TOKEN_BEDROCK)", isOn: Binding(
+                    get: { bedrock.preferStoredToken },
+                    set: { on in Task { await applyPreferStored(on) } }
+                ))
+                .toggleStyle(.checkbox)
+                .font(.caption)
+                .disabled(busy)
+                if bedrock.preferStoredToken, !bedrock.storedTokenSuffix.isEmpty {
+                    Text("2nb (terminal, MCP, this app) uses the saved key; your shell's AWS_BEARER_TOKEN_BEDROCK still serves other tools like the aws CLI.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             if showRevalidateOffer {
@@ -400,6 +412,16 @@ struct SettingsAIView: View {
             // refresh rather than auto-spending on it. Vault-bound only — the
             // Models tab is WelcomeView otherwise.
             showRevalidateOffer = appState.vault != nil
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func applyPreferStored(_ on: Bool) async {
+        busy = true
+        defer { busy = false }
+        do {
+            bedrock = try await appState.saveBedrockMachineConfig(region: "", token: nil, preferStored: on)
         } catch {
             message = error.localizedDescription
         }
