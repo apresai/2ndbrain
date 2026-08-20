@@ -70,7 +70,7 @@ func ChunkDocument(doc *Document) []Chunk {
 	var fence fenceTracker
 	for i, line := range lines {
 		lineNum := i + 1
-		level := headingLevelOutsideFence(line, &fence)
+		level := fence.headingLevel(line)
 
 		if level > 0 {
 			flushChunk(lineNum - 1)

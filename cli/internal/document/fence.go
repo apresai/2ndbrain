@@ -2,47 +2,37 @@ package document
 
 import "strings"
 
-// fenceTracker tracks CommonMark-lite fenced code block state across a
-// line-oriented scan. Opening and closing fences must use the same delimiter
-// (` or ~) and the closer's run must be at least as long as the opener.
-// Info strings on the opener are ignored. A closer may only have trailing
-// whitespace after the delimiter run (CommonMark).
+// fenceTracker skips ATX heading detection inside fenced code blocks so a
+// `# comment` in a shell snippet cannot reparent later sections.
 //
-// Leading whitespace is trimmed (spaces and tabs), matching ExtractTasks /
-// ExtractInlineTags, so a fence indented inside a list item is still recognized.
-// This is slightly more permissive than CommonMark's 0-3 space indent.
+// Closers must use the same delimiter (` or ~) and a run at least as long as
+// the opener. An info string is allowed on open and rejected on close.
+// Leading space/tab is trimmed, matching ExtractTasks, so a fence indented
+// inside a list item still counts.
 type fenceTracker struct {
 	delim byte // 0 if not in a fence
 	run   int
 }
 
-// Inside reports whether the scanner is currently inside a fenced code block.
-func (f *fenceTracker) Inside() bool { return f.delim != 0 }
-
-// Feed consumes one line. It returns true if the line is a fence delimiter
-// (open or close). After Feed, Inside() reflects the new state.
-func (f *fenceTracker) Feed(line string) bool {
+// headingLevel is the heading rule shared by ChunkDocument and SectionBounds.
+func (f *fenceTracker) headingLevel(line string) int {
 	delim, n, hasInfo := parseFenceLine(line)
-	if delim == 0 {
-		return false
+	switch {
+	case f.delim == 0 && delim != 0:
+		f.delim, f.run = delim, n
+		return 0
+	case f.delim != 0 && delim == f.delim && n >= f.run && !hasInfo:
+		f.delim, f.run = 0, 0
+		return 0
+	case f.delim != 0:
+		return 0
+	default:
+		return headingLevel(line)
 	}
-	if f.delim == 0 {
-		f.delim = delim
-		f.run = n
-		return true
-	}
-	// Close: same character, long enough, no info string.
-	if delim == f.delim && n >= f.run && !hasInfo {
-		f.delim = 0
-		f.run = 0
-		return true
-	}
-	return false
 }
 
-// parseFenceLine reports whether line is a fence marker. delim is '`' or '~',
-// run is the delimiter length (>= 3), and hasInfo is true when non-whitespace
-// follows the run (an info string on an opener; forbidden on a closer).
+// parseFenceLine reports a fence marker: delim is '`' or '~', run is its
+// length (>= 3), and hasInfo is true when non-whitespace follows the run.
 func parseFenceLine(line string) (delim byte, run int, hasInfo bool) {
 	trimmed := strings.TrimLeft(line, " \t")
 	if len(trimmed) < 3 {
@@ -59,16 +49,5 @@ func parseFenceLine(line string) (delim byte, run int, hasInfo bool) {
 	if i < 3 {
 		return 0, 0, false
 	}
-	rest := strings.TrimLeft(trimmed[i:], " \t")
-	return ch, i, rest != ""
-}
-
-// headingLevelOutsideFence is the heading rule shared by ChunkDocument and
-// SectionBounds. A line inside a fenced code block is never a heading, even
-// when it looks like ATX (`# comment` in a shell snippet).
-func headingLevelOutsideFence(line string, f *fenceTracker) int {
-	if f.Feed(line) || f.Inside() {
-		return 0
-	}
-	return headingLevel(line)
+	return ch, i, strings.TrimSpace(trimmed[i:]) != ""
 }

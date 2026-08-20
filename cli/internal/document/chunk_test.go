@@ -125,9 +125,6 @@ func TestChunkDocument_IgnoresHeadingsInsideFences(t *testing.T) {
 		if chunks[i].HeadingPath != path {
 			t.Errorf("chunk %d heading_path = %q, want %q", i, chunks[i].HeadingPath, path)
 		}
-		if strings.Contains(chunks[i].HeadingPath, "probe-") {
-			t.Errorf("chunk %d heading_path %q must not be derived from an in-fence comment", i, chunks[i].HeadingPath)
-		}
 	}
 	if !strings.Contains(chunks[1].Content, "# probe-backtick-comment") {
 		t.Errorf("Section A content should keep the in-fence comment, got %q", chunks[1].Content)

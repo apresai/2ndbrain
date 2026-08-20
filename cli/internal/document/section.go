@@ -18,7 +18,7 @@ import "strings"
 // When the path contains " > " separators (the same form ChunkDocument emits),
 // only the LAST component is matched against the heading title; ancestors are
 // not required to line up. The heading-level detection reuses the exact rule
-// ChunkDocument uses (headingLevelOutsideFence), so section boundaries agree
+// ChunkDocument uses (fenceTracker.headingLevel), so section boundaries agree
 // with chunking and `#` lines inside fenced code blocks are never headings.
 //
 // First match wins: when the body has multiple headings with the same title,
@@ -39,7 +39,7 @@ func SectionBounds(body, headingPath string) (start, end int, ok bool) {
 	headingLine := -1
 	headingLvl := 0
 	for i, line := range lines {
-		lvl := headingLevelOutsideFence(line, &fence)
+		lvl := fence.headingLevel(line)
 		if lvl == 0 {
 			continue
 		}
@@ -61,7 +61,7 @@ func SectionBounds(body, headingPath string) (start, end int, ok bool) {
 	// level (a sibling or an ancestor), or at end-of-body.
 	end = len(lines)
 	for i := start; i < len(lines); i++ {
-		lvl := headingLevelOutsideFence(lines[i], &fence)
+		lvl := fence.headingLevel(lines[i])
 		if lvl > 0 && lvl <= headingLvl {
 			end = i
 			break

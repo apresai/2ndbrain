@@ -79,8 +79,8 @@ func ExtractTasks(body string) []Task {
 // i.e. its first non-space run is ``` or ~~~ (an optional info string may
 // follow). Indented fences (inside list items) are recognized.
 func isFenceMarker(line string) bool {
-	trimmed := strings.TrimLeft(line, " \t")
-	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+	delim, _, _ := parseFenceLine(line)
+	return delim != 0
 }
 
 // ToggleTaskLine flips the GFM checkbox marker on a single body line and
