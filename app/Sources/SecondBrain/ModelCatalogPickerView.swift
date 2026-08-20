@@ -310,8 +310,15 @@ struct ModelCatalogPickerView: View {
                 if let advice = guidance?.advice, !advice.isEmpty {
                     Text(advice).font(.callout)
                 }
-                if let label = guidance?.actionLabel, let url = guidance?.actionURL {
-                    Link(label, destination: url).font(.callout)
+                if let label = guidance?.actionLabel, let action = guidance?.action {
+                    switch action {
+                    case .url(let url):
+                        Link(label, destination: url).font(.callout)
+                    case .aiSettings:
+                        OpenSettingsTabButton(label, tab: .ai)
+                            .font(.callout)
+                            .buttonStyle(.link)
+                    }
                 }
                 Text(err)
                     .font(.caption.monospaced())

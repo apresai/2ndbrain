@@ -238,9 +238,7 @@ struct VaultStatusView: View {
             // tab holds the credentials and a Test everything button that
             // actually calls the models — so this is one honest link to it.
             HStack {
-                SettingsLink {
-                    Text("Open AI settings…")
-                }
+                OpenSettingsTabButton("Open AI settings…", tab: .ai)
                 Spacer()
             }
         }

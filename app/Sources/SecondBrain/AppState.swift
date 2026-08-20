@@ -74,9 +74,19 @@ final class AppState {
     // property. They were a migration shim that outlived its migration: four
     // names for one flag meant a button labelled "Test Connection…" and one
     // labelled "AI Setup…" were the same no-op navigation, and reading the
-    // call site told you nothing about what would happen. Both callers now use
-    // SettingsLink, so the aliases are gone.
+    // call site told you nothing about what would happen. Both callers now
+    // route to Settings (OpenSettingsTabButton), so the aliases are gone.
     var showAIHub = false
+
+    /// Which Settings tab the window shows. Selection-bound so a link
+    /// anywhere in the app ("Add your API key…", a bad-credentials fix
+    /// action) can land the user on the exact tab, instead of whatever tab
+    /// macOS last restored.
+    var settingsTab: SettingsTab = .general
+
+    /// Set by the post-key-save "re-validate now?" offer; SimpleModelsView
+    /// observes it and starts a Validate pass (still cost-confirmed there).
+    var pendingValidateRequest = false
 
     private static let lowDiskThreshold: Int64 = 50 * 1024 * 1024
 
@@ -2319,16 +2329,32 @@ final class AppState {
         return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
     }
 
-    func saveBedrockMachineConfig(region: String, token: String?) async throws -> BedrockMachineStatus {
+    /// Builds the `config bedrock --set` argv. Pure and unit-testable.
+    /// `verifyRegions` semantics: nil leaves the stored region list untouched,
+    /// an empty array clears it (`--clear-regions`), a non-empty array
+    /// replaces it (`--regions a,b`).
+    nonisolated static func bedrockSetArgs(region: String, hasToken: Bool, verifyRegions: [String]?) -> [String] {
         var args = ["config", "bedrock", "--set", "--json", "--porcelain"]
         if !region.isEmpty {
             args += ["--region", region]
         }
-        var stdin: Data?
-        if let token, !token.isEmpty {
-            args.append("--token-stdin")
-            stdin = Data(token.utf8)
+        if let verifyRegions {
+            if verifyRegions.isEmpty {
+                args.append("--clear-regions")
+            } else {
+                args += ["--regions", verifyRegions.joined(separator: ",")]
+            }
         }
+        if hasToken {
+            args.append("--token-stdin")
+        }
+        return args
+    }
+
+    func saveBedrockMachineConfig(region: String, token: String?, verifyRegions: [String]? = nil) async throws -> BedrockMachineStatus {
+        let hasToken = !(token ?? "").isEmpty
+        let args = Self.bedrockSetArgs(region: region, hasToken: hasToken, verifyRegions: verifyRegions)
+        let stdin: Data? = hasToken ? Data(token!.utf8) : nil
         let data = try await runCLIGlobal(args, stdin: stdin)
         return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
     }
@@ -3289,6 +3315,18 @@ struct BedrockMachineStatus: Codable, Equatable {
     /// the user can recognize without the app ever holding the secret.
     let tokenSuffix: String
     let tokenSource: String
+    /// Additional included regions for model verification/discovery. Empty on
+    /// older CLIs or when unconfigured (single-region behavior).
+    let regions: [String]
+    /// RFC3339 timestamp of the last STORED-token change; "" on older CLIs.
+    /// Compared against model_access.last_verified_at to flag verdicts that
+    /// predate the current key.
+    let tokenUpdatedAt: String
+    /// True when AWS_BEARER_TOKEN_BEDROCK in the CLI's environment overrides
+    /// a DIFFERENT saved key (the terminal/app split-brain).
+    let envOverridesStored: Bool
+    /// Suffix of the STORED key when it diverges from the env token.
+    let storedTokenSuffix: String
     let error: String?
 
     enum CodingKeys: String, CodingKey {
@@ -3297,6 +3335,10 @@ struct BedrockMachineStatus: Codable, Equatable {
         case tokenSet = "token_set"
         case tokenSuffix = "token_suffix"
         case tokenSource = "token_source"
+        case regions
+        case tokenUpdatedAt = "token_updated_at"
+        case envOverridesStored = "env_overrides_stored"
+        case storedTokenSuffix = "stored_token_suffix"
         case error
     }
 
@@ -3307,6 +3349,10 @@ struct BedrockMachineStatus: Codable, Equatable {
         tokenSet = try c.decode(Bool.self, forKey: .tokenSet)
         tokenSuffix = try c.decodeIfPresent(String.self, forKey: .tokenSuffix) ?? ""
         tokenSource = try c.decode(String.self, forKey: .tokenSource)
+        regions = try c.decodeIfPresent([String].self, forKey: .regions) ?? []
+        tokenUpdatedAt = try c.decodeIfPresent(String.self, forKey: .tokenUpdatedAt) ?? ""
+        envOverridesStored = try c.decodeIfPresent(Bool.self, forKey: .envOverridesStored) ?? false
+        storedTokenSuffix = try c.decodeIfPresent(String.self, forKey: .storedTokenSuffix) ?? ""
         error = try c.decodeIfPresent(String.self, forKey: .error)
     }
 
