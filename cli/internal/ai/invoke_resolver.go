@@ -30,6 +30,21 @@ func ResolveModelRegion(provider, modelID, vaultRoot string) string {
 	})
 }
 
+// EffectiveBedrockRegion returns the region a Bedrock client for modelID
+// should call: an in-memory RegionOverride wins (multi-region verify sets it
+// per attempt), then a catalog Region pin on the model (the rerankRegion
+// pattern generalized — a model verified in a non-primary region routes
+// there), then the configured region via ResolveBedrockConfig.
+func EffectiveBedrockRegion(cfg BedrockConfig, modelID, vaultRoot string) string {
+	if cfg.RegionOverride != "" {
+		return cfg.RegionOverride
+	}
+	if pinned := ResolveModelRegion("bedrock", modelID, vaultRoot); pinned != "" {
+		return pinned
+	}
+	return ResolveBedrockConfig(cfg).Region
+}
+
 // ResolveModelEndpoint returns the per-model endpoint URL override for
 // (provider, modelID), resolved through the same user-catalog-over-builtin
 // chain as ResolveInvokeStrategy. Returns "" when no catalog entry pins an

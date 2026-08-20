@@ -282,6 +282,9 @@ func RemediationFor(code TestErrorCode, provider, strategy string) string {
 	case TestErrIncompatible:
 		return "2nb doesn't support this model's invoke path, so it was not called. Pick a compatible model from `2nb models list`."
 	case TestErrInvalidRequest:
+		if provider == "bedrock" {
+			return "The provider rejected the request as invalid. Bedrock also returns this when the model isn't served from the probed region or must be called via a region-prefixed inference-profile ID (us., eu., global.) — check `2nb config bedrock` (region and included regions) and ai.bedrock.region. Otherwise the model may need a different invoke strategy; see the notes in `2nb models list`."
+		}
 		return "The provider rejected the request as invalid. The model may need a different invoke strategy; see the notes in `2nb models list`."
 	}
 	return ""

@@ -196,6 +196,12 @@ type BedrockConfig struct {
 	// Disabled silences the provider in the catalog and GUI selection
 	// without removing credentials. Absent == enabled.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// RegionOverride forces the invoke region for this one in-memory config
+	// value, above the machine file's region and any catalog Region pin. It
+	// exists so a caller (multi-region verify, a vault-scoped pin) can vary
+	// the region per call: ResolveBedrockConfig otherwise overlays the
+	// bedrock.json region on whatever the caller set. Never serialized.
+	RegionOverride string `yaml:"-" json:"-"`
 }
 
 // OpenRouterConfig configures the OpenRouter provider.

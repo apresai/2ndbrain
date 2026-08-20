@@ -495,6 +495,68 @@ func TestContract_ModelsVerifyAnthropicLine_CredGated(t *testing.T) {
 	t.Logf("anthropic line summary: %v", report.Summary)
 }
 
+// TestContract_ModelsVerifyMultiRegion_CredGated is the end-to-end
+// multi-region contract: with a second included region configured, verify's
+// start event names the region set, each result carries the region it was
+// probed in, and a primary-region pass persists NO region pin (self-heal
+// semantics). Skips without AWS credentials; costs one probe.
+func TestContract_ModelsVerifyMultiRegion_CredGated(t *testing.T) {
+	if !ai.CheckBedrockCredentials(t.Context(), ai.BedrockConfig{Profile: "default", Region: "us-east-1"}) {
+		t.Skip("AWS credentials not configured")
+	}
+	_, root := newContractVault(t)
+	const model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+	if _, err := runCLIArgs(t, root, "config", "bedrock", "--set", "--regions", "us-west-2"); err != nil {
+		t.Fatalf("set regions: %v", err)
+	}
+	got, err := runCLIArgs(t, root,
+		"models", "verify", model,
+		"--yes", "--events", "--porcelain")
+	if err != nil {
+		t.Fatalf("verify: %v (out=%s)", err, truncate(got, 500))
+	}
+
+	var start, result verifyEvent
+	sawResult := false
+	for _, line := range bytes.Split(bytes.TrimSpace(got), []byte("\n")) {
+		var ev verifyEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			t.Fatalf("bad NDJSON line %s: %v", line, err)
+		}
+		switch ev.Event {
+		case "start":
+			start = ev
+		case "result":
+			result = ev
+			sawResult = true
+		}
+	}
+	if len(start.Regions) != 2 || start.Regions[0] != "us-east-1" || start.Regions[1] != "us-west-2" {
+		t.Fatalf("start regions = %v, want [us-east-1 us-west-2]", start.Regions)
+	}
+	if !sawResult || result.Result == nil {
+		t.Fatal("no result event")
+	}
+	if !result.Result.OK {
+		t.Skipf("account cannot invoke %s (%s); region-pin assertions need a pass", model, result.Result.Code)
+	}
+	if result.Result.Region != "us-east-1" {
+		t.Fatalf("result region = %q, want the primary us-east-1", result.Result.Region)
+	}
+
+	// A primary-region pass must persist WITHOUT a region pin.
+	for _, m := range ai.LoadUserCatalog(root) {
+		if m.ID == model && m.Provider == "bedrock" {
+			if m.Region != "" {
+				t.Fatalf("primary pass persisted a region pin: %q", m.Region)
+			}
+			return
+		}
+	}
+	t.Fatal("verified model not found in the user catalog")
+}
+
 // TestContract_AIStatusActiveProviderDisabled asserts the loud-degradation
 // flag: hand-setting ai.<active>.disabled=true must surface as
 // active_provider_disabled in ai status --json.

@@ -216,7 +216,10 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 		mu.Unlock()
 	}
 
-	// Bedrock vendor discovery.
+	// Bedrock vendor discovery. ListFoundationModels is a regional API, so
+	// with additional included regions configured the listing is the union
+	// across them (sequential — extra regions are 24h-cached after the first
+	// walk), deduped by ID with the primary region's row winning.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -224,9 +227,30 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 		if useCache {
 			list = ListBedrockVendorModelsCached
 		}
-		models, err := list(ctx, cfg.Bedrock)
-		if err != nil {
-			addWarning("bedrock", err)
+		var models []ModelInfo
+		seen := map[string]bool{}
+		var firstErr error
+		succeeded := false
+		for _, region := range ResolveBedrockRegions(cfg.Bedrock) {
+			regionCfg := cfg.Bedrock
+			regionCfg.RegionOverride = region
+			regionModels, err := list(ctx, regionCfg)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			succeeded = true
+			for _, m := range regionModels {
+				if !seen[m.ID] {
+					seen[m.ID] = true
+					models = append(models, m)
+				}
+			}
+		}
+		if !succeeded {
+			addWarning("bedrock", firstErr)
 			return
 		}
 		mu.Lock()

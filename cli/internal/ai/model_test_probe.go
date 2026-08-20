@@ -26,6 +26,10 @@ type TestProbeResult struct {
 	// notably suppress the Bedrock "Model access" console link for mantle
 	// models, which that page doesn't govern. Empty when undeclared.
 	Strategy string `json:"invoke_strategy,omitempty"`
+	// Region is the AWS region this probe actually called (additive; Bedrock
+	// only). Bedrock model entitlement is per-region, so a verdict without
+	// its region is ambiguous the moment more than one region is in play.
+	Region string `json:"region,omitempty"`
 }
 
 // TestProbeModel creates a temporary provider for the given model and runs
@@ -51,6 +55,9 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 		ModelID:  modelID,
 		Provider: provider,
 		Type:     modelType,
+	}
+	if provider == "bedrock" {
+		result.Region = EffectiveBedrockRegion(cfg.Bedrock, modelID, vaultRoot)
 	}
 
 	start := time.Now()
@@ -94,6 +101,13 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) error {
 	switch provider {
 	case "bedrock":
+		// Carry a vault-scoped catalog Region pin into the embedder (which
+		// resolves with vaultRoot "" and would only see builtin/global pins).
+		if cfg.Bedrock.RegionOverride == "" {
+			if pinned := ResolveModelRegion("bedrock", modelID, vaultRoot); pinned != "" {
+				cfg.Bedrock.RegionOverride = pinned
+			}
+		}
 		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding", vaultRoot); err != nil {
 			return err
 		}
@@ -159,6 +173,13 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 
 	switch provider {
 	case "bedrock":
+		// Same vault-pin carry as probeEmbedding, so the preflight and the
+		// invoke agree on the region NewBedrockGeneration will route to.
+		if cfg.Bedrock.RegionOverride == "" {
+			if pinned := ResolveModelRegion("bedrock", modelID, vaultRoot); pinned != "" {
+				cfg.Bedrock.RegionOverride = pinned
+			}
+		}
 		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation", vaultRoot); err != nil {
 			return "", err
 		}
@@ -187,6 +208,66 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 	default:
 		return "", fmt.Errorf("unknown provider %q", provider)
 	}
+}
+
+// regionRetryable reports whether a failure code is worth retrying in
+// another region. Bedrock model entitlement, listings, and inference-profile
+// coverage are all per-region, so not_found / invalid_request / access_denied
+// can flip elsewhere. Credential, throttle, and transport failures cannot —
+// retrying them only burns 30s timeouts.
+func regionRetryable(code TestErrorCode) bool {
+	switch code {
+	case TestErrNotFound, TestErrInvalidRequest, TestErrAccessDenied:
+		return true
+	}
+	return false
+}
+
+// TestProbeModelInRegions probes modelID across the included region set,
+// stopping at the first pass. Region 0 (the primary) always goes first, so a
+// stale non-primary pin self-heals the moment the account gains primary
+// access. Only classic-plane Bedrock models fan out: non-bedrock providers
+// have no AWS region, mantle models are endpoint-pinned per model, and a
+// single-region set keeps today's exact behavior (no override at all, so a
+// catalog Region pin still routes the probe).
+//
+// On exhaustion the PRIMARY region's failure is returned — keeping the
+// reported classification stable for existing consumers — with the other
+// attempted regions noted in Detail.
+func TestProbeModelInRegions(ctx context.Context, cfg AIConfig, modelID, provider, modelType, vaultRoot string, regions []string) (*TestProbeResult, error) {
+	if provider == "" {
+		provider = InferProvider(modelID)
+	}
+	if provider != "bedrock" || len(regions) <= 1 ||
+		ResolveInvokeStrategy(provider, modelID, vaultRoot) == StrategyBedrockMantleResponses {
+		return TestProbeModel(ctx, cfg, modelID, provider, modelType, vaultRoot)
+	}
+
+	var primary *TestProbeResult
+	var alsoFailed []string
+	for i, region := range regions {
+		attempt := cfg
+		attempt.Bedrock.RegionOverride = region
+		result, err := TestProbeModel(ctx, attempt, modelID, provider, modelType, vaultRoot)
+		if err != nil {
+			return result, err
+		}
+		if result.OK {
+			return result, nil
+		}
+		if i == 0 {
+			primary = result
+		} else {
+			alsoFailed = append(alsoFailed, region)
+		}
+		if !regionRetryable(result.Code) {
+			break
+		}
+	}
+	if len(alsoFailed) > 0 {
+		primary.Detail += fmt.Sprintf(" (also failed in %s)", strings.Join(alsoFailed, ", "))
+	}
+	return primary, nil
 }
 
 // InferProvider guesses the provider from model ID patterns.

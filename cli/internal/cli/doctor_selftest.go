@@ -104,6 +104,22 @@ func selfTestModels(ctx context.Context, cfg ai.AIConfig, vaultRoot string) ([]D
 		modelCheck("search model", cfg.EmbeddingModel, embed),
 		modelCheck("answer model", cfg.GenerationModel, gen),
 	}
+	if cfg.Provider == "bedrock" {
+		if div := ai.BedrockTokenDivergence(); div.Diverges {
+			// Zero-network: pure env + file/Keychain comparison. This is where
+			// "the app works but my terminal still 403s" gets diagnosed — the
+			// env token outranks the saved key for every process that inherits
+			// this shell's environment.
+			checks = append(checks, DoctorCheck{
+				Name: "bedrock key source",
+				OK:   true,
+				Warn: true,
+				Detail: fmt.Sprintf("AWS_BEARER_TOKEN_BEDROCK (ends %s) overrides the saved key (ends %s) in this environment",
+					suffixOrUnknown(div.EnvSuffix), suffixOrUnknown(div.StoredSuffix)),
+				Fix: "unset AWS_BEARER_TOKEN_BEDROCK (or update its source, e.g. your shell profile) so this shell and its MCP servers use the saved key",
+			})
+		}
+	}
 	return checks, creds
 }
 

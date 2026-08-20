@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const bedrockFileName = "bedrock.json"
@@ -17,6 +18,15 @@ const bedrockFileName = "bedrock.json"
 type BedrockFile struct {
 	Region string `json:"region,omitempty"`
 	Token  string `json:"token,omitempty"`
+	// Regions are additional AWS regions to include beyond the primary when
+	// verifying model access and discovering vendor listings (Bedrock model
+	// entitlement and ListFoundationModels are both per-region). The primary
+	// region is always included and probed first. Empty means single-region.
+	Regions []string `json:"regions,omitempty"`
+	// TokenUpdatedAt records (RFC3339 UTC) when the stored token last
+	// changed, so a UI can flag model-access verdicts that predate the
+	// current key. Stamped only on token writes, never on region edits.
+	TokenUpdatedAt string `json:"token_updated_at,omitempty"`
 }
 
 // BedrockTokenSource names where ResolveBedrockToken found a bearer token.
@@ -71,7 +81,19 @@ func ReadBedrockFile() (BedrockFile, error) {
 	}
 	out.Region = strings.TrimSpace(out.Region)
 	out.Token = strings.TrimSpace(out.Token)
+	out.Regions = normalizeRegionList(out.Regions)
 	return out, nil
+}
+
+// normalizeRegionList trims entries and drops empties, preserving order.
+func normalizeRegionList(regions []string) []string {
+	var out []string
+	for _, r := range regions {
+		if t := strings.TrimSpace(r); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // WriteBedrockFile replaces the machine-local credentials file. The parent
@@ -151,8 +173,59 @@ func UpdateBedrockFile(region string, token *string, clearRegion bool) error {
 	}
 	if token != nil {
 		cur.Token = strings.TrimSpace(*token)
+		// Any token change (set or clear) is a key change: stamp it so
+		// model-access verdicts recorded before this moment can be flagged
+		// stale. Region-only edits deliberately leave the stamp alone.
+		cur.TokenUpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 	return WriteBedrockFile(cur)
+}
+
+// UpdateBedrockRegions replaces the stored additional-regions list (or clears
+// it). Each entry must be a bare AWS region label; a hostile or mistyped
+// value is refused before anything is written.
+func UpdateBedrockRegions(regions []string, clear bool) error {
+	cur, err := ReadBedrockFile()
+	if err != nil {
+		if BedrockFilePath() == "" {
+			return err
+		}
+		if !isNotPrivateErr(err) && !strings.Contains(err.Error(), "parse ") {
+			return err
+		}
+		cur = BedrockFile{}
+	}
+	if clear {
+		cur.Regions = nil
+		return WriteBedrockFile(cur)
+	}
+	normalized := normalizeRegionList(regions)
+	for _, r := range normalized {
+		if !isBareRegionLabel(r) {
+			return fmt.Errorf("invalid region %q: expected a bare AWS region label like us-west-2", r)
+		}
+	}
+	cur.Regions = normalized
+	return WriteBedrockFile(cur)
+}
+
+// ResolveBedrockRegions returns the full included region set for multi-region
+// verification and discovery: the primary region first (today's single-region
+// resolution, unchanged), then the machine file's additional regions, deduped
+// in order. With no additional regions configured this is exactly [primary].
+func ResolveBedrockRegions(vault BedrockConfig) []string {
+	primary := ResolveBedrockConfig(vault).Region
+	out := []string{primary}
+	seen := map[string]bool{primary: true}
+	if f, err := ReadBedrockFile(); err == nil {
+		for _, r := range f.Regions {
+			if !seen[r] {
+				seen[r] = true
+				out = append(out, r)
+			}
+		}
+	}
+	return out
 }
 
 // ClearBedrockStoredToken removes the file token and, on macOS, the Keychain
@@ -170,9 +243,16 @@ func ClearBedrockStoredToken() error {
 }
 
 // ResolveBedrockConfig overlays the machine-file region onto vault config
-// when the file names one. An empty result falls back to us-east-1.
+// when the file names one. An empty result falls back to us-east-1. An
+// in-memory RegionOverride outranks the file: it is how per-call region
+// variation (multi-region verify, catalog pins) survives this overlay, which
+// would otherwise clobber whatever region the caller set.
 func ResolveBedrockConfig(vault BedrockConfig) BedrockConfig {
 	out := vault
+	if out.RegionOverride != "" {
+		out.Region = out.RegionOverride
+		return out
+	}
 	if f, err := ReadBedrockFile(); err == nil && f.Region != "" {
 		out.Region = f.Region
 	}
@@ -198,6 +278,62 @@ func ResolveBedrockToken() (string, BedrockTokenSource) {
 		}
 	}
 	return "", BedrockTokenNone
+}
+
+// TokenSuffix returns the last 4 characters of a token, or "" when the token
+// is too short to reveal a suffix without leaking a meaningful fraction of
+// it. Standard BYOK practice: enough to identify a key, useless to an
+// attacker. Single source of the rule for every redacted-token surface.
+func TokenSuffix(token string) string {
+	const revealed = 4
+	r := []rune(token)
+	if len(r) < revealed*3 {
+		return ""
+	}
+	return string(r[len(r)-revealed:])
+}
+
+// TokenDivergence reports the relationship between the environment bearer
+// token and the stored key (file, then Keychain). Suffixes only — never the
+// tokens themselves.
+type TokenDivergence struct {
+	EnvSet       bool
+	StoredSet    bool
+	Diverges     bool // env token set AND stored token set AND they differ
+	EnvSuffix    string
+	StoredSuffix string
+}
+
+// BedrockTokenDivergence detects the split-brain state where
+// AWS_BEARER_TOKEN_BEDROCK in this process's environment overrides a
+// DIFFERENT saved key: the app (no shell env) uses the new stored key while
+// every terminal/MCP invocation silently keeps using the old env token.
+func BedrockTokenDivergence() TokenDivergence {
+	var kc func(string) (string, error)
+	if keychainLookupEnabled() {
+		kc = keychainGet
+	}
+	return bedrockTokenDivergence(os.Getenv, readBedrockFileToken, kc)
+}
+
+func bedrockTokenDivergence(getenv func(string) string, fileToken func() string, keychain func(string) (string, error)) TokenDivergence {
+	env := strings.TrimSpace(getenv(bedrockBearerTokenEnv))
+	stored := ""
+	if fileToken != nil {
+		stored = strings.TrimSpace(fileToken())
+	}
+	if stored == "" && keychain != nil {
+		if t, err := keychain("bedrock"); err == nil {
+			stored = strings.TrimSpace(t)
+		}
+	}
+	return TokenDivergence{
+		EnvSet:       env != "",
+		StoredSet:    stored != "",
+		Diverges:     env != "" && stored != "" && env != stored,
+		EnvSuffix:    TokenSuffix(env),
+		StoredSuffix: TokenSuffix(stored),
+	}
 }
 
 // bedrockSkipKeychainEnv lets tests neutralize the login Keychain without

@@ -106,7 +106,8 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	configGetEffective = false
 	bedrockSet, bedrockClearToken, bedrockTokenStdin = false, false, false
 	bedrockRegion, bedrockToken = "", ""
-	for _, name := range []string{"set", "clear-token", "region", "token", "token-stdin"} {
+	bedrockRegions, bedrockClearRegions = "", false
+	for _, name := range []string{"set", "clear-token", "region", "token", "token-stdin", "regions", "clear-regions"} {
 		if f := configBedrockCmd.Flags().Lookup(name); f != nil {
 			_ = configBedrockCmd.Flags().Set(name, f.DefValue)
 			f.Changed = false
@@ -624,8 +625,26 @@ func TestContract_ModelsPolicyShowJSON(t *testing.T) {
 	if err := json.Unmarshal(got, &parsed); err != nil {
 		t.Fatalf("policy show JSON parse: %v (body=%s)", err, truncate(got, 500))
 	}
-	if len(parsed) != 1 || parsed[0].Provider != "bedrock" || parsed[0].Scope != "vault" {
-		t.Fatalf("expected one vault-scope bedrock policy, got %+v", parsed)
+	// One CONFIGURED bedrock row; other providers appear only as synthetic
+	// vocabulary gap rows (empty mode/vendors), never as configured policies.
+	var configured []string
+	foundBedrock := false
+	for _, p := range parsed {
+		if p.Mode != "" || len(p.Vendors) > 0 {
+			configured = append(configured, p.Provider)
+		}
+		if p.Provider == "bedrock" {
+			foundBedrock = true
+			if p.Mode != "enable_only" || p.Scope != "vault" || len(p.Vendors) != 1 {
+				t.Fatalf("bedrock row should be the configured vault policy, got %+v", p)
+			}
+		}
+	}
+	if !foundBedrock {
+		t.Fatalf("no bedrock row: %+v", parsed)
+	}
+	if len(configured) != 1 || configured[0] != "bedrock" {
+		t.Fatalf("expected bedrock as the only configured policy, got %v in %+v", configured, parsed)
 	}
 }
 

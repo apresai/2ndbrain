@@ -86,6 +86,9 @@ type verifyEvent struct {
 	Result       *ai.TestProbeResult `json:"result,omitempty"`
 	Summary      map[string]int      `json:"summary,omitempty"`
 	SavedScope   string              `json:"saved_scope,omitempty"`
+	// Regions is the included region set on the "start" event (additive;
+	// primary first). Absent on single-region runs from older configs.
+	Regions []string `json:"regions,omitempty"`
 }
 
 func emitVerifyEvent(enc *json.Encoder, e verifyEvent) {
@@ -153,11 +156,16 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("estimated probe cost $%.4f exceeds --cost-cap $%.4f (%d models); narrow the set or raise the cap",
 			totalUSD, verifyCostCap, len(candidates))
 	}
+	regions := ai.ResolveBedrockRegions(v.Config.AI.Bedrock)
 	humanMode := !jsonMode && !verifyEvents
 	if humanMode {
 		fmt.Printf("Verifying %d model(s) against your account — estimated cost $%.4f\n", len(candidates), totalUSD)
 		if unknownPricing > 0 {
 			fmt.Printf("  note: %d model(s) have unknown pricing and are excluded from the estimate (probes are ~50 tokens each)\n", unknownPricing)
+		}
+		if len(regions) > 1 {
+			fmt.Printf("  probing across regions: %s (a refused probe retries in the next region; only a passing probe bills)\n",
+				strings.Join(regions, ", "))
 		}
 	}
 	if !verifyYes && humanMode {
@@ -180,8 +188,12 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 	// records this account's real access state.
 	results := make([]*ai.TestProbeResult, 0, len(candidates))
 	total := len(candidates)
-	emitVerifyEvent(enc, verifyEvent{Event: "start", Total: total, EstimatedUSD: totalUSD})
-	probeModelsConcurrently(ctx, v.Config.AI, v.Root, candidates, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
+	startEvent := verifyEvent{Event: "start", Total: total, EstimatedUSD: totalUSD}
+	if len(regions) > 1 {
+		startEvent.Regions = regions
+	}
+	emitVerifyEvent(enc, startEvent)
+	probeModelsConcurrentlyRegions(ctx, v.Config.AI, v.Root, candidates, regions, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
 		if err != nil {
 			// Hard errors (cannot infer provider etc.) become synthetic failed
 			// results so the report stays complete.
@@ -202,7 +214,11 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		emitVerifyEvent(enc, verifyEvent{Event: "result", N: n, Total: total, Result: result})
 		if humanMode {
 			if result.OK {
-				fmt.Printf("[%d/%d] PASS  %s  (%s)\n", n, total, result.ModelID, result.Latency)
+				regionNote := ""
+				if result.Region != "" && result.Region != regions[0] {
+					regionNote = fmt.Sprintf("  [%s]", result.Region)
+				}
+				fmt.Printf("[%d/%d] PASS  %s  (%s)%s\n", n, total, result.ModelID, result.Latency, regionNote)
 			} else {
 				code := string(result.Code)
 				if code == "" {
