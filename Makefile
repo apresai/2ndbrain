@@ -1,4 +1,4 @@
-.PHONY: test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
+.PHONY: test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-app-status release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-release-script test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -105,11 +105,20 @@ package-app: build-app-release
 # release-app additionally uploads it to the existing release v<VERSION> and
 # updates the Homebrew cask. Run release-app AFTER `make release` (CI creates the
 # release + ships CLI/plugin).
+#
+# The pipeline is CHECKPOINTED (build/release-state-<VERSION>.json): a re-run
+# after any death resumes where it left off — no rebuild, no re-upload of an
+# in-flight notarization. RELEASE_NOWAIT=1 submits and exits instead of
+# blocking on Apple; release-app-status reports every phase (and asks Apple
+# about pending submissions) without changing anything.
 notarize-app:
 	@bash scripts/release-app-local.sh
 
 release-app:
 	@bash scripts/release-app-local.sh --publish
+
+release-app-status:
+	@bash scripts/release-app-local.sh --status
 
 # The one-command unified release: bump -> tag -> wait for CI (CLI formula +
 # plugin assets) -> sign/notarize/publish the app + cask -> verify everything
@@ -188,7 +197,10 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-vault-switch.sh
 	SKIP_BUILD=1 ./tests/gui-test-polish.sh
 
-test-all: test test-battery test-usage test-swift test-gui
+test-release-script:
+	@bash tests/release-script-test.sh
+
+test-all: test test-battery test-usage test-swift test-gui test-release-script
 
 bump-build:
 	@echo "$(MAJOR).$(MINOR).$(shell echo $$(($(BUILD)+1)))" > VERSION

@@ -10,6 +10,15 @@
 # out of the image; the DMG's ticket lets the downloaded .dmg pass Gatekeeper
 # offline. That means two notary round-trips, so expect two waits on Apple.
 #
+# CHECKPOINTED AND RESUMABLE. Every phase proves its own completion from the
+# artifacts (a stapled bundle validates; a stapled DMG validates), and the two
+# Apple waits persist their submission id — keyed to the artifact's sha256 — in
+# build/release-state-<VERSION>.json. So a run that dies at any point (laptop
+# sleep, closed shell, a notarytool crash) resumes in seconds: nothing already
+# notarized is rebuilt, and an in-flight submission is re-polled, never
+# re-uploaded. A changed artifact hash invalidates its pending submission, so a
+# rebuilt bundle can never adopt a stale ticket.
+#
 # Signing config (identity + notary key) is read from scripts/sign.env, which is
 # gitignored. Code signing is asymmetric: the shipped artifacts embed only your
 # PUBLIC certificate; the private key never leaves your keychain / cert store and
@@ -20,6 +29,14 @@
 #   scripts/release-app-local.sh --publish  also upload the DMG to the existing
 #                                            GitHub release v<VERSION> and update
 #                                            the Homebrew cask (version + sha256)
+#   scripts/release-app-local.sh --status   report each phase's state (and ask
+#                                            Apple about pending submissions),
+#                                            change nothing, exit 0
+#
+#   RELEASE_NOWAIT=1  do not block on Apple: submit, record the id, print how to
+#                     resume, and exit 0. Re-running continues exactly where the
+#                     previous invocation left off. The default (blocking) run
+#                     polls to completion as before.
 #
 # The --publish step requires the release v<VERSION> to already exist — it is
 # created by CI (GoReleaser) on tag push, which also ships the CLI + plugin. Run
@@ -68,6 +85,92 @@ BUNDLE="app/.build/arm64-apple-macosx/release/SecondBrain.app"
 # unaffected by the local path.
 ARTIFACT_DIR="build"
 DMG="${ARTIFACT_DIR}/SecondBrain-${VERSION}-arm64.dmg"
+STATE="${ARTIFACT_DIR}/release-state-${VERSION}.json"
+NOWAIT="${RELEASE_NOWAIT:-}"
+
+# ── Checkpoint state ─────────────────────────────────────────────────────────
+# The state file carries ONLY what the artifacts cannot prove for themselves:
+# a pending notarization submission id, keyed to the sha256 of the exact
+# artifact that was submitted. Everything else is derived live (stapler
+# validate, Info.plist version, file existence), so state can never disagree
+# with reality — at worst a lost state file costs one redundant submission.
+
+state_get() { # state_get <jq-path>  → value or empty
+  [ -f "$STATE" ] || { echo ""; return 0; }
+  jq -r "$1 // empty" "$STATE" 2>/dev/null || true
+}
+
+state_set() { # state_set <key> <value>
+  mkdir -p "$ARTIFACT_DIR"
+  local cur="{}"
+  [ -f "$STATE" ] && cur="$(cat "$STATE" 2>/dev/null || echo '{}')"
+  printf '%s' "$cur" | jq --arg k "$1" --arg v "$2" '.[$k] = $v' > "${STATE}.tmp" \
+    && mv "${STATE}.tmp" "$STATE"
+}
+
+artifact_sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+bundle_sha() {
+  # Hash the two Mach-Os that define this build. Faster and more stable than
+  # hashing the zip (ditto zips are not byte-reproducible across runs).
+  cat "$BUNDLE/Contents/MacOS/SecondBrain" "$BUNDLE/Contents/Resources/2nb" \
+    | shasum -a 256 | awk '{print $1}'
+}
+
+bundle_version() {
+  defaults read "$ROOT/$BUNDLE/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo ""
+}
+
+stapled() { # stapled <artifact> → 0 when already notarized+stapled
+  xcrun stapler validate "$1" >/dev/null 2>&1
+}
+
+notary_status() { # notary_status <submission-id> → status string or empty
+  xcrun notarytool info "$1" \
+    --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+    --output-format json 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true
+}
+
+# ── --status: report and exit, changing nothing ──────────────────────────────
+if [ "${1:-}" = "--status" ]; then
+  echo "release-app status (v${VERSION}):"
+  if [ -d "$BUNDLE" ] && [ "$(bundle_version)" = "$VERSION" ]; then
+    if stapled "$BUNDLE"; then
+      echo "  app    : built, signed, notarized, stapled"
+    else
+      sub="$(state_get '.app_sub_id')"
+      if [ -n "$sub" ] && [ "$(state_get '.app_sha')" = "$(bundle_sha)" ]; then
+        st="$(notary_status "$sub")"
+        echo "  app    : built + signed; notarization ${sub} → ${st:-unknown}"
+      else
+        echo "  app    : built + signed; not yet submitted"
+      fi
+    fi
+  else
+    echo "  app    : not built for this version"
+  fi
+  if [ -f "$DMG" ]; then
+    if stapled "$DMG"; then
+      echo "  dmg    : built, signed, notarized, stapled ($(basename "$DMG"))"
+    else
+      sub="$(state_get '.dmg_sub_id')"
+      if [ -n "$sub" ] && [ "$(state_get '.dmg_sha')" = "$(artifact_sha "$DMG")" ]; then
+        st="$(notary_status "$sub")"
+        echo "  dmg    : built + signed; notarization ${sub} → ${st:-unknown}"
+      else
+        echo "  dmg    : built + signed; not yet submitted"
+      fi
+    fi
+  else
+    echo "  dmg    : not built"
+  fi
+  if gh release view "v${VERSION}" --json assets --jq '.assets[].name' 2>/dev/null | grep -q "$(basename "$DMG")"; then
+    echo "  release: v${VERSION} carries $(basename "$DMG")"
+  else
+    echo "  release: v${VERSION} does not carry the DMG yet"
+  fi
+  exit 0
+fi
 
 # When publishing, verify the release exists up front — BEFORE the slow
 # build+sign+notarize — so running too early (CI/GoReleaser hasn't created
@@ -79,118 +182,76 @@ if [ "${1:-}" = "--publish" ] && ! gh release view "v${VERSION}" >/dev/null 2>&1
   exit 1
 fi
 
-echo "==> Building release app (v${VERSION})"
-make build-app-release >/dev/null
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
 
-# Fail fast if the bundled CLI drifted from the app version. The point of
-# bundling 2nb (Makefile build-app-release) is that the app and CLI ship at a
-# single version; a mismatch here means the build copied a stale cli/bin/2nb.
-BUNDLED_CLI="$BUNDLE/Contents/Resources/2nb"
-if [ ! -x "$BUNDLED_CLI" ]; then
-  echo "error: bundled CLI missing at $BUNDLED_CLI (build-app-release should copy cli/bin/2nb)." >&2
-  exit 1
-fi
-# `|| true` so a binary that runs but prints no parseable version (e.g. a dyld
-# failure to the swallowed stderr) leaves BUNDLED_CLI_VERSION empty and falls
-# into the explicit mismatch branch below with its actionable message, rather
-# than tripping `set -euo pipefail` on grep's no-match exit before we get there.
-BUNDLED_CLI_VERSION="$("$BUNDLED_CLI" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
-if [ "$BUNDLED_CLI_VERSION" != "$VERSION" ]; then
-  echo "error: bundled CLI version ($BUNDLED_CLI_VERSION) != app version ($VERSION)." >&2
-  echo "       Run 'make build-cli' so cli/bin/2nb is current, then re-run." >&2
-  exit 1
-fi
-echo "==> Bundled CLI verified at v${BUNDLED_CLI_VERSION}"
-
-echo "==> Signing with Developer ID + hardened runtime"
-# Sign nested code inside-out: the bundled 2nb binary FIRST, then the outer
-# bundle. The outer codesign is intentionally not --deep, so it would leave the
-# nested executable unsigned — and an unsigned nested binary fails notarization.
-codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.cli --sign "$SIGN_IDENTITY" "$BUNDLED_CLI"
-codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BUNDLE"
-codesign --verify --strict --verbose=2 "$BUNDLE"
-
-echo "==> Verifying load-command paths are portable (no dangling rpaths/dylibs)"
-# A dangling LC_RPATH (e.g. the Xcode toolchain path `swift build` bakes in) or a
-# non-system LC_LOAD_DYLIB resolves on THIS machine but not on a clean Mac, and is
-# the documented SPM Gatekeeper footgun ("Apple could not verify ... is free of
-# malware"). codesign --verify and stapler validate do NOT catch it. Gate here,
-# before notarizing, so a bad binary fails fast instead of burning a notary wait.
-check_portable_macho() {
-  local b="$1" bad_rpath bad_dylib
-  bad_rpath="$(otool -l "$b" | awk '/LC_RPATH/{getline;getline;print $2}' \
-    | grep -vE '^(@executable_path|@loader_path|/usr/lib/swift)' || true)"
-  bad_dylib="$(otool -L "$b" | tail -n +2 | awk '{print $1}' \
-    | grep -E '^/' | grep -vE '^(/usr/lib/|/System/)' || true)"
-  if [ -n "$bad_rpath" ] || [ -n "$bad_dylib" ]; then
-    echo "error: non-portable load commands in $b (would dangle on a clean Mac):" >&2
-    [ -n "$bad_rpath" ] && { echo "  dangling LC_RPATH:" >&2; echo "$bad_rpath" | sed 's/^/    /' >&2; }
-    [ -n "$bad_dylib" ] && { echo "  external LC_LOAD_DYLIB:" >&2; echo "$bad_dylib" | sed 's/^/    /' >&2; }
-    exit 1
-  fi
-}
-check_portable_macho "$BUNDLE/Contents/MacOS/SecondBrain"
-check_portable_macho "$BUNDLED_CLI"
-# The bundled 2nb must ship with the hardened runtime (notarization requires it).
-# Capture codesign's output first, then match a here-string: piping it into
-# `grep -q` lets grep close the pipe on its first match, which SIGPIPEs codesign,
-# and under `set -o pipefail` that surfaces as a false failure even though the
-# runtime flag IS present.
-cli_codesign="$(codesign -dvv "$BUNDLED_CLI" 2>&1 || true)"
-if ! grep -qE 'flags=[^ ]*runtime' <<<"$cli_codesign"; then
-  echo "error: bundled 2nb is not signed with the hardened runtime" >&2
-  grep -i 'flags=' <<<"$cli_codesign" >&2 || true
-  exit 1
-fi
-
-# notarize <artifact>: submit to Apple's notary service and poll to completion,
-# surviving the intermittent notarytool SIGBUS. `xcrun notarytool submit --wait`
-# reliably CRASHES (Bus error 10) mid-poll on the Xcode 26.x toolchain — a bug in
-# Apple's tool (SIGBUS in String(format:) on a worker thread), NOT in our build:
-# signing + upload succeed, only the wait crashes. So we submit WITHOUT --wait,
-# capture the submission id, and poll `notarytool info` on that existing
-# submission — a crashed poll returns empty and we simply poll again, with NO
-# re-upload. Fails (returns 1) only if the final status is not Accepted.
+# notarize <artifact> <state-prefix>: ensure <artifact> is notarized, resuming
+# an in-flight submission when the state file holds one for this exact artifact
+# hash. Submits without --wait (the `--wait` poll reliably SIGBUSes on the
+# Xcode 26.x toolchain), records the id + artifact sha in the state file, then
+# polls `notarytool info` — a crashed poll returns empty and we poll again,
+# with NO re-upload. A submit that loses its stdout while the upload landed
+# (observed live on consecutive releases 2026-08-20) is recovered by adopting
+# the newest matching submission from `notarytool history`. Under
+# RELEASE_NOWAIT=1 an In-Progress submission prints how to resume and exits
+# the SCRIPT successfully instead of blocking on Apple.
 notarize() {
-  local artifact="$1"
-  echo "  submitting $(basename "$artifact") to the notary service ..."
-  local submit_json sub_id
-  submit_json="$(xcrun notarytool submit "$artifact" \
-    --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-    --output-format json 2>/dev/null || true)"
-  sub_id="$(printf '%s' "$submit_json" | jq -r '.id // empty' 2>/dev/null || true)"
+  local artifact="${1:?notarize: artifact path required}"
+  local prefix="${2:?notarize: state prefix required}"
+  local sha="${3:?notarize: artifact sha required}"
+  local sub_id
+
+  # Resume: a pending submission for this exact artifact needs no re-upload.
+  sub_id="$(state_get ".${prefix}_sub_id")"
+  if [ -n "$sub_id" ] && [ "$(state_get ".${prefix}_sha")" = "$sha" ]; then
+    echo "  resuming submission $sub_id (recorded for this exact artifact — no re-upload)"
+  else
+    sub_id=""
+  fi
+
   if [ -z "$sub_id" ]; then
-    # notarytool sometimes returns EMPTY output from a submit whose upload
-    # actually landed (observed live twice on 2026-08-20, on consecutive
-    # releases: `notarytool history` showed the submission In Progress moments
-    # after the "failed" submit). Failing here would abort a release whose
-    # notarization is already running, so before giving up, adopt the newest
-    # submission in history that matches this artifact's name and was created
-    # in the last 10 minutes — then fall into the normal poll loop, which
-    # needs only the id.
-    echo "  submit returned no id — checking history for a just-landed submission ..."
-    sleep 10
-    sub_id="$(xcrun notarytool history \
+    echo "  submitting $(basename "$artifact") to the notary service ..."
+    local submit_json
+    # --no-s3-acceleration: Apple's documented mitigation for flaky submits
+    # ("If you experience performance or connectivity issues") — the
+    # accelerated upload path is the prime suspect in the lost-output submits
+    # this script self-heals from.
+    submit_json="$(xcrun notarytool submit "$artifact" --no-s3-acceleration \
       --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-      --output-format json 2>/dev/null \
-      | jq -r --arg name "$(basename "$artifact")" '
-          [.history[]? | select(.name == $name)
-            | select((.createdDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > (now - 600))]
-          | sort_by(.createdDate) | last | .id // empty' 2>/dev/null || true)"
-    if [ -n "$sub_id" ]; then
-      echo "  adopted submission $sub_id from history (the upload landed; only the submit output was lost)"
+      --output-format json 2>/dev/null || true)"
+    sub_id="$(printf '%s' "$submit_json" | jq -r '.id // empty' 2>/dev/null || true)"
+    if [ -z "$sub_id" ]; then
+      # notarytool sometimes returns EMPTY output from a submit whose upload
+      # actually landed (observed live twice on 2026-08-20, on consecutive
+      # releases: `notarytool history` showed the submission In Progress
+      # moments after the "failed" submit). Before giving up, adopt the newest
+      # submission in history that matches this artifact's name and was
+      # created in the last 10 minutes.
+      echo "  submit returned no id — checking history for a just-landed submission ..."
+      sleep 10
+      sub_id="$(xcrun notarytool history \
+        --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+        --output-format json 2>/dev/null \
+        | jq -r --arg name "$(basename "$artifact")" '
+            [.history[]? | select(.name == $name)
+              | select((.createdDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > (now - 600))]
+            | sort_by(.createdDate) | last | .id // empty' 2>/dev/null || true)"
+      if [ -n "$sub_id" ]; then
+        echo "  adopted submission $sub_id from history (the upload landed; only the submit output was lost)"
+      fi
     fi
+    if [ -z "$sub_id" ]; then
+      echo "  ERROR: notarytool submit returned no id and history shows no matching recent submission: ${submit_json}" >&2
+      return 1
+    fi
+    state_set "${prefix}_sub_id" "$sub_id"
+    state_set "${prefix}_sha" "$sha"
   fi
-  if [ -z "$sub_id" ]; then
-    echo "  ERROR: notarytool submit returned no id and history shows no matching recent submission: $submit_json" >&2
-    return 1
-  fi
+
   echo "  submission $sub_id — polling to completion (retries through any notarytool crash, no re-upload) ..."
   local status=""
   for _ in $(seq 1 80); do   # up to ~20 min at 15s
-    status="$(xcrun notarytool info "$sub_id" \
-      --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-      --output-format json 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)"
+    status="$(notary_status "$sub_id")"
     case "$status" in
       Accepted)
         echo "  notarized: $sub_id (Accepted)"
@@ -201,48 +262,154 @@ notarize() {
           --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" 2>/dev/null | head -60 >&2 || true
         return 1 ;;
       *)
-        # "In Progress", or empty from a crashed/failed poll — keep polling.
+        # "In Progress", or empty from a crashed/failed poll.
+        if [ -n "$NOWAIT" ]; then
+          echo ""
+          echo "  RELEASE_NOWAIT: notarization of $(basename "$artifact") is in progress (${sub_id})."
+          echo "  Nothing is blocked on this shell. Re-run \`make release-app\` to continue"
+          echo "  exactly here (no rebuild, no re-upload), or \`make release-app-status\` to check."
+          exit 0
+        fi
         sleep 15 ;;
     esac
   done
   echo "  ERROR: timed out waiting for notarization of $artifact (last status: ${status:-unknown})" >&2
+  echo "         The submission stays recorded; re-running resumes the poll without re-uploading." >&2
   return 1
 }
 
-echo "==> Notarizing the app (self-healing poll; survives the notarytool SIGBUS)"
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-NOTARY_ZIP="$TMP/notarize.zip"
-ditto -c -k --keepParent "$BUNDLE" "$NOTARY_ZIP"
-notarize "$NOTARY_ZIP"
+# ── Phase 1: build + sign + portability gate ─────────────────────────────────
+# Skipped wholesale when the bundle for THIS version is already notarized and
+# stapled: `stapler validate` is the durable proof, and rebuilding would
+# invalidate the very ticket we already earned. The version check keeps a
+# previous release's stapled bundle from short-circuiting a new one.
+if [ -d "$BUNDLE" ] && [ "$(bundle_version)" = "$VERSION" ] && stapled "$BUNDLE"; then
+  echo "==> App already notarized + stapled for v${VERSION} — skipping build/sign/notarize"
+else
+  if [ -d "$BUNDLE" ] && [ "$(bundle_version)" = "$VERSION" ] \
+     && [ -n "$(state_get '.app_sub_id')" ] && [ "$(state_get '.app_sha')" = "$(bundle_sha)" ]; then
+    echo "==> Reusing the built + signed app (its notarization is already in flight)"
+  else
+    echo "==> Building release app (v${VERSION})"
+    make build-app-release >/dev/null
 
-echo "==> Stapling the notarization ticket"
-xcrun stapler staple "$BUNDLE"
-xcrun stapler validate "$BUNDLE"
+    # Fail fast if the bundled CLI drifted from the app version. The point of
+    # bundling 2nb (Makefile build-app-release) is that the app and CLI ship at a
+    # single version; a mismatch here means the build copied a stale cli/bin/2nb.
+    BUNDLED_CLI="$BUNDLE/Contents/Resources/2nb"
+    if [ ! -x "$BUNDLED_CLI" ]; then
+      echo "error: bundled CLI missing at $BUNDLED_CLI (build-app-release should copy cli/bin/2nb)." >&2
+      exit 1
+    fi
+    # `|| true` so a binary that runs but prints no parseable version (e.g. a dyld
+    # failure to the swallowed stderr) leaves BUNDLED_CLI_VERSION empty and falls
+    # into the explicit mismatch branch below with its actionable message, rather
+    # than tripping `set -euo pipefail` on grep's no-match exit before we get there.
+    BUNDLED_CLI_VERSION="$("$BUNDLED_CLI" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    if [ "$BUNDLED_CLI_VERSION" != "$VERSION" ]; then
+      echo "error: bundled CLI version ($BUNDLED_CLI_VERSION) != app version ($VERSION)." >&2
+      echo "       Run 'make build-cli' so cli/bin/2nb is current, then re-run." >&2
+      exit 1
+    fi
+    echo "==> Bundled CLI verified at v${BUNDLED_CLI_VERSION}"
 
-# Sweep prior local installer artifacts before building this one. Each release
-# leaves a gitignored SecondBrain-<version>-arm64.dmg; every one is already
-# uploaded to its GitHub release, so the local copies just pile up (13 stale DMGs
-# / ~150 MB had accumulated by v0.11.0). create-dmg only clears the current
-# version's output, so older versions linger — clear them all here (both the
-# current build/ dir and the legacy repo-root location, plus the retired .zip
-# format); the current version's DMG is rebuilt immediately below.
-echo "==> Removing prior local installer artifacts"
-mkdir -p "$ARTIFACT_DIR"
-rm -f "$ARTIFACT_DIR"/SecondBrain-*.dmg "$ARTIFACT_DIR"/SecondBrain-*.zip \
-      SecondBrain-*.dmg SecondBrain-*.zip
+    echo "==> Signing with Developer ID + hardened runtime"
+    # Sign nested code inside-out: the bundled 2nb binary FIRST, then the outer
+    # bundle. The outer codesign is intentionally not --deep, so it would leave the
+    # nested executable unsigned — and an unsigned nested binary fails notarization.
+    codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.cli --sign "$SIGN_IDENTITY" "$BUNDLED_CLI"
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BUNDLE"
+    codesign --verify --strict --verbose=2 "$BUNDLE"
 
-echo "==> Building the branded installer DMG"
-bash scripts/make-dmg.sh "$BUNDLE" "$DMG"   # builds + Developer ID-signs the DMG
+    echo "==> Verifying load-command paths are portable (no dangling rpaths/dylibs)"
+    # A dangling LC_RPATH (e.g. the Xcode toolchain path `swift build` bakes in) or a
+    # non-system LC_LOAD_DYLIB resolves on THIS machine but not on a clean Mac, and is
+    # the documented SPM Gatekeeper footgun ("Apple could not verify ... is free of
+    # malware"). codesign --verify and stapler validate do NOT catch it. Gate here,
+    # before notarizing, so a bad binary fails fast instead of burning a notary wait.
+    check_portable_macho() {
+      local b="$1" bad_rpath bad_dylib
+      bad_rpath="$(otool -l "$b" | awk '/LC_RPATH/{getline;getline;print $2}' \
+        | grep -vE '^(@executable_path|@loader_path|/usr/lib/swift)' || true)"
+      bad_dylib="$(otool -L "$b" | tail -n +2 | awk '{print $1}' \
+        | grep -E '^/' | grep -vE '^(/usr/lib/|/System/)' || true)"
+      if [ -n "$bad_rpath" ] || [ -n "$bad_dylib" ]; then
+        echo "error: non-portable load commands in $b (would dangle on a clean Mac):" >&2
+        [ -n "$bad_rpath" ] && { echo "  dangling LC_RPATH:" >&2; echo "$bad_rpath" | sed 's/^/    /' >&2; }
+        [ -n "$bad_dylib" ] && { echo "  external LC_LOAD_DYLIB:" >&2; echo "$bad_dylib" | sed 's/^/    /' >&2; }
+        exit 1
+      fi
+    }
+    check_portable_macho "$BUNDLE/Contents/MacOS/SecondBrain"
+    check_portable_macho "$BUNDLED_CLI"
+    # The bundled 2nb must ship with the hardened runtime (notarization requires it).
+    # Capture codesign's output first, then match a here-string: piping it into
+    # `grep -q` lets grep close the pipe on its first match, which SIGPIPEs codesign,
+    # and under `set -o pipefail` that surfaces as a false failure even though the
+    # runtime flag IS present.
+    cli_codesign="$(codesign -dvv "$BUNDLED_CLI" 2>&1 || true)"
+    if ! grep -qE 'flags=[^ ]*runtime' <<<"$cli_codesign"; then
+      echo "error: bundled 2nb is not signed with the hardened runtime" >&2
+      grep -i 'flags=' <<<"$cli_codesign" >&2 || true
+      exit 1
+    fi
+  fi
 
-echo "==> Notarizing the DMG (self-healing poll)"
-notarize "$DMG"
+  # ── Phase 2: notarize + staple the app ─────────────────────────────────────
+  echo "==> Notarizing the app (checkpointed; survives crashes, sleeps, and lost submits)"
+  APP_SHA="$(bundle_sha)"
+  # Version-scoped name: history-adoption matches by basename, and a generic
+  # name could adopt an orphan submission from a DIFFERENT release attempt
+  # within the window (two attempts sat 3 minutes apart today).
+  NOTARY_ZIP="$TMP/notarize-${VERSION}.zip"
+  # The zip is only needed for a NEW submission; a resumed one polls by id.
+  # The submission is keyed to the BUNDLE hash (stable across runs), not the
+  # zip (ditto output is not byte-reproducible).
+  if [ -z "$(state_get '.app_sub_id')" ] || [ "$(state_get '.app_sha')" != "$APP_SHA" ]; then
+    ditto -c -k --keepParent "$BUNDLE" "$NOTARY_ZIP"
+  fi
+  notarize "$NOTARY_ZIP" app "$APP_SHA"
 
-echo "==> Stapling the DMG"
-xcrun stapler staple "$DMG"
-xcrun stapler validate "$DMG"
+  echo "==> Stapling the notarization ticket"
+  xcrun stapler staple "$BUNDLE"
+  xcrun stapler validate "$BUNDLE"
+fi
 
-SHA256="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+# ── Phase 3: build + sign the DMG ────────────────────────────────────────────
+if [ -f "$DMG" ] && stapled "$DMG"; then
+  echo "==> DMG already notarized + stapled — skipping build/notarize"
+else
+  if [ -f "$DMG" ] && [ -n "$(state_get '.dmg_sub_id')" ] \
+     && [ "$(state_get '.dmg_sha')" = "$(artifact_sha "$DMG")" ]; then
+    echo "==> Reusing the built + signed DMG (its notarization is already in flight)"
+  else
+    # Sweep prior local installer artifacts before building this one. Each release
+    # leaves a gitignored SecondBrain-<version>-arm64.dmg; every one is already
+    # uploaded to its GitHub release, so the local copies just pile up. create-dmg
+    # only clears the current version's output, so older versions linger — clear
+    # them all here (both the current build/ dir and the legacy repo-root
+    # location, plus the retired .zip format).
+    echo "==> Removing prior local installer artifacts"
+    mkdir -p "$ARTIFACT_DIR"
+    find "$ARTIFACT_DIR" -maxdepth 1 -name 'SecondBrain-*.dmg' ! -name "$(basename "$DMG")" -delete
+    rm -f "$ARTIFACT_DIR"/SecondBrain-*.zip SecondBrain-*.dmg SecondBrain-*.zip
+
+    echo "==> Building the branded installer DMG"
+    bash scripts/make-dmg.sh "$BUNDLE" "$DMG"   # builds + Developer ID-signs the DMG
+    # A fresh DMG invalidates any older pending submission.
+    state_set dmg_sub_id ""
+  fi
+
+  # ── Phase 4: notarize + staple the DMG ─────────────────────────────────────
+  echo "==> Notarizing the DMG (checkpointed)"
+  notarize "$DMG" dmg "$(artifact_sha "$DMG")"
+
+  echo "==> Stapling the DMG"
+  xcrun stapler staple "$DMG"
+  xcrun stapler validate "$DMG"
+fi
+
+SHA256="$(artifact_sha "$DMG")"
 
 # Gatekeeper as a hard gate on BOTH artifacts (the end-to-end check users hit;
 # codesign --verify and stapler validate above already gate each step). Staple
