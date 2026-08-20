@@ -16,6 +16,9 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	EmbedGeneration
 //	  1  chunk-size cap (#134) + asymmetric GENERIC_RETRIEVAL query purpose:
 //	     chunk boundaries / vec_chunks changed, so a full re-embed is required.
+//	  2  fenced-code heading exemption: `#` inside ``` / ~~~ is no longer an
+//	     ATX heading, so heading_path / chunk ids change for notes with
+//	     in-fence `#` comments (typical of runbooks).
 //	IndexGeneration
 //	  1  baseline.
 //
@@ -31,7 +34,7 @@ const (
 	// (chunk boundaries, purpose, pooling, normalization) at the SAME model and
 	// dimension. A full re-embed is required because vec_chunks ids/vectors must be
 	// regenerated to match the rebuilt chunks table. Fix: 2nb index --force-reembed.
-	EmbedGeneration = 1
+	EmbedGeneration = 2
 )
 
 // IndexFreshness reports whether a vault's index was built by an older 2nb whose

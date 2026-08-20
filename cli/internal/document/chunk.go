@@ -29,7 +29,9 @@ type Chunk struct {
 
 // ChunkDocument splits a document into chunks at heading boundaries. Obsidian
 // comments are stripped first so they don't leak into FTS/search/read; newline
-// count is preserved so chunk line numbers stay accurate.
+// count is preserved so chunk line numbers stay accurate. Lines inside fenced
+// code blocks (``` / ~~~) are never treated as headings, so a `# comment` in a
+// shell snippet cannot reparent later sections.
 func ChunkDocument(doc *Document) []Chunk {
 	lines := strings.Split(StripComments(doc.Body), "\n")
 	var chunks []Chunk
@@ -65,9 +67,10 @@ func ChunkDocument(doc *Document) []Chunk {
 		order++
 	}
 
+	var fence fenceTracker
 	for i, line := range lines {
 		lineNum := i + 1
-		level := headingLevel(line)
+		level := fence.headingLevel(line)
 
 		if level > 0 {
 			flushChunk(lineNum - 1)
