@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.18.2] - 2026-08-20
+
+### Added
+- `prefer_stored_token` in `~/.config/2nb/bedrock.json` (off by default): makes the saved Bedrock key (file, then Keychain) outrank the `AWS_BEARER_TOKEN_BEDROCK` env var for 2nb only, so the env token keeps serving other tools in the shell. Applies to every 2nb surface, including the classic SDK path and the mantle plane; with no stored key the env var still applies, so the flag can never break auth. Set via `2nb config bedrock --set --prefer-stored-token` / `--no-prefer-stored-token` or the new Settings AI checkbox, and reported as `prefer_stored_token` in the status JSON. (#210)
+- Internal `2NB_BEDROCK_IGNORE_PREFER_STORED=1` escape hatch restoring env-first for one process, used by the app's verify-before-accept so a candidate key probed via the env var is actually the key being tested. (#210)
+
+### Changed
+- The env-overrides-stored split-brain warning (`config bedrock`, `doctor` tier 1, Settings) downgrades to an informational both-keys note when `prefer_stored_token` is on, since the env var no longer overrides anything in 2nb. (#210)
+
+### Fixed
+- `doctor` now captures the env-vs-stored key divergence before provider initialization; previously, hydration under `prefer_stored_token` overwrote the env var first, making the Bedrock key-source check unreachable in exactly the scenario it renders for. (#210)
+- `config bedrock` help text no longer claims the env var unconditionally wins over the stored key. (#210)
+
+
 ## [0.18.1] - 2026-08-20
 
 ### Added
