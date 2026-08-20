@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- Fenced code blocks are exempt from heading parsing: a `# comment` inside ``` or `~~~` is no longer treated as an ATX heading, so it cannot create a phantom section or reparent later chunks. Affects `heading_path`, `outline` / `kb_structure`, and `replace --section` / `kb_replace_section`.
+- ⚠ reindex recommended: `2nb index --force-reembed`
 
 ## [0.18.0] - 2026-08-13
 

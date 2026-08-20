@@ -198,3 +198,62 @@ func TestReplaceSection_PreservesComment(t *testing.T) {
 		t.Fatalf("edit section not swapped:\n%s", out)
 	}
 }
+
+func TestSectionBounds_IgnoresHeadingsInsideFences(t *testing.T) {
+	body := strings.Join([]string{
+		"# Real H1",                    // 0
+		"",                             // 1
+		"## Section A",                 // 2
+		"",                             // 3
+		"```bash",                      // 4
+		"# probe-backtick-comment",     // 5
+		"echo hi",                      // 6
+		"```",                          // 7
+		"",                             // 8
+		"## Section B",                 // 9
+		"b content",                    // 10
+		"",                             // 11
+		"## Section C",                 // 12
+		"c content",                    // 13
+	}, "\n")
+	lines := strings.Split(body, "\n")
+
+	start, end, ok := SectionBounds(body, "Section A")
+	if !ok {
+		t.Fatalf("expected Section A found")
+	}
+	if start != 3 || end != 9 {
+		t.Fatalf("Section A bounds = (%d,%d), want (3,9) — fence `#` must not terminate", start, end)
+	}
+	got := strings.Join(lines[start:end], "\n")
+	if !strings.Contains(got, "# probe-backtick-comment") || !strings.Contains(got, "echo hi") {
+		t.Fatalf("Section A content lost the fence:\n%s", got)
+	}
+	if strings.Contains(got, "## Section B") {
+		t.Fatalf("Section A bounds leaked into Section B:\n%s", got)
+	}
+
+	if _, _, ok := SectionBounds(body, "probe-backtick-comment"); ok {
+		t.Fatalf("in-fence `#` must not be a --section target")
+	}
+
+	out, ok := ReplaceSection(body, "Section A", "replaced A")
+	if !ok {
+		t.Fatalf("expected ReplaceSection to find Section A")
+	}
+	if !strings.Contains(out, "replaced A") {
+		t.Fatalf("new Section A content missing:\n%s", out)
+	}
+	if strings.Contains(out, "# probe-backtick-comment") {
+		t.Fatalf("old fence content should have been replaced:\n%s", out)
+	}
+	if !strings.Contains(out, "## Section B") || !strings.Contains(out, "b content") {
+		t.Fatalf("Section B damaged:\n%s", out)
+	}
+	if !strings.Contains(out, "## Section C") || !strings.Contains(out, "c content") {
+		t.Fatalf("Section C damaged:\n%s", out)
+	}
+	if !strings.Contains(out, "## Section A") {
+		t.Fatalf("Section A heading removed:\n%s", out)
+	}
+}

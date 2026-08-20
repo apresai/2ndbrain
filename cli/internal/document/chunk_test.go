@@ -71,6 +71,75 @@ func TestChunkDocument_SortOrder(t *testing.T) {
 	}
 }
 
+func TestChunkDocument_IgnoresHeadingsInsideFences(t *testing.T) {
+	// Reporter fixture: line-initial `#` inside ``` and ~~~ fences must stay
+	// literal text. A 4-space-indented `#` inside a fence is also not a heading
+	// (headingLevel requires a line-initial `#`), and must remain in Section C.
+	doc := &Document{
+		ID: "test-id",
+		Body: strings.Join([]string{
+			"# Real H1",
+			"",
+			"## Section A",
+			"",
+			"```bash",
+			"# probe-backtick-comment",
+			"echo hi",
+			"```",
+			"",
+			"## Section B",
+			"",
+			"~~~bash",
+			"# probe-tilde-comment",
+			"echo hi",
+			"~~~",
+			"",
+			"## Section C",
+			"",
+			"```bash",
+			"    # probe-indented-comment",
+			"echo hi",
+			"```",
+			"",
+			"## Section D",
+			"",
+			"end.",
+		}, "\n"),
+	}
+	chunks := ChunkDocument(doc)
+	want := []string{
+		"# Real H1",
+		"# Real H1 > ## Section A",
+		"# Real H1 > ## Section B",
+		"# Real H1 > ## Section C",
+		"# Real H1 > ## Section D",
+	}
+	if len(chunks) != len(want) {
+		got := make([]string, len(chunks))
+		for i, c := range chunks {
+			got[i] = c.HeadingPath
+		}
+		t.Fatalf("chunks = %d %v, want %d %v", len(chunks), got, len(want), want)
+	}
+	for i, path := range want {
+		if chunks[i].HeadingPath != path {
+			t.Errorf("chunk %d heading_path = %q, want %q", i, chunks[i].HeadingPath, path)
+		}
+		if strings.Contains(chunks[i].HeadingPath, "probe-") {
+			t.Errorf("chunk %d heading_path %q must not be derived from an in-fence comment", i, chunks[i].HeadingPath)
+		}
+	}
+	if !strings.Contains(chunks[1].Content, "# probe-backtick-comment") {
+		t.Errorf("Section A content should keep the in-fence comment, got %q", chunks[1].Content)
+	}
+	if !strings.Contains(chunks[2].Content, "# probe-tilde-comment") {
+		t.Errorf("Section B content should keep the in-fence comment, got %q", chunks[2].Content)
+	}
+	if !strings.Contains(chunks[3].Content, "# probe-indented-comment") {
+		t.Errorf("Section C content should keep the indented in-fence comment, got %q", chunks[3].Content)
+	}
+}
+
 func TestSplitLongChunks_UnderCapUnchanged(t *testing.T) {
 	in := []Chunk{{ID: "a", DocID: "d", HeadingPath: "# H", Content: "short content", ContentHash: "x", SortOrder: 0}}
 	got := SplitLongChunks(in, maxEmbedChunkChars)
