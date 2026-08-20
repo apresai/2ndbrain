@@ -66,8 +66,13 @@ struct SimpleModelsView: View {
         .onChange(of: appState.modelsCatalogVersion) { _, _ in
             Task { await reload(discover: false) }
         }
-        .onChange(of: appState.pendingValidateRequest) { _, requested in
-            // The post-key-save "re-validate now?" offer routes here; the
+        .onChange(of: appState.pendingValidateRequest, initial: true) { _, requested in
+            // The post-key-save "re-validate now?" offer routes here. In the
+            // PRIMARY flow the flag is set BEFORE this view mounts (the
+            // Settings button routes the main window to the Models tab), so
+            // `initial: true` is load-bearing: without it the attach-time
+            // value is never observed and the request sticks, silently doing
+            // nothing now and firing on some later unrelated toggle. The
             // Validate pass itself still cost-confirms before spending.
             guard requested else { return }
             appState.pendingValidateRequest = false

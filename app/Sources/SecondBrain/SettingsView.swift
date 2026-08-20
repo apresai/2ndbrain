@@ -1,18 +1,6 @@
 import SwiftUI
 import SecondBrainCore
 
-/// The macOS Settings window (Cmd+,).
-///
-/// Until now this held exactly two settings — a Bedrock region and token —
-/// while 19 config keys lived in a dashboard tab, 13 of them behind a single
-/// unlabeled "Advanced settings" disclosure. That is backwards on this
-/// platform: a `Settings` scene wrapping a small `TabView` is where a Mac user
-/// looks first, and it is the only surface that works with no vault bound.
-///
-/// Four tabs, in the order a user meets them: what vault, what AI, the knobs,
-/// and which tools are wired up. Nothing was removed to get here — the tuning
-/// knobs moved wholesale into Advanced, and the model catalog stayed in the
-/// main window because a 980x700 browser does not belong in a settings sheet.
 /// The Settings window's tabs, selectable in code so a link anywhere in the
 /// app can land the user on a SPECIFIC tab. Without a selection binding the
 /// TabView opened on whatever tab macOS last restored, which made every
@@ -45,6 +33,18 @@ struct OpenSettingsTabButton: View {
     }
 }
 
+/// The macOS Settings window (Cmd+,).
+///
+/// Until now this held exactly two settings — a Bedrock region and token —
+/// while 19 config keys lived in a dashboard tab, 13 of them behind a single
+/// unlabeled "Advanced settings" disclosure. That is backwards on this
+/// platform: a `Settings` scene wrapping a small `TabView` is where a Mac user
+/// looks first, and it is the only surface that works with no vault bound.
+///
+/// Four tabs, in the order a user meets them: what vault, what AI, the knobs,
+/// and which tools are wired up. Nothing was removed to get here — the tuning
+/// knobs moved wholesale into Advanced, and the model catalog stayed in the
+/// main window because a 980x700 browser does not belong in a settings sheet.
 struct SettingsView: View {
     @Environment(AppState.self) var appState
 

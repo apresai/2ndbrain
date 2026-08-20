@@ -74,8 +74,8 @@ final class AppState {
     // property. They were a migration shim that outlived its migration: four
     // names for one flag meant a button labelled "Test Connection…" and one
     // labelled "AI Setup…" were the same no-op navigation, and reading the
-    // call site told you nothing about what would happen. Both callers now use
-    // SettingsLink, so the aliases are gone.
+    // call site told you nothing about what would happen. Both callers now
+    // route to Settings (OpenSettingsTabButton), so the aliases are gone.
     var showAIHub = false
 
     /// Which Settings tab the window shows. Selection-bound so a link
