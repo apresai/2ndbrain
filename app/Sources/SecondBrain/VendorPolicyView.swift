@@ -216,6 +216,19 @@ struct VendorPolicyView: View {
             HStack {
                 Text(ProviderDisplay.name(section.provider)).font(.headline)
                 Spacer()
+                // Pure staging, like every checkbox here: nothing is written
+                // until Apply, and Apply stays disabled on an empty set (the
+                // existing hint below already explains the empty state).
+                Button("Check all") {
+                    checked[section.provider] = Set(section.vendors.map(\.vendor))
+                }
+                .controlSize(.small)
+                .disabled(busyProvider != nil)
+                Button("Uncheck all") {
+                    checked[section.provider] = []
+                }
+                .controlSize(.small)
+                .disabled(busyProvider != nil || checkedSet.isEmpty)
                 if busyProvider == section.provider { ProgressView().controlSize(.small) }
             }
             Text(policyStatusLine(policy))

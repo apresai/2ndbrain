@@ -129,3 +129,9 @@ func aiStatusEmbeddableDenominator() {
     let legacy = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":115,"document_count":117}"#)
     #expect(legacy.embeddableDenominator == 117)
 }
+
+@Test("settingsLinkTitle leads with the key when not ready, stays as a subdued route when ready")
+func settingsLinkCopy() {
+    #expect(HomeAI.settingsLinkTitle(ready: false) == "Add your API key in Settings…")
+    #expect(HomeAI.settingsLinkTitle(ready: true) == "AI settings…")
+}

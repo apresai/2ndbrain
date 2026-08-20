@@ -21,6 +21,10 @@ struct SimpleModelsView: View {
     @State private var vendorGuardMessage: String?
     @State private var reasoningEffort = ""
     @State private var showFullCatalog = false
+    @State private var bedrockStatus: BedrockMachineStatus?
+    /// True while "Uncheck all" has staged an empty board (nothing written;
+    /// cleared by any successful policy write or reload resync).
+    @State private var stagedEmpty = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -31,7 +35,17 @@ struct SimpleModelsView: View {
                     if appState.vault == nil {
                         Text("Bind an Obsidian vault to pick vendors and models. Until then, Settings uses the shipped Haiku + Nova-2 defaults.")
                             .foregroundStyle(.secondary)
+                        // Credentials need no vault (`config bedrock` is
+                        // machine-local), so the keyless first-run user can
+                        // still act from here instead of hitting a dead end.
+                        OpenSettingsTabButton("Open AI settings…", tab: .ai)
+                            .controlSize(.small)
                     } else {
+                        if staleVerdicts {
+                            Label(StaleVerdicts.bannerText, systemImage: "clock.arrow.circlepath")
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                        }
                         vendorSection
                         validateSection
                         pickersSection
@@ -52,6 +66,13 @@ struct SimpleModelsView: View {
         .onChange(of: appState.modelsCatalogVersion) { _, _ in
             Task { await reload(discover: false) }
         }
+        .onChange(of: appState.pendingValidateRequest) { _, requested in
+            // The post-key-save "re-validate now?" offer routes here; the
+            // Validate pass itself still cost-confirms before spending.
+            guard requested else { return }
+            appState.pendingValidateRequest = false
+            Task { await runValidate() }
+        }
         .alert("Couldn't load models", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -71,6 +92,7 @@ struct SimpleModelsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            credentialsChip
             if loading {
                 ProgressView().controlSize(.small)
             }
@@ -78,15 +100,50 @@ struct SimpleModelsView: View {
         .padding()
     }
 
+    /// Always-visible key-state chip. This tab is where "bad credentials"
+    /// failures render, and it used to be the one surface with no route to
+    /// fix them.
+    private var credentialsChip: some View {
+        let chip = CredentialChipPresentation.chip(bedrockStatus)
+        return OpenSettingsTabButton(chip.label, tab: .ai)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(chip.warning ? .orange : nil)
+    }
+
+    private var staleVerdicts: Bool {
+        StaleVerdicts.isStale(
+            lastVerifiedAt: aiStatus?.modelAccess?.lastVerifiedAt,
+            tokenUpdatedAt: bedrockStatus?.tokenUpdatedAt
+        )
+    }
+
     private var vendorSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Vendors")
-                .font(.subheadline.bold())
-                .textCase(.uppercase)
-                .foregroundStyle(.secondary)
-            Text(VendorSelection.restrictionCaption(hasPolicy: hasBedrockPolicy))
+            HStack {
+                Text("Vendors")
+                    .font(.subheadline.bold())
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                // Check all = remove the restriction (policy clear), so
+                // vendors AWS adds later arrive enabled — an explicit
+                // full-list write would freeze today's vocabulary and
+                // silently block vendor #20. No-op when no policy exists
+                // (everything is already unrestricted).
+                Button("Check all") { Task { await checkAllVendors() } }
+                    .controlSize(.small)
+                    .disabled(savingPolicy || !hasBedrockPolicy)
+                // Uncheck all stages an empty board WITHOUT writing: the CLI
+                // refuses an empty enable-only list, and mapping this to
+                // policy clear would ENABLE everything.
+                Button("Uncheck all") { uncheckAllVendors() }
+                    .controlSize(.small)
+                    .disabled(savingPolicy || selectedVendors.isEmpty)
+            }
+            Text(stagedEmpty ? VendorSelection.stagedEmptyMessage : VendorSelection.restrictionCaption(hasPolicy: hasBedrockPolicy))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(stagedEmpty ? .orange : .secondary)
             WrapHStack(items: vendorChoices) { vendor in
                 Toggle(vendor.display, isOn: vendorBinding(vendor.slug))
                     .toggleStyle(.checkbox)
@@ -108,11 +165,11 @@ struct SimpleModelsView: View {
                 }
                 .disabled(verifying || appState.vault == nil)
                 if let estimate = validateEstimate {
-                    Text(String(format: "Validate · est. $%.4f", estimate.totalUSD))
+                    Text(String(format: "Validate · est. $%.4f", estimate.totalUSD) + regionSuffix)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("List models for the checked vendors, try them, keep the ones that work.")
+                    Text("List models for the checked vendors, try them, keep the ones that work." + regionSuffix)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -244,6 +301,16 @@ struct SimpleModelsView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                 }
+                if failed.contains(where: { $0.testErrorCode == "bad_credentials" }) {
+                    HStack(spacing: 4) {
+                        Text("Credentials problem —")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        OpenSettingsTabButton("Open AI settings", tab: .ai)
+                            .buttonStyle(.link)
+                            .font(.caption)
+                    }
+                }
             }
             .font(.subheadline)
         }
@@ -263,6 +330,12 @@ struct SimpleModelsView: View {
 
     private var hasBedrockPolicy: Bool {
         CatalogSummary.activePolicy(policies, provider: "bedrock") != nil
+    }
+
+    /// " across N regions" when additional verify regions are configured
+    /// (primary + the bedrock.json list); "" single-region.
+    private var regionSuffix: String {
+        RegionIncludeSelection.validateSuffix(regionCount: 1 + (bedrockStatus?.regions.count ?? 0))
     }
 
     /// CLI `known_vendors` (including a synthetic no-policy row). The
@@ -288,9 +361,15 @@ struct SimpleModelsView: View {
                 ) {
                 case .applied(let next):
                     vendorGuardMessage = nil
+                    stagedEmpty = false
                     selectedVendors = next
                     Task { await savePolicy() }
                 case .refusedEmpty:
+                    // From a staged-empty board the first re-check flows
+                    // through .applied above; this refusal only fires when
+                    // unchecking the LAST box one-by-one, which is usually
+                    // an accident — the Uncheck-all button is the explicit
+                    // route to empty.
                     vendorGuardMessage = VendorSelection.keepAtLeastOneMessage
                 }
             }
@@ -305,6 +384,9 @@ struct SimpleModelsView: View {
     /// policy write / catalog-version bump so a checkbox does not re-walk
     /// Bedrock.
     private func reload(discover: Bool) async {
+        // Machine-local, vault-free, milliseconds: drives the header chip and
+        // the stale-verdicts banner, so it loads even with no vault bound.
+        bedrockStatus = try? await appState.refreshBedrockMachineConfig()
         guard appState.vault != nil else {
             loading = false
             return
@@ -341,6 +423,30 @@ struct SimpleModelsView: View {
             policy: CatalogSummary.activePolicy(policies, provider: "bedrock"),
             fallback: vendorSlugs
         )
+        // Any resync to persisted truth ends a staged-empty board.
+        stagedEmpty = false
+    }
+
+    /// Check all = clear the vendor policy (restriction removed; future
+    /// vendors arrive enabled). The button is disabled when no policy exists.
+    private func checkAllVendors() async {
+        savingPolicy = true
+        defer { savingPolicy = false }
+        do {
+            try await appState.clearGUIVendorPolicies(provider: "bedrock")
+            await reload(discover: false)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Uncheck all = staged-empty: clear the checkboxes locally, write
+    /// nothing, and say so. The first re-check writes a policy with exactly
+    /// that vendor via the normal toggle path.
+    private func uncheckAllVendors() {
+        selectedVendors = []
+        stagedEmpty = true
+        vendorGuardMessage = nil
     }
 
     private func savePolicy() async {
@@ -444,6 +550,12 @@ struct SimpleModelsView: View {
 /// dedupe are unit-testable without SwiftUI.
 enum VendorSelection {
     static let keepAtLeastOneMessage = "Keep at least one vendor."
+
+    /// Shown after "Uncheck all": nothing was written (the CLI refuses an
+    /// empty enable-only list, and clearing the policy would ENABLE
+    /// everything — the opposite of the visual state), so the empty board is
+    /// pure staging until a vendor is re-checked.
+    static let stagedEmptyMessage = "Nothing saved yet — check at least one vendor. The last saved vendor list still applies."
 
     /// Last-resort slugs when `models policy show` has no `known_vendors`
     /// (CLI predating the synthetic vocabulary row).

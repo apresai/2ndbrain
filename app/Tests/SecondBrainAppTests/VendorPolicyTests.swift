@@ -324,3 +324,15 @@ func modelsListArgsDiscoverToggle() {
     #expect(AppState.modelsListArgs(discover: true) == ["models", "list", "--json", "--porcelain", "--discover"])
     #expect(AppState.modelsListArgs(discover: false) == ["models", "list", "--json", "--porcelain"])
 }
+
+@Test("staged-empty recovery: the first re-check from an empty board applies its display group")
+func stagedEmptyRecovery() {
+    // Uncheck-all stages an empty set locally (no write). The next check must
+    // flow through the normal toggle path and produce a non-empty policy set.
+    let outcome = VendorSelection.toggling([], slug: "anthropic", on: true)
+    #expect(outcome == .applied(["anthropic"]))
+    // Alias groups still travel together from empty.
+    let grouped = VendorSelection.toggling([], slug: "moonshot", on: true, together: ["moonshot", "moonshotai"])
+    #expect(grouped == .applied(["moonshot", "moonshotai"]))
+    #expect(VendorSelection.stagedEmptyMessage.contains("Nothing saved yet"))
+}

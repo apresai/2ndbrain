@@ -369,10 +369,8 @@ struct AIHubView: View {
                     Text(bedrockTokenLabel(p))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    SettingsLink {
-                        Text("Settings…")
-                    }
-                    .controlSize(.mini)
+                    OpenSettingsTabButton("Settings…", tab: .ai)
+                        .controlSize(.mini)
                 }
             }
             Spacer(minLength: 0)

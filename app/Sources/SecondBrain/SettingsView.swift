@@ -13,25 +13,62 @@ import SecondBrainCore
 /// and which tools are wired up. Nothing was removed to get here — the tuning
 /// knobs moved wholesale into Advanced, and the model catalog stayed in the
 /// main window because a 980x700 browser does not belong in a settings sheet.
+/// The Settings window's tabs, selectable in code so a link anywhere in the
+/// app can land the user on a SPECIFIC tab. Without a selection binding the
+/// TabView opened on whatever tab macOS last restored, which made every
+/// "open Settings" affordance a coin flip — the root of "I don't see how to
+/// configure the bedrock key".
+enum SettingsTab: String {
+    case general, ai, advanced, integrations
+}
+
+/// A Button that opens the Settings window ON a specific tab. Replaces
+/// `SettingsLink`, which has no action hook to set the tab and so landed on
+/// whatever tab macOS last restored. If the window is already open, setting
+/// the selection switches the live window's tab.
+struct OpenSettingsTabButton: View {
+    @Environment(AppState.self) var appState
+    @Environment(\.openSettings) private var openSettings
+    let title: String
+    let tab: SettingsTab
+
+    init(_ title: String, tab: SettingsTab) {
+        self.title = title
+        self.tab = tab
+    }
+
+    var body: some View {
+        Button(title) {
+            appState.settingsTab = tab
+            openSettings()
+        }
+    }
+}
+
 struct SettingsView: View {
     @Environment(AppState.self) var appState
 
     var body: some View {
+        @Bindable var state = appState
         // `Tab(_:systemImage:content:)` is macOS 15+; this app deploys to 14,
         // so the tabs use the .tabItem form.
-        TabView {
+        return TabView(selection: $state.settingsTab) {
             SettingsGeneralView()
                 .environment(appState)
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             SettingsAIView()
                 .environment(appState)
                 .tabItem { Label("AI", systemImage: "sparkles") }
+                .tag(SettingsTab.ai)
             SettingsAdvancedView()
                 .environment(appState)
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
+                .tag(SettingsTab.advanced)
             SettingsIntegrationsView()
                 .environment(appState)
                 .tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
+                .tag(SettingsTab.integrations)
         }
         // Tall enough that the AI page's verdict lands on screen without a
         // scroll: a "Test everything" button whose answer is below the fold

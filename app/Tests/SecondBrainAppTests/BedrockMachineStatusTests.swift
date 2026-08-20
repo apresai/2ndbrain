@@ -29,6 +29,41 @@ func bedrockMachineStatusDecode() throws {
     #expect(bad.error?.contains("not private") == true)
 }
 
+@Test("BedrockMachineStatus decodes the additive region/staleness/divergence fields, absent on older CLIs")
+func bedrockMachineStatusAdditiveFields() throws {
+    let new = """
+    {"path":"/tmp/bedrock.json","region":"us-east-1","token_set":true,"token_source":"file","regions":["us-west-2","us-east-2"],"token_updated_at":"2026-08-20T18:00:00Z","env_overrides_stored":true,"stored_token_suffix":"RT0="}
+    """
+    let got = try JSONDecoder().decode(BedrockMachineStatus.self, from: Data(new.utf8))
+    #expect(got.regions == ["us-west-2", "us-east-2"])
+    #expect(got.tokenUpdatedAt == "2026-08-20T18:00:00Z")
+    #expect(got.envOverridesStored)
+    #expect(got.storedTokenSuffix == "RT0=")
+
+    // A pre-region CLI payload defaults every new field.
+    let old = """
+    {"path":"/tmp/bedrock.json","token_set":true,"token_source":"file"}
+    """
+    let legacy = try JSONDecoder().decode(BedrockMachineStatus.self, from: Data(old.utf8))
+    #expect(legacy.regions.isEmpty)
+    #expect(legacy.tokenUpdatedAt == "")
+    #expect(!legacy.envOverridesStored)
+    #expect(legacy.storedTokenSuffix == "")
+}
+
+@Test("bedrockSetArgs builds the regions/clear-regions argv correctly")
+func bedrockSetArgsBuilder() {
+    #expect(AppState.bedrockSetArgs(region: "", hasToken: true, verifyRegions: nil)
+        == ["config", "bedrock", "--set", "--json", "--porcelain", "--token-stdin"])
+    #expect(AppState.bedrockSetArgs(region: "us-east-1", hasToken: false, verifyRegions: nil)
+        == ["config", "bedrock", "--set", "--json", "--porcelain", "--region", "us-east-1"])
+    #expect(AppState.bedrockSetArgs(region: "", hasToken: false, verifyRegions: ["us-west-2", "us-east-2"])
+        == ["config", "bedrock", "--set", "--json", "--porcelain", "--regions", "us-west-2,us-east-2"])
+    // Empty array means CLEAR, never an empty --regions value.
+    #expect(AppState.bedrockSetArgs(region: "", hasToken: false, verifyRegions: [])
+        == ["config", "bedrock", "--set", "--json", "--porcelain", "--clear-regions"])
+}
+
 @Test("ProviderStatusInfo decodes additive token_source")
 func providerStatusTokenSourceDecode() throws {
     let json = """

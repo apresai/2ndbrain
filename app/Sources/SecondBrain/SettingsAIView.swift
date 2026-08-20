@@ -28,6 +28,7 @@ struct SettingsAIView: View {
     @State private var testing = false
     @State private var testError: String?
     @State private var loadError: String?
+    @State private var showRevalidateOffer = false
 
     var body: some View {
         Form {
@@ -54,7 +55,41 @@ struct SettingsAIView: View {
                     .foregroundStyle(.secondary)
             }
             regionRow
+            regionIncludeRow
         }
+    }
+
+    /// "Also verify in": additional regions Validate probes when a model
+    /// fails in the primary (Bedrock model access is granted per region).
+    /// Verification-only — the primary region above keeps its risk guard;
+    /// adding or removing an include region can't take embeddings offline.
+    @ViewBuilder
+    private var regionIncludeRow: some View {
+        let included = bedrock?.regions ?? []
+        let choices = RegionIncludeSelection.choices(
+            common: BedrockRegions.common.map(\.id),
+            primary: effectiveRegion,
+            stored: included
+        )
+        LabeledContent("Also verify in") {
+            Menu(included.isEmpty ? "None" : included.joined(separator: ", ")) {
+                ForEach(choices, id: \.self) { region in
+                    Button {
+                        Task { await applyIncludedRegions(RegionIncludeSelection.toggling(included, region: region)) }
+                    } label: {
+                        if included.contains(region) {
+                            Label(region, systemImage: "checkmark")
+                        } else {
+                            Text(region)
+                        }
+                    }
+                }
+            }
+            .disabled(busy)
+        }
+        Text(RegionIncludeSelection.summary(primary: effectiveRegion, included: included))
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -141,6 +176,25 @@ struct SettingsAIView: View {
                 Text("Stored in \(bedrock.path) (source: \(bedrock.tokenSource)). Never written into a vault.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if bedrock.envOverridesStored {
+                    Label("AWS_BEARER_TOKEN_BEDROCK in your shell (ends \(bedrock.tokenSuffix)) overrides this saved key (ends \(bedrock.storedTokenSuffix)) for terminal and MCP use. The app uses the saved key.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            if showRevalidateOffer {
+                HStack(spacing: 8) {
+                    Text("Re-validate your models with the new key?")
+                        .font(.caption)
+                    Button("Re-validate now") {
+                        showRevalidateOffer = false
+                        appState.showAIHub = true
+                        appState.pendingValidateRequest = true
+                    }
+                    .controlSize(.small)
+                    Button("Later") { showRevalidateOffer = false }
+                        .controlSize(.small)
+                }
             }
         }
     }
@@ -342,6 +396,20 @@ struct SettingsAIView: View {
                 provider: report.provider
             )
             status = try? await appState.fetchAIStatus()
+            // Persisted model-access verdicts now predate this key; offer the
+            // refresh rather than auto-spending on it. Vault-bound only — the
+            // Models tab is WelcomeView otherwise.
+            showRevalidateOffer = appState.vault != nil
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func applyIncludedRegions(_ regions: [String]) async {
+        busy = true
+        defer { busy = false }
+        do {
+            bedrock = try await appState.saveBedrockMachineConfig(region: "", token: nil, verifyRegions: regions)
         } catch {
             message = error.localizedDescription
         }

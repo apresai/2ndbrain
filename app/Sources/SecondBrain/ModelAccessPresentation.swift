@@ -6,11 +6,28 @@ import Foundation
 /// the raw error detail always accompanies this, never replaced by it.
 enum ModelAccessPresentation {
     struct Guidance: Equatable {
+        /// What the guidance's action button does: open an external URL (the
+        /// AWS console for a classic access denial) or land on the Settings
+        /// window's AI tab (the fix surface for bad credentials). An enum
+        /// rather than a bare URL so an in-app destination is expressible —
+        /// the bad_credentials case used to leave the action slot empty
+        /// because "open Settings on the AI tab" had no representation.
+        enum Action: Equatable {
+            case url(URL)
+            case aiSettings
+        }
+
         let badge: String
         let title: String
         let advice: String
         let actionLabel: String?
-        let actionURL: URL?
+        let action: Action?
+
+        /// The external URL when the action is one; nil for in-app actions.
+        var actionURL: URL? {
+            if case .url(let u) = action { return u }
+            return nil
+        }
     }
 
     /// Guidance for a classified code. `remediation` (the CLI's own hint)
@@ -27,42 +44,43 @@ enum ModelAccessPresentation {
         let isMantle = strategy == "bedrock_mantle_responses"
         let advice: String
         var actionLabel: String?
-        var actionURL: URL?
+        var action: Guidance.Action?
         switch code {
         case "access_denied":
             if isMantle {
                 advice = remediation ?? "Your account isn't entitled to this model on the Bedrock mantle plane. This is AWS's staged, per-account rollout, not a problem with 2nb or your credentials, and your other models still work. Request access by contacting AWS Sales; the Bedrock console's Model access page does not govern mantle models."
             } else {
                 advice = remediation ?? "Your account can't invoke this model yet. For Bedrock, request access under Model access in the AWS console; newer frontier models can stay gated by AWS's staged rollout even when the console shows access as granted."
-                if provider == "bedrock" {
+                if provider == "bedrock", let url = bedrockConsoleURL(region: region) {
                     actionLabel = "Open AWS console"
-                    actionURL = bedrockConsoleURL(region: region)
+                    action = .url(url)
                 }
             }
-            return Guidance(badge: "no access", title: "This account can't invoke the model", advice: advice, actionLabel: actionLabel, actionURL: actionURL)
+            return Guidance(badge: "no access", title: "This account can't invoke the model", advice: advice, actionLabel: actionLabel, action: action)
         case "bad_credentials":
             advice = remediation ?? "Credentials are missing, expired, or invalid for \(ProviderDisplay.name(provider))."
-            return Guidance(badge: "bad credentials", title: "Credentials problem", advice: advice, actionLabel: nil, actionURL: nil)
+            // The fix surface for a bad key is the Settings AI tab, in-app.
+            return Guidance(badge: "bad credentials", title: "Credentials problem", advice: advice, actionLabel: "Open AI settings", action: .aiSettings)
         case "throttled":
             advice = remediation ?? "The request was rate-limited, so the model very likely works. Retry in a minute, or lower Embed concurrency under Advanced settings."
-            return Guidance(badge: "throttled", title: "Rate-limited (the model likely works)", advice: advice, actionLabel: nil, actionURL: nil)
+            return Guidance(badge: "throttled", title: "Rate-limited (the model likely works)", advice: advice, actionLabel: nil, action: nil)
         case "not_found":
             advice = remediation ?? "The model ID wasn't found for this account or region."
-            return Guidance(badge: "not found", title: "Model not found", advice: advice, actionLabel: nil, actionURL: nil)
+            return Guidance(badge: "not found", title: "Model not found", advice: advice, actionLabel: nil, action: nil)
         case "provider_unreachable":
             advice = remediation ?? "The provider endpoint is unreachable. Check your network, or that the local server is running."
-            return Guidance(badge: "unreachable", title: "Provider unreachable", advice: advice, actionLabel: nil, actionURL: nil)
+            return Guidance(badge: "unreachable", title: "Provider unreachable", advice: advice, actionLabel: nil, action: nil)
         case "timeout":
             advice = remediation ?? "The probe timed out. Retry; the model may be cold-starting."
-            return Guidance(badge: "timeout", title: "Probe timed out", advice: advice, actionLabel: nil, actionURL: nil)
+            return Guidance(badge: "timeout", title: "Probe timed out", advice: advice, actionLabel: nil, action: nil)
         case "incompatible":
             advice = remediation ?? "2nb doesn't support this model's invoke path, so it was not called."
-            return Guidance(badge: "incompatible", title: "Not supported by 2nb", advice: advice, actionLabel: nil, actionURL: nil)
+            return Guidance(badge: "incompatible", title: "Not supported by 2nb", advice: advice, actionLabel: nil, action: nil)
         case "invalid_request":
             advice = remediation ?? "The provider rejected the request as invalid; the model may need a different invoke strategy."
-            return Guidance(badge: "invalid request", title: "Request rejected", advice: advice, actionLabel: nil, actionURL: nil)
+            return Guidance(badge: "invalid request", title: "Request rejected", advice: advice, actionLabel: nil, action: nil)
         default:
-            return Guidance(badge: code.replacingOccurrences(of: "_", with: " "), title: "Test failed (\(code))", advice: remediation ?? "", actionLabel: nil, actionURL: nil)
+            return Guidance(badge: code.replacingOccurrences(of: "_", with: " "), title: "Test failed (\(code))", advice: remediation ?? "", actionLabel: nil, action: nil)
         }
     }
 

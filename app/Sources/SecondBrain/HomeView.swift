@@ -247,16 +247,13 @@ struct HomeView: View {
                 Text(HomeAI.statusLine(status))
             }
             .font(.callout)
-            // The onboarding dead end: this card told a first-run user their
-            // credentials were missing and then offered nowhere to put them.
-            // The only routes were Cmd+, (undiscoverable from here) and a
-            // mini link buried two clicks deep in the Hub.
-            if !ready {
-                SettingsLink {
-                    Text("Add your API key in Settings…")
-                }
+            // Always visible, landing on the AI tab: when AI is not ready the
+            // copy leads with the key ("Add your API key…"); once it works the
+            // link stays as the route to VIEW or REPLACE the key — the old
+            // `if !ready` gate made the only path to a working key vanish the
+            // moment it worked.
+            OpenSettingsTabButton(HomeAI.settingsLinkTitle(ready: ready), tab: .ai)
                 .controlSize(.small)
-            }
             HStack {
                 // The reset path only appears when the config has drifted from
                 // the recommended defaults, and always confirms first: the old
@@ -391,10 +388,8 @@ struct HomeView: View {
             SheetSectionHeader(title: "AI Clients", systemImage: "sparkles")
             statusLine(ok: configuredClientCount > 0,
                        text: "\(configuredClientCount) of \(ClientDescriptor.all.count) clients can reach this vault")
-            SettingsLink {
-                Text("Set up in Settings…")
-            }
-            .controlSize(.small)
+            OpenSettingsTabButton("Set up in Settings…", tab: .integrations)
+                .controlSize(.small)
         }
     }
 
@@ -458,6 +453,14 @@ enum HomeAI {
     static let genModel = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     static let embedModel = "amazon.nova-2-multimodal-embeddings-v1:0"
     static let dims = 1024
+
+    /// Settings-link copy: lead with the key when AI is not ready, stay as a
+    /// subdued route to view/replace a WORKING key otherwise. The link itself
+    /// is always rendered — its old `if !ready` gate made the only path to a
+    /// working key vanish the moment the key worked.
+    static func settingsLinkTitle(ready: Bool) -> String {
+        ready ? "AI settings…" : "Add your API key in Settings…"
+    }
 
     /// Card header reflecting the ACTIVE provider, never hardcoded copy.
     static func headerTitle(_ status: AIStatusInfo?) -> String {

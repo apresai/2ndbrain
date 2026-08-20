@@ -43,6 +43,20 @@ func remediationWins() {
     #expect(g?.advice == "Refresh your SSO session.")
 }
 
+@Test("bad_credentials carries the in-app Open AI settings action; access_denied stays a URL")
+func badCredentialsActionRoutesToSettings() {
+    let bad = ModelAccessPresentation.guidance(code: "bad_credentials", provider: "bedrock")
+    #expect(bad?.actionLabel == "Open AI settings")
+    #expect(bad?.action == .aiSettings)
+    // In-app action means no external URL.
+    #expect(bad?.actionURL == nil)
+
+    let denied = ModelAccessPresentation.guidance(code: "access_denied", provider: "bedrock", region: "us-east-1")
+    if case .url = denied?.action {} else {
+        Issue.record("classic access_denied should carry a URL action, got \(String(describing: denied?.action))")
+    }
+}
+
 @Test("every classified code maps; unknown and nil do not")
 func codeMapping() {
     for code in ["access_denied", "bad_credentials", "throttled", "not_found", "provider_unreachable", "timeout", "incompatible", "invalid_request"] {
