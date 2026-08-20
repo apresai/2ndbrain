@@ -201,20 +201,20 @@ func TestReplaceSection_PreservesComment(t *testing.T) {
 
 func TestSectionBounds_IgnoresHeadingsInsideFences(t *testing.T) {
 	body := strings.Join([]string{
-		"# Real H1",                    // 0
-		"",                             // 1
-		"## Section A",                 // 2
-		"",                             // 3
-		"```bash",                      // 4
-		"# probe-backtick-comment",     // 5
-		"echo hi",                      // 6
-		"```",                          // 7
-		"",                             // 8
-		"## Section B",                 // 9
-		"b content",                    // 10
-		"",                             // 11
-		"## Section C",                 // 12
-		"c content",                    // 13
+		"# Real H1",                // 0
+		"",                         // 1
+		"## Section A",             // 2
+		"",                         // 3
+		"```bash",                  // 4
+		"# probe-backtick-comment", // 5
+		"echo hi",                  // 6
+		"```",                      // 7
+		"",                         // 8
+		"## Section B",             // 9
+		"b content",                // 10
+		"",                         // 11
+		"## Section C",             // 12
+		"c content",                // 13
 	}, "\n")
 	lines := strings.Split(body, "\n")
 
