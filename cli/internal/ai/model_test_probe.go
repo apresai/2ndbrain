@@ -153,17 +153,24 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultR
 	}
 }
 
-// probeGenMaxTokens is the generation smoke probe's output budget. 256, not
-// 32: always-reasoning models on the CLASSIC plane (grok-4.6) bill their
-// reasoning against the output budget — a live "what is 2+2" cost 180 output
-// tokens — and a 32-token cap truncates mid-reasoning with no answer text,
-// failing a working model. Matches mantleMinOutputTokens, the mantle client's
-// floor for the same cause. The ProbeTest cost spec quotes this constant so
-// the estimate can never under-report what a probe may bill; the offline
-// TestProbeBudgetConstantsPinned holds all three together (the live guard,
-// TestLiveGrok46ClassicConverse_CredGated, is credential-gated and invisible
-// to plain CI).
-const probeGenMaxTokens = 256
+// probeGenMaxTokens is the generation smoke probe's output budget. 1024, not
+// 256: always-reasoning models on the CLASSIC plane (grok-4.6) bill their
+// reasoning against the output budget (a live "what is 2+2" cost 180 output
+// tokens, with plenty of headroom to spare), but 256 leaves little margin
+// for a deeper reasoning-by-default model to also emit answer text, and a
+// cap that is too low truncates mid-reasoning with no answer text, failing a
+// working model. The probe measures entitlement (can this account invoke
+// the model at all), not budget (what a real answer should cost), so the
+// constant errs generous: at least mantleMinOutputTokens, the mantle
+// client's own floor for the same reasoning-overhead cause, with headroom
+// above it rather than an exact match. The ProbeTest cost spec quotes this
+// constant so the estimate can never under-report what a probe may bill (a
+// wide `--discover` run scaling to 1024 output tokens per candidate may
+// deliberately trip the default $0.50 verify cost cap, which is the cap
+// working as intended); the offline TestProbeBudgetConstantsPinned holds
+// all three together (the live guard, TestLiveGrok46ClassicConverse_CredGated
+// in internal/cli, is credential-gated and invisible to plain CI).
+const probeGenMaxTokens = 1024
 
 func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) (string, error) {
 	prompt := "What is 2+2? Reply with just the number."
