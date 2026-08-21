@@ -191,7 +191,7 @@ func classifyFailureWithStderr() {
     #expect(outcome == .failure("refusing to spend: estimated cost exceeds cap"))
 }
 
-@Test("Validate cost-preview and verify share explicit IDs; verify does not widen")
+@Test("Validate cost-preview and verify share explicit IDs and the discovery lookup pool")
 func validateSpendUsesSameIDs() {
     let ids = [
         "us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -203,7 +203,13 @@ func validateSpendUsesSameIDs() {
         #expect(preview.contains(id))
         #expect(verify.contains(id))
     }
-    #expect(!verify.contains("--discover"))
+    // Pinned IDs still pin the spend (explicit IDs win in the CLI), but BOTH
+    // argvs carry --discover so the lookup pool includes hint-carrying
+    // mantle-discovered rows: without it a pinned mantle ID falls to the
+    // hint-less fallback, classic-probes a plane that cannot see it, and
+    // persists a spurious FAIL (verify) or estimates $0 (cost-preview).
+    #expect(preview.contains("--discover"))
+    #expect(verify.contains("--discover"))
     #expect(!verify.contains("--enabled-only"))
 }
 

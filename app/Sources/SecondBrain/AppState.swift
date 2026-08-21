@@ -2283,9 +2283,13 @@ final class AppState {
     }
 
     /// Argv for `models cost-preview --probe`. Extracted so Validate can pin
-    /// the same IDs the confirm showed onto `verifyModelsArgs`.
+    /// the same IDs the confirm showed onto `verifyModelsArgs`. Carries
+    /// `--discover` so the CLI resolves IDs against the discovered pool too:
+    /// a mantle-plane discovery has no catalog entry until verified, and
+    /// without the flag its estimate would silently resolve to $0,
+    /// under-stating the spend the Validate confirm is gating.
     nonisolated static func costPreviewArgs(modelIDs: [String], probe: String) -> [String] {
-        var args = ["models", "cost-preview", "--json", "--porcelain", "--probe", probe]
+        var args = ["models", "cost-preview", "--json", "--porcelain", "--probe", probe, "--discover"]
         args.append(contentsOf: modelIDs)
         return args
     }
@@ -2804,7 +2808,12 @@ final class AppState {
 
     /// Argv for `models verify --events`. Empty IDs add `--enabled-only
     /// --discover` (the CLI rebuilds the pool). Validate must pass the same
-    /// explicit IDs it cost-previewed so the confirm cannot under-state spend.
+    /// explicit IDs it cost-previewed so the confirm cannot under-state
+    /// spend; pinned IDs ALSO carry `--discover`, which only widens the
+    /// CLI's lookup pool (explicit IDs still pin the candidate set): a
+    /// pinned mantle-discovered ID would otherwise miss the hint-carrying
+    /// discovery row, fall to the hint-less fallback, classic-probe a plane
+    /// that cannot see it, and persist a spurious FAIL.
     nonisolated static func verifyModelsArgs(provider: String, costCap: Double, modelIDs: [String]) -> [String] {
         var args = [
             "models", "verify",
@@ -2812,10 +2821,10 @@ final class AppState {
             "--scope", "vault",
             "--yes", "--events",
             "--cost-cap", String(format: "%.4f", costCap),
+            "--discover",
         ]
         if modelIDs.isEmpty {
             args.append("--enabled-only")
-            args.append("--discover")
         } else {
             args.append(contentsOf: modelIDs)
         }
