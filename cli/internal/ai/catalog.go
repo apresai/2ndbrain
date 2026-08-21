@@ -115,6 +115,14 @@ func BuiltinCatalog() []ModelInfo {
 		{"us.anthropic.claude-sonnet-5", "Claude Sonnet 5", 1000000, 0, 0, stagedRolloutNote, true},
 		{"us.anthropic.claude-opus-4-6-v1", "Claude Opus 4.6", 1000000, 0, 0, "1M context", false},
 		{"us.anthropic.claude-opus-4-8", "Claude Opus 4.8", 1000000, 0, 0, stagedRolloutNote, true},
+		// Grok 4.6 (Bedrock launch 2026-08-19) is dual-plane: this CLASSIC
+		// entry rides Converse via the us. cross-region profile (SigV4 or
+		// bearer; geo pricing pinned from the model card, verified live
+		// 2026-08-20), while the same model is separately invokable on the
+		// mantle plane as xai.grok-4.6 (bearer-only, us-west-2). Reasoning is
+		// always on (default effort low), so even trivial answers bill ~200
+		// output tokens — the probe budget accounts for this.
+		{"us.xai.grok-4.6", "xAI Grok 4.6", 500000, 2.20, 6.60, "reasoning always on; 500K context", false},
 		{"amazon.nova-micro-v1:0", "Amazon Nova Micro", 128000, 0.035, 0.14, "text-only, fastest", false},
 		{"amazon.nova-lite-v1:0", "Amazon Nova Lite", 300000, 0.06, 0.24, "", false},
 		{"amazon.nova-pro-v1:0", "Amazon Nova Pro", 300000, 0.80, 3.20, "", false},

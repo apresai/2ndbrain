@@ -81,7 +81,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 
 ## AI Providers
 
-2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token).
+2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token). Grok 4.6 is dual-plane: its builtin entry rides the classic Converse profile `us.xai.grok-4.6` (SigV4 or bearer), with the mantle id also usable via a user-catalog entry.
 
 Bedrock token precedence: `AWS_BEARER_TOKEN_BEDROCK`, then `~/.config/2nb/bedrock.json` (Settings, Cmd+, or `2nb config bedrock --set`), then the macOS Keychain (`2nb config set-key bedrock`), then SigV4 from `~/.aws`. To make the SAVED key win over the env var for 2nb only — handy when `AWS_BEARER_TOKEN_BEDROCK` serves other tools in your shell — turn on `2nb config bedrock --set --prefer-stored-token` (or the matching Settings checkbox). File region, when set, overlays vault `ai.bedrock.region`. The token is never written into a vault.
 

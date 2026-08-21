@@ -89,6 +89,30 @@ func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelI
 	return writeCatalog(path, cat)
 }
 
+// UserCatalogEntry returns the raw stored entry for (provider, id) from the
+// single catalog file at scope — no builtin merge, no overlay — so a caller
+// about to REPLACE an entry (SaveUserCatalogEntry is wholesale) can see
+// exactly what it would erase. ok is false when the file has no such entry.
+func UserCatalogEntry(scope UserCatalogScope, vaultRoot, provider, id string) (ModelInfo, bool) {
+	userCatalogMu.Lock()
+	defer userCatalogMu.Unlock()
+
+	path, err := catalogPathForScope(scope, vaultRoot)
+	if err != nil {
+		return ModelInfo{}, false
+	}
+	cat, err := readCatalogForWrite(path)
+	if err != nil {
+		return ModelInfo{}, false
+	}
+	for _, m := range cat.Models {
+		if m.Provider == provider && m.ID == id {
+			return m, true
+		}
+	}
+	return ModelInfo{}, false
+}
+
 // RemoveUserCatalogEntry removes the matching (provider, id) from the catalog
 // at `scope`. Returns nil if the entry was not present — no empty catalog file
 // is written in that case.
