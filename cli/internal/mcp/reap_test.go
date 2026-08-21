@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,5 +201,33 @@ func TestReap_SkipsActiveServer(t *testing.T) {
 	}
 	if !pidAlive(pid) {
 		t.Errorf("active server PID %d must still be alive", pid)
+	}
+}
+
+// TestReap_EmptyResultMarshalsArraysNeverNull pins the JSON contract for the
+// HEALTHY case: zero stale servers and zero sidecars must serialize as
+// "reaped": [] and "skipped": [], not null. Nil slices marshal as null, which
+// the app's non-optional MCPReapResult decoder rejected, so every clean
+// Verify-setup run failed with "The data couldn't be read because it is
+// missing" until this was pinned.
+func TestReap_EmptyResultMarshalsArraysNeverNull(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	res, err := Reap(v, 6*time.Hour, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if strings.Contains(s, `"reaped":null`) || strings.Contains(s, `"skipped":null`) {
+		t.Fatalf("empty reap result marshals null, want []: %s", s)
+	}
+	if !strings.Contains(s, `"reaped":[]`) {
+		t.Fatalf("want \"reaped\":[] in %s", s)
+	}
+	if !strings.Contains(s, `"skipped":[]`) {
+		t.Fatalf("want \"skipped\":[] in %s", s)
 	}
 }
