@@ -675,3 +675,81 @@ func TestContract_ModelsVerifyEventsStreamsResult(t *testing.T) {
 		t.Fatalf("done summary should count the one probe, got %s", lines[2])
 	}
 }
+
+// TestProbeSavePreservesRoutingFields pins the fix for a live-observed bug:
+// `models test --save` rebuilt the entry from a merged row that had lost the
+// user catalog's invoke_strategy, and SaveUserCatalogEntry replaces
+// wholesale — so a hand-added mantle entry PASSED its probe and was
+// simultaneously reclassified statically incompatible. Routing fields must
+// survive a probe save; a CLASSIC entry's region stays under
+// persistProbedRegion's control and is NOT preserved.
+func TestProbeSavePreservesRoutingFields(t *testing.T) {
+	_, root := newContractVault(t)
+	scope := ai.ScopeVault
+
+	if err := ai.SaveUserCatalogEntry(scope, root, ai.ModelInfo{
+		ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation",
+		InvokeStrategy: ai.StrategyBedrockMantleResponses,
+		Region:         "us-west-2",
+		ContextLen:     500000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A probe-derived entry, as catalogEntryFromTestResult would build it
+	// when the merged base lost the routing fields.
+	entry := ai.ModelInfo{ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation", Tier: ai.TierUserVerified}
+	preserveRoutingFields(scope, root, &entry)
+	if entry.InvokeStrategy != ai.StrategyBedrockMantleResponses {
+		t.Errorf("invoke_strategy not preserved: %q", entry.InvokeStrategy)
+	}
+	if entry.Region != "us-west-2" {
+		t.Errorf("mantle region pin not preserved: %q", entry.Region)
+	}
+	if entry.ContextLen != 500000 {
+		t.Errorf("context length not preserved: %d", entry.ContextLen)
+	}
+
+	// Classic entry: region must NOT be resurrected (persistProbedRegion
+	// owns it — a primary pass clears stale pins on purpose).
+	if err := ai.SaveUserCatalogEntry(scope, root, ai.ModelInfo{
+		ID: "us.anthropic.claude-sonnet-5", Provider: "bedrock", Type: "generation",
+		Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	classic := ai.ModelInfo{ID: "us.anthropic.claude-sonnet-5", Provider: "bedrock", Type: "generation"}
+	preserveRoutingFields(scope, root, &classic)
+	if classic.Region != "" {
+		t.Errorf("classic region must stay cleared, got %q", classic.Region)
+	}
+}
+
+// TestLiveGrok46ClassicConverse_CredGated proves the first classic-plane xAI
+// model end to end: the Converse allowlist admits it, the 256-token probe
+// budget survives always-on reasoning (a trivial answer bills ~180 output
+// tokens), and the generator extracts the text block behind the
+// reasoningContent block. Skips without AWS credentials; costs ~$0.002.
+func TestLiveGrok46ClassicConverse_CredGated(t *testing.T) {
+	if !ai.CheckBedrockCredentials(t.Context(), ai.BedrockConfig{Profile: "default", Region: "us-east-1"}) {
+		t.Skip("AWS credentials not configured")
+	}
+	_, root := newContractVault(t)
+	got, err := runCLIArgs(t, root, "models", "test", "us.xai.grok-4.6", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("models test: %v (out=%s)", err, truncate(got, 300))
+	}
+	var res struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(got, &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		if res.Code == "access_denied" {
+			t.Skipf("account not entitled to grok-4.6 (%s)", res.Code)
+		}
+		t.Fatalf("probe failed: %+v (out=%s)", res, truncate(got, 300))
+	}
+}

@@ -163,7 +163,12 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 	// is still floored internally by the mantle client. This deliberately
 	// ignores cfg.ReasoningEffort: a user's thinking-depth preference applies to
 	// real answers, not to an access check whose only job is to come back.
-	opts := GenOpts{MaxTokens: 32, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
+	// MaxTokens 256, not 32: always-reasoning models on the CLASSIC plane
+	// (grok-4.6) bill their reasoning against the output budget — a live
+	// "what is 2+2" cost 180 output tokens — and a 32-token cap truncates
+	// mid-reasoning with no answer text, failing a working model. 256
+	// matches the mantle client's own floor for the same cause.
+	opts := GenOpts{MaxTokens: 256, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
 
 	switch provider {
 	case "bedrock":

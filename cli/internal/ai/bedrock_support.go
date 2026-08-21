@@ -141,6 +141,13 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 			return true, ""
 		case strings.HasPrefix(lower, "nvidia.nemotron"):
 			return true, ""
+		case strings.HasPrefix(lower, "xai.grok"):
+			// Grok 4.6 (2026-08-19) is the first xAI model on the CLASSIC
+			// plane: Converse via the us./global. cross-region profiles
+			// (earlier Groks were mantle-only, which bypasses this gate via
+			// their invoke strategy). Output is [reasoningContent, text]
+			// blocks; the generator's block iteration handles that.
+			return true, ""
 		default:
 			return false, "2nb doesn't support this Bedrock Converse model path yet"
 		}

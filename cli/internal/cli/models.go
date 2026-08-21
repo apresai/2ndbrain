@@ -310,6 +310,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	probeModelsConcurrently(ctx, v.Config.AI, v.Root, merged.Unverified, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
 		if err == nil && result != nil && result.OK {
 			entry := promotedEntry(&m, result)
+			preserveRoutingFields(scope, v.Root, &entry)
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
 				passed++
 				fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",
@@ -557,6 +558,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		scope := ai.UserCatalogScope(testSaveScope)
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
+		preserveRoutingFields(scope, v.Root, &entry)
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			if getFormat(cmd) != "" {
 				return fmt.Errorf("save test result: %w", err)
@@ -819,6 +821,7 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 			}
 		}
 		entry.Enabled = ai.Ptr(enabled)
+		preserveRoutingFields(scope, vaultRoot, &entry)
 		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 			return fmt.Errorf("save %s: %w", id, err)
 		}
@@ -935,6 +938,34 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 	}
 	persistProbedRegion(&entry, result, ai.ResolveBedrockConfig(cfg.Bedrock).Region)
 	return entry
+}
+
+// preserveRoutingFields carries user-authored routing metadata (invoke
+// strategy, endpoint, mantle region pin, context length) from the existing
+// scope entry through a probe save. SaveUserCatalogEntry replaces wholesale,
+// and the merged row a save is built from can lose these fields — observed
+// live 2026-08-20 when `models test --save` stripped a hand-added mantle
+// entry's invoke_strategy, leaving a row that had just PASSED its probe
+// classified statically incompatible. Region for CLASSIC entries is
+// deliberately NOT preserved: persistProbedRegion owns it (a primary-region
+// pass must clear a stale pin, and preservation would resurrect it).
+func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
+	existing, ok := ai.UserCatalogEntry(scope, vaultRoot, entry.Provider, entry.ID)
+	if !ok {
+		return
+	}
+	if entry.InvokeStrategy == "" {
+		entry.InvokeStrategy = existing.InvokeStrategy
+	}
+	if entry.Endpoint == "" {
+		entry.Endpoint = existing.Endpoint
+	}
+	if entry.Region == "" && entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
+		entry.Region = existing.Region
+	}
+	if entry.ContextLen == 0 {
+		entry.ContextLen = existing.ContextLen
+	}
 }
 
 // persistProbedRegion records where a classic-Bedrock model actually passed so

@@ -223,6 +223,7 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		entry := promotedEntry(base, r)
 		entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, v.Root)
 		entry.TestLatencyMs = latencyMs(r.Latency)
+		preserveRoutingFields(scope, v.Root, &entry)
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			events.emit(wizardEvent{
 				Step:    "save_error",

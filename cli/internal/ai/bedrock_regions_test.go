@@ -341,3 +341,38 @@ func TestInvalidRequestRemediationMentionsRegion(t *testing.T) {
 		t.Errorf("non-bedrock remediation should not mention region: %s", generic)
 	}
 }
+
+// TestCrossPlanePinsNeverBleed pins two live-observed bugs from grok-4.6's
+// dual-plane debut: a mantle user entry for the bare id must not leak its
+// invoke strategy or region onto the CLASSIC us./global. profile forms via
+// the profile-stripped base match — profiles exist only on the classic
+// plane, and the leak dispatched Converse traffic to a mantle 404 and pinned
+// it to the mantle region.
+func TestCrossPlanePinsNeverBleed(t *testing.T) {
+	root := t.TempDir()
+	if err := SaveUserCatalogEntry(ScopeVault, root, ModelInfo{
+		ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation",
+		InvokeStrategy: StrategyBedrockMantleResponses,
+		Region:         "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exact id: mantle strategy and region apply.
+	if s := ResolveInvokeStrategy("bedrock", "xai.grok-4.6", root); s != StrategyBedrockMantleResponses {
+		t.Errorf("exact mantle strategy lost: %q", s)
+	}
+	if r := ResolveModelRegion("bedrock", "xai.grok-4.6", root); r != "us-west-2" {
+		t.Errorf("exact mantle region lost: %q", r)
+	}
+
+	// Profile forms: NEITHER bleeds across the plane boundary.
+	for _, id := range []string{"us.xai.grok-4.6", "global.xai.grok-4.6"} {
+		if s := ResolveInvokeStrategy("bedrock", id, root); s == StrategyBedrockMantleResponses {
+			t.Errorf("%s inherited the mantle strategy via base match", id)
+		}
+		if r := ResolveModelRegion("bedrock", id, root); r != "" {
+			t.Errorf("%s inherited region %q via base match", id, r)
+		}
+	}
+}

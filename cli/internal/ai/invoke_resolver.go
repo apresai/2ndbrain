@@ -15,19 +15,59 @@ import "strings"
 // but wasteful: BuiltinCatalog is a static slice and LoadUserCatalog
 // re-reads YAML files from disk.
 func ResolveInvokeStrategy(provider, modelID, vaultRoot string) string {
-	return resolveCatalogString(provider, modelID, vaultRoot, func(m ModelInfo) string {
-		return m.InvokeStrategy
-	})
+	field := func(m ModelInfo) string { return m.InvokeStrategy }
+	// Exact id first, user over builtin.
+	if s := findCatalogStringExact(LoadUserCatalog(vaultRoot), provider, modelID, field); s != "" {
+		return s
+	}
+	if s := findCatalogStringExact(BuiltinCatalog(), provider, modelID, field); s != "" {
+		return s
+	}
+	// The profile-stripped base fallback keeps a us./eu./global. variant on
+	// its base entry's dialect — EXCEPT the mantle strategy: cross-region
+	// profiles exist only on the CLASSIC plane, so a profile-prefixed id can
+	// never be mantle, and inheriting it dispatches Converse traffic to a
+	// mantle 404 (observed live 2026-08-20 when the classic us.xai.grok-4.6
+	// base-matched a mantle xai.grok-4.6 user entry).
+	s := resolveCatalogString(provider, modelID, vaultRoot, field)
+	if s == StrategyBedrockMantleResponses &&
+		!strings.EqualFold(inferenceProfileBaseID(modelID), modelID) {
+		return ""
+	}
+	return s
 }
 
 // ResolveModelRegion returns the per-model AWS region pin for (provider,
-// modelID), resolved through the same user-catalog-over-builtin chain as
-// ResolveInvokeStrategy. Returns "" when no catalog entry pins a region,
-// meaning "use the provider default (ai.bedrock.region)".
+// modelID), user catalog over builtin. Returns "" when no catalog entry pins
+// a region, meaning "use the provider default (ai.bedrock.region)".
+//
+// EXACT id matching only — deliberately not resolveCatalogString's
+// profile-stripped base fallback. Region pins are always authored against
+// exact ids (the rerank and mantle builtins, persisted verify passes), and
+// base matching let one PLANE's pin bleed onto the other: the classic
+// `us.xai.grok-4.6` Converse profile base-matched a mantle `xai.grok-4.6`
+// user entry and inherited its us-west-2 mantle pin, routing Converse to a
+// region where the profile 404s (observed live 2026-08-20).
 func ResolveModelRegion(provider, modelID, vaultRoot string) string {
-	return resolveCatalogString(provider, modelID, vaultRoot, func(m ModelInfo) string {
-		return m.Region
-	})
+	field := func(m ModelInfo) string { return m.Region }
+	if user := findCatalogStringExact(LoadUserCatalog(vaultRoot), provider, modelID, field); user != "" {
+		return user
+	}
+	return findCatalogStringExact(BuiltinCatalog(), provider, modelID, field)
+}
+
+// findCatalogStringExact is findCatalogString without the
+// inference-profile-stripped fallback: only an entry whose ID equals modelID
+// matches.
+func findCatalogStringExact(catalog []ModelInfo, provider, modelID string, field func(ModelInfo) string) string {
+	for _, m := range catalog {
+		if m.Provider == provider && m.ID == modelID {
+			if s := field(m); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // EffectiveBedrockRegion returns the region a Bedrock client for modelID

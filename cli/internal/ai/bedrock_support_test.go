@@ -139,3 +139,36 @@ func TestBedrockContextLenHint_AgreesWithBuiltinCatalog(t *testing.T) {
 		}
 	}
 }
+
+// Grok 4.6 (2026-08-19) is the first xAI model on the classic Converse
+// plane; earlier Groks were mantle-only and bypass this gate entirely via
+// their invoke strategy. The us./global. profile forms and the bare id must
+// all pass, and an unknown vendor still falls to the refusal.
+func TestBedrockModelSupported_XAIGrokConverse(t *testing.T) {
+	for _, id := range []string{"us.xai.grok-4.6", "global.xai.grok-4.6", "xai.grok-4.6"} {
+		if ok, why := bedrockModelSupported(id, "generation"); !ok {
+			t.Errorf("%s should be Converse-supported, got refused: %s", id, why)
+		}
+	}
+	if ok, _ := bedrockModelSupported("unknownvendor.some-model", "generation"); ok {
+		t.Error("unknown vendor should still be refused")
+	}
+}
+
+func TestBuiltinCatalogCarriesGrok46Classic(t *testing.T) {
+	for _, m := range BuiltinCatalog() {
+		if m.ID == "us.xai.grok-4.6" {
+			if m.Provider != "bedrock" || m.Type != "generation" {
+				t.Fatalf("wrong shape: %+v", m)
+			}
+			if m.ContextLen != 500000 {
+				t.Errorf("context = %d, want 500000 (model card)", m.ContextLen)
+			}
+			if m.PriceIn != 2.20 || m.PriceOut != 6.60 {
+				t.Errorf("pricing = %v/%v, want 2.20/6.60 (geo, model card 2026-08-20)", m.PriceIn, m.PriceOut)
+			}
+			return
+		}
+	}
+	t.Fatal("us.xai.grok-4.6 missing from the builtin catalog")
+}
