@@ -952,19 +952,31 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
 	existing, ok := ai.UserCatalogEntry(scope, vaultRoot, entry.Provider, entry.ID)
 	if !ok {
+		slog.Debug("preserve routing fields: no existing scope entry, nothing to carry",
+			"provider", entry.Provider, "model", entry.ID, "scope", scope)
 		return
 	}
-	if entry.InvokeStrategy == "" {
+	var carried []string
+	if entry.InvokeStrategy == "" && existing.InvokeStrategy != "" {
 		entry.InvokeStrategy = existing.InvokeStrategy
+		carried = append(carried, "invoke_strategy")
 	}
-	if entry.Endpoint == "" {
+	if entry.Endpoint == "" && existing.Endpoint != "" {
 		entry.Endpoint = existing.Endpoint
+		carried = append(carried, "endpoint")
 	}
-	if entry.Region == "" && entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
+	if entry.Region == "" && existing.Region != "" && entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
 		entry.Region = existing.Region
+		carried = append(carried, "region")
 	}
-	if entry.ContextLen == 0 {
+	if entry.ContextLen == 0 && existing.ContextLen != 0 {
 		entry.ContextLen = existing.ContextLen
+		carried = append(carried, "context_len")
+	}
+	if len(carried) > 0 {
+		slog.Debug("preserve routing fields: carried from existing scope entry",
+			"provider", entry.Provider, "model", entry.ID, "scope", scope,
+			"fields", strings.Join(carried, ","))
 	}
 }
 
