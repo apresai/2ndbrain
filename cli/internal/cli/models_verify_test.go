@@ -725,6 +725,58 @@ func TestProbeSavePreservesRoutingFields(t *testing.T) {
 	}
 }
 
+// TestAdoptCandidateRouting pins the persistence half of the mantle-discovery
+// seam: a passing probe of a discovered row (no catalog entry anywhere) must
+// save the row's routing hints so the ordinary resolvers route every future
+// invoke — and must never overwrite what preserveRoutingFields already
+// carried from an existing user entry, nor touch classic Region, which
+// persistProbedRegion owns.
+func TestAdoptCandidateRouting(t *testing.T) {
+	// Discovered mantle candidate onto a bare probe-derived entry: strategy,
+	// region, and context length are adopted.
+	candidate := ai.ModelInfo{
+		ID: "deepseek.v3.2", Provider: "bedrock", Type: "generation",
+		InvokeStrategy: ai.StrategyBedrockMantleResponses,
+		Region:         "us-east-1",
+		ContextLen:     128000,
+	}
+	entry := ai.ModelInfo{ID: "deepseek.v3.2", Provider: "bedrock", Type: "generation", Tier: ai.TierUserVerified}
+	adoptCandidateRouting(&entry, candidate)
+	if entry.InvokeStrategy != ai.StrategyBedrockMantleResponses {
+		t.Errorf("invoke_strategy not adopted: %q", entry.InvokeStrategy)
+	}
+	if entry.Region != "us-east-1" {
+		t.Errorf("mantle region not adopted: %q", entry.Region)
+	}
+	if entry.ContextLen != 128000 {
+		t.Errorf("context length not adopted: %d", entry.ContextLen)
+	}
+
+	// Existing values win (preserveRoutingFields ran first): nothing is
+	// overwritten by the discovery hint.
+	kept := ai.ModelInfo{
+		ID: "deepseek.v3.2", Provider: "bedrock", Type: "generation",
+		InvokeStrategy: ai.StrategyBedrockMantleResponses,
+		Region:         "us-west-2",
+		Endpoint:       "https://bedrock-mantle-custom.api.aws",
+		ContextLen:     500000,
+	}
+	adoptCandidateRouting(&kept, candidate)
+	if kept.Region != "us-west-2" || kept.ContextLen != 500000 || kept.Endpoint != "https://bedrock-mantle-custom.api.aws" {
+		t.Errorf("existing routing overwritten: %+v", kept)
+	}
+
+	// A classic candidate (empty strategy) must never plant a Region:
+	// persistProbedRegion owns classic pins, and a primary-region pass
+	// clears them on purpose.
+	classicCandidate := ai.ModelInfo{ID: "us.acme.model-1", Provider: "bedrock", Type: "generation", Region: "us-west-2"}
+	classicEntry := ai.ModelInfo{ID: "us.acme.model-1", Provider: "bedrock", Type: "generation"}
+	adoptCandidateRouting(&classicEntry, classicCandidate)
+	if classicEntry.Region != "" {
+		t.Errorf("classic region must stay under persistProbedRegion's control, got %q", classicEntry.Region)
+	}
+}
+
 // TestLiveGrok46ClassicConverse_CredGated proves the first classic-plane xAI
 // model end to end: the Converse allowlist admits it, the 1024-token probe
 // budget survives always-on reasoning (a trivial answer bills ~180 output

@@ -311,6 +311,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 		if err == nil && result != nil && result.OK {
 			entry := promotedEntry(&m, result)
 			preserveRoutingFields(scope, v.Root, &entry)
+			adoptCandidateRouting(&entry, m)
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
 				passed++
 				fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",
@@ -368,7 +369,11 @@ func probeModelsConcurrentlyRegions(ctx context.Context, cfg ai.AIConfig, vaultR
 			defer func() { <-sem }()
 
 			n := int(counter.Add(1))
-			result, err := ai.TestProbeModelInRegions(ctx, cfg, m.ID, m.Provider, m.Type, vaultRoot, regions)
+			// The hinted variant: batch candidates are full ModelInfo rows, so
+			// a mantle-DISCOVERED model (no catalog entry) carries its own
+			// InvokeStrategy/Region and probes over the right plane. Catalog
+			// resolution still wins inside.
+			result, err := ai.TestProbeModelInfoInRegions(ctx, cfg, m, vaultRoot, regions)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -548,6 +553,12 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	// Region-aware like verify: a pinned model re-checks primary (self-heal)
 	// and the included regions apply, so `models test --save` can never
 	// freeze a stale pin that verify would have cleared.
+	//
+	// Known limitation: a bare id here resolves routing from the catalogs
+	// only, so a mantle-DISCOVERED model (in no catalog yet) classic-probes
+	// and 404s. The supported routes for those are `models verify --discover
+	// <id>` (which threads the discovery row's routing hints) or a prior
+	// promote; after either, the persisted entry routes this command too.
 	result, err := ai.TestProbeModelInRegions(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
 	if err != nil {
 		return err
@@ -977,6 +988,31 @@ func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *a
 		slog.Debug("preserve routing fields: carried from existing scope entry",
 			"provider", entry.Provider, "model", entry.ID, "scope", scope,
 			"fields", strings.Join(carried, ","))
+	}
+}
+
+// adoptCandidateRouting fills discovery-time routing hints from the probed
+// candidate into the entry being saved, so a passing probe of a
+// mantle-DISCOVERED model persists invoke_strategy + region and the ordinary
+// resolvers route every future invoke. It must run AFTER
+// preserveRoutingFields at each save site: an existing user-catalog entry
+// always beats the discovery hint. Region is adopted only for
+// mantle-strategy entries — classic Region is owned by persistProbedRegion
+// (a primary-region pass must clear a stale pin), and the two owners must
+// never fight over the same field.
+func adoptCandidateRouting(entry *ai.ModelInfo, candidate ai.ModelInfo) {
+	if entry.InvokeStrategy == "" && candidate.InvokeStrategy != "" {
+		entry.InvokeStrategy = candidate.InvokeStrategy
+	}
+	if entry.Endpoint == "" && candidate.Endpoint != "" {
+		entry.Endpoint = candidate.Endpoint
+	}
+	if entry.ContextLen == 0 && candidate.ContextLen != 0 {
+		entry.ContextLen = candidate.ContextLen
+	}
+	if entry.Region == "" && candidate.Region != "" &&
+		entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
+		entry.Region = candidate.Region
 	}
 }
 
