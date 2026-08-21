@@ -2799,6 +2799,39 @@ final class AppState {
         _ = try await runCLI(args, cwd: vault.rootURL)
     }
 
+    // MARK: - Discovery nudge (new-model "seen" snapshot)
+
+    /// Persisted set of `"provider|modelID"` keys already shown in the
+    /// Models tab discovery-nudge banner (`DiscoveryNudge`). App-side
+    /// (`UserDefaults`), deliberately not vault-side: a vault's
+    /// `.2ndbrain/` sidecar can sync across machines via Obsidian/git, and
+    /// a synced "seen" snapshot would mis-badge models as new (or not-new)
+    /// on a different machine than the one that actually saw them. The
+    /// CLI's own XDG discovery cache is a different namespace (a 24h-TTL
+    /// listing cache, not a per-viewer seen-set) and is not reused here.
+    ///
+    /// `nil` means no snapshot has ever been written (a fresh install, or
+    /// an app version predating this feature): SimpleModelsView reads
+    /// this distinction, together with `DiscoveryNudge.shouldSuppressFirstRun`'s
+    /// per-provider check, to seed the snapshot silently on first load
+    /// instead of badging the entire shipped catalog as "new".
+    var discoverySeenModelKeys: Set<String>? {
+        guard let stored = UserDefaults.standard.array(forKey: DiscoveryNudge.key) as? [String] else {
+            return nil
+        }
+        return Set(stored)
+    }
+
+    /// Merges `keys` into the persisted seen snapshot. Never removes an
+    /// existing entry, so a vendor momentarily absent from a reload (a
+    /// slow catalog fetch, a policy toggle mid-flight) can't un-badge a
+    /// model the user has already seen.
+    func recordDiscoverySeen(_ keys: Set<String>) {
+        guard !keys.isEmpty else { return }
+        let current = discoverySeenModelKeys ?? []
+        UserDefaults.standard.set(Array(current.union(keys)), forKey: DiscoveryNudge.key)
+    }
+
     // MARK: - Vendor policy (enable-only per provider)
 
     /// GUI vendor policy is machine-local and sticky across vaults. Vault
