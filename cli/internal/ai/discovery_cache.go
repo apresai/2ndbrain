@@ -40,7 +40,14 @@ type cachedDiscovery struct {
 	Models  []ModelInfo `json:"models"`
 }
 
-const discoveryCacheVersion = 1
+// discoveryCacheVersion is 2: the classic-plane generation compatibility gate
+// (bedrockModelSupported) widened from a per-vendor allowlist to a
+// default-allow, so a v1 cache written before this change would keep serving
+// the narrow, pre-widening catalog for up to 24h. Bumping the version
+// invalidates every existing entry (including the mantle-plane caches PR2
+// adds under a separate namespace) so the next discovery call re-fetches
+// live and reflects the new gate.
+const discoveryCacheVersion = 2
 
 // ListBedrockVendorModelsCached is ListBedrockVendorModels with a 24h disk
 // cache. A fresh entry short-circuits the AWS calls entirely; on a live
