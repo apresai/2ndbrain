@@ -57,12 +57,16 @@ func TestInferModelType(t *testing.T) {
 // always-reasoning models bill reasoning against the output budget (a live
 // "what is 2+2" on grok-4.6 cost 180 output tokens), so a revert toward the
 // old 32-token cap truncates mid-reasoning and fails a working model. The
-// three values are pinned together so the cost estimate can never
-// under-report what a probe may bill and the classic-plane budget can never
-// drop below the mantle client's floor, which exists for the same cause.
+// floor is 1024, not the earlier 256: the probe measures entitlement, not
+// budget, so it needs headroom for a deeper reasoning-by-default model to
+// still emit answer text after its reasoning overhead, not just enough to
+// match one measured 180-token sample. The three values are pinned together
+// so the cost estimate can never under-report what a probe may bill and the
+// classic-plane budget can never drop below the mantle client's floor, which
+// exists for the same cause.
 func TestProbeBudgetConstantsPinned(t *testing.T) {
-	if probeGenMaxTokens < 256 {
-		t.Errorf("probeGenMaxTokens = %d; below 256 truncates always-reasoning models mid-answer (measured 180 tokens for a trivial prompt)", probeGenMaxTokens)
+	if probeGenMaxTokens < 1024 {
+		t.Errorf("probeGenMaxTokens = %d; below 1024 leaves too little headroom for a deep reasoning-by-default model to emit answer text after its reasoning overhead (measured 180 tokens for grok-4.6 on a trivial prompt, but the probe must cover models with much larger reasoning overhead too)", probeGenMaxTokens)
 	}
 	if got := DefaultProbeSpec(ProbeTest).OutputTokens; got != probeGenMaxTokens {
 		t.Errorf("ProbeTest cost spec OutputTokens = %d, want probeGenMaxTokens (%d); the estimate must not under-report what a probe may bill", got, probeGenMaxTokens)

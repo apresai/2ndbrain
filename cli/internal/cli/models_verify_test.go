@@ -726,10 +726,11 @@ func TestProbeSavePreservesRoutingFields(t *testing.T) {
 }
 
 // TestLiveGrok46ClassicConverse_CredGated proves the first classic-plane xAI
-// model end to end: the Converse allowlist admits it, the 256-token probe
+// model end to end: the Converse allowlist admits it, the 1024-token probe
 // budget survives always-on reasoning (a trivial answer bills ~180 output
-// tokens), and the generator extracts the text block behind the
-// reasoningContent block. Skips without AWS credentials; costs ~$0.002.
+// tokens, well under the cap), and the generator extracts the text block
+// behind the reasoningContent block. Skips without AWS credentials; costs
+// ~$0.002 (billed on actual tokens generated, not the cap).
 func TestLiveGrok46ClassicConverse_CredGated(t *testing.T) {
 	if !ai.CheckBedrockCredentials(t.Context(), ai.BedrockConfig{Profile: "default", Region: "us-east-1"}) {
 		t.Skip("AWS credentials not configured")
