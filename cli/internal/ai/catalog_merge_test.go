@@ -405,3 +405,88 @@ func TestProviderDisabled_EachProviderToggles(t *testing.T) {
 		}
 	}
 }
+
+// TestAdoptRoutingHints pins the shared fill-only-empty rule used by both the
+// discovery merge graft and the CLI probe save path.
+func TestAdoptRoutingHints(t *testing.T) {
+	mantle := ModelInfo{ID: "xai.grok-4.6", Provider: "bedrock",
+		InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-west-2",
+		Endpoint: "https://bedrock-mantle.us-west-2.api.aws", ContextLen: 500000}
+
+	t.Run("empty entry adopts strategy, endpoint, contextlen, and mantle region", func(t *testing.T) {
+		entry := ModelInfo{ID: "xai.grok-4.6", Provider: "bedrock"}
+		AdoptRoutingHints(&entry, mantle)
+		if entry.InvokeStrategy != StrategyBedrockMantleResponses || entry.Region != "us-west-2" ||
+			entry.Endpoint != mantle.Endpoint || entry.ContextLen != 500000 {
+			t.Fatalf("hints not adopted: %+v", entry)
+		}
+	})
+
+	t.Run("authored fields are never overwritten", func(t *testing.T) {
+		entry := ModelInfo{ID: "x", Provider: "bedrock",
+			InvokeStrategy: StrategyBedrockConverse, Region: "eu-west-1", ContextLen: 8192}
+		AdoptRoutingHints(&entry, mantle)
+		if entry.InvokeStrategy != StrategyBedrockConverse || entry.Region != "eu-west-1" || entry.ContextLen != 8192 {
+			t.Fatalf("authored fields clobbered: %+v", entry)
+		}
+	})
+
+	t.Run("region is adopted only under the mantle strategy", func(t *testing.T) {
+		entry := ModelInfo{ID: "x", Provider: "bedrock"}
+		classic := ModelInfo{ID: "x", Provider: "bedrock", Region: "us-east-2"}
+		AdoptRoutingHints(&entry, classic)
+		if entry.Region != "" {
+			t.Fatalf("classic region adopted; persistProbedRegion owns classic pins: %+v", entry)
+		}
+	})
+
+	t.Run("authored mantle strategy with empty region adopts the region", func(t *testing.T) {
+		entry := ModelInfo{ID: "x", Provider: "bedrock", InvokeStrategy: StrategyBedrockMantleResponses}
+		AdoptRoutingHints(&entry, mantle)
+		if entry.Region != "us-west-2" {
+			t.Fatalf("mantle region not adopted onto authored mantle entry: %+v", entry)
+		}
+	})
+}
+
+// TestMergeDiscoveredGraftsHintsOntoRoutingEmptyRows pins the self-heal for
+// the 2026-08-21 live incident: a user-catalog row whose routing was stripped
+// by a pre-0.19.0 save clobber must adopt the discovered row's hints instead
+// of shadowing them (which probed a mantle-only id over classic Converse
+// until the row was manually removed).
+func TestMergeDiscoveredGraftsHintsOntoRoutingEmptyRows(t *testing.T) {
+	stripped := ModelInfo{ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation", Tier: TierUserVerified}
+	authored := ModelInfo{ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation",
+		InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-east-2"}
+	classicOnly := ModelInfo{ID: "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider: "bedrock", Type: "generation"}
+	catalog := []ModelInfo{stripped, authored, classicOnly}
+
+	discovered := []ModelInfo{
+		// Mantle listing row for the stripped id: hints must graft.
+		{ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation",
+			InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-west-2"},
+		// Mantle listing row for an authored id: must not touch it.
+		{ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation",
+			InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-west-2"},
+		// Classic discovery row for a merged id: empty strategy, graft no-ops.
+		{ID: "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider: "bedrock", Type: "generation"},
+		// Genuinely new id: joins unverified with hints intact.
+		{ID: "zai.glm-9", Provider: "bedrock", Type: "generation",
+			InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-east-1"},
+	}
+
+	unverified := mergeDiscovered(catalog, discovered)
+
+	if len(unverified) != 1 || unverified[0].ID != "zai.glm-9" || unverified[0].InvokeStrategy != StrategyBedrockMantleResponses {
+		t.Fatalf("unverified = %+v, want only zai.glm-9 with hints", unverified)
+	}
+	if catalog[0].InvokeStrategy != StrategyBedrockMantleResponses || catalog[0].Region != "us-west-2" {
+		t.Fatalf("stripped row did not adopt hints: %+v", catalog[0])
+	}
+	if catalog[1].Region != "us-east-2" {
+		t.Fatalf("authored row was clobbered: %+v", catalog[1])
+	}
+	if catalog[2].InvokeStrategy != "" || catalog[2].Region != "" {
+		t.Fatalf("classic row gained routing from a classic discovery row: %+v", catalog[2])
+	}
+}

@@ -41,6 +41,25 @@ type ProbeSpec struct {
 	AppliesToGeneration bool
 }
 
+// Generation output budgets shared between the callers that spend them and
+// the cost estimator that predicts them, so estimates can never drift from
+// what a probe may actually bill. Sized by the project rule: a budget exists
+// to bound runaway cost, never to fail a working model. Always-reasoning
+// models on the classic plane (grok-4.6) bill reasoning against the output
+// budget with no off switch (Converse has no reasoning.effort knob), so
+// every budget leaves reasoning headroom well above the answer's natural
+// length; the caps only bind when a model would genuinely run away.
+const (
+	// BenchGenMaxTokens is the generate-bench output budget (matches the
+	// probeGenMaxTokens rationale: 128 truncated classic always-reasoning
+	// models mid-reasoning and failed working models).
+	BenchGenMaxTokens = 1024
+	// RAGGenMaxTokens is the answer budget for ask/chat RAG generation and
+	// the RAG bench (both flow through ai.RAG). 1024 squeezed real answers
+	// on classic-reasoning models; 4096 matches the polish surfaces.
+	RAGGenMaxTokens = 4096
+)
+
 // DefaultProbeSpec returns the budget for a standard probe kind. The
 // ProbeRetrievalQuality kind needs a caller-supplied InputTokens (via
 // EstimateCostWithSpec) because its cost scales with the vault's
@@ -58,11 +77,11 @@ func DefaultProbeSpec(p ProbeKind) ProbeSpec {
 	case ProbeBenchEmbed:
 		return ProbeSpec{InputTokens: 10, Requests: 1, AppliesToEmbedding: true}
 	case ProbeBenchGen:
-		return ProbeSpec{InputTokens: 20, OutputTokens: 128, Requests: 1, AppliesToGeneration: true}
+		return ProbeSpec{InputTokens: 20, OutputTokens: BenchGenMaxTokens, Requests: 1, AppliesToGeneration: true}
 	case ProbeBenchRAG:
 		// RAG probe pulls ~5 chunks × ~500 tokens ≈ 2500 tokens of context,
-		// plus a short prompt; bound output at 512.
-		return ProbeSpec{InputTokens: 2500, OutputTokens: 512, Requests: 1, AppliesToGeneration: true}
+		// plus a short prompt; output bounded by the shared RAG answer budget.
+		return ProbeSpec{InputTokens: 2500, OutputTokens: RAGGenMaxTokens, Requests: 1, AppliesToGeneration: true}
 	case ProbeRetrievalQuality:
 		return ProbeSpec{Requests: 0, AppliesToEmbedding: true}
 	}

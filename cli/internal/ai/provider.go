@@ -322,10 +322,13 @@ type BenchmarkSummary struct {
 	VaultDocCount int `json:"vault_doc_count,omitempty" yaml:"vault_doc_count,omitempty"`
 }
 
-// DefaultGenOpts returns sensible defaults for generation.
+// DefaultGenOpts returns sensible defaults for generation. MaxTokens leaves
+// reasoning headroom for classic-plane always-reasoning models (which bill
+// reasoning against the budget with no off switch): a budget bounds runaway
+// cost, it must never fail a working model.
 func DefaultGenOpts() GenOpts {
 	return GenOpts{
 		Temperature: Ptr(0.1),
-		MaxTokens:   512,
+		MaxTokens:   1024,
 	}
 }

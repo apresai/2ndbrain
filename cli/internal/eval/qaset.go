@@ -108,7 +108,10 @@ who half-remembers the idea would ask it — CONCEPTUALLY, in their own words. R
 
 Output ONLY the question, nothing else.`, c.SourceTitle, body)
 
-	return gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 120, Temperature: ai.Ptr(0.3)})
+	// 1024 for a one-line question: classic-plane always-reasoning models
+	// bill reasoning against this budget, and 120 truncated a working
+	// generator mid-reasoning before the question appeared.
+	return gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 1024, Temperature: ai.Ptr(0.3), ReasoningEffort: "none"})
 }
 
 // candidateDocs returns notes with enough body text to ground a question.

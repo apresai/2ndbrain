@@ -72,8 +72,10 @@ func TestEstimateCost_GenerationSplitsInOutPricing(t *testing.T) {
 		PriceIn: 3.0, PriceOut: 15.0, PriceSource: "builtin",
 	}
 	est := EstimateCost(m, ProbeBenchGen)
-	// Bench gen: 20 in, 128 out
-	want := 20.0*3.0/1_000_000 + 128.0*15.0/1_000_000
+	// Derive from the spec so a budget change can't silently stale this test;
+	// the split itself (in-price on input, out-price on output) is the claim.
+	spec := DefaultProbeSpec(ProbeBenchGen)
+	want := float64(spec.InputTokens)*3.0/1_000_000 + float64(spec.OutputTokens)*15.0/1_000_000
 	if !approxEq(est.USD, want) {
 		t.Errorf("USD = %v, want %v", est.USD, want)
 	}
@@ -135,5 +137,29 @@ func TestProbeAppliesToModel_Rerank(t *testing.T) {
 		if probeAppliesToModel(rr, DefaultProbeSpec(p)) {
 			t.Errorf("rerank model should not apply to probe %q", p)
 		}
+	}
+}
+
+// TestGenerationBudgetsPinned holds the project rule offline: a generation
+// budget bounds runaway cost and must never fail a working model. Classic
+// always-reasoning models (grok-4.6) bill ~180 reasoning tokens before any
+// answer text with no off switch, so every budget keeps at least the probe's
+// reasoning headroom, and the cost specs quote the same constants the
+// spenders use so estimates can never drift from reality.
+func TestGenerationBudgetsPinned(t *testing.T) {
+	if BenchGenMaxTokens < 1024 {
+		t.Errorf("BenchGenMaxTokens = %d; below 1024 fails classic always-reasoning models", BenchGenMaxTokens)
+	}
+	if RAGGenMaxTokens < BenchGenMaxTokens {
+		t.Errorf("RAGGenMaxTokens = %d below BenchGenMaxTokens %d; RAG answers need at least the bench headroom", RAGGenMaxTokens, BenchGenMaxTokens)
+	}
+	if got := DefaultProbeSpec(ProbeBenchGen).OutputTokens; got != BenchGenMaxTokens {
+		t.Errorf("bench_gen spec OutputTokens = %d, want BenchGenMaxTokens (%d)", got, BenchGenMaxTokens)
+	}
+	if got := DefaultProbeSpec(ProbeBenchRAG).OutputTokens; got != RAGGenMaxTokens {
+		t.Errorf("bench_rag spec OutputTokens = %d, want RAGGenMaxTokens (%d)", got, RAGGenMaxTokens)
+	}
+	if got := DefaultGenOpts().MaxTokens; got < 1024 {
+		t.Errorf("DefaultGenOpts MaxTokens = %d; below 1024 fails classic always-reasoning models", got)
 	}
 }

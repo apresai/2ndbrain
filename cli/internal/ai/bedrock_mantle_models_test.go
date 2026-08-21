@@ -380,3 +380,78 @@ func TestLiveMantleDiscoveredProbe_CredGated(t *testing.T) {
 	}
 	t.Logf("hinted xai.grok-4.6 probe passed in %s: %s", gres.Latency, gres.Detail)
 }
+
+// TestStrippedRowSelfHealsOnVerifyDiscover_CredGated is the regression test
+// for the 2026-08-21 live incident: a vault-catalog row for xai.grok-4.6
+// whose invoke_strategy/region were stripped by a pre-0.19.0 save clobber
+// could not be healed by `verify --discover` — the hint-less row shadowed the
+// discovered row's hints, the probe base-matched onto classic Converse, and
+// the only recovery was `models remove` then re-verify. With the merge graft
+// (mergeDiscovered + AdoptRoutingHints) the stripped row adopts the hints at
+// discovery time, probes over the mantle plane, and persists its routing —
+// no manual removal.
+func TestStrippedRowSelfHealsOnVerifyDiscover_CredGated(t *testing.T) {
+	setupHome(t) // isolate catalogs; the bearer token must come from the env
+	if os.Getenv(bedrockBearerTokenEnv) == "" {
+		t.Skipf("set %s to run the live self-heal regression", bedrockBearerTokenEnv)
+	}
+	root := t.TempDir()
+
+	// The 0.18.2 clobber artifact: a user row with no routing.
+	stripped := ModelInfo{ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation", Tier: TierUserVerified}
+	if err := SaveUserCatalogEntry(ScopeVault, root, stripped); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	list, err := BuildModelList(ctx, MergedListOptions{Config: AIConfig{}, VaultRoot: root, Discover: true, DiscoverCached: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate *ModelInfo
+	for i := range list.Verified {
+		if list.Verified[i].Provider == "bedrock" && list.Verified[i].ID == "xai.grok-4.6" {
+			candidate = &list.Verified[i]
+			break
+		}
+	}
+	if candidate == nil {
+		t.Fatalf("stripped row missing from merged list")
+	}
+	if candidate.InvokeStrategy != StrategyBedrockMantleResponses {
+		if len(list.Warnings) > 0 {
+			t.Skipf("mantle discovery unavailable (no graft source): %v", list.Warnings)
+		}
+		t.Fatalf("stripped row did not adopt the discovery hints: %+v", *candidate)
+	}
+	if candidate.Region != "us-west-2" {
+		t.Errorf("grafted region = %q, want the us-west-2 mantle listing region", candidate.Region)
+	}
+
+	result, err := TestProbeModelInfo(ctx, AIConfig{}, *candidate, root)
+	if err != nil {
+		t.Fatalf("TestProbeModelInfo returned hard error: %v", err)
+	}
+	if result.Strategy != StrategyBedrockMantleResponses {
+		t.Errorf("probe strategy = %q, want mantle via the grafted hint", result.Strategy)
+	}
+	if !result.OK {
+		if result.Code == TestErrAccessDenied || result.Code == TestErrThrottled || result.Code == TestErrTimeout {
+			t.Skipf("account/plane state prevents the pass assertion (%s): %s", result.Code, result.Detail)
+		}
+		t.Fatalf("hinted probe of the healed row failed [%s]: %s", result.Code, result.Detail)
+	}
+
+	// The save path: routing adopted from the candidate persists durably.
+	saved := ModelInfo{ID: result.ModelID, Provider: result.Provider, Type: result.Type, Tier: TierUserVerified}
+	AdoptRoutingHints(&saved, *candidate)
+	if err := SaveUserCatalogEntry(ScopeVault, root, saved); err != nil {
+		t.Fatal(err)
+	}
+	persisted, ok := UserCatalogEntry(ScopeVault, root, "bedrock", "xai.grok-4.6")
+	if !ok || persisted.InvokeStrategy != StrategyBedrockMantleResponses || persisted.Region != "us-west-2" {
+		t.Fatalf("routing did not persist (ok=%v): %+v", ok, persisted)
+	}
+}

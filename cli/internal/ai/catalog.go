@@ -411,17 +411,8 @@ func configHint(provider, modelType, modelID string) string {
 }
 
 // catalogKey is the composite identity key for a ModelInfo: provider + id
-// separated by NUL so neither field can spoof the other. Shared by catalogIndex
-// and the user-catalog overlay logic.
+// separated by NUL so neither field can spoof the other. Shared by the
+// discovery merge (mergeDiscovered) and the user-catalog overlay logic.
 func catalogKey(provider, id string) string {
 	return provider + "\x00" + id
-}
-
-// catalogIndex returns a set of catalogKey(provider, id) entries for fast deduplication.
-func catalogIndex(catalog []ModelInfo) map[string]bool {
-	idx := make(map[string]bool, len(catalog))
-	for _, m := range catalog {
-		idx[catalogKey(m.Provider, m.ID)] = true
-	}
-	return idx
 }

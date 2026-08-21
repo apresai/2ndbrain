@@ -109,8 +109,13 @@ Follow-up question: %s
 
 Rewrite the follow-up question as a single standalone question that can be understood with no conversation context. Keep all specific names, paths, and terms. If it is already standalone, return it exactly unchanged.`, serializeHistory(tail), question)
 
+	// 1024, not the ~50 tokens a rewritten query needs: classic-plane
+	// always-reasoning models bill reasoning against this budget with no
+	// off switch, and the old 128 truncated mid-reasoning, breaking every
+	// multi-turn ask on a working model. Budgets bound runaway cost; they
+	// must never fail a working model.
 	raw, err := gen.Generate(ctx, prompt, applyGenOptions(GenOpts{
-		MaxTokens:    128,
+		MaxTokens:    1024,
 		Temperature:  Ptr(0.0),
 		SystemPrompt: condenseSystemPrompt,
 	}, opts))
