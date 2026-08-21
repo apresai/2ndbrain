@@ -105,12 +105,7 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	if opts.Discover {
 		vendorModels, warnings := discoverVendorModels(ctx, opts.Config, opts.DiscoverCached)
 		result.Warnings = append(result.Warnings, warnings...)
-		idx := catalogIndex(catalog)
-		for _, m := range vendorModels {
-			if !idx[catalogKey(m.Provider, m.ID)] {
-				result.Unverified = append(result.Unverified, m)
-			}
-		}
+		result.Unverified = mergeDiscovered(catalog, vendorModels)
 		// Freshly discovered entries get the same policy verdict as the
 		// merged catalog: models from non-chosen vendors arrive pre-disabled.
 		result.Warnings = append(result.Warnings, applyVendorPolicy(result.Unverified, policies, policyGuard)...)
@@ -487,4 +482,58 @@ func catalogCompatibility(m ModelInfo) (bool, string) {
 		return false, reason
 	}
 	return true, ""
+}
+
+// AdoptRoutingHints fills entry's routing metadata from `from` wherever entry
+// is empty: InvokeStrategy, Endpoint, and ContextLen when unset, and Region
+// only when the entry's (possibly just-filled) strategy is the mantle plane,
+// because classic Region pins are owned by the probe's region persistence
+// (persistProbedRegion) and the two owners must never fight over the field.
+// Authored values always win: a non-empty field is never overwritten.
+//
+// Shared by two call sites so the rule cannot drift: the discovery merge
+// graft in mergeDiscovered (a routing-EMPTY user row adopts a discovered
+// row's hints, so a row whose routing was stripped by a pre-0.19.0 save
+// clobber self-heals on the next `verify --discover` instead of shadowing
+// its own cure — live incident 2026-08-21, xai.grok-4.6), and the CLI probe
+// save path (adoptCandidateRouting).
+func AdoptRoutingHints(entry *ModelInfo, from ModelInfo) {
+	if entry.InvokeStrategy == "" && from.InvokeStrategy != "" {
+		entry.InvokeStrategy = from.InvokeStrategy
+	}
+	if entry.Endpoint == "" && from.Endpoint != "" {
+		entry.Endpoint = from.Endpoint
+	}
+	if entry.ContextLen == 0 && from.ContextLen != 0 {
+		entry.ContextLen = from.ContextLen
+	}
+	if entry.Region == "" && from.Region != "" &&
+		entry.InvokeStrategy == StrategyBedrockMantleResponses {
+		entry.Region = from.Region
+	}
+}
+
+// mergeDiscovered folds vendor-discovered rows into the model list: a row
+// whose exact (provider, id) is absent from the merged catalog joins the
+// returned unverified slice; a row that IS already merged grafts its routing
+// hints onto the catalog row's empty fields via AdoptRoutingHints instead of
+// being dropped silently. Authored routing beats the hint, but the ABSENCE
+// of routing does not: dropping the hints let a strategy-stripped user row
+// shadow its own cure, probing a mantle-only id over classic Converse until
+// the row was manually removed. Mutates catalog rows in place (in-memory
+// only; nothing is persisted until a probe save).
+func mergeDiscovered(catalog []ModelInfo, discovered []ModelInfo) []ModelInfo {
+	idx := make(map[string]int, len(catalog))
+	for i, c := range catalog {
+		idx[catalogKey(c.Provider, c.ID)] = i
+	}
+	var unverified []ModelInfo
+	for _, m := range discovered {
+		if i, ok := idx[catalogKey(m.Provider, m.ID)]; ok {
+			AdoptRoutingHints(&catalog[i], m)
+			continue
+		}
+		unverified = append(unverified, m)
+	}
+	return unverified
 }

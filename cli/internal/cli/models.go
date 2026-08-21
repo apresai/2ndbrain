@@ -1001,19 +1001,10 @@ func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *a
 // (a primary-region pass must clear a stale pin), and the two owners must
 // never fight over the same field.
 func adoptCandidateRouting(entry *ai.ModelInfo, candidate ai.ModelInfo) {
-	if entry.InvokeStrategy == "" && candidate.InvokeStrategy != "" {
-		entry.InvokeStrategy = candidate.InvokeStrategy
-	}
-	if entry.Endpoint == "" && candidate.Endpoint != "" {
-		entry.Endpoint = candidate.Endpoint
-	}
-	if entry.ContextLen == 0 && candidate.ContextLen != 0 {
-		entry.ContextLen = candidate.ContextLen
-	}
-	if entry.Region == "" && candidate.Region != "" &&
-		entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
-		entry.Region = candidate.Region
-	}
+	// Thin wrapper over the shared rule (ai.AdoptRoutingHints), which the
+	// discovery merge graft also uses, so the save path and the merge can
+	// never disagree about what "adopt the hints" means.
+	ai.AdoptRoutingHints(entry, candidate)
 }
 
 // persistProbedRegion records where a classic-Bedrock model actually passed so
