@@ -93,7 +93,11 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 			return false, "2nb doesn't support Bedrock image-generation models"
 		case strings.HasPrefix(lower, "amazon.nova-reel"):
 			return false, "2nb doesn't support Bedrock video-generation models"
-		case strings.HasPrefix(lower, "stability.stable-image"):
+		case strings.HasPrefix(lower, "stability."):
+			// Stability AI's entire Bedrock lineup is image generation
+			// (stable-image-*, sd3*, stable-diffusion-xl*), so the deny is
+			// vendor-wide: a narrower stable-image prefix let the sd3 and
+			// stable-diffusion-xl ids fall through to the default-allow arm.
 			return false, "2nb doesn't support Bedrock image-generation models"
 		case strings.HasPrefix(lower, "amazon.titan-image-generator"):
 			return false, "2nb doesn't support Bedrock image-generation models"
@@ -103,53 +107,22 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 			return false, "2nb doesn't support Bedrock video-understanding models"
 		case strings.HasPrefix(lower, "writer.palmyra-vision-7b"):
 			return false, "2nb doesn't support Bedrock Palmyra Vision probe requirements"
-		case strings.HasPrefix(lower, "anthropic.claude"):
-			return true, ""
-		case strings.HasPrefix(lower, "amazon.nova-micro"),
-			strings.HasPrefix(lower, "amazon.nova-lite"),
-			strings.HasPrefix(lower, "amazon.nova-pro"),
-			strings.HasPrefix(lower, "amazon.nova-premier"):
-			return true, ""
-		case strings.HasPrefix(lower, "amazon.titan-tg1"):
-			return true, ""
-		case strings.HasPrefix(lower, "ai21.jamba"):
-			return true, ""
-		case strings.HasPrefix(lower, "cohere.command"):
-			return true, ""
-		case strings.HasPrefix(lower, "deepseek"):
-			return true, ""
-		case strings.HasPrefix(lower, "meta.llama"):
-			return true, ""
-		case strings.HasPrefix(lower, "mistral"):
-			return true, ""
-		case strings.HasPrefix(lower, "pixtral"):
-			return true, ""
-		case strings.HasPrefix(lower, "writer.palmyra-x4"),
-			strings.HasPrefix(lower, "writer.palmyra-x5"):
-			return true, ""
-		case strings.HasPrefix(lower, "google.gemma"):
-			return true, ""
-		case strings.HasPrefix(lower, "openai.gpt-oss"):
-			return true, ""
-		case strings.HasPrefix(lower, "qwen.qwen"):
-			return true, ""
-		case strings.HasPrefix(lower, "zai.glm"):
-			return true, ""
-		case strings.HasPrefix(lower, "moonshot"):
-			return true, ""
-		case strings.HasPrefix(lower, "minimax"):
-			return true, ""
-		case strings.HasPrefix(lower, "nvidia.nemotron"):
-			return true, ""
-		case strings.HasPrefix(lower, "xai.grok"):
-			// Grok 4.6 (2026-08-19) is the first xAI model on the CLASSIC
-			// plane: Converse via the us./global. cross-region profiles
-			// (earlier Groks were mantle-only, which bypasses this gate via
-			// their invoke strategy). Output is [reasoningContent, text]
-			// blocks; the generator's block iteration handles that.
-			return true, ""
 		default:
-			return false, "2nb doesn't support this Bedrock Converse model path yet"
+			// Every other classic-plane generation model is admitted by
+			// default. The Converse API is a uniform dialect across vendors
+			// (unlike embedding/rerank below, where each vendor's InvokeModel
+			// body shape is genuinely different and stays an explicit
+			// allowlist), so a vendor family this gate has never seen is not
+			// evidence of incompatibility, only evidence 2nb hasn't tried it
+			// yet. This used to require a code change per new vendor (Grok
+			// 4.6 needed one, PR #213) before discovery could even surface
+			// the model; now it surfaces immediately as an unverified,
+			// probeable row, and the real compatibility test is the probe
+			// itself (`models test`/`models verify`), which measures
+			// entitlement and dialect fit directly and persists a classified
+			// failure (e.g. `incompatible`) if a model turns out to need a
+			// non-Converse wire format.
+			return true, ""
 		}
 	}
 }
@@ -158,6 +131,13 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 // a lifecycle lookup before a probe invokes the model. vaultRoot scopes the
 // user-catalog strategy lookup so a VAULT-scoped mantle entry is bypassed
 // too; pass "" when no vault is open (builtin + global entries still resolve).
+//
+// Since the generation gate widened to default-allow, an unrecognized
+// classic-plane generation vendor no longer short-circuits here on the
+// static check: it now falls through to bedrockModelIsLegacy, a
+// GetFoundationModel control-plane round-trip. This is bounded (control
+// plane, no charge) and was already paid by every model the old allowlist
+// admitted; the newly-admitted models pay it too.
 func BedrockPreflightModel(ctx context.Context, cfg BedrockConfig, modelID, modelType, vaultRoot string) error {
 	// Mantle-plane models are invisible to the classic control plane: the
 	// static allowlist doesn't know them and GetFoundationModel would 404,

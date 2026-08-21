@@ -660,7 +660,13 @@ func TestBedrockModelSupportedStaticAllowlist(t *testing.T) {
 		modelType string
 		wantOK    bool
 	}{
-		// generation — supported
+		// generation — supported. These four rows now pass through the
+		// default-allow catch-all (bedrock_support.go), not a per-vendor
+		// arm — the gate widening in this PR deleted the vendor-specific
+		// arms these rows originally pinned. They stay here as smoke
+		// coverage; TestBedrockModelSupported_GenerationDefaultAllow (in
+		// bedrock_support_test.go) is the test that actually discriminates
+		// the current deny-arm/default-allow shape.
 		{"anthropic.claude-3-5-sonnet-20241022-v2:0", "generation", true},
 		{"amazon.nova-micro-v1:0", "generation", true},
 		{"meta.llama3-8b-instruct-v1:0", "generation", true},
