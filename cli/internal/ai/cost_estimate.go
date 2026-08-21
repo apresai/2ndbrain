@@ -50,10 +50,11 @@ func DefaultProbeSpec(p ProbeKind) ProbeSpec {
 	switch p {
 	case ProbeTest:
 		// TestProbeModel uses a 10-ish-token embed or a 20-ish-token
-		// generate with MaxTokens=256 (the budget always-reasoning models
-		// need to emit any answer text at all). Bucket the upper bound —
-		// most probes bill far less; only reasoning models approach it.
-		return ProbeSpec{InputTokens: 20, OutputTokens: 256, Requests: 1, AppliesToEmbedding: true, AppliesToGeneration: true}
+		// generate with MaxTokens=probeGenMaxTokens (the budget
+		// always-reasoning models need to emit any answer text at all).
+		// Bucket the upper bound — most probes bill far less; only
+		// reasoning models approach it.
+		return ProbeSpec{InputTokens: 20, OutputTokens: probeGenMaxTokens, Requests: 1, AppliesToEmbedding: true, AppliesToGeneration: true}
 	case ProbeBenchEmbed:
 		return ProbeSpec{InputTokens: 10, Requests: 1, AppliesToEmbedding: true}
 	case ProbeBenchGen:
