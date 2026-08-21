@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.19.1] - 2026-08-21
+
+### Fixed
+- Self-heal catalog rows whose invoke routing was stripped by a pre-0.19.0 save clobber: `mergeDiscovered` now grafts discovered routing hints onto a merged row's empty fields (authored fields still win), so a stripped mantle model (e.g. `xai.grok-4.6`) recovers on the next `models verify --discover` instead of shadowing its own cure
+- `models bench` generate probe now pins reasoning effort to none (like the smoke probe), so always-reasoning mantle models no longer burn the budget on thinking and time out at the 90s HTTP limit; the RAG bench probe pins it too
+
+### Changed
+- Every generation token budget resized so a working model can never fail on truncation (always-reasoning classic models bill ~180 reasoning tokens with no off switch): bench generate 128 → 1024, RAG answers and RAG bench 1024 → 4096, chat history condenser 128 → 1024, suggest-target LLM verdict 400 → 1024, eval jury/QA generation → 1024, default generation opts 512 → 1024; budgets live as shared constants quoted by the cost specs and are pinned by `TestGenerationBudgetsPinned`
+- `models wizard` default `--cost-cap` raised 0.10 → 0.50 to match the honest 1024-token probe estimates
+
+### Removed
+- Dead `catalogIndex` helper in the AI catalog; its no-duplicate-builtin-IDs invariant survives as a direct test
+
+
 ## [0.19.0] - 2026-08-20
 
 ### Added
