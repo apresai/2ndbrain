@@ -206,6 +206,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		entry.Recommended = m.Recommended // preserve curation on the saved entry
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
+		adoptCandidateRouting(&entry, m)
 		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && humanMode {
 			fmt.Printf("[%d/%d] warning: save %s failed: %v\n", n, total, m.ID, saveErr)
 		}

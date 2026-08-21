@@ -17,6 +17,7 @@ var (
 	costProbeKind string
 	costProvider  string
 	costAll       bool
+	costDiscover  bool
 )
 
 var modelsCostPreviewCmd = &cobra.Command{
@@ -37,6 +38,8 @@ func init() {
 		"Filter by provider: bedrock, openrouter, ollama")
 	modelsCostPreviewCmd.Flags().BoolVar(&costAll, "all", false,
 		"Estimate across every verified model (when no IDs given)")
+	modelsCostPreviewCmd.Flags().BoolVar(&costDiscover, "discover", false,
+		"Resolve IDs against vendor-discovered models too (mantle-plane discoveries have no catalog entry until verified)")
 	_ = modelsCostPreviewCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsCostPreviewCmd.RegisterFlagCompletionFunc("probe", completeProbeKinds)
 	modelsCmd.AddCommand(modelsCostPreviewCmd)
@@ -78,20 +81,34 @@ func runModelsCostPreview(cmd *cobra.Command, args []string) error {
 	list, err := ai.BuildModelList(context.Background(), ai.MergedListOptions{
 		Config:    v.Config.AI,
 		VaultRoot: v.Root,
+		Discover:  costDiscover,
+		// A cost preview precedes a verify --discover run, which reads
+		// discovery through the 24h cache; reading through the same cache
+		// keeps the previewed pool identical and the preview fast.
+		DiscoverCached: costDiscover,
 	})
 	if err != nil {
 		return fmt.Errorf("load model catalog: %w", err)
 	}
+	// With --discover the lookup pool is verified ∪ unverified: a
+	// mantle-plane discovery has no catalog entry until something probes it,
+	// and resolving it to nothing here would warn "unknown model id" and
+	// contribute $0 — silently under-stating the spend the matching verify
+	// run is about to make.
+	pool := list.Verified
+	if costDiscover {
+		pool = append(append([]ai.ModelInfo{}, list.Verified...), list.Unverified...)
+	}
 
 	// Build the candidate set: either the ids the user asked for, or the
-	// whole verified catalog when --all is set.
+	// whole pool when --all is set.
 	var candidates []ai.ModelInfo
 	if len(args) > 0 {
 		idSet := make(map[string]bool, len(args))
 		for _, a := range args {
 			idSet[a] = true
 		}
-		for _, m := range list.Verified {
+		for _, m := range pool {
 			if idSet[m.ID] {
 				candidates = append(candidates, m)
 			}
@@ -115,7 +132,7 @@ func runModelsCostPreview(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "warning: unknown model id(s): %s\n", strings.Join(missing, ", "))
 		}
 	} else {
-		candidates = list.Verified
+		candidates = pool
 	}
 
 	if costProvider != "" {

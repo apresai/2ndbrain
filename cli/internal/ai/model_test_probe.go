@@ -36,28 +36,93 @@ type TestProbeResult struct {
 // a quick smoke test (embed or generate). Returns the result. vaultRoot
 // scopes user-catalog invoke-strategy/region lookups (so a vault-scoped
 // mantle entry probes over the mantle plane); pass "" when no vault is open.
+// Thin wrapper over TestProbeModelInfo with a hint-less candidate, so a bare
+// model id (models test <id>) still resolves routing from the catalogs only.
 func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelType, vaultRoot string) (*TestProbeResult, error) {
+	return TestProbeModelInfo(ctx, cfg, ModelInfo{ID: modelID, Provider: provider, Type: modelType}, vaultRoot)
+}
+
+// effectiveInvokeStrategy resolves the invoke strategy for a probe
+// candidate. Precedence: EXACT catalog declarations (user over builtin) are
+// authored intent and always win; the candidate's own discovery-time mantle
+// hint comes next; the catalog's profile-stripped base-match INFERENCE
+// (ResolveInvokeStrategy's fallback) comes last. The hint must beat the base
+// match because base matching exists so profile VARIANTS inherit a base
+// entry's dialect — run first, it would let the classic us.xai.grok-4.6
+// builtin drag the mantle-LISTED bare xai.grok-4.6 onto Converse and record
+// a spurious FAIL, when the /v1/models listing is authoritative that the
+// exact bare id lives on the mantle plane. A profile-prefixed id never takes
+// the mantle hint (cross-region profiles exist only on the classic plane,
+// the same guard ResolveInvokeStrategy applies to its own fallback).
+func effectiveInvokeStrategy(provider string, m ModelInfo, vaultRoot string) string {
+	field := func(mi ModelInfo) string { return mi.InvokeStrategy }
+	if s := findCatalogStringExact(LoadUserCatalog(vaultRoot), provider, m.ID, field); s != "" {
+		return s
+	}
+	if s := findCatalogStringExact(BuiltinCatalog(), provider, m.ID, field); s != "" {
+		return s
+	}
+	if m.InvokeStrategy == StrategyBedrockMantleResponses {
+		if strings.EqualFold(inferenceProfileBaseID(m.ID), m.ID) {
+			return StrategyBedrockMantleResponses
+		}
+		// A profile-prefixed id can never be mantle: drop the hint and let
+		// the catalog's base-match inference speak.
+		return ResolveInvokeStrategy(provider, m.ID, vaultRoot)
+	}
+	if s := ResolveInvokeStrategy(provider, m.ID, vaultRoot); s != "" {
+		return s
+	}
+	return m.InvokeStrategy
+}
+
+// TestProbeModelInfo is the hinted probe core: the candidate's own
+// InvokeStrategy/Region fill in when the catalogs declare nothing, so a
+// mantle-DISCOVERED model (no catalog entry anywhere) probes over the mantle
+// plane in its listing region instead of classic-Converse-ing into a 404.
+// Catalog resolution always wins over the hints (effectiveInvokeStrategy /
+// the ResolveModelRegion gate below), so a user entry keeps full authority.
+func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoot string) (*TestProbeResult, error) {
+	provider := m.Provider
 	if provider == "" {
-		provider = InferProvider(modelID)
+		provider = InferProvider(m.ID)
 	}
 	if provider == "" {
-		return nil, fmt.Errorf("cannot infer provider for %q — use --provider", modelID)
+		return nil, fmt.Errorf("cannot infer provider for %q — use --provider", m.ID)
 	}
 
+	modelType := m.Type
 	if modelType == "" {
-		modelType = InferModelType(modelID)
+		modelType = InferModelType(m.ID)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	// The effective strategy drives the probe route, the mantle-aware failure
+	// remediation, the GUI's console-link suppression, and (via the result)
+	// persistProbedRegion's mantle exclusion.
+	strategy := effectiveInvokeStrategy(provider, m, vaultRoot)
+
+	// A hinted mantle candidate routes to its listing region on the existing
+	// RegionOverride carrier: ResolveBedrockConfig maps the override onto
+	// Region before mantleBaseURL's config-region fallback reads it, so no
+	// client change is needed. Only when nothing else already routes the
+	// call — an in-memory override (multi-region verify) or a catalog Region
+	// pin (a persisted verify pass, a builtin) always wins.
+	if provider == "bedrock" && strategy == StrategyBedrockMantleResponses &&
+		m.Region != "" && cfg.Bedrock.RegionOverride == "" &&
+		ResolveModelRegion("bedrock", m.ID, vaultRoot) == "" {
+		cfg.Bedrock.RegionOverride = m.Region
+	}
+
 	result := &TestProbeResult{
-		ModelID:  modelID,
+		ModelID:  m.ID,
 		Provider: provider,
 		Type:     modelType,
 	}
 	if provider == "bedrock" {
-		result.Region = EffectiveBedrockRegion(cfg.Bedrock, modelID, vaultRoot)
+		result.Region = EffectiveBedrockRegion(cfg.Bedrock, m.ID, vaultRoot)
 	}
 
 	start := time.Now()
@@ -65,14 +130,14 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 
 	switch modelType {
 	case "embedding":
-		err = probeEmbedding(ctx, cfg, provider, modelID, vaultRoot)
+		err = probeEmbedding(ctx, cfg, provider, m.ID, vaultRoot)
 	case "rerank":
 		// No rerank probe exists; don't generation-probe a reranker (which would
 		// fail confusingly). Enable a reranker with `2nb config set ai.rerank.enabled true`.
 		err = fmt.Errorf("rerank models aren't testable via `2nb models test` yet")
 	default:
 		var snippet string
-		snippet, err = probeGeneration(ctx, cfg, provider, modelID, vaultRoot)
+		snippet, err = probeGeneration(ctx, cfg, provider, m.ID, vaultRoot, strategy)
 		if err == nil {
 			result.Detail = snippet
 		}
@@ -82,9 +147,8 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 
 	// The model's invoke strategy tailors failure guidance (a mantle model's
 	// access_denied points at AWS Sales, not the Bedrock console) and rides
-	// out on the result so a UI can do the same. Resolved through the same
-	// user-catalog-over-builtin chain the dispatcher uses.
-	result.Strategy = ResolveInvokeStrategy(provider, modelID, vaultRoot)
+	// out on the result so a UI can do the same.
+	result.Strategy = strategy
 
 	if err != nil {
 		result.OK = false
@@ -172,7 +236,13 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultR
 // in internal/cli, is credential-gated and invisible to plain CI).
 const probeGenMaxTokens = 1024
 
-func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) (string, error) {
+// probeGeneration runs the generation smoke probe. strategy is the EFFECTIVE
+// invoke strategy from effectiveInvokeStrategy (catalog first, candidate hint
+// filling empty): a mantle-strategy probe skips the classic-control-plane
+// preflight (the static allowlist and GetFoundationModel are blind to the
+// plane — a hinted discovery would be misclassified incompatible) and routes
+// construction through the strategy-aware dispatcher.
+func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot, strategy string) (string, error) {
 	prompt := "What is 2+2? Reply with just the number."
 	// ReasoningEffort "none" keeps a smoke probe deterministic: a mantle model
 	// reasons by default and, with reasoning on, non-deterministically consumes
@@ -187,10 +257,12 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 	switch provider {
 	case "bedrock":
 		carryVaultRegionPin(&cfg.Bedrock, modelID, vaultRoot)
-		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation", vaultRoot); err != nil {
-			return "", err
+		if strategy != StrategyBedrockMantleResponses {
+			if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation", vaultRoot); err != nil {
+				return "", err
+			}
 		}
-		g, err := NewBedrockGeneration(ctx, cfg.Bedrock, modelID, vaultRoot)
+		g, err := NewBedrockGenerationRouted(ctx, cfg.Bedrock, modelID, vaultRoot, strategy)
 		if err != nil {
 			return "", err
 		}
@@ -257,31 +329,41 @@ func regionAttempts(regions []string, pinned string) []string {
 }
 
 // TestProbeModelInRegions probes modelID across the included region set,
-// stopping at the first pass. Region 0 (the primary) always goes first, and a
-// model carrying a catalog Region pin gets the pin appended to the attempt
-// list — so a pinned model re-checks primary on EVERY probe (self-heal: a
-// primary pass clears the pin via persistProbedRegion) while remaining
-// reachable in its pinned region. Only classic-plane Bedrock models fan out:
-// non-bedrock providers have no AWS region, mantle models are endpoint-pinned
-// per model, and an unpinned single-region probe keeps the plain path.
+// stopping at the first pass. Thin wrapper over TestProbeModelInfoInRegions
+// with a hint-less candidate.
+func TestProbeModelInRegions(ctx context.Context, cfg AIConfig, modelID, provider, modelType, vaultRoot string, regions []string) (*TestProbeResult, error) {
+	return TestProbeModelInfoInRegions(ctx, cfg, ModelInfo{ID: modelID, Provider: provider, Type: modelType}, vaultRoot, regions)
+}
+
+// TestProbeModelInfoInRegions probes the candidate across the included region
+// set, stopping at the first pass. Region 0 (the primary) always goes first,
+// and a model carrying a catalog Region pin gets the pin appended to the
+// attempt list — so a pinned model re-checks primary on EVERY probe
+// (self-heal: a primary pass clears the pin via persistProbedRegion) while
+// remaining reachable in its pinned region. Only classic-plane Bedrock models
+// fan out: non-bedrock providers have no AWS region, mantle models are
+// endpoint-pinned per model, and an unpinned single-region probe keeps the
+// plain path. The mantle exclusion uses the EFFECTIVE strategy (catalog or
+// candidate hint) — a hinted, failing mantle discovery must not fan out
+// across classic regions it can never pass in.
 //
 // On exhaustion the PRIMARY region's failure is returned — keeping the
 // reported classification stable for existing consumers — with the other
 // attempted regions noted in Detail.
-func TestProbeModelInRegions(ctx context.Context, cfg AIConfig, modelID, provider, modelType, vaultRoot string, regions []string) (*TestProbeResult, error) {
-	if provider == "" {
-		provider = InferProvider(modelID)
+func TestProbeModelInfoInRegions(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoot string, regions []string) (*TestProbeResult, error) {
+	if m.Provider == "" {
+		m.Provider = InferProvider(m.ID)
 	}
-	if provider != "bedrock" ||
-		ResolveInvokeStrategy(provider, modelID, vaultRoot) == StrategyBedrockMantleResponses {
-		return TestProbeModel(ctx, cfg, modelID, provider, modelType, vaultRoot)
+	if m.Provider != "bedrock" ||
+		effectiveInvokeStrategy(m.Provider, m, vaultRoot) == StrategyBedrockMantleResponses {
+		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
 	if len(regions) == 0 {
 		regions = []string{ResolveBedrockConfig(cfg.Bedrock).Region}
 	}
-	attempts := regionAttempts(regions, ResolveModelRegion("bedrock", modelID, vaultRoot))
+	attempts := regionAttempts(regions, ResolveModelRegion("bedrock", m.ID, vaultRoot))
 	if attempts == nil {
-		return TestProbeModel(ctx, cfg, modelID, provider, modelType, vaultRoot)
+		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
 
 	var primary *TestProbeResult
@@ -289,7 +371,7 @@ func TestProbeModelInRegions(ctx context.Context, cfg AIConfig, modelID, provide
 	for i, region := range attempts {
 		attempt := cfg
 		attempt.Bedrock.RegionOverride = region
-		result, err := TestProbeModel(ctx, attempt, modelID, provider, modelType, vaultRoot)
+		result, err := TestProbeModelInfo(ctx, attempt, m, vaultRoot)
 		if err != nil {
 			return result, err
 		}
