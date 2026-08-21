@@ -156,7 +156,15 @@ func RunEmbed(opts ProbeOpts) ProbeResult {
 // RunGenerate benchmarks generation latency.
 func RunGenerate(opts ProbeOpts) ProbeResult {
 	start := time.Now()
-	genOpts := ai.GenOpts{MaxTokens: 128, SystemPrompt: "You are a helpful assistant. Be concise."}
+	// ReasoningEffort "none" for the same reason the models-test smoke probe
+	// sets it: this probe measures generation LATENCY, and an always-reasoning
+	// model (mantle grok, gpt-5.5) left at its model default bills reasoning
+	// against this small output budget, returning a reasoning-only
+	// "incomplete" response or, observed live 2026-08-21 on xai.grok-4.6,
+	// running past the mantle client's 90s HTTP timeout and failing the
+	// bench outright at latency_ms=90008. Non-reasoning providers ignore the
+	// field.
+	genOpts := ai.GenOpts{MaxTokens: 128, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
 
 	resp, err := func() (string, error) {
 		switch opts.Provider {
