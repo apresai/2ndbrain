@@ -483,8 +483,7 @@ struct SimpleModelsView: View {
         guard let provider = aiStatus?.provider else { return }
         let seen = appState.discoverySeenModelKeys
         guard !DiscoveryNudge.shouldSuppressFirstRun(seen: seen, provider: provider) else {
-            let currentIDs = DiscoveryNudge.probeableAndEnabled(models, provider: provider).map(\.modelID)
-            appState.recordDiscoverySeen(DiscoveryNudge.modelKeys(provider: provider, modelIDs: currentIDs))
+            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
             discoveryNewIDs = []
             return
         }
@@ -499,10 +498,14 @@ struct SimpleModelsView: View {
         await runValidate(only: ids)
     }
 
-    /// "Dismiss": marks the currently new IDs as seen without probing them.
+    /// "Dismiss": the user has seen this discovery state, so record the
+    /// provider's FULL current catalog (not just the badged subset): a
+    /// disabled model left unseen here would re-badge as "new" the moment
+    /// its vendor checkbox is toggled on, mislabeling a filter change as a
+    /// discovery event.
     private func dismissDiscoveryNudge() {
         guard let provider = aiStatus?.provider, !discoveryNewIDs.isEmpty else { return }
-        appState.recordDiscoverySeen(DiscoveryNudge.modelKeys(provider: provider, modelIDs: discoveryNewIDs))
+        appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
         discoveryNewIDs = []
     }
 
@@ -588,9 +591,10 @@ struct SimpleModelsView: View {
             try await appState.verifyModels(provider: provider, costCap: cap, modelIDs: candidateIDs) { event in
                 applyVerifyEvent(event)
             }
-            // These IDs have now been shown and probed; the discovery
-            // banner must stop nudging about them.
-            appState.recordDiscoverySeen(DiscoveryNudge.modelKeys(provider: provider, modelIDs: candidateIDs))
+            // The user has now seen (and partly probed) this discovery
+            // state; record the provider's full current catalog so later
+            // vendor-checkbox toggles never re-badge long-known models.
+            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
             await reload(discover: true)
         } catch {
             errorMessage = error.localizedDescription
@@ -799,6 +803,19 @@ enum DiscoveryNudge {
                 && $0.modelType != "rerank"
                 && ($0.compatible ?? true)
         }
+    }
+
+    /// Every key for `provider` in the current catalog, regardless of
+    /// enabled state or probeability. The seen snapshot records what
+    /// discovery has OBSERVED, not what the filters currently admit:
+    /// recording only the enabled subset made a later vendor-checkbox
+    /// toggle re-badge that vendor's long-known models as "new models
+    /// discovered", mislabeling a filter change as a discovery event.
+    /// `newIDs` stays filtered (only enabled, probeable models nudge);
+    /// only the recording side uses the full set.
+    static func allProviderKeys(_ models: [CatalogModelInfo], provider: String) -> Set<String> {
+        Set(models.filter { $0.provider == provider }
+            .map { modelKey(provider: provider, modelID: $0.modelID) })
     }
 
     /// IDs present in the current catalog but absent from the seen snapshot.

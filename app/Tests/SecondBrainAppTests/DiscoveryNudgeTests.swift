@@ -148,3 +148,29 @@ func dismissThenRediscoverIdempotence() {
     newIDs = DiscoveryNudge.newIDs(models: [existing, discovered, laterDiscovery], provider: "bedrock", seen: seen)
     #expect(newIDs == [laterDiscovery.modelID])
 }
+
+// MARK: - allProviderKeys (the recording-side universe)
+
+@Test("allProviderKeys records disabled and incompatible models too")
+func allProviderKeysIgnoresFilters() {
+    let enabled = decodeModel(#"{"id":"deepseek.v3.2","name":"DeepSeek","provider":"bedrock","type":"generation"}"#)
+    let disabled = decodeModel(#"{"id":"zai.glm-5","name":"GLM 5","provider":"bedrock","type":"generation","enabled":false}"#)
+    let rerank = decodeModel(#"{"id":"cohere.rerank-v3-5:0","name":"Rerank","provider":"bedrock","type":"rerank"}"#)
+    let other = decodeModel(#"{"id":"openai/gpt-4o","name":"GPT-4o","provider":"openrouter","type":"generation"}"#)
+    let keys = DiscoveryNudge.allProviderKeys([enabled, disabled, rerank, other], provider: "bedrock")
+    #expect(keys == ["bedrock|deepseek.v3.2", "bedrock|zai.glm-5", "bedrock|cohere.rerank-v3-5:0"])
+}
+
+@Test("a vendor-checkbox toggle never re-badges models seeded while disabled")
+func vendorToggleDoesNotNudge() {
+    // First run: zai is policy-disabled. Seeding records the FULL catalog.
+    let disabledZai = decodeModel(#"{"id":"zai.glm-5","name":"GLM 5","provider":"bedrock","type":"generation","enabled":false}"#)
+    let seen = DiscoveryNudge.allProviderKeys([disabledZai], provider: "bedrock")
+    // The user then enables the zai vendor: same model, now enabled. A
+    // filter change is not a discovery event, so nothing is "new".
+    let enabledZai = decodeModel(#"{"id":"zai.glm-5","name":"GLM 5","provider":"bedrock","type":"generation","enabled":true}"#)
+    #expect(DiscoveryNudge.newIDs(models: [enabledZai], provider: "bedrock", seen: seen).isEmpty)
+    // A genuinely new arrival still nudges once its vendor is enabled.
+    let fresh = decodeModel(#"{"id":"zai.glm-6","name":"GLM 6","provider":"bedrock","type":"generation","enabled":true}"#)
+    #expect(DiscoveryNudge.newIDs(models: [enabledZai, fresh], provider: "bedrock", seen: seen) == ["zai.glm-6"])
+}
