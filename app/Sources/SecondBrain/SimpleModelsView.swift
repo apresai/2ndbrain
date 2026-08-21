@@ -25,6 +25,10 @@ struct SimpleModelsView: View {
     /// True while "Uncheck all" has staged an empty board (nothing written;
     /// cleared by any successful policy write or reload resync).
     @State private var stagedEmpty = false
+    /// Probeable-and-enabled model IDs present in the catalog but absent
+    /// from the persisted "seen" snapshot. Recomputed on every reload;
+    /// empty means no banner (including the seeded-silently first run).
+    @State private var discoveryNewIDs: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -47,6 +51,7 @@ struct SimpleModelsView: View {
                                 .foregroundStyle(.orange)
                         }
                         vendorSection
+                        discoveryNudgeBanner
                         validateSection
                         pickersSection
                         thinkingSection
@@ -159,6 +164,33 @@ struct SimpleModelsView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
+        }
+    }
+
+    /// "N new models discovered": shown only when a reload finds
+    /// probeable-and-enabled models absent from the persisted seen
+    /// snapshot (see `DiscoveryNudge`). Silent on first launch (the
+    /// snapshot seeds instead of badging the shipped catalog as new) and
+    /// silent again once every current model has been shown at least once.
+    @ViewBuilder
+    private var discoveryNudgeBanner: some View {
+        if !discoveryNewIDs.isEmpty {
+            HStack(spacing: 8) {
+                Label(
+                    discoveryNewIDs.count == 1 ? "1 new model discovered" : "\(discoveryNewIDs.count) new models discovered",
+                    systemImage: "sparkles"
+                )
+                .font(.callout)
+                Spacer()
+                Button("Validate new models") { Task { await validateNewModels() } }
+                    .controlSize(.small)
+                    .disabled(verifying)
+                Button("Dismiss") { dismissDiscoveryNudge() }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+            }
+            .padding(8)
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
         }
     }
 
@@ -418,6 +450,12 @@ struct SimpleModelsView: View {
                     validateEstimate = try? await appState.costPreview(modelIDs: candidateIDs, probe: "test")
                 }
             }
+            // After aiStatus is current (when this was a discover:true
+            // reload) so the seen-snapshot is never seeded/read under a
+            // guessed provider. Vendor toggles also change which models are
+            // enabled, so this still runs on every reload, not only
+            // discover:true ones.
+            updateDiscoveryNudge()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -430,6 +468,45 @@ struct SimpleModelsView: View {
         )
         // Any resync to persisted truth ends a staged-empty board.
         stagedEmpty = false
+    }
+
+    /// Recomputes `discoveryNewIDs` against the persisted seen snapshot.
+    /// Requires a known active provider (`aiStatus` populated) so a
+    /// snapshot is never seeded, or read, under a guessed provider name
+    /// (bedrock is only a display fallback elsewhere in this view, never
+    /// safe to write into a per-provider persisted key). On the very first
+    /// run for that provider (no key for it has ever been recorded) this
+    /// seeds the snapshot with the current catalog silently instead of
+    /// badging the whole shipped model list as new; see
+    /// `DiscoveryNudge.shouldSuppressFirstRun`.
+    private func updateDiscoveryNudge() {
+        guard let provider = aiStatus?.provider else { return }
+        let seen = appState.discoverySeenModelKeys
+        guard !DiscoveryNudge.shouldSuppressFirstRun(seen: seen, provider: provider) else {
+            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+            discoveryNewIDs = []
+            return
+        }
+        discoveryNewIDs = DiscoveryNudge.newIDs(models: models, provider: provider, seen: seen ?? [])
+    }
+
+    /// "Validate new models": probes exactly the banner's IDs via the same
+    /// pinned-ID path the main Validate button uses.
+    private func validateNewModels() async {
+        let ids = discoveryNewIDs
+        guard !ids.isEmpty else { return }
+        await runValidate(only: ids)
+    }
+
+    /// "Dismiss": the user has seen this discovery state, so record the
+    /// provider's FULL current catalog (not just the badged subset): a
+    /// disabled model left unseen here would re-badge as "new" the moment
+    /// its vendor checkbox is toggled on, mislabeling a filter change as a
+    /// discovery event.
+    private func dismissDiscoveryNudge() {
+        guard let provider = aiStatus?.provider, !discoveryNewIDs.isEmpty else { return }
+        appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+        discoveryNewIDs = []
     }
 
     /// Check all = clear the vendor policy (restriction removed; future
@@ -470,23 +547,34 @@ struct SimpleModelsView: View {
         }
     }
 
-    private func runValidate() async {
+    /// `only` pins the candidate set to exactly those IDs (the discovery
+    /// banner's "Validate new models" action) instead of re-discovering and
+    /// recomputing the full enabled-vendor candidate set (the main Validate
+    /// button, `only: nil`). Both paths share the same cost-preview /
+    /// confirm / verify-stream body below.
+    private func runValidate(only: [String]? = nil) async {
         guard !verifying else { return }
         verifying = true
         defer { verifying = false }
-        // Discover once here (not on every checkbox) so a newly checked
-        // vendor's Bedrock listings join the candidate set.
-        do {
-            models = try await appState.fetchModelsCatalog(discover: true)
-        } catch {
-            errorMessage = error.localizedDescription
-            return
-        }
         let provider = aiStatus?.provider ?? "bedrock"
-        let candidateIDs = probeableIDs(models.filter { $0.provider == provider && ($0.enabled ?? true) })
-        guard !candidateIDs.isEmpty else {
-            errorMessage = "No probeable models to validate. Check at least one vendor."
-            return
+        let candidateIDs: [String]
+        if let only {
+            guard !only.isEmpty else { return }
+            candidateIDs = only
+        } else {
+            // Discover once here (not on every checkbox) so a newly checked
+            // vendor's Bedrock listings join the candidate set.
+            do {
+                models = try await appState.fetchModelsCatalog(discover: true)
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+            candidateIDs = probeableIDs(models.filter { $0.provider == provider && ($0.enabled ?? true) })
+            guard !candidateIDs.isEmpty else {
+                errorMessage = "No probeable models to validate. Check at least one vendor."
+                return
+            }
         }
         // Preview the same IDs verify will use (post-discover), not a
         // stale checkbox-reload estimate.
@@ -503,6 +591,10 @@ struct SimpleModelsView: View {
             try await appState.verifyModels(provider: provider, costCap: cap, modelIDs: candidateIDs) { event in
                 applyVerifyEvent(event)
             }
+            // The user has now seen (and partly probed) this discovery
+            // state; record the provider's full current catalog so later
+            // vendor-checkbox toggles never re-badge long-known models.
+            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
             await reload(discover: true)
         } catch {
             errorMessage = error.localizedDescription
@@ -676,6 +768,78 @@ struct VendorChoice: Identifiable, Equatable {
     var id: String { slug }
     let slug: String
     let display: String
+}
+
+/// "New models discovered" banner logic for the simple Models tab. Split out
+/// so the seen-key computation, the probeable-and-enabled predicate, and
+/// first-run suppression are unit-testable without SwiftUI or UserDefaults.
+///
+/// The banner exists because a catalog change (a newly enumerable vendor, a
+/// newly listed model) can surface models the user has never seen without
+/// any action on their part; it should say so once, then get out of the way.
+enum DiscoveryNudge {
+    /// `UserDefaults` key for the persisted "seen" snapshot
+    /// (`AppState.discoverySeenModelKeys`). Declared next to the logic that
+    /// decides what "seen" means; AppState only loads/stores it.
+    static let key = "discoverySeenModelKeys"
+
+    static func modelKey(provider: String, modelID: String) -> String {
+        provider + "|" + modelID
+    }
+
+    static func modelKeys(provider: String, modelIDs: [String]) -> Set<String> {
+        Set(modelIDs.map { modelKey(provider: provider, modelID: $0) })
+    }
+
+    /// The exact predicate the Validate flow uses for its candidate set:
+    /// provider match, not vendor-policy-disabled, and probeable (not
+    /// rerank, not statically incompatible). Matching it here means a
+    /// policy-disabled vendor's discoveries never nudge, and "Validate new
+    /// models" probes precisely what the banner counted.
+    static func probeableAndEnabled(_ models: [CatalogModelInfo], provider: String) -> [CatalogModelInfo] {
+        models.filter {
+            $0.provider == provider
+                && ($0.enabled ?? true)
+                && $0.modelType != "rerank"
+                && ($0.compatible ?? true)
+        }
+    }
+
+    /// Every key for `provider` in the current catalog, regardless of
+    /// enabled state or probeability. The seen snapshot records what
+    /// discovery has OBSERVED, not what the filters currently admit:
+    /// recording only the enabled subset made a later vendor-checkbox
+    /// toggle re-badge that vendor's long-known models as "new models
+    /// discovered", mislabeling a filter change as a discovery event.
+    /// `newIDs` stays filtered (only enabled, probeable models nudge);
+    /// only the recording side uses the full set.
+    static func allProviderKeys(_ models: [CatalogModelInfo], provider: String) -> Set<String> {
+        Set(models.filter { $0.provider == provider }
+            .map { modelKey(provider: provider, modelID: $0.modelID) })
+    }
+
+    /// IDs present in the current catalog but absent from the seen snapshot.
+    static func newIDs(models: [CatalogModelInfo], provider: String, seen: Set<String>) -> [String] {
+        probeableAndEnabled(models, provider: provider)
+            .map(\.modelID)
+            .filter { !seen.contains(modelKey(provider: provider, modelID: $0)) }
+    }
+
+    /// True when no key for `provider` has ever been recorded to the seen
+    /// snapshot: a fresh install (no snapshot at all), or a provider
+    /// switched to for the first time on a machine whose snapshot already
+    /// holds another provider's keys. Scoped per provider, not merely
+    /// "does a snapshot exist at all": a global check would suppress
+    /// forever after the FIRST provider ever seeds, then badge the entire
+    /// catalog of every later-activated provider as new, which is the
+    /// exact flood this suppression exists to prevent. The caller should
+    /// seed silently in this case rather than badge the provider's full
+    /// catalog as "new" on its first appearance.
+    static func shouldSuppressFirstRun(seen: Set<String>?, provider: String) -> Bool {
+        guard let seen else { return true }
+        let prefix = provider + "|"
+        return !seen.contains { $0.hasPrefix(prefix) }
+    }
 }
 
 /// Wrapping vendor checkboxes. Adaptive grid so ~19 slugs wrap instead of
