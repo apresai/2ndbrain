@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,12 +41,14 @@ func TestBedrockPreflightModel_MantleBypass(t *testing.T) {
 		t.Errorf("builtin mantle model should bypass preflight, got %v", err)
 	}
 
-	// Contrast: without a mantle strategy the same unknown ID still fails the
-	// static allowlist (deterministically, before any network call).
-	err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "openai.gpt-5.5-no-catalog-entry", "generation", "")
+	// Contrast: without a mantle strategy, a model the static gate actually
+	// denies (an image-generation model, not merely an unknown vendor — the
+	// generation catch-all is default-allow since this PR) still fails
+	// deterministically, before any network call.
+	err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "amazon.nova-canvas-no-catalog-entry", "generation", "")
 	var incompatible *IncompatibleModelError
 	if !errors.As(err, &incompatible) {
-		t.Errorf("non-mantle unknown model should fail the static allowlist, got %v", err)
+		t.Errorf("non-mantle image-generation model should fail the static gate, got %v", err)
 	}
 }
 
@@ -57,8 +60,12 @@ func TestBedrockPreflightModel_VaultScopedMantleBypass(t *testing.T) {
 	setupHome(t)
 	vaultRoot := t.TempDir()
 
+	// ID carries an "amazon.nova-canvas" prefix so that, absent the mantle
+	// catalog entry, it is genuinely denied by the static gate's
+	// image-generation deny arm rather than merely being an unrecognized
+	// vendor (which the default-allow catch-all now admits since this PR).
 	entry := ModelInfo{
-		ID:             "acme.vault-frontier-1",
+		ID:             "amazon.nova-canvas-vault-frontier-1",
 		Provider:       "bedrock",
 		Type:           "generation",
 		InvokeStrategy: StrategyBedrockMantleResponses,
@@ -70,16 +77,16 @@ func TestBedrockPreflightModel_VaultScopedMantleBypass(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "acme.vault-frontier-1", "generation", vaultRoot); err != nil {
+	if err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "amazon.nova-canvas-vault-frontier-1", "generation", vaultRoot); err != nil {
 		t.Errorf("vault-scoped mantle entry should bypass preflight, got %v", err)
 	}
 
-	// Without the vault root the entry is invisible and the allowlist refuses
-	// the unknown ID — the exact pre-fix failure mode.
-	err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "acme.vault-frontier-1", "generation", "")
+	// Without the vault root the entry is invisible and the static gate's
+	// image-generation deny arm refuses it — the exact pre-fix failure mode.
+	err := BedrockPreflightModel(ctx, BedrockConfig{Region: "us-east-1"}, "amazon.nova-canvas-vault-frontier-1", "generation", "")
 	var incompatible *IncompatibleModelError
 	if !errors.As(err, &incompatible) {
-		t.Errorf("without the vault root the entry should hit the static allowlist, got %v", err)
+		t.Errorf("without the vault root the entry should hit the static gate's deny arm, got %v", err)
 	}
 }
 
@@ -143,15 +150,99 @@ func TestBedrockContextLenHint_AgreesWithBuiltinCatalog(t *testing.T) {
 // Grok 4.6 (2026-08-19) is the first xAI model on the classic Converse
 // plane; earlier Groks were mantle-only and bypass this gate entirely via
 // their invoke strategy. The us./global. profile forms and the bare id must
-// all pass, and an unknown vendor still falls to the refusal.
+// all pass. An unknown vendor is ALSO admitted now — the generation
+// catch-all defaults to allow (TestBedrockModelSupported_GenerationDefaultAllow
+// below pins that behavior directly) — so this test no longer asserts a
+// refusal for it.
 func TestBedrockModelSupported_XAIGrokConverse(t *testing.T) {
 	for _, id := range []string{"us.xai.grok-4.6", "global.xai.grok-4.6", "xai.grok-4.6"} {
 		if ok, why := bedrockModelSupported(id, "generation"); !ok {
 			t.Errorf("%s should be Converse-supported, got refused: %s", id, why)
 		}
 	}
-	if ok, _ := bedrockModelSupported("unknownvendor.some-model", "generation"); ok {
-		t.Error("unknown vendor should still be refused")
+	if ok, why := bedrockModelSupported("unknownvendor.some-model", "generation"); !ok {
+		t.Errorf("unknown vendor should now be admitted by the default-allow catch-all, got refused: %s", why)
+	}
+}
+
+// TestBedrockModelSupported_GenerationDefaultAllow pins the classic-plane
+// generation gate's post-widening shape (this PR): the five conceptual deny
+// categories (image-generation, video-generation, rerank-as-generation,
+// video-understanding, Palmyra Vision) still refuse, and everything else —
+// including vendor families 2nb has never invoked — is admitted by default
+// with no per-vendor allowlist entry required. This is the regression test
+// for the behavioral widening: a future new vendor must NOT need a code
+// change here to become discoverable and probeable.
+func TestBedrockModelSupported_GenerationDefaultAllow(t *testing.T) {
+	denyCases := []struct {
+		modelID string
+		wantSub string
+	}{
+		{"amazon.nova-canvas-v1:0", "image-generation"},
+		{"amazon.nova-reel-v1:0", "video-generation"},
+		{"stability.stable-image-core-v1:0", "image-generation"},
+		{"amazon.titan-image-generator-v1", "image-generation"},
+		{"cohere.rerank-v3-5:0", "reranker"},
+		{"us.twelvelabs.pegasus-1-2-v1:0", "video-understanding"},
+		{"twelvelabs.pegasus-1:0", "video-understanding"},
+		{"writer.palmyra-vision-7b", "Palmyra Vision"},
+	}
+	for _, tc := range denyCases {
+		t.Run("deny/"+tc.modelID, func(t *testing.T) {
+			ok, reason := bedrockModelSupported(tc.modelID, "generation")
+			if ok {
+				t.Fatalf("bedrockModelSupported(%q, generation) = true, want denied (%s)", tc.modelID, tc.wantSub)
+			}
+			if !strings.Contains(reason, tc.wantSub) {
+				t.Fatalf("bedrockModelSupported(%q, generation) reason = %q, want substring %q", tc.modelID, reason, tc.wantSub)
+			}
+		})
+	}
+
+	// Vendors 2nb has always known about, and vendors it has never seen,
+	// must both pass now with no distinction between them.
+	allowIDs := []string{
+		"anthropic.claude-3-5-haiku-20241022-v1:0",
+		"amazon.nova-micro-v1:0",
+		"meta.llama3-8b-instruct-v1:0",
+		"mistral.mistral-7b-instruct-v0:2",
+		"deepseek.v3.2",
+		"xai.grok-4.6",
+		// Vendor families formerly covered by an explicit allow arm — the
+		// widened catch-all admits them with no per-vendor logic left.
+		"qwen.qwen3-235b-a22b-v1:0",
+		"zai.glm-4-6-v1:0",
+		"moonshotai.kimi-k2-v1:0",
+		"minimax.m2-v1:0",
+		"nvidia.nemotron-super-49b-v1:0",
+		"google.gemma-3-27b-it-v1:0",
+		"openai.gpt-oss-120b-v1:0",
+		// A vendor 2nb has genuinely never invoked or added a case for.
+		"unknownvendor.some-model",
+		"acme.brand-new-frontier-model-v7",
+	}
+	for _, id := range allowIDs {
+		t.Run("allow/"+id, func(t *testing.T) {
+			if ok, why := bedrockModelSupported(id, "generation"); !ok {
+				t.Errorf("bedrockModelSupported(%q, generation) should be admitted by the default-allow catch-all, got refused: %s", id, why)
+			}
+		})
+	}
+}
+
+// TestBedrockModelSupported_EmbeddingRerankStillAllowlisted pins that ONLY
+// the classic-plane generation gate widened in this PR — embedding and
+// rerank keep their explicit per-family allowlists (each vendor's InvokeModel
+// body shape is genuinely different, so "unknown" cannot default to
+// "compatible" the way it can for the uniform Converse dialect).
+func TestBedrockModelSupported_EmbeddingRerankStillAllowlisted(t *testing.T) {
+	if ok, reason := bedrockModelSupported("unknownvendor.some-embedder", "embedding"); ok {
+		t.Error("unknown embedding vendor should still be refused")
+	} else if !strings.Contains(reason, "2nb doesn't support this Bedrock embedding invoke format yet") {
+		t.Errorf("embedding catch-all reason changed: %q (pinned by JSONDecodingTests.swift:445, do not alter)", reason)
+	}
+	if ok, _ := bedrockModelSupported("unknownvendor.some-reranker", "rerank"); ok {
+		t.Error("unknown rerank vendor should still be refused")
 	}
 }
 
