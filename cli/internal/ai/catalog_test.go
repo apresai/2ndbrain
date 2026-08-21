@@ -60,15 +60,21 @@ func TestBuiltinCatalog_AllProvidersPresent(t *testing.T) {
 	}
 }
 
-func TestCatalogIndex(t *testing.T) {
+// TestBuiltinCatalog_NoDuplicateIDs keeps the invariant the retired
+// catalogIndex helper used to back: every builtin (provider, id) pair is
+// unique, so exact-id lookups and the discovery merge are unambiguous.
+func TestBuiltinCatalog_NoDuplicateIDs(t *testing.T) {
 	catalog := BuiltinCatalog()
-	idx := catalogIndex(catalog)
-	if len(idx) != len(catalog) {
-		t.Errorf("catalogIndex size %d != catalog size %d (duplicates?)", len(idx), len(catalog))
+	seen := make(map[string]bool, len(catalog))
+	for _, m := range catalog {
+		k := catalogKey(m.Provider, m.ID)
+		if seen[k] {
+			t.Errorf("duplicate builtin catalog entry: %s/%s", m.Provider, m.ID)
+		}
+		seen[k] = true
 	}
-	// Spot check one entry exists.
-	if !idx["bedrock\x00amazon.nova-2-multimodal-embeddings-v1:0"] {
-		t.Error("expected bedrock nova embeddings in index")
+	if !seen[catalogKey("bedrock", "amazon.nova-2-multimodal-embeddings-v1:0")] {
+		t.Error("expected bedrock nova embeddings in the builtin catalog")
 	}
 }
 
