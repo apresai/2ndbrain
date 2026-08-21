@@ -127,6 +127,13 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 // a lifecycle lookup before a probe invokes the model. vaultRoot scopes the
 // user-catalog strategy lookup so a VAULT-scoped mantle entry is bypassed
 // too; pass "" when no vault is open (builtin + global entries still resolve).
+//
+// Since the generation gate widened to default-allow, an unrecognized
+// classic-plane generation vendor no longer short-circuits here on the
+// static check: it now falls through to bedrockModelIsLegacy, a
+// GetFoundationModel control-plane round-trip. This is bounded (control
+// plane, no charge) and was already paid by every model the old allowlist
+// admitted; the newly-admitted models pay it too.
 func BedrockPreflightModel(ctx context.Context, cfg BedrockConfig, modelID, modelType, vaultRoot string) error {
 	// Mantle-plane models are invisible to the classic control plane: the
 	// static allowlist doesn't know them and GetFoundationModel would 404,
