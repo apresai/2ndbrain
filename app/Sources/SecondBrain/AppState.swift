@@ -3937,9 +3937,11 @@ enum VerifyFlow {
     /// double the preview plus a cent of headroom, so the CLI's spend guard
     /// still trips on a runaway but never on the exact amount the user just
     /// approved. A nil preview (the estimator itself failed) falls back to the
-    /// CLI's own default guard.
+    /// CLI's own default guard (models_verify.go `--cost-cap`, $0.50) — the
+    /// value is passed as an explicit flag, so it must match the CLI default
+    /// rather than silently tightening it.
     static func costCap(preview: CostPreviewResponse?) -> Double {
-        guard let preview else { return 0.05 }
+        guard let preview else { return 0.50 }
         return preview.totalUSD * 2 + 0.01
     }
 

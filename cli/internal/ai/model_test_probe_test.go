@@ -50,3 +50,24 @@ func TestInferModelType(t *testing.T) {
 		})
 	}
 }
+
+// TestProbeBudgetConstantsPinned holds the probe output budget offline where
+// plain CI always runs (the live guard, TestLiveGrok46ClassicConverse_CredGated,
+// is credential-gated and so invisible to CI). The budget is load-bearing:
+// always-reasoning models bill reasoning against the output budget (a live
+// "what is 2+2" on grok-4.6 cost 180 output tokens), so a revert toward the
+// old 32-token cap truncates mid-reasoning and fails a working model. The
+// three values are pinned together so the cost estimate can never
+// under-report what a probe may bill and the classic-plane budget can never
+// drop below the mantle client's floor, which exists for the same cause.
+func TestProbeBudgetConstantsPinned(t *testing.T) {
+	if probeGenMaxTokens < 256 {
+		t.Errorf("probeGenMaxTokens = %d; below 256 truncates always-reasoning models mid-answer (measured 180 tokens for a trivial prompt)", probeGenMaxTokens)
+	}
+	if got := DefaultProbeSpec(ProbeTest).OutputTokens; got != probeGenMaxTokens {
+		t.Errorf("ProbeTest cost spec OutputTokens = %d, want probeGenMaxTokens (%d); the estimate must not under-report what a probe may bill", got, probeGenMaxTokens)
+	}
+	if probeGenMaxTokens < mantleMinOutputTokens {
+		t.Errorf("probeGenMaxTokens = %d below mantleMinOutputTokens = %d; the classic probe budget must cover the same reasoning overhead the mantle floor exists for", probeGenMaxTokens, mantleMinOutputTokens)
+	}
+}

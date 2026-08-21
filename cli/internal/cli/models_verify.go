@@ -54,7 +54,7 @@ func init() {
 	modelsVerifyCmd.Flags().BoolVar(&verifyRecommended, "recommended", false, "Probe only the curated recommended models")
 	modelsVerifyCmd.Flags().BoolVar(&verifyAll, "all", false, "Probe every catalog model (verified + user catalog)")
 	modelsVerifyCmd.Flags().StringVar(&verifyScope, "scope", "vault", "Catalog scope for saved results: vault or global")
-	modelsVerifyCmd.Flags().Float64Var(&verifyCostCap, "cost-cap", 0.05, "Abort if the estimated probe cost exceeds this many USD")
+	modelsVerifyCmd.Flags().Float64Var(&verifyCostCap, "cost-cap", 0.50, "Abort if the estimated probe cost exceeds this many USD")
 	modelsVerifyCmd.Flags().BoolVar(&verifyYes, "yes", false, "Skip the interactive confirmation")
 	modelsVerifyCmd.Flags().BoolVar(&verifyEnabledOnly, "enabled-only", false, "Restrict candidates to effectively-enabled models (post-policy; explicit model IDs still win)")
 	modelsVerifyCmd.Flags().BoolVar(&verifyEvents, "events", false, "Stream line-delimited JSON progress events to stdout (requires --yes; mutually exclusive with --json)")

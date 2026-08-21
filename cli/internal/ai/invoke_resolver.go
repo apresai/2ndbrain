@@ -99,13 +99,24 @@ func carryVaultRegionPin(cfg *BedrockConfig, modelID, vaultRoot string) {
 }
 
 // ResolveModelEndpoint returns the per-model endpoint URL override for
-// (provider, modelID), resolved through the same user-catalog-over-builtin
-// chain as ResolveInvokeStrategy. Returns "" when no catalog entry pins an
-// endpoint, meaning "derive the endpoint from the model's Region".
+// (provider, modelID), user catalog over builtin. Returns "" when no catalog
+// entry pins an endpoint, meaning "derive the endpoint from the model's
+// Region".
+//
+// EXACT id matching only, like ResolveModelRegion and for the same reason:
+// endpoint pins are authored against exact ids (mantle user entries), and
+// the profile-stripped base fallback would let a mantle entry's endpoint
+// bleed onto the classic us./global. profile forms — the same cross-plane
+// class of bug fixed for Region and InvokeStrategy. Not reachable as a live
+// defect (the only caller sits behind the mantle strategy gate in
+// bedrock_mantle.go, and builtins declare no endpoints); hardened so the
+// three routing resolvers share one matching rule.
 func ResolveModelEndpoint(provider, modelID, vaultRoot string) string {
-	return resolveCatalogString(provider, modelID, vaultRoot, func(m ModelInfo) string {
-		return m.Endpoint
-	})
+	field := func(m ModelInfo) string { return m.Endpoint }
+	if user := findCatalogStringExact(LoadUserCatalog(vaultRoot), provider, modelID, field); user != "" {
+		return user
+	}
+	return findCatalogStringExact(BuiltinCatalog(), provider, modelID, field)
 }
 
 // resolveCatalogString resolves one string-valued catalog field for

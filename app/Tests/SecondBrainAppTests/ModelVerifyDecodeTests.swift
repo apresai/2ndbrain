@@ -175,7 +175,7 @@ func costCapFromPreview() throws {
 
 @Test("costCap falls back to the CLI default guard when no estimate is available")
 func costCapNilPreview() {
-    #expect(VerifyFlow.costCap(preview: nil) == 0.05)
+    #expect(VerifyFlow.costCap(preview: nil) == 0.50)
 }
 
 // MARK: - VerifyFlow.classify (empty-stream + nonzero exit is a failure)

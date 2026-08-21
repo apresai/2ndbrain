@@ -344,35 +344,44 @@ func TestInvalidRequestRemediationMentionsRegion(t *testing.T) {
 
 // TestCrossPlanePinsNeverBleed pins two live-observed bugs from grok-4.6's
 // dual-plane debut: a mantle user entry for the bare id must not leak its
-// invoke strategy or region onto the CLASSIC us./global. profile forms via
-// the profile-stripped base match — profiles exist only on the classic
-// plane, and the leak dispatched Converse traffic to a mantle 404 and pinned
-// it to the mantle region.
+// invoke strategy, region, or endpoint onto the CLASSIC us./global. profile
+// forms via the profile-stripped base match — profiles exist only on the
+// classic plane, and the leak dispatched Converse traffic to a mantle 404
+// and pinned it to the mantle region. Endpoint was never observed bleeding
+// (its one caller sits behind the strategy gate) but shares the matching
+// rule, so it is pinned here alongside the other two.
 func TestCrossPlanePinsNeverBleed(t *testing.T) {
 	root := t.TempDir()
 	if err := SaveUserCatalogEntry(ScopeVault, root, ModelInfo{
 		ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation",
 		InvokeStrategy: StrategyBedrockMantleResponses,
 		Region:         "us-west-2",
+		Endpoint:       "https://bedrock-mantle.us-west-2.api.aws",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Exact id: mantle strategy and region apply.
+	// Exact id: mantle strategy, region, and endpoint apply.
 	if s := ResolveInvokeStrategy("bedrock", "xai.grok-4.6", root); s != StrategyBedrockMantleResponses {
 		t.Errorf("exact mantle strategy lost: %q", s)
 	}
 	if r := ResolveModelRegion("bedrock", "xai.grok-4.6", root); r != "us-west-2" {
 		t.Errorf("exact mantle region lost: %q", r)
 	}
+	if ep := ResolveModelEndpoint("bedrock", "xai.grok-4.6", root); ep != "https://bedrock-mantle.us-west-2.api.aws" {
+		t.Errorf("exact mantle endpoint lost: %q", ep)
+	}
 
-	// Profile forms: NEITHER bleeds across the plane boundary.
+	// Profile forms: NOTHING bleeds across the plane boundary.
 	for _, id := range []string{"us.xai.grok-4.6", "global.xai.grok-4.6"} {
 		if s := ResolveInvokeStrategy("bedrock", id, root); s == StrategyBedrockMantleResponses {
 			t.Errorf("%s inherited the mantle strategy via base match", id)
 		}
 		if r := ResolveModelRegion("bedrock", id, root); r != "" {
 			t.Errorf("%s inherited region %q via base match", id, r)
+		}
+		if ep := ResolveModelEndpoint("bedrock", id, root); ep != "" {
+			t.Errorf("%s inherited endpoint %q via base match", id, ep)
 		}
 	}
 }
