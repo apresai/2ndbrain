@@ -90,8 +90,11 @@ func RAGWithHistory(ctx context.Context, gen GenerationProvider, question string
 // caller cannot override the tuned values by passing a GenOpts of its own.
 func ragGenOpts(system string, opts []GenOption) GenOpts {
 	return applyGenOptions(GenOpts{
-		// 1024 so a fuller answer (now backed by full-note parent-document
-		// context) isn't itself truncated mid-thought.
+		// RAGGenMaxTokens (4096) so a fuller answer (backed by full-note
+		// parent-document context) isn't truncated mid-thought, and so a
+		// classic-plane always-reasoning model's reasoning overhead never
+		// eats the answer. A budget bounds runaway cost; it must never
+		// fail a working model.
 		MaxTokens:    RAGGenMaxTokens,
 		Temperature:  Ptr(0.1),
 		SystemPrompt: system,
