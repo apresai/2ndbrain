@@ -93,7 +93,11 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 			return false, "2nb doesn't support Bedrock image-generation models"
 		case strings.HasPrefix(lower, "amazon.nova-reel"):
 			return false, "2nb doesn't support Bedrock video-generation models"
-		case strings.HasPrefix(lower, "stability.stable-image"):
+		case strings.HasPrefix(lower, "stability."):
+			// Stability AI's entire Bedrock lineup is image generation
+			// (stable-image-*, sd3*, stable-diffusion-xl*), so the deny is
+			// vendor-wide: a narrower stable-image prefix let the sd3 and
+			// stable-diffusion-xl ids fall through to the default-allow arm.
 			return false, "2nb doesn't support Bedrock image-generation models"
 		case strings.HasPrefix(lower, "amazon.titan-image-generator"):
 			return false, "2nb doesn't support Bedrock image-generation models"
