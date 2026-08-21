@@ -92,7 +92,7 @@ func ragGenOpts(system string, opts []GenOption) GenOpts {
 	return applyGenOptions(GenOpts{
 		// 1024 so a fuller answer (now backed by full-note parent-document
 		// context) isn't itself truncated mid-thought.
-		MaxTokens:    1024,
+		MaxTokens:    RAGGenMaxTokens,
 		Temperature:  Ptr(0.1),
 		SystemPrompt: system,
 	}, opts)

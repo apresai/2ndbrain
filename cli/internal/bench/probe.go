@@ -159,12 +159,16 @@ func RunGenerate(opts ProbeOpts) ProbeResult {
 	// ReasoningEffort "none" for the same reason the models-test smoke probe
 	// sets it: this probe measures generation LATENCY, and an always-reasoning
 	// model (mantle grok, gpt-5.5) left at its model default bills reasoning
-	// against this small output budget, returning a reasoning-only
-	// "incomplete" response or, observed live 2026-08-21 on xai.grok-4.6,
-	// running past the mantle client's 90s HTTP timeout and failing the
-	// bench outright at latency_ms=90008. Non-reasoning providers ignore the
-	// field.
-	genOpts := ai.GenOpts{MaxTokens: 128, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
+	// against the output budget, returning a reasoning-only "incomplete"
+	// response or, observed live 2026-08-21 on xai.grok-4.6, running past the
+	// mantle client's 90s HTTP timeout and failing the bench outright at
+	// latency_ms=90008. Non-reasoning providers ignore the field — and so
+	// does the CLASSIC Converse plane, which has no reasoning knob at all,
+	// which is why the budget is ai.BenchGenMaxTokens rather than the old
+	// 128: classic grok-4.6 bills ~180 reasoning tokens before any answer
+	// text, so 128 failed a working model. Budgets bound runaway cost; they
+	// must never fail a working model.
+	genOpts := ai.GenOpts{MaxTokens: ai.BenchGenMaxTokens, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
 
 	resp, err := func() (string, error) {
 		switch opts.Provider {
@@ -292,7 +296,11 @@ func RunRAG(opts ProbeOpts) ProbeResult {
 		return ProbeResult{Probe: "rag", LatencyMs: time.Since(start).Milliseconds(), OK: false, Detail: fmt.Sprintf("unknown provider %q", opts.Provider)}
 	}
 
-	result, err := ai.RAG(opts.Ctx, generator, ragQuestion, chunks)
+	// Effort "none" for the same latency-measurement rationale as
+	// RunGenerate: the bench must not inherit an always-reasoning mantle
+	// model's default and time out. Production ask keeps the user's
+	// configured reasoning depth; only the bench pins it off.
+	result, err := ai.RAG(opts.Ctx, generator, ragQuestion, chunks, ai.WithReasoningEffort("none"))
 	ms := time.Since(start).Milliseconds()
 	if err != nil {
 		return ProbeResult{Probe: "rag", LatencyMs: ms, OK: false, Detail: err.Error()}

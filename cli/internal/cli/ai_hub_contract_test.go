@@ -89,7 +89,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	costAll = false
 	wizardScope, wizardProvider = "vault", ""
 	wizardSkipDiscover, wizardJSON, wizardSetActive = false, false, false
-	wizardCostCap = 0.10
+	wizardCostCap = 0.50
 	benchModelFlag, benchProbeFlag, benchProviderFlag = "", "", ""
 	benchSummaryScope = "global"
 	benchHistoryLimit = 20

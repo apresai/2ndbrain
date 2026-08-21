@@ -83,7 +83,10 @@ GROUNDING: <1-5>`, question, sourceTitle, body, answer)
 	var sc AnswerScore
 	var sumC, sumP, sumG float64
 	for _, j := range judges {
-		out, err := j.Gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 40, Temperature: ai.Ptr(0.0)})
+		// 1024 for a three-number grade: classic-plane always-reasoning
+		// judges bill reasoning against this budget with no off switch, and
+		// 40 truncated a working judge before it could emit the axes.
+		out, err := j.Gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 1024, Temperature: ai.Ptr(0.0), ReasoningEffort: "none"})
 		jd := Judgment{Judge: j.Name}
 		if err == nil {
 			jd.Correctness, jd.Completeness, jd.Grounding = parseAxes(out)

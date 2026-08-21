@@ -60,7 +60,7 @@ func TestRAGGenOpts_ReasoningEffort(t *testing.T) {
 	if base.ReasoningEffort != "" {
 		t.Errorf("no options: ReasoningEffort = %q, want empty (model default)", base.ReasoningEffort)
 	}
-	if base.MaxTokens != 1024 || base.Temperature == nil || *base.Temperature != 0.1 || base.SystemPrompt != system {
+	if base.MaxTokens != RAGGenMaxTokens || base.Temperature == nil || *base.Temperature != 0.1 || base.SystemPrompt != system {
 		t.Fatalf("unexpected base opts: %+v", base)
 	}
 
@@ -78,7 +78,7 @@ func TestRAGGenOpts_ReasoningEffort(t *testing.T) {
 			if got.ReasoningEffort != effort {
 				t.Errorf("ReasoningEffort = %q, want %q", got.ReasoningEffort, effort)
 			}
-			if got.MaxTokens != 1024 || got.Temperature == nil || *got.Temperature != 0.1 {
+			if got.MaxTokens != RAGGenMaxTokens || got.Temperature == nil || *got.Temperature != 0.1 {
 				t.Errorf("reasoning effort must not disturb the tuned opts: %+v", got)
 			}
 			if got.SystemPrompt != system {

@@ -718,8 +718,11 @@ func llmRerankPicks(ctx context.Context, cfg ai.AIConfig, system, user string) (
 		return nil, fmt.Errorf("generation provider %q unavailable", cfg.Provider)
 	}
 	out, err := gen.Generate(ctx, user, ai.GenOpts{
-		Temperature:     ai.Ptr(0.0),
-		MaxTokens:       400,
+		Temperature: ai.Ptr(0.0),
+		// 1024 for a small JSON verdict: classic-plane always-reasoning
+		// models bill reasoning against this budget (effort "none" is
+		// mantle-only), and 400 truncated a working model mid-reasoning.
+		MaxTokens:       1024,
 		SystemPrompt:    system,
 		ReasoningEffort: "none",
 	})

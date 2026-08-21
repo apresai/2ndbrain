@@ -42,7 +42,7 @@ func init() {
 		"Limit to a single provider: bedrock, openrouter, ollama")
 	modelsWizardCmd.Flags().BoolVar(&wizardSkipDiscover, "skip-discover", false,
 		"Use only the builtin catalog; don't query vendor APIs")
-	modelsWizardCmd.Flags().Float64Var(&wizardCostCap, "cost-cap", 0.10,
+	modelsWizardCmd.Flags().Float64Var(&wizardCostCap, "cost-cap", 0.50,
 		"Abort if estimated test cost exceeds this USD value")
 	modelsWizardCmd.Flags().BoolVar(&wizardJSON, "json", false,
 		"Emit JSON-line events on stdout (non-interactive; uses defaults)")

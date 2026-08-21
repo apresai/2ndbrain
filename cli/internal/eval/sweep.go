@@ -38,7 +38,7 @@ type PromptVariant struct {
 
 // GenerateAnswerVariant runs the ask pipeline for one prompt variant: production
 // retrieval (cfg) + ragctx.Build, then an eval-local generation that mirrors
-// ai.RAGWithHistory's chunk formatting + GenOpts (MaxTokens 1024, temp 0.1) but
+// ai.RAGWithHistory's chunk formatting + GenOpts (MaxTokens ai.RAGGenMaxTokens, temp 0.1) but
 // with the variant's system prompt / answer instruction / citation clause /
 // candidate limit. Returns the answer text.
 func GenerateAnswerVariant(ctx context.Context, v *vault.Vault, c *corpus, gen ai.GenerationProvider, cfg SweepConfig, pv PromptVariant, qi int, question string) (string, error) {
@@ -69,7 +69,7 @@ func GenerateAnswerVariant(ctx context.Context, v *vault.Vault, c *corpus, gen a
 		system = defaultRAGSystem
 	}
 	prompt := buildVariantPrompt(question, chunks, pv)
-	return gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 1024, Temperature: ai.Ptr(0.1), SystemPrompt: system})
+	return gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: ai.RAGGenMaxTokens, Temperature: ai.Ptr(0.1), SystemPrompt: system})
 }
 
 // buildVariantPrompt mirrors ai.buildRAGPrompt's no-history template (the eval
