@@ -84,7 +84,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	verifyProvider, verifyVendor, verifyScope = "", "", "vault"
 	verifyRecommended, verifyAll, verifyYes = false, false, false
 	verifyEnabledOnly, verifyEvents, verifyDiscover = false, false, false
-	verifyCostCap = 0.05
+	verifyCostCap = 0.50
 	costProvider, costProbeKind = "", "test"
 	costAll = false
 	wizardScope, wizardProvider = "vault", ""
