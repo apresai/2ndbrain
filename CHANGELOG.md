@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.19.0] - 2026-08-20
+
+### Added
+- Grok 4.6 (`us.xai.grok-4.6`) as a builtin classic-plane Bedrock catalog entry via the Converse cross-region profile, with plane-safe pins so the mantle `xai.grok-4.6` id stays separately routable (#213)
+- Mantle-plane model enumeration: `--discover` on `models list`, `models verify`, and `models cost-preview` now lists each mantle region's `/v1/models` catalog as probeable rows carrying routing hints, and a verified probe persists the routing into the user catalog (#218)
+- New-model discovery nudge banner on the macOS Models tab: newly discovered probeable models are flagged with Validate and Dismiss actions, and first activation of a provider seeds silently instead of badging its whole catalog (#217)
+
+### Changed
+- Classic-plane Bedrock generation compatibility gate is now default-allow: only five static deny categories remain, so models from unrecognized vendors surface through discovery as probeable rows without a code change (#215)
+- Generation probe output budget raised from 256 to 1024 tokens, with cost estimates scaled to the new budget (#216)
+- `make release-app` is checkpointed, resumable, and optionally non-blocking: phases prove completion from artifacts, pending notarization submissions persist keyed to artifact sha256, `RELEASE_NOWAIT=1` submits and exits, and `make release-app-status` reports progress (#212)
+- Hardened the mantle endpoint resolution (https and `*.api.aws` only), pinned the probe cost estimate to the probe budget, and added a verify cost cap plus routing logs (#214)
+
+### Fixed
+- Verify-setup reap decode failure in the macOS app; model probe failures now surface code-aware remediation advice keyed to the classified error (#219)
+- A notarization submit that loses its stdout while the upload landed is recovered by adopting the matching submission from `notarytool history`; submits also pass `--no-s3-acceleration` (#211)
+
+
 ## [0.18.2] - 2026-08-20
 
 ### Added
