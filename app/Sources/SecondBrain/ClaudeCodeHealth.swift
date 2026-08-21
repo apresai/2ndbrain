@@ -167,6 +167,20 @@ struct MCPReapResult: Codable {
         case reaped, skipped, threshold
         case dryRun = "dry_run"
     }
+
+    /// CLIs through 0.18.2 emit `"reaped": null` / `"skipped": null` in the
+    /// healthy zero-stale case (Go nil slices), which a plain non-optional
+    /// decode rejects as valueNotFound, failing every clean Verify-setup
+    /// run with "The data couldn't be read because it is missing". The CLI
+    /// now emits [] (arrays, never null), but a PATH-fallback dev build can
+    /// still resolve an older binary, so decode null/absent as empty.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        reaped = try c.decodeIfPresent([ReapedServerInfo].self, forKey: .reaped) ?? []
+        skipped = try c.decodeIfPresent([SkippedServerInfo].self, forKey: .skipped) ?? []
+        threshold = try c.decode(String.self, forKey: .threshold)
+        dryRun = try c.decode(Bool.self, forKey: .dryRun)
+    }
 }
 
 // MARK: - Health checklist model + pure mapping
@@ -206,16 +220,27 @@ enum ClaudeCodeHealth {
         }
     }
 
-    /// Map a `models test` probe into a single AI HealthCheck.
+    /// Map a `models test` probe into a single AI HealthCheck. Failure advice
+    /// is code-aware via ModelAccessPresentation (the same taxonomy Home Test
+    /// renders): an `incompatible` or `access_denied` probe must not tell the
+    /// user to go verify credentials that are working fine, which is exactly
+    /// what the old hardcoded string did.
     static func modelCheck(_ probe: AIProbeResult?, label: String) -> HealthCheck {
         guard let probe else {
             return HealthCheck(group: "AI", name: "\(label) model", state: .fail,
                                detail: "model test did not run", fix: "check 2nb ai status")
         }
+        var fix: String?
+        if !probe.ok {
+            fix = ModelAccessPresentation.guidance(
+                code: probe.errorCode, provider: probe.provider,
+                remediation: probe.remediation, strategy: probe.invokeStrategy
+            )?.advice ?? probe.remediation ?? "verify provider credentials (2nb ai status)"
+        }
         return HealthCheck(group: "AI", name: "\(label): \(probe.modelID)",
                            state: probe.ok ? .pass : .fail,
                            detail: probe.detail ?? "latency \(probe.latency)",
-                           fix: probe.ok ? nil : "verify provider credentials (2nb ai status)")
+                           fix: fix)
     }
 
     /// The cross-dependency callout: Claude Code integration needs BOTH the skill

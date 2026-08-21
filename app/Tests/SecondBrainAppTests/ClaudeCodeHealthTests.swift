@@ -103,3 +103,42 @@ func modelCheckMapping() {
     #expect(ClaudeCodeHealth.modelCheck(ok, label: "Embedding").state == .pass)
     #expect(ClaudeCodeHealth.modelCheck(nil, label: "Generation").state == .fail)
 }
+
+@Test("MCPReapResult decodes the shipped null-array form (0.18.2) and the fixed [] form")
+func reapResultToleratesNullArrays() throws {
+    // Byte-for-byte what CLIs through 0.18.2 emit on a healthy zero-stale
+    // run: Go nil slices marshal as null. This decode failing was the
+    // "Reap failed: The data couldn't be read because it is missing" bug.
+    let shipped = """
+    {"reaped":null,"skipped":null,"threshold":"6h0m0s","dry_run":true}
+    """.data(using: .utf8)!
+    let old = try JSONDecoder().decode(MCPReapResult.self, from: shipped)
+    #expect(old.reaped.isEmpty && old.skipped.isEmpty && old.dryRun && old.threshold == "6h0m0s")
+
+    let fixed = """
+    {"reaped":[],"skipped":[],"threshold":"6h0m0s","dry_run":false}
+    """.data(using: .utf8)!
+    let new = try JSONDecoder().decode(MCPReapResult.self, from: fixed)
+    #expect(new.reaped.isEmpty && new.skipped.isEmpty && !new.dryRun)
+}
+
+@Test("modelCheck failure advice is code-aware, not a hardcoded credentials hint")
+func modelCheckCodeAwareAdvice() {
+    // incompatible: credentials are fine; the advice must not send the user
+    // to verify them (the misleading text this replaces).
+    let incompatible = AIProbeResult(modelID: "xai.grok-4.6", provider: "bedrock", modelType: "generation", ok: false, detail: "unsupported", latency: "10ms", errorCode: "incompatible", remediation: nil, invokeStrategy: nil)
+    let incFix = ClaudeCodeHealth.modelCheck(incompatible, label: "Generation").fix
+    #expect(incFix != nil && incFix?.contains("verify provider credentials") == false)
+
+    // The CLI's own remediation wins when the taxonomy carries one.
+    let denied = AIProbeResult(modelID: "us.anthropic.claude-opus-4-8", provider: "bedrock", modelType: "generation", ok: false, detail: "403", latency: "50ms", errorCode: "access_denied", remediation: "request access in the AWS console", invokeStrategy: nil)
+    #expect(ClaudeCodeHealth.modelCheck(denied, label: "Generation").fix == "request access in the AWS console")
+
+    // No code at all (pre-taxonomy CLI): the generic hint remains the floor.
+    let bare = AIProbeResult(modelID: "m", provider: "bedrock", modelType: "generation", ok: false, detail: "boom", latency: "5ms", errorCode: nil, remediation: nil, invokeStrategy: nil)
+    #expect(ClaudeCodeHealth.modelCheck(bare, label: "Generation").fix == "verify provider credentials (2nb ai status)")
+
+    // A pass carries no fix.
+    let ok = AIProbeResult(modelID: "m", provider: "bedrock", modelType: "embedding", ok: true, detail: nil, latency: "120ms", errorCode: nil, remediation: nil, invokeStrategy: nil)
+    #expect(ClaudeCodeHealth.modelCheck(ok, label: "Embedding").fix == nil)
+}

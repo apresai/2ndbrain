@@ -124,7 +124,15 @@ func Reap(v *vault.Vault, olderThan time.Duration, dryRun bool) (ReapResult, err
 		return ReapResult{}, err
 	}
 
-	res := ReapResult{Threshold: olderThan.String(), DryRun: dryRun, Skipped: skipped}
+	// The JSON contract is arrays, never null: the app's MCPReapResult
+	// decoder (and the repo-wide empty-array convention) require [] for the
+	// healthy zero-stale case. Nil slices marshal as null, which surfaced in
+	// the GUI as "Reap failed: The data couldn't be read because it is
+	// missing" on every clean Verify-setup run.
+	res := ReapResult{Threshold: olderThan.String(), DryRun: dryRun, Reaped: []ReapedServer{}, Skipped: skipped}
+	if res.Skipped == nil {
+		res.Skipped = []SkippedServer{}
+	}
 	for _, st := range stale {
 		entry := ReapedServer{PID: st.PID, Age: now.Sub(serverLastActivity(st)).Round(time.Second).String(), LastInvocation: st.LastInvocation}
 		if dryRun {
