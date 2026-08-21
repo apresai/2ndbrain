@@ -624,7 +624,23 @@ var _ UsageGenerator = (*BedrockGenerator)(nil)
 // and would fail with a misleading 404. vaultRoot scopes user-catalog
 // strategy/region lookups; pass "" when no vault is open.
 func NewBedrockGeneration(ctx context.Context, cfg BedrockConfig, model, vaultRoot string) (GenerationProvider, error) {
-	if ResolveInvokeStrategy("bedrock", model, vaultRoot) == StrategyBedrockMantleResponses {
+	return NewBedrockGenerationRouted(ctx, cfg, model, vaultRoot, "")
+}
+
+// NewBedrockGenerationRouted is NewBedrockGeneration with a strategy HINT for
+// models no catalog knows yet: a mantle-DISCOVERED candidate carries its
+// plane on the ModelInfo (mantleModelInfo), and the probe threads it through
+// here so construction can dispatch to the Responses client. Precedence is
+// effectiveInvokeStrategy's, shared with the probe path so the dispatched
+// route can never diverge from the strategy the probe reports: an EXACT
+// catalog entry beats the hint (a user entry keeps full routing authority),
+// and the hint beats the profile-stripped base-match inference (the classic
+// us.xai.grok-4.6 builtin must not drag the mantle-listed bare xai.grok-4.6
+// onto Converse — observed live 2026-08-20 as a ValidationException before
+// this constructor adopted the shared precedence).
+func NewBedrockGenerationRouted(ctx context.Context, cfg BedrockConfig, model, vaultRoot, strategyHint string) (GenerationProvider, error) {
+	strategy := effectiveInvokeStrategy("bedrock", ModelInfo{ID: model, Provider: "bedrock", InvokeStrategy: strategyHint}, vaultRoot)
+	if strategy == StrategyBedrockMantleResponses {
 		slog.Debug("bedrock generation: dispatching to the mantle plane", "model", model)
 		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
 	}

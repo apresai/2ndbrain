@@ -90,6 +90,58 @@ func discoveryCachePath(cfg BedrockConfig) (string, error) {
 	return filepath.Join(dir, name), nil
 }
 
+// mantleDiscoveryCachePath keys the mantle /v1/models listing cache per
+// region + profile in its own bedrock-mantle-* namespace, so classic and
+// mantle entries for the same region can never shadow each other. Same
+// envelope, TTL, and stale-fallback treatment as the classic cache; no
+// discoveryCacheVersion bump — a brand-new namespace has no stale files
+// to invalidate.
+func mantleDiscoveryCachePath(cfg BedrockConfig, region string) (string, error) {
+	dir, err := discoveryCacheDir()
+	if err != nil {
+		return "", err
+	}
+	profile := cfg.Profile
+	if profile == "" {
+		profile = "default"
+	}
+	name := fmt.Sprintf("bedrock-mantle-%s-%s.json", sanitizeCacheKey(region), sanitizeCacheKey(profile))
+	return filepath.Join(dir, name), nil
+}
+
+// listBedrockMantleModelsThroughCache backs ListBedrockMantleModelsCached:
+// fresh cache short-circuits the network; a live failure degrades to the
+// stale entry rather than to nothing (mirroring ListBedrockVendorModelsCached).
+func listBedrockMantleModelsThroughCache(ctx context.Context, cfg BedrockConfig, region string) ([]ModelInfo, error) {
+	path, pathErr := mantleDiscoveryCachePath(cfg, region)
+
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+
+	if pathErr == nil {
+		if models, ok := readDiscoveryCache(path, region, true); ok {
+			return models, nil
+		}
+	}
+
+	models, err := ListBedrockMantleModels(ctx, cfg, region)
+	if err != nil {
+		if pathErr == nil {
+			if stale, ok := readDiscoveryCache(path, region, false); ok {
+				slog.Warn("bedrock mantle discovery failed, using stale cache", "path", path, "region", region, "err", err)
+				return stale, nil
+			}
+		}
+		return nil, err
+	}
+	if pathErr == nil {
+		if writeErr := writeDiscoveryCache(path, region, models); writeErr != nil {
+			slog.Debug("write mantle discovery cache failed", "path", path, "err", writeErr)
+		}
+	}
+	return models, nil
+}
+
 func discoveryCacheDir() (string, error) {
 	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
 		return filepath.Join(xdg, "2nb", "discovery"), nil

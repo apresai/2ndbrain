@@ -285,6 +285,52 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 		mu.Unlock()
 	}()
 
+	// Bedrock mantle-plane discovery: GET /v1/models per documented mantle
+	// region (bedrock_mantle_models.go). The plane is bearer-token only and a
+	// SigV4-only setup is legitimate, so a missing token skips silently; a
+	// listing failure WITH a token is a real warning. First listing of an id
+	// wins, so the primary-first region ordering pins each row's Region to
+	// the user's primary region whenever that region serves the model.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if resolveMantleBearerToken() == "" {
+			slog.Debug("bedrock mantle discovery skipped: no bearer token (SigV4-only setup)")
+			return
+		}
+		mlist := ListBedrockMantleModels
+		if useCache {
+			mlist = ListBedrockMantleModelsCached
+		}
+		var models []ModelInfo
+		seen := map[string]bool{}
+		var firstErr error
+		succeeded := false
+		for _, region := range mantleDiscoveryRegions(cfg.Bedrock) {
+			regionModels, err := mlist(ctx, cfg.Bedrock, region)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			succeeded = true
+			for _, m := range regionModels {
+				if !seen[m.ID] {
+					seen[m.ID] = true
+					models = append(models, m)
+				}
+			}
+		}
+		if !succeeded {
+			addWarning("bedrock-mantle", firstErr)
+			return
+		}
+		mu.Lock()
+		all = append(all, models...)
+		mu.Unlock()
+	}()
+
 	// Ollama: discover installed models.
 	wg.Add(1)
 	go func() {
@@ -308,7 +354,35 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 	}()
 
 	wg.Wait()
-	return all, warnings
+	return dedupeDiscoveredBedrock(all), warnings
+}
+
+// dedupeDiscoveredBedrock collapses exact-id collisions between the two
+// Bedrock discovery planes: a model listed by BOTH the classic control plane
+// and a mantle /v1/models listing keeps its classic (empty-strategy) row,
+// because the classic listing carries richer metadata and the classic route
+// needs no bearer token. Order-independent — the goroutines append in
+// nondeterministic order, so "classic wins" is decided by InvokeStrategy,
+// not arrival. Non-bedrock rows and distinct ids pass through untouched;
+// dated variants (openai.gpt-5.5-2026-04-23) are distinct ids and survive.
+func dedupeDiscoveredBedrock(models []ModelInfo) []ModelInfo {
+	firstAt := make(map[string]int)
+	out := make([]ModelInfo, 0, len(models))
+	for _, m := range models {
+		if m.Provider != "bedrock" {
+			out = append(out, m)
+			continue
+		}
+		if i, ok := firstAt[m.ID]; ok {
+			if out[i].InvokeStrategy == StrategyBedrockMantleResponses && m.InvokeStrategy == "" {
+				out[i] = m
+			}
+			continue
+		}
+		firstAt[m.ID] = len(out)
+		out = append(out, m)
+	}
+	return out
 }
 
 // filterEnabled removes entries that are explicitly disabled (Enabled != nil &&

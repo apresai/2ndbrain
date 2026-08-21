@@ -6,10 +6,15 @@ package ai
 // It is a separate plane from classic Bedrock: auth is a Bedrock API key
 // (bearer token) only — SigV4 does not work — each model is pinned to its
 // own region (ModelInfo.Region), and the classic control plane
-// (ListFoundationModels / GetFoundationModel) cannot see the models.
-// Request/response shapes below were live-probed 2026-07-07 against the real
-// endpoints; the parse/build helpers are pure functions over []byte so tests
-// exercise them on captured fixtures without faking the endpoint.
+// (ListFoundationModels / GetFoundationModel) cannot see the models. The
+// plane does enumerate ITSELF, though: GET {base}/v1/models lists the
+// region's catalog (note the listing path has NO /openai prefix, unlike the
+// responses call; only the id field is documented reliable) — see
+// bedrock_mantle_models.go, which feeds `--discover`. Listing proves
+// existence, not entitlement. Request/response shapes below were live-probed
+// 2026-07-07 against the real endpoints; the parse/build helpers are pure
+// functions over []byte so tests exercise them on captured fixtures without
+// faking the endpoint.
 
 import (
 	"bytes"
@@ -161,10 +166,11 @@ func isBareRegionLabel(region string) bool {
 
 func (g *BedrockMantleGenerator) Name() string { return "bedrock" }
 
-// Available reports whether a bearer token resolves. The mantle plane has no
-// free control-plane probe (classic ListFoundationModels cannot see it, and a
-// real /responses call costs tokens), so this checks the credential
-// precondition only; per-model entitlement still needs `2nb models test`.
+// Available reports whether a bearer token resolves. The plane's own
+// /v1/models listing is free but proves existence, not entitlement (and the
+// classic ListFoundationModels cannot see the plane at all), while a real
+// /responses call costs tokens — so this checks the credential precondition
+// only; per-model entitlement still needs `2nb models test`.
 func (g *BedrockMantleGenerator) Available(_ context.Context) bool { return g.token != "" }
 
 // Generate satisfies GenerationProvider; it delegates to GenerateWithUsage
