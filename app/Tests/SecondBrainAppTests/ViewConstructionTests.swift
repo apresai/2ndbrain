@@ -71,12 +71,15 @@ func settingsViewsConstruct() {
     // views belong in the same smoke test as the rest: a body that fails to
     // type-check or a bad @Environment wiring should fail here, not on Cmd+,.
     let settings = SettingsView()
+    // The same implementation also hosts the dashboard sidebar's Settings tab.
+    let inlineSettings = SettingsView(isInline: true)
     let general = SettingsGeneralView()
     let ai = SettingsAIView()
     let advanced = SettingsAdvancedView()
     let integrations = SettingsIntegrationsView()
 
     #expect(String(describing: type(of: settings)) == "SettingsView")
+    #expect(String(describing: type(of: inlineSettings)) == "SettingsView")
     #expect(String(describing: type(of: general)) == "SettingsGeneralView")
     #expect(String(describing: type(of: ai)) == "SettingsAIView")
     #expect(String(describing: type(of: advanced)) == "SettingsAdvancedView")
