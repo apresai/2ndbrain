@@ -18,13 +18,17 @@ enum DashboardTab: String, CaseIterable, Identifiable {
     case notes = "Notes"
     case health = "Health"
     case activity = "Activity"
+    /// The same four-tab Settings content as Cmd+,, hosted inline
+    /// (`SettingsView(isInline: true)`). Kept LAST: it is a destination, not a
+    /// status group, and Mac sidebars put settings at the bottom of the list.
+    case settings = "Settings"
 
     var id: String { self.rawValue }
 
     /// Everything below Home. No longer labelled "Advanced": with the knobs
     /// moved out, these are ordinary status views, and calling them advanced
     /// discouraged people from opening the ones that answer real questions.
-    static var secondary: [DashboardTab] { [.models, .notes, .health, .activity] }
+    static var secondary: [DashboardTab] { [.models, .notes, .health, .activity, .settings] }
 
     var systemImage: String {
         switch self {
@@ -33,6 +37,7 @@ enum DashboardTab: String, CaseIterable, Identifiable {
         case .notes: return "checkmark.seal"
         case .health: return "stethoscope"
         case .activity: return "clock.arrow.circlepath"
+        case .settings: return "gearshape"
         }
     }
 }
@@ -64,6 +69,9 @@ struct ContentView: View {
             }
             .onChange(of: appState.showVaultStatus) { _, show in
                 if show { route(.vaultStatus); appState.showVaultStatus = false }
+            }
+            .onChange(of: appState.showSettingsPane) { _, show in
+                if show { route(.settings); appState.showSettingsPane = false }
             }
             .sheet(isPresented: Binding(
                 get: { appState.showMCPSetup },
@@ -143,6 +151,8 @@ struct ContentView: View {
                         HealthView(section: $healthSection)
                     case .activity:
                         ActivityView(section: $activitySection)
+                    case .settings:
+                        SettingsView(isInline: true)
                     }
                 }
                 .navigationTitle(selection.rawValue)
