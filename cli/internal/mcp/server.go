@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/vault"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -34,17 +35,46 @@ type toolRegistration struct {
 	handler server.ToolHandlerFunc
 }
 
+// Per-tool timeouts. Cheap metadata/graph calls stay tight; the budgets that
+// wrap a provider call derive from the transport worst cases in internal/ai
+// so the innermost bound always fires first and a timeout names the real
+// subsystem (TestToolBudgetsNested pins the nesting). These bound hangs; a
+// slow-but-working provider is never failed by them.
+const (
+	// mcpEmbedBudget bounds the single query-embed call inside the retrieval
+	// pipeline. Shared with BOTH WithEmbedTimeout call sites in tools.go so
+	// the tSearch derivation below cannot drift from what the pipeline
+	// actually enforces.
+	mcpEmbedBudget = 60 * time.Second
+
+	tCheap  = 10 * time.Second
+	tCreate = 30 * time.Second
+	// tSearch strictly CONTAINS the embed budget it wraps, leaving room for
+	// the BM25 + KNN work after the embed returns. It used to EQUAL the embed
+	// budget (60s == 60s), so both bounds fired together and a stuck embed
+	// was misattributed to the search tool.
+	tSearch = mcpEmbedBudget + 30*time.Second
+	// tGenerate wraps kb_ask / kb_polish: one retrieval embed (mcpEmbedBudget)
+	// plus a generation call whose worst case is the mantle plane's full
+	// retry budget. The old flat 120s sat far inside that budget and killed
+	// working cold-start reasoning models mid-answer.
+	tGenerate = ai.MantleWorstCase + mcpEmbedBudget
+	tIndex    = 300 * time.Second
+)
+
+// DoctorExercisedBudget is the wall-clock budget one `2nb mcp doctor` run
+// needs: the per-tool timeouts of every engine tool the self-test exercises
+// sequentially (kb_info, kb_list, kb_search), plus slack for the AI-readiness
+// probe and the config/WAL reads around them. Deriving it HERE, next to the
+// budgets it contains, keeps the doctor's outer deadline nested outside the
+// engine budgets it wraps: the old flat 15s cap made the 60s search budget
+// dead code and blamed the index whenever the clock expired first.
+func DoctorExercisedBudget() time.Duration {
+	const doctorChecksSlack = 10 * time.Second
+	return tCheap + tCheap + tSearch + doctorChecksSlack
+}
+
 func mcpToolRegistrations(h *handlers) []toolRegistration {
-	// Per-tool timeouts. Cheap metadata/graph calls: 10s. Search + suggest:
-	// 60s (includes one embed call). Generation-bound tools: 120s. Create:
-	// 30s (may embed the new doc). Full reindex: 300s.
-	const (
-		tCheap    = 10 * time.Second
-		tCreate   = 30 * time.Second
-		tSearch   = 60 * time.Second
-		tGenerate = 120 * time.Second
-		tIndex    = 300 * time.Second
-	)
 	return []toolRegistration{
 		{kbInfoTool(), tCheap, h.handleKBInfo},
 		{kbSearchTool(), tSearch, h.handleKBSearch},

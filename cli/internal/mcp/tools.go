@@ -235,11 +235,12 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 	}
 
 	// Shared retrieval pipeline (same as `2nb search`), pinned to the server's
-	// cross-request embedding cache and the 60s embed timeout so a stuck
-	// provider can't hang a client.
+	// cross-request embedding cache and the shared embed budget (which
+	// tSearch derives from, so the tool deadline always outlives the embed
+	// bound it wraps) so a stuck provider can't hang a client.
 	res, err := retrieve.New(h.vault).
 		WithCorpusLoader(h.getCachedEmbeddings).
-		WithEmbedTimeout(60 * time.Second).
+		WithEmbedTimeout(mcpEmbedBudget).
 		Retrieve(ctx, retrieve.Options{
 			Query:     query,
 			Type:      docType,
@@ -296,10 +297,10 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 
 	// Retrieve relevant context via the shared pipeline (the SAME path `2nb ask`
 	// uses, so the CLI and MCP ask surfaces can't diverge), pinned to the
-	// server's embedding cache and the 60s embed timeout.
+	// server's embedding cache and the shared embed budget.
 	rr, rerr := retrieve.New(h.vault).
 		WithCorpusLoader(h.getCachedEmbeddings).
-		WithEmbedTimeout(60 * time.Second).
+		WithEmbedTimeout(mcpEmbedBudget).
 		Retrieve(ctx, retrieve.Options{
 			Query:     question,
 			Limit:     ai.DefaultRAGCandidateDocs,
