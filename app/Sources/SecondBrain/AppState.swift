@@ -81,8 +81,17 @@ final class AppState {
     /// Which Settings tab the window shows. Selection-bound so a link
     /// anywhere in the app ("Add your API key…", a bad-credentials fix
     /// action) can land the user on the exact tab, instead of whatever tab
-    /// macOS last restored.
+    /// macOS last restored. ONE shared property for both Settings hosts (the
+    /// Cmd+, window and the sidebar tab), so the two can never show different
+    /// tabs.
     var settingsTab: SettingsTab = .general
+
+    /// Deep-link flag for the sidebar Settings tab, wired in ContentView like
+    /// the other show* flags. OpenSettingsTabButton sets it (after
+    /// settingsTab) when a vault is bound, so Settings opens as the sidebar
+    /// tab rather than a second window; with no vault the main window is
+    /// WelcomeView and the button opens the Cmd+, Settings window instead.
+    var showSettingsPane = false
 
     /// Set by the post-key-save "re-validate now?" offer; SimpleModelsView
     /// observes it and starts a Validate pass (still cost-confirmed there).

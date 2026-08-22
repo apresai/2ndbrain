@@ -10,6 +10,26 @@ enum SettingsTab: String {
     case general, ai, advanced, integrations
 }
 
+/// Whether the enclosing SettingsView is the inline sidebar host rather than
+/// the Cmd+, Settings window.
+///
+/// An environment key rather than an init parameter on each tab view, because
+/// the consumers are leaf controls (the AI page's Return-key default action)
+/// buried levels below the host: the key is stamped once, where the host knows
+/// the answer, and read exactly where it matters, and its `false` default keeps
+/// every existing construction site (the Settings scene, tests) behaving as the
+/// window host with no call-site changes.
+private struct SettingsHostIsInlineKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var settingsHostIsInline: Bool {
+        get { self[SettingsHostIsInlineKey.self] }
+        set { self[SettingsHostIsInlineKey.self] = newValue }
+    }
+}
+
 /// A Button that opens the Settings window ON a specific tab. Replaces
 /// `SettingsLink`, which has no action hook to set the tab and so landed on
 /// whatever tab macOS last restored. If the window is already open, setting
@@ -28,7 +48,16 @@ struct OpenSettingsTabButton: View {
     var body: some View {
         Button(title) {
             appState.settingsTab = tab
-            openSettings()
+            if appState.vault != nil {
+                // Vault bound: the dashboard sidebar hosts the same Settings
+                // content as a first-class tab, so land there instead of
+                // opening a second window over the dashboard.
+                appState.showSettingsPane = true
+            } else {
+                // No vault: the main window is WelcomeView, which has no
+                // sidebar, so the Cmd+, Settings window stays the host.
+                openSettings()
+            }
         }
     }
 }
@@ -48,11 +77,20 @@ struct OpenSettingsTabButton: View {
 struct SettingsView: View {
     @Environment(AppState.self) var appState
 
+    /// True when hosted inline as the dashboard sidebar's Settings tab; false
+    /// (the default) in the Cmd+, Settings window. Both hosts share this one
+    /// implementation and the one `AppState.settingsTab` selection; the flag
+    /// gates only host-specific behavior: the fixed window frame below, and
+    /// (via the `settingsHostIsInline` environment key) keyboard shortcuts
+    /// that register window-global and so must stay out of the dashboard
+    /// window.
+    var isInline: Bool = false
+
     var body: some View {
         @Bindable var state = appState
         // `Tab(_:systemImage:content:)` is macOS 15+; this app deploys to 14,
         // so the tabs use the .tabItem form.
-        return TabView(selection: $state.settingsTab) {
+        let tabs = TabView(selection: $state.settingsTab) {
             SettingsGeneralView()
                 .environment(appState)
                 .tabItem { Label("General", systemImage: "gearshape") }
@@ -70,10 +108,19 @@ struct SettingsView: View {
                 .tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
                 .tag(SettingsTab.integrations)
         }
-        // Tall enough that the AI page's verdict lands on screen without a
-        // scroll: a "Test everything" button whose answer is below the fold
-        // half-defeats the point of having one button.
-        .frame(width: 660, height: 700)
+        .environment(\.settingsHostIsInline, isInline)
+        return Group {
+            if isInline {
+                // The split view's detail pane owns the size; a fixed frame
+                // here would letterbox the content inside the dashboard.
+                tabs
+            } else {
+                // Tall enough that the AI page's verdict lands on screen
+                // without a scroll: a "Test everything" button whose answer is
+                // below the fold half-defeats the point of having one button.
+                tabs.frame(width: 660, height: 700)
+            }
+        }
     }
 }
 
@@ -84,6 +131,7 @@ struct SettingsGeneralView: View {
     @State private var pluginVersion: String?
     @State private var busy = false
     @State private var message: String?
+    @State private var reloading = false
 
     var body: some View {
         Form {
@@ -124,6 +172,12 @@ struct SettingsGeneralView: View {
     }
 
     private func reload() async {
+        // Single-flight: Settings renders in two hosts (the Cmd+, window and
+        // the sidebar tab), so reloads can be requested while one is already
+        // running; the Bool collapses re-entrant reloads within this host.
+        guard !reloading else { return }
+        reloading = true
+        defer { reloading = false }
         pluginVersion = appState.vault.flatMap { ObsidianPlugin.installedVersion(vaultRoot: $0.rootURL) }
     }
 
@@ -150,6 +204,7 @@ struct SettingsAdvancedView: View {
     @Environment(AppState.self) var appState
     @State private var status: AIStatusInfo?
     @State private var models: [CatalogModelInfo] = []
+    @State private var reloading = false
 
     var body: some View {
         ScrollView {
@@ -166,6 +221,11 @@ struct SettingsAdvancedView: View {
     }
 
     private func reload() async {
+        // Single-flight against dual-host reload stacking; see
+        // SettingsGeneralView.reload.
+        guard !reloading else { return }
+        reloading = true
+        defer { reloading = false }
         status = try? await appState.fetchAIStatus()
         if let provider = status?.provider {
             models = (try? await appState.fetchModels(provider: provider)) ?? []
