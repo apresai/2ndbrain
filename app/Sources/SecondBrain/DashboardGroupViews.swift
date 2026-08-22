@@ -28,6 +28,7 @@ enum DashboardRoute {
         case gitActivity
         case lintResults
         case vaultStatus
+        case settings
     }
 
     static func tab(for target: Target) -> DashboardTab {
@@ -36,6 +37,7 @@ enum DashboardRoute {
         case .mcpStatus, .gitActivity: return .activity
         case .lintResults: return .notes
         case .vaultStatus: return .health
+        case .settings: return .settings
         }
     }
 

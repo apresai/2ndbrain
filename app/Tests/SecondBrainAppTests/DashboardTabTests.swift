@@ -33,10 +33,20 @@ func dashboardTabHasIconAndLabel() {
 
 /// The sidebar is the thing this change is about, so its size is asserted
 /// rather than left to drift back. Eight entries is what made "is my vault
-/// healthy?" a three-tab question.
+/// healthy?" a three-tab question. Six is deliberate: the Settings sidebar
+/// tab was added as a first-class destination, and this pin is bumped with it.
 @Test("DashboardTab: the sidebar stays small")
 func dashboardTabCount() {
-    #expect(DashboardTab.allCases.count == 5)
+    #expect(DashboardTab.allCases.count == 6)
+}
+
+/// Settings is a destination, not a status group, and it sits last the way
+/// Mac sidebars put settings at the bottom. Pinning the full order also
+/// catches an accidental reshuffle when the next tab lands.
+@Test("DashboardTab: secondary keeps its order, Settings last")
+func dashboardTabSecondaryOrder() {
+    #expect(DashboardTab.secondary == [.models, .notes, .health, .activity, .settings])
+    #expect(DashboardTab.secondary.last == .settings)
 }
 
 /// Every menu deep link lands on the right tab AND the right pane.
@@ -59,13 +69,16 @@ func deepLinksRouteToTabAndPane() {
 
     #expect(DashboardRoute.tab(for: .vaultStatus) == .health)
     #expect(DashboardRoute.healthSection(for: .vaultStatus) == .vault)
+
+    // The sidebar Settings tab (OpenSettingsTabButton with a vault bound).
+    #expect(DashboardRoute.tab(for: .settings) == .settings)
 }
 
 /// A target that does not land in a group must not carry a pane, or routing
 /// would silently move a pane the user is not looking at.
 @Test("DashboardRoute: non-group targets request no pane")
 func deepLinksWithoutPanesRequestNone() {
-    for target in [DashboardRoute.Target.aiHub, .lintResults] {
+    for target in [DashboardRoute.Target.aiHub, .lintResults, .settings] {
         #expect(DashboardRoute.activitySection(for: target) == nil)
         #expect(DashboardRoute.healthSection(for: target) == nil)
     }

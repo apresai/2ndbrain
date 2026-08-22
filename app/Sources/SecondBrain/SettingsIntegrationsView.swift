@@ -119,6 +119,10 @@ struct SettingsIntegrationsView: View {
     }
 
     private func reload() async {
+        // Single-flight against dual-host reload stacking; see
+        // SettingsGeneralView.reload.
+        guard appState.beginSettingsReload("integrations") else { return }
+        defer { appState.endSettingsReload("integrations") }
         await appState.refreshSkillStatus()
         await appState.refreshMCPConfigured()
         await appState.refreshGlobalInstructions()
