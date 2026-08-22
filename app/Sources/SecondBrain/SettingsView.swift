@@ -131,7 +131,6 @@ struct SettingsGeneralView: View {
     @State private var pluginVersion: String?
     @State private var busy = false
     @State private var message: String?
-    @State private var reloading = false
 
     var body: some View {
         Form {
@@ -175,9 +174,8 @@ struct SettingsGeneralView: View {
         // Single-flight: Settings renders in two hosts (the Cmd+, window and
         // the sidebar tab), so reloads can be requested while one is already
         // running; the Bool collapses re-entrant reloads within this host.
-        guard !reloading else { return }
-        reloading = true
-        defer { reloading = false }
+        guard appState.beginSettingsReload("general") else { return }
+        defer { appState.endSettingsReload("general") }
         pluginVersion = appState.vault.flatMap { ObsidianPlugin.installedVersion(vaultRoot: $0.rootURL) }
     }
 
@@ -204,7 +202,6 @@ struct SettingsAdvancedView: View {
     @Environment(AppState.self) var appState
     @State private var status: AIStatusInfo?
     @State private var models: [CatalogModelInfo] = []
-    @State private var reloading = false
 
     var body: some View {
         ScrollView {
@@ -223,9 +220,8 @@ struct SettingsAdvancedView: View {
     private func reload() async {
         // Single-flight against dual-host reload stacking; see
         // SettingsGeneralView.reload.
-        guard !reloading else { return }
-        reloading = true
-        defer { reloading = false }
+        guard appState.beginSettingsReload("advanced") else { return }
+        defer { appState.endSettingsReload("advanced") }
         status = try? await appState.fetchAIStatus()
         if let provider = status?.provider {
             models = (try? await appState.fetchModels(provider: provider)) ?? []

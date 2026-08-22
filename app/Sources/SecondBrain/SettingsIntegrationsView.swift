@@ -18,7 +18,6 @@ struct SettingsIntegrationsView: View {
 
     @State private var busyClient: String?
     @State private var message: String?
-    @State private var reloading = false
 
     var body: some View {
         Form {
@@ -122,9 +121,8 @@ struct SettingsIntegrationsView: View {
     private func reload() async {
         // Single-flight against dual-host reload stacking; see
         // SettingsGeneralView.reload.
-        guard !reloading else { return }
-        reloading = true
-        defer { reloading = false }
+        guard appState.beginSettingsReload("integrations") else { return }
+        defer { appState.endSettingsReload("integrations") }
         await appState.refreshSkillStatus()
         await appState.refreshMCPConfigured()
         await appState.refreshGlobalInstructions()

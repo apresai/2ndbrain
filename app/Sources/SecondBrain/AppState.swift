@@ -93,6 +93,27 @@ final class AppState {
     /// WelcomeView and the button opens the Cmd+, Settings window instead.
     var showSettingsPane = false
 
+    /// Cross-host single-flight for the settings tab reloads. The Cmd+,
+    /// window and the sidebar Settings tab mount INDEPENDENT view instances,
+    /// so a per-view @State guard cannot see the other host's in-flight
+    /// reload; this AppState-scoped set is the one place both hosts check.
+    /// Keys are view kinds ("general", "ai", "advanced", "integrations").
+    private var settingsReloadsInFlight: Set<String> = []
+
+    /// Claims the single-flight slot for a settings reload; false means the
+    /// other host (or a re-fired .task) is already reloading and the caller
+    /// should skip: the in-flight reload writes the same shared AppState the
+    /// skipped caller would have read.
+    func beginSettingsReload(_ key: String) -> Bool {
+        guard !settingsReloadsInFlight.contains(key) else { return false }
+        settingsReloadsInFlight.insert(key)
+        return true
+    }
+
+    func endSettingsReload(_ key: String) {
+        settingsReloadsInFlight.remove(key)
+    }
+
     /// Set by the post-key-save "re-validate now?" offer; SimpleModelsView
     /// observes it and starts a Validate pass (still cost-confirmed there).
     var pendingValidateRequest = false

@@ -30,7 +30,6 @@ struct SettingsAIView: View {
     @State private var testError: String?
     @State private var loadError: String?
     @State private var showRevalidateOffer = false
-    @State private var reloading = false
 
     var body: some View {
         Form {
@@ -293,9 +292,8 @@ struct SettingsAIView: View {
     private func reload() async {
         // Single-flight against dual-host reload stacking; see
         // SettingsGeneralView.reload.
-        guard !reloading else { return }
-        reloading = true
-        defer { reloading = false }
+        guard appState.beginSettingsReload("ai") else { return }
+        defer { appState.endSettingsReload("ai") }
         // The credential row is the reason this page exists, so a failure to
         // read it is reported rather than rendered as "no key". The AI status
         // and vault region legitimately fail with no vault bound, which is a
