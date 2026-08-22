@@ -37,7 +37,7 @@ func NewOllamaEmbedder(endpoint, model string, dims int) *OllamaEmbedder {
 		endpoint: endpoint,
 		model:    model,
 		dims:     dims,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: localAttemptTimeout},
 	}
 }
 
@@ -122,7 +122,7 @@ func NewOllamaGenerator(endpoint, model string) *OllamaGenerator {
 	return &OllamaGenerator{
 		endpoint: endpoint,
 		model:    model,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: localAttemptTimeout},
 	}
 }
 

@@ -27,6 +27,12 @@ type OpenRouterEmbedder struct {
 	avail   availableCache
 }
 
+// openRouterHTTPClient bounds every OpenRouter call at
+// OpenRouterAttemptTimeout per attempt with tight connect-phase bounds
+// (timeouts.go). It replaces http.DefaultClient, which has NO timeout: a
+// hung upstream previously parked the caller forever.
+var openRouterHTTPClient = newProviderHTTPClient(OpenRouterAttemptTimeout)
+
 // NewOpenRouterEmbedder creates an OpenRouter embedding provider.
 func NewOpenRouterEmbedder(apiKey, model string, dims int) *OpenRouterEmbedder {
 	if model == "" {
@@ -37,7 +43,7 @@ func NewOpenRouterEmbedder(apiKey, model string, dims int) *OpenRouterEmbedder {
 		model:   model,
 		dims:    dims,
 		baseURL: openrouterBaseURL,
-		client:  http.DefaultClient,
+		client:  openRouterHTTPClient,
 	}
 }
 
@@ -166,7 +172,7 @@ func NewOpenRouterGenerator(apiKey, model string) *OpenRouterGenerator {
 		apiKey:  apiKey,
 		model:   model,
 		baseURL: openrouterBaseURL,
-		client:  http.DefaultClient,
+		client:  openRouterHTTPClient,
 	}
 }
 
@@ -254,11 +260,12 @@ func (g *OpenRouterGenerator) ListModels(_ context.Context) ([]ModelInfo, error)
 	}}, nil
 }
 
-// doOpenRouterRequest sends an HTTP POST to OpenRouter and returns the response body.
-// Retries up to 3 times with exponential backoff on HTTP 429 (rate limit).
+// doOpenRouterRequest sends an HTTP POST to OpenRouter and returns the
+// response body. Retries HTTP 429 (rate limit) with exponential backoff; the
+// attempt count and backoff live in timeouts.go so OpenRouterWorstCase
+// derives from what this loop actually runs.
 func doOpenRouterRequest(ctx context.Context, client *http.Client, url, apiKey string, body []byte) ([]byte, error) {
-	const maxRetries = 3
-	for attempt := range maxRetries {
+	for attempt := range openRouterMaxAttempts {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
@@ -279,10 +286,9 @@ func doOpenRouterRequest(ctx context.Context, client *http.Client, url, apiKey s
 			return nil, fmt.Errorf("read response: %w", err)
 		}
 
-		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries-1 {
-			delay := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < openRouterMaxAttempts-1 {
 			select {
-			case <-time.After(delay):
+			case <-time.After(retryBackoff(attempt)): // 1s, 2s
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()

@@ -500,16 +500,17 @@ func TestNewBedrockGeneration_DispatchesMantle(t *testing.T) {
 // `2nb models test xai.grok-4.3 --provider bedrock` takes, against the real
 // us-west-2 mantle endpoint. Requires a Bedrock API key. Non-defect outcomes
 // skip rather than fail: 401 (account not entitled to grok), throttling, and
-// a persistent hang (the plane demonstrably stalls occasionally — one live
-// probe hung >120s — which the 90s client timeout mitigates in production;
-// the probe's own 30s deadline can still eat one stall, so timeout retries
+// a persistent hang (the plane demonstrably stalls occasionally; the
+// MantleAttemptTimeout client bound resolves a stalled attempt in
+// production, and the test's own context — derived from that constant so it
+// can never sit inside it — can still eat one stall, so timeout retries
 // once).
 func TestLiveMantleGrokProbe(t *testing.T) {
 	if os.Getenv(bedrockBearerTokenEnv) == "" {
 		t.Skipf("set %s to run the live mantle probe", bedrockBearerTokenEnv)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), MantleAttemptTimeout+60*time.Second)
 	defer cancel()
 
 	var result *TestProbeResult

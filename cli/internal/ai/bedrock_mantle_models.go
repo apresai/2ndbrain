@@ -163,7 +163,8 @@ func ListBedrockMantleModels(ctx context.Context, cfg BedrockConfig, region stri
 		return nil, fmt.Errorf("invalid mantle region %q: expected a bare region label like us-east-2", region)
 	}
 	baseURL := fmt.Sprintf("https://bedrock-mantle.%s.api.aws", region)
-	client := &http.Client{Timeout: bedrockMantleTimeout}
+	// The listing is a fast GET; the shared attempt bound is only a hang cap.
+	client := newProviderHTTPClient(MantleAttemptTimeout)
 	body, err := fetchMantleModelList(ctx, client, baseURL, token)
 	if err != nil {
 		return nil, err
