@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -13,7 +15,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/apresai/2ndbrain/internal/netstall"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
 	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
@@ -86,11 +90,30 @@ func ensureBedrockBearerTokenPrefer(getenv func(string) string, setenv func(stri
 	}
 }
 
-// loadBedrockAWSConfig builds an AWS config from BedrockConfig settings.
+// bedrockSDKHTTPClient bounds the classic SDK planes' HTTP attempts. The SDK
+// path previously ran on the SDK default client with NO timeout: a half-open
+// connection could hang `ask`, the embed pass, or a probe forever (the flat
+// 30s probe context was the only bound anywhere). Per-attempt wall clock is
+// BedrockClassicAttemptTimeout (generous think time: classic always-reasoning
+// models burn real server-side time before the non-streaming response
+// starts); the connect phase stays tight so a dead network fails in seconds.
+// Built once — BuildableClient's With* methods return copies, and sharing one
+// client shares its connection pool.
+var bedrockSDKHTTPClient = awshttp.NewBuildableClient().
+	WithTimeout(BedrockClassicAttemptTimeout).
+	WithDialerOptions(func(d *net.Dialer) { d.Timeout = netstall.DialTimeout }).
+	WithTransportOptions(func(tr *http.Transport) { tr.TLSHandshakeTimeout = netstall.TLSHandshakeTimeout })
+
+// loadBedrockAWSConfig builds an AWS config from BedrockConfig settings. The
+// HTTP client and retry attempt count are pinned so the worst case one SDK
+// call can take (BedrockClassicWorstCase, timeouts.go) derives from values
+// this function controls rather than SDK defaults that could drift.
 func loadBedrockAWSConfig(ctx context.Context, cfg BedrockConfig) (aws.Config, error) {
 	hydrateBedrockBearerToken()
 	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cfg.Region),
+		awsconfig.WithHTTPClient(bedrockSDKHTTPClient),
+		awsconfig.WithRetryMaxAttempts(bedrockSDKMaxAttempts),
 	}
 	if cfg.Profile != "" && cfg.Profile != "default" {
 		opts = append(opts, awsconfig.WithSharedConfigProfile(cfg.Profile))

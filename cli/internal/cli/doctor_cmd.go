@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/ai"
+	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -113,18 +115,24 @@ func init() {
 // The self-test is bounded PER TIER rather than by one shared deadline.
 //
 // A single budget looks simpler and is wrong: tier 1's two model probes run
-// sequentially and each carries its own 30s cap, so a degraded provider — the
-// exact condition this command exists to diagnose — can eat ~60s before tier 2
-// starts. Whatever is left then expires mid-check, and the vault tier reports
-// "the search index is unusable" when the truth is that the self-test ran out
-// of time. A diagnostic that misattributes its own timeout to the subsystem it
-// was inspecting is worse than one that is merely slow.
+// sequentially and each carries its own strategy-aware cap (ai.ProbeDeadline,
+// up to ai.MaxProbeDeadline for the slowest route), so a degraded provider —
+// the exact condition this command exists to diagnose — can consume both caps
+// before tier 2 starts. Whatever is left then expires mid-check, and the
+// vault tier reports "the search index is unusable" when the truth is that
+// the self-test ran out of time. A diagnostic that misattributes its own
+// timeout to the subsystem it was inspecting is worse than one that is merely
+// slow.
 //
-// So each tier gets a floor it cannot be starved out of. Tier 2 mirrors the 15s
-// standalone `2nb mcp doctor` already uses, plus room for the config checks.
-const (
-	doctorModelTierTimeout = 70 * time.Second // 2 sequential probes at 30s + slack
-	doctorVaultTierTimeout = 20 * time.Second // mcp doctor's 15s + the config checks
+// So each tier gets a floor DERIVED from what runs inside it, so no inner
+// budget is ever dead code under the tier's clock: tier 1 contains two
+// sequential worst-case probes plus slack; tier 2 contains the same
+// engine-tool budgets standalone `2nb mcp doctor` runs under, plus the config
+// checks. These bound hangs; a slow-but-working model is never failed by
+// them. TestDoctorBudgetsNested pins the containment.
+var (
+	doctorModelTierTimeout = 2*ai.MaxProbeDeadline() + 30*time.Second
+	doctorVaultTierTimeout = mcppkg.DoctorExercisedBudget() + 10*time.Second
 )
 
 func runDoctor(cmd *cobra.Command, _ []string) error {

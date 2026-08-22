@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/netstall"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -125,10 +126,26 @@ func parseLatestReleaseTag(data []byte) (string, error) {
 	return r.TagName, nil
 }
 
-var pluginHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// pluginHTTPClient carries NO overall timeout: the old blanket 30s killed
+// slow-but-progressing downloads on exactly the networks that need patience.
+// The connect phase stays tight (10s dial / 10s TLS via netstall.Transport)
+// so a dead network fails in seconds, GitHub's response headers are bounded
+// separately (plain file serving; headers arrive immediately), and the body
+// read is bounded by byte progress via the netstall watchdog in
+// fetchPluginAsset — the same stall-watchdog shape as the llama model
+// downloader it was extracted from.
+var pluginHTTPClient = &http.Client{Transport: func() *http.Transport {
+	tr := netstall.Transport()
+	tr.ResponseHeaderTimeout = 30 * time.Second
+	return tr
+}()}
 
-// fetchPluginAsset GETs a URL and returns its body, size-capped.
+// fetchPluginAsset GETs a URL and returns its body, size-capped. A transfer
+// that keeps delivering bytes is never aborted; one that goes silent for
+// netstall.DefaultStallTimeout is cancelled promptly.
 func fetchPluginAsset(ctx context.Context, url string) ([]byte, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -148,8 +165,13 @@ func fetchPluginAsset(ctx context.Context, url string) ([]byte, error) {
 	}
 	// Read one byte past the cap so an over-limit body errors instead of
 	// being silently truncated into a corrupt asset.
-	data, err := io.ReadAll(io.LimitReader(resp.Body, pluginAssetLimit+1))
+	src, stopWatchdog := netstall.Guard(io.LimitReader(resp.Body, pluginAssetLimit+1), netstall.DefaultStallTimeout, cancel)
+	defer stopWatchdog()
+	data, err := io.ReadAll(src)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("GET %s stalled: no data for %s", url, netstall.DefaultStallTimeout)
+		}
 		return nil, err
 	}
 	if len(data) > pluginAssetLimit {

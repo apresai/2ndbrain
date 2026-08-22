@@ -64,7 +64,12 @@ func runMCPDoctor(cmd *cobra.Command, _ []string) error {
 	setupFileLogging(v)
 	initAIProviders(v)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// The budget contains every engine tool this self-test exercises at that
+	// tool's own full per-tool timeout (mcp.DoctorExercisedBudget). The old
+	// flat 15s cap sat inside the 60s search budget, making it dead code and
+	// blaming the index whenever the doctor's clock expired first; deadlines
+	// here bound hangs, never a slow-but-working provider.
+	ctx, cancel := context.WithTimeout(context.Background(), mcppkg.DoctorExercisedBudget())
 	defer cancel()
 
 	report := buildMCPDoctorReport(ctx, v)

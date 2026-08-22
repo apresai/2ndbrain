@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/apresai/2ndbrain/internal/netstall"
 )
 
 // ModelArtifact is one downloadable GGUF weight file, pinned by URL + sha256.
@@ -242,14 +244,16 @@ func EnsureModelProgress(ctx context.Context, id string, onProgress ProgressFunc
 }
 
 // downloadHTTPClient has no overall timeout (model files are large); callers
-// bound the fetch with the context.
+// bound the fetch with the context and the netstall watchdog below.
 var downloadHTTPClient = &http.Client{Timeout: 0}
 
 // downloadStallTimeout bounds a STALLED transfer (a half-open socket delivering
 // no bytes) without capping the total time — a legitimately slow multi-GB pull
 // that keeps making progress is never aborted, but a dead connection can't hang
 // forever. A blanket http.Client.Timeout would wrongly kill slow downloads.
-const downloadStallTimeout = 60 * time.Second
+// The mechanism lives in internal/netstall (extracted from here) so other
+// downloads share the same shape.
+const downloadStallTimeout = netstall.DefaultStallTimeout
 
 // downloadTo streams url into path and returns the lower-case hex sha256 of the
 // bytes written, computed on the fly (no second read of the file). When
@@ -287,9 +291,9 @@ func downloadTo(ctx context.Context, url, path string, total int64, onProgress P
 		src = &progressReader{r: resp.Body, total: total, onProgress: onProgress}
 	}
 	// Idle watchdog: cancel the request if no bytes arrive for the stall timeout.
-	watchdog := time.AfterFunc(downloadStallTimeout, cancel)
-	defer watchdog.Stop()
-	src = &stallReader{r: src, reset: func() { watchdog.Reset(downloadStallTimeout) }}
+	guarded, stopWatchdog := netstall.Guard(src, downloadStallTimeout, cancel)
+	defer stopWatchdog()
+	src = guarded
 	if _, err := io.Copy(io.MultiWriter(f, h), src); err != nil {
 		f.Close()
 		if ctx.Err() != nil {
@@ -318,22 +322,6 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	if now := time.Now(); err != nil || now.Sub(p.last) >= 200*time.Millisecond {
 		p.onProgress(p.done, p.total)
 		p.last = now
-	}
-	return n, err
-}
-
-// stallReader resets an idle watchdog on each non-empty read, so a transfer that
-// stops delivering bytes is cancelled by the watchdog rather than blocking the
-// io.Copy forever.
-type stallReader struct {
-	r     io.Reader
-	reset func()
-}
-
-func (s *stallReader) Read(b []byte) (int, error) {
-	n, err := s.r.Read(b)
-	if n > 0 {
-		s.reset()
 	}
 	return n, err
 }

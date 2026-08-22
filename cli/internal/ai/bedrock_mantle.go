@@ -31,15 +31,16 @@ import (
 )
 
 // mantleMaxResponseBytes bounds the response body read so a buggy or hostile
-// endpoint cannot exhaust memory (the 90s timeout only weakly bounds a slow
-// unbounded stream). A Responses payload is a few KB; 8 MB is generous.
+// endpoint cannot exhaust memory (the attempt timeout only weakly bounds a
+// slow unbounded stream). A Responses payload is a few KB; 8 MB is generous.
 const mantleMaxResponseBytes = 8 << 20
 
-// bedrockMantleTimeout hard-bounds one mantle HTTP call. A live probe hung
-// for over 120 seconds once, so the client carries its own timeout instead of
-// trusting the caller's context alone; the resulting net timeout classifies
-// as TestErrTimeout in ClassifyProbeError.
-const bedrockMantleTimeout = 90 * time.Second
+// The per-attempt wall-clock bound is MantleAttemptTimeout (timeouts.go): a
+// live probe hung for over 120 seconds once, so the client carries its own
+// timeout instead of trusting the caller's context alone, and the resulting
+// net timeout classifies as TestErrTimeout in ClassifyProbeError. The retry
+// count (mantleMaxAttempts) and backoff (retryBackoff) live there too so
+// MantleWorstCase derives from what this file actually runs.
 
 // mantleMinOutputTokens floors max_output_tokens. Mantle models reason by
 // default (grok effort "low", gpt-5.5 "medium") and the reasoning tokens bill
@@ -84,7 +85,7 @@ func NewBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot string) (*Bed
 		return nil, err
 	}
 	return &BedrockMantleGenerator{
-		client:  &http.Client{Timeout: bedrockMantleTimeout},
+		client:  newProviderHTTPClient(MantleAttemptTimeout),
 		model:   model,
 		baseURL: baseURL,
 		token:   token,
@@ -346,8 +347,7 @@ func parseMantleResponse(model string, body []byte) (string, GenUsage, error) {
 // without mantle-specific rules.
 func (g *BedrockMantleGenerator) doMantleRequest(ctx context.Context, body []byte) ([]byte, error) {
 	url := g.baseURL + "/openai/v1/responses"
-	const maxRetries = 3
-	for attempt := range maxRetries {
+	for attempt := range mantleMaxAttempts {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
@@ -365,10 +365,9 @@ func (g *BedrockMantleGenerator) doMantleRequest(ctx context.Context, body []byt
 			return nil, fmt.Errorf("read response: %w", err)
 		}
 
-		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries-1 {
-			delay := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < mantleMaxAttempts-1 {
 			select {
-			case <-time.After(delay):
+			case <-time.After(retryBackoff(attempt)): // 1s, 2s
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()

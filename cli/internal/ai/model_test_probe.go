@@ -96,13 +96,21 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 		modelType = InferModelType(m.ID)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// The effective strategy drives the probe route, the mantle-aware failure
-	// remediation, the GUI's console-link suppression, and (via the result)
-	// persistProbedRegion's mantle exclusion.
+	// The effective strategy drives the probe route, the strategy-aware
+	// deadline below, the mantle-aware failure remediation, the GUI's
+	// console-link suppression, and (via the result) persistProbedRegion's
+	// mantle exclusion. Resolved BEFORE the context so the deadline can be
+	// route-aware.
 	strategy := effectiveInvokeStrategy(provider, m, vaultRoot)
+
+	// The probe deadline contains the resolved route's full transport worst
+	// case plus slack (ProbeDeadline, timeouts.go), so the innermost transport
+	// bound always fires first and a timeout names the transport, never the
+	// probe. The old flat 30s here sat INSIDE the mantle client's own retry
+	// budget and killed working cold-start reasoning models. Deadlines bound
+	// hangs; a slow-but-working model always passes.
+	ctx, cancel := context.WithTimeout(ctx, ProbeDeadline(provider, strategy, modelType))
+	defer cancel()
 
 	// A hinted mantle candidate routes to its listing region on the existing
 	// RegionOverride carrier: ResolveBedrockConfig maps the override onto
@@ -293,7 +301,7 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 // another region. Bedrock model entitlement, listings, and inference-profile
 // coverage are all per-region, so not_found / invalid_request / access_denied
 // can flip elsewhere. Credential, throttle, and transport failures cannot —
-// retrying them only burns 30s timeouts.
+// retrying them only burns full probe deadlines.
 func regionRetryable(code TestErrorCode) bool {
 	switch code {
 	case TestErrNotFound, TestErrInvalidRequest, TestErrAccessDenied:

@@ -284,7 +284,20 @@ func runBenchProbes(opts bench.ProbeOpts, only string, enc *json.Encoder) ([]ben
 			Probe:    probe,
 			Message:  "probe started",
 		})
-		result := fn(opts)
+		// Bench previously ran with NO wall clock at any level: a hung
+		// provider parked the whole run forever. Each probe now gets its own
+		// deadline derived from the transport ceiling (2x, because the rag
+		// probe chains an embed, a search, and a generation). This bounds
+		// hangs; a slow-but-working model is never failed by it.
+		probeOpts := opts
+		parent := opts.Ctx
+		if parent == nil {
+			parent = context.Background()
+		}
+		probeCtx, cancel := context.WithTimeout(parent, 2*ai.MaxProbeDeadline())
+		probeOpts.Ctx = probeCtx
+		result := fn(probeOpts)
+		cancel()
 		emitBenchEvent(enc, benchEvent{
 			Event:    "probe_result",
 			ModelID:  opts.ModelID,

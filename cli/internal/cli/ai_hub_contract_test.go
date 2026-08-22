@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -85,6 +86,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	verifyRecommended, verifyAll, verifyYes = false, false, false
 	verifyEnabledOnly, verifyEvents, verifyDiscover = false, false, false
 	verifyCostCap = 0.50
+	verifyMaxDuration = 30 * time.Minute
 	costProvider, costProbeKind = "", "test"
 	costAll = false
 	wizardScope, wizardProvider = "vault", ""

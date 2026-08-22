@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"time"
 
 	"github.com/apresai/2ndbrain/internal/llama"
 )
@@ -43,7 +42,7 @@ func NewLlamaEmbedder(model string, dims int, endpoint string) *LlamaEmbedder {
 		model:    model,
 		dims:     dims,
 		endpoint: endpoint,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: localAttemptTimeout},
 	}
 }
 
@@ -150,7 +149,7 @@ func NewLlamaGenerator(model, endpoint string) *LlamaGenerator {
 	return &LlamaGenerator{
 		model:    model,
 		endpoint: endpoint,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: localAttemptTimeout},
 	}
 }
 
@@ -271,7 +270,7 @@ func NewLlamaReranker(model, endpoint string) *LlamaReranker {
 	return &LlamaReranker{
 		model:    model,
 		endpoint: endpoint,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: localAttemptTimeout},
 	}
 }
 
