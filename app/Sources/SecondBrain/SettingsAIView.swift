@@ -13,6 +13,7 @@ import AppKit
 /// credentials, the two active models, and the verdict.
 struct SettingsAIView: View {
     @Environment(AppState.self) var appState
+    @Environment(\.settingsHostIsInline) private var isInlineHost
 
     @State private var bedrock: BedrockMachineStatus?
     @State private var status: AIStatusInfo?
@@ -29,6 +30,7 @@ struct SettingsAIView: View {
     @State private var testError: String?
     @State private var loadError: String?
     @State private var showRevalidateOffer = false
+    @State private var reloading = false
 
     var body: some View {
         Form {
@@ -144,11 +146,15 @@ struct SettingsAIView: View {
                 SecureField("Bearer token", text: $newToken)
                     .textFieldStyle(.roundedBorder)
                 HStack {
-                    Button(busy ? "Checking…" : "Save and test") {
-                        Task { await saveToken() }
+                    // Return activates Save and test only in the Settings
+                    // window host. `.defaultAction` registers window-global,
+                    // so in the inline sidebar host it would claim Return for
+                    // the whole dashboard window while this tab is visible.
+                    if isInlineHost {
+                        saveTokenButton
+                    } else {
+                        saveTokenButton.keyboardShortcut(.defaultAction)
                     }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(busy || newToken.trimmingCharacters(in: .whitespaces).isEmpty)
                     if bedrock?.tokenSet ?? false {
                         Button("Cancel") {
                             enteringToken = false
@@ -209,6 +215,13 @@ struct SettingsAIView: View {
                 }
             }
         }
+    }
+
+    private var saveTokenButton: some View {
+        Button(busy ? "Checking…" : "Save and test") {
+            Task { await saveToken() }
+        }
+        .disabled(busy || newToken.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     // MARK: - Models
@@ -278,6 +291,11 @@ struct SettingsAIView: View {
     // MARK: - Actions
 
     private func reload() async {
+        // Single-flight against dual-host reload stacking; see
+        // SettingsGeneralView.reload.
+        guard !reloading else { return }
+        reloading = true
+        defer { reloading = false }
         // The credential row is the reason this page exists, so a failure to
         // read it is reported rather than rendered as "no key". The AI status
         // and vault region legitimately fail with no vault bound, which is a
