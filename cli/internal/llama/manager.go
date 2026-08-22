@@ -19,9 +19,11 @@ import (
 const (
 	// restartBackoff is the pause before restarting a crashed role process.
 	restartBackoff = 2 * time.Second
-	// healthTimeout bounds the initial /health wait after a role starts (a cold
-	// GGUF load can take tens of seconds).
-	healthTimeout = 90 * time.Second
+	// HealthTimeout bounds the initial /health wait after a role starts (a cold
+	// GGUF load can take tens of seconds). Exported so internal/ai derives the
+	// llama-local probe worst case (ai.LocalWorstCase) from the real bound
+	// instead of a copied number.
+	HealthTimeout = 90 * time.Second
 	// healthPollInterval is how often the initial /health wait retries.
 	healthPollInterval = 500 * time.Millisecond
 )
@@ -289,7 +291,7 @@ func probeHealth(ctx context.Context, port int) bool {
 
 // waitHealthy polls /health until ready, the deadline passes, or ctx is done.
 func waitHealthy(ctx context.Context, port int) bool {
-	deadline := time.Now().Add(healthTimeout)
+	deadline := time.Now().Add(HealthTimeout)
 	for time.Now().Before(deadline) {
 		if probeHealth(ctx, port) {
 			return true
