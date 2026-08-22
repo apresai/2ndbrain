@@ -25,6 +25,7 @@ var (
 	verifyEnabledOnly bool
 	verifyEvents      bool
 	verifyDiscover    bool
+	verifyMaxDuration time.Duration
 )
 
 var modelsVerifyCmd = &cobra.Command{
@@ -59,6 +60,7 @@ func init() {
 	modelsVerifyCmd.Flags().BoolVar(&verifyEnabledOnly, "enabled-only", false, "Restrict candidates to effectively-enabled models (post-policy; explicit model IDs still win)")
 	modelsVerifyCmd.Flags().BoolVar(&verifyEvents, "events", false, "Stream line-delimited JSON progress events to stdout (requires --yes; mutually exclusive with --json)")
 	modelsVerifyCmd.Flags().BoolVar(&verifyDiscover, "discover", false, "Also probe vendor-discovered models (policy-enabled discoveries), not just the merged catalog")
+	modelsVerifyCmd.Flags().DurationVar(&verifyMaxDuration, "max-duration", 30*time.Minute, "Wall-clock cap for the whole verify run (0 disables). Individual probes keep their transport-derived deadlines; this only stops a runaway batch")
 	_ = modelsVerifyCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsVerifyCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 	modelsCmd.AddCommand(modelsVerifyCmd)
@@ -193,7 +195,19 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		startEvent.Regions = regions
 	}
 	emitVerifyEvent(enc, startEvent)
-	probeModelsConcurrentlyRegions(ctx, v.Config.AI, v.Root, candidates, regions, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
+	// --max-duration is the runaway wall clock for the WHOLE run, the missing
+	// cost half of the timeout principle: individual probes keep their
+	// strategy-aware deadlines (a slow model is never failed), but a wide
+	// --discover run over many gated candidates must still have a ceiling the
+	// caller can reason about. 0 disables it. A probe cut off by the cap
+	// records as a timeout like any other cancelled probe.
+	probeCtx := ctx
+	if verifyMaxDuration > 0 {
+		var cancelProbes context.CancelFunc
+		probeCtx, cancelProbes = context.WithTimeout(ctx, verifyMaxDuration)
+		defer cancelProbes()
+	}
+	probeModelsConcurrentlyRegions(probeCtx, v.Config.AI, v.Root, candidates, regions, func(n int, m ai.ModelInfo, result *ai.TestProbeResult, err error) {
 		if err != nil {
 			// Hard errors (cannot infer provider etc.) become synthetic failed
 			// results so the report stays complete.

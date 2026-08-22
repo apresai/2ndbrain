@@ -48,7 +48,8 @@ const (
 )
 
 // runSelfTest executes both tiers and rolls up an OK. ctx bounds the network
-// probes; each individual probe carries its own 30s cap inside TestProbeModel.
+// probes; each individual probe carries its own strategy-aware cap inside
+// TestProbeModel (ai.ProbeDeadline: the route's transport worst case + slack).
 func runSelfTest(ctx context.Context) SelfTestReport {
 	root, hasSidecar := resolve2nbVaultRoot()
 	cfg := readAIConfigReadOnly(root)
