@@ -130,9 +130,14 @@ const BedrockClassicWorstCase = bedrockSDKMaxAttempts*BedrockClassicAttemptTimeo
 // from what the clients enforce.
 const localAttemptTimeout = 120 * time.Second
 
-// LocalWorstCase is the longest one local-provider call can take before its
-// own bounds resolve it: a cold engine start's /health wait (the llama
-// manager's real bound) plus one attempt.
+// LocalWorstCase is the ceiling for one local-provider call. The request
+// path itself performs only a short (~2s) health probe before the attempt,
+// not the llama manager's HealthTimeout-bounded readiness loop (that loop
+// runs in the launchd manager's background goroutine); the derivation
+// deliberately budgets the full cold-start wait anyway so a probe issued
+// the moment the engine boots is never failed while the engine is still
+// legitimately loading weights. Over-generosity here is a hang ceiling,
+// never a sleep.
 const LocalWorstCase = llama.HealthTimeout + localAttemptTimeout
 
 // ── Probe deadlines (models test / verify / doctor) ────────────────────────

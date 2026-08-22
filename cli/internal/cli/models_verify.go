@@ -199,8 +199,10 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 	// cost half of the timeout principle: individual probes keep their
 	// strategy-aware deadlines (a slow model is never failed), but a wide
 	// --discover run over many gated candidates must still have a ceiling the
-	// caller can reason about. 0 disables it. A probe cut off by the cap
-	// records as a timeout like any other cancelled probe.
+	// caller can reason about. 0 disables it. A probe cut off by the cap is
+	// reported in the transient stream but its verdict is NOT persisted (see
+	// the onResult guard below): the cap stops the run, it must not rewrite
+	// what the catalog knows about models it merely interrupted.
 	probeCtx := ctx
 	if verifyMaxDuration > 0 {
 		var cancelProbes context.CancelFunc
@@ -215,6 +217,22 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 				ModelID: m.ID, Provider: m.Provider, Type: m.Type,
 				OK: false, Detail: err.Error(), Code: ai.TestErrUnknown,
 			}
+		}
+		// A timeout that lands after the batch cap fired is the cap's doing,
+		// not the model's: --max-duration stops the RUN, it must not poison
+		// the catalog with durable working:false verdicts for candidates that
+		// were merely cut off or never started (their prior verdicts stand).
+		// The transient event stream still reports the row. A genuine
+		// per-probe transport timeout that completed before the cap keeps
+		// persisting; skipping a save is the safe direction for the rare
+		// result racing the cap's edge.
+		if probeCtx.Err() != nil && result.Code == ai.TestErrTimeout {
+			results = append(results, result)
+			emitVerifyEvent(enc, verifyEvent{Event: "result", N: n, Total: total, Result: result})
+			if humanMode {
+				fmt.Printf("[%d/%d] %s: cut off by --max-duration (verdict not saved)\n", n, total, m.ID)
+			}
+			return
 		}
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Recommended = m.Recommended // preserve curation on the saved entry
