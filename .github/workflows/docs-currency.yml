@@ -1,0 +1,59 @@
+# Non-blocking README-currency annotation.
+#
+# The release front door hard-gates on doc currency (.release.yaml docs[]),
+# but that is the backstop of last resort: docs are supposed to land WITH the
+# PR that changes user-facing behavior. This job surfaces the question at
+# review time as a sticky PR comment. It NEVER fails the build: most PRs
+# (internal refactors, test fixes, review sweeps) legitimately need no README
+# edit, and a hard gate here would be noise that trains everyone to ignore it.
+name: Docs currency
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  readme-currency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compare user-facing changes against README
+        id: check
+        run: |
+          git fetch -q origin "${{ github.base_ref }}"
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          USER_FACING=$(echo "$CHANGED" | grep -E '^(cli/|app/|plugins/)' || true)
+          README_TOUCHED=$(echo "$CHANGED" | grep -x 'README.md' || true)
+          if [ -n "$USER_FACING" ] && [ -z "$README_TOUCHED" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=README currency::This PR changes user-facing surfaces (cli/app/plugins) without touching README.md. If the change is user-visible, update README in this PR; if it is internal-only, this note needs no action."
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upsert the sticky comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STALE: ${{ steps.check.outputs.stale }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          MARKER='<!-- readme-currency -->'
+          if [ "$STALE" = "true" ]; then
+            TEXT='**README currency**: this PR changes user-facing surfaces (`cli/`, `app/`, or `plugins/`) and README.md is untouched. If the change is user-visible, fold the README update into this PR (docs land with the change, not at release preflight); if it is internal-only, say so and carry on. This check never blocks.'
+          else
+            TEXT='**README currency**: resolved (README updated, or no user-facing surface changed on the current head).'
+          fi
+          BODY="$(printf '%s\n%s' "$MARKER" "$TEXT")"
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING" -f body="$BODY" > /dev/null
+          elif [ "$STALE" = "true" ]; then
+            gh api "repos/${{ github.repository }}/issues/$PR/comments" -f body="$BODY" > /dev/null
+          fi
