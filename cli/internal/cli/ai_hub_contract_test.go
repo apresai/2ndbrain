@@ -87,6 +87,10 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	verifyEnabledOnly, verifyEvents, verifyDiscover = false, false, false
 	verifyCostCap = 0.50
 	verifyMaxDuration = 30 * time.Minute
+	discoverRefresh, discoverValidate, discoverYes = false, false, false
+	discoverAdd = nil
+	discoverScope = "vault"
+	discoverCostCap = 0.50
 	costProvider, costProbeKind = "", "test"
 	costAll = false
 	wizardScope, wizardProvider = "vault", ""
