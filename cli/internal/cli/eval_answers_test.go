@@ -6,16 +6,21 @@ import (
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/eval"
 )
 
 func TestEstimateAnswersCostUSD(t *testing.T) {
 	gen := ai.ModelInfo{ID: "g", Provider: "bedrock", Type: "generation", PriceIn: 1.0, PriceOut: 5.0, PriceSource: "builtin"}
 	judge := ai.ModelInfo{ID: "j", Provider: "bedrock", Type: "generation", PriceIn: 3.0, PriceOut: 15.0, PriceSource: "builtin"}
 
-	// n=10 answers on gen: 25000 in + 5120 out tokens = 0.025 + 0.0256 USD.
-	// One judge: 12000 in + 400 out = 0.036 + 0.006 USD.
-	got := estimateAnswersCostUSD(gen, []ai.ModelInfo{judge}, 10)
-	want := 0.025 + 0.0256 + 0.036 + 0.006
+	// Derive from the real spend ceilings so a budget change cannot silently
+	// stale this test; the split (answers on gen, gradings per judge) is the
+	// claim. n=10: answers = 2500*10 in at $1/M + RAGGenMaxTokens*10 out at
+	// $5/M; one judge = 1200*10 in at $3/M + JuryMaxTokens*10 out at $15/M.
+	const n = 10
+	got := estimateAnswersCostUSD(gen, []ai.ModelInfo{judge}, n)
+	want := 2500.0*n*1.0/1_000_000 + float64(ai.RAGGenMaxTokens)*n*5.0/1_000_000 +
+		1200.0*n*3.0/1_000_000 + float64(eval.JuryMaxTokens)*n*15.0/1_000_000
 	if diff := got - want; diff > 1e-9 || diff < -1e-9 {
 		t.Fatalf("estimate = %v, want %v", got, want)
 	}
