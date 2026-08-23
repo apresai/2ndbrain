@@ -61,15 +61,26 @@ func delistedMovesToGone() {
     #expect(state.newKeys == ["bedrock|fake.v2"])
 }
 
-@Test("afterAdd drops the added id immediately (the add run's pool still lists it)")
+@Test("afterAdd drops the added key immediately (the add run's pool still lists it)")
 func afterAddDropsImmediately() {
     var state = DiscoverDiffSession.merged(.init(), report: envelope(models: [poolV1, poolV2], new: [poolV2]))
     // The --add envelope computes its pool BEFORE persisting the add, so v2
     // is still listed; the pool-intersection rule alone would keep the badge
     // one run too long.
     state = DiscoverDiffSession.merged(state, report: envelope(models: [poolV1, poolV2], new: []))
-    state = DiscoverDiffSession.afterAdd(state, addedIDs: ["fake.v2"])
+    state = DiscoverDiffSession.afterAdd(state, addedKeys: ["bedrock|fake.v2"])
     #expect(state.newKeys.isEmpty)
+}
+
+@Test("afterAdd is provider-qualified: adding one provider's model never clears another provider's same-id badge")
+func afterAddIsProviderQualified() {
+    // Two providers list the SAME bare id; only the ollama row is added.
+    // A bare-id match would clear both badges, and the un-added openrouter
+    // model would never re-announce (the CLI diff is one-shot).
+    var state = DiscoverDiffSession.State()
+    state.newKeys = ["openrouter|foo", "ollama|foo"]
+    state = DiscoverDiffSession.afterAdd(state, addedKeys: ["ollama|foo"])
+    #expect(state.newKeys == ["openrouter|foo"])
 }
 
 @Test("clearingNew clears only the named provider's keys")

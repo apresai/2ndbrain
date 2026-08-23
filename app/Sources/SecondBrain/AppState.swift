@@ -2943,10 +2943,11 @@ final class AppState {
 
     // MARK: - Discovery as a verb (models discover)
 
-    /// Whether the resolved CLI supports `2nb models discover`. nil = not yet
-    /// probed this app run; probed at most once (the first run settles it)
-    /// and kept in memory only, so a `brew upgrade` mid-flight is picked up
-    /// on the next launch. Detection is payload-shape based, never exit-code
+    /// Whether the resolved CLI supports `2nb models discover`. nil = no
+    /// classified run yet this app session; the VERDICT settles on the first
+    /// classified run and is trusted afterwards (the discover command itself
+    /// still re-runs on reloads and refreshes). Kept in memory only, so a
+    /// `brew upgrade` mid-flight is picked up on the next launch. Detection is payload-shape based, never exit-code
     /// based: a pre-discover CLI answers the verb as `models list` — exit 0,
     /// top-level array (see `DiscoverCLIProbe`).
     var modelsDiscoverSupported: Bool?
@@ -2988,7 +2989,11 @@ final class AppState {
     /// the capability verdict untouched. A run that added or validated
     /// models bumps `modelsCatalogVersion` (the user catalog changed).
     @discardableResult
-    func runModelsDiscover(refresh: Bool = false, add: [String] = [], validate: Bool = false, costCap: Double? = nil) async throws -> DiscoverRunOutcome {
+    /// `addKeys` carries the clicked rows' provider-qualified "provider|id"
+    /// keys alongside the bare `add` ids the CLI takes, so the session-NEW
+    /// removal can target exactly the added rows (a bare id is ambiguous
+    /// across providers).
+    func runModelsDiscover(refresh: Bool = false, add: [String] = [], addKeys: [String] = [], validate: Bool = false, costCap: Double? = nil) async throws -> DiscoverRunOutcome {
         guard let vault else { throw CLIError.noVault }
         let args = Self.modelsDiscoverArgs(refresh: refresh, add: add, validate: validate, costCap: costCap)
         log.info("Discover action: 2nb \(args.joined(separator: " "), privacy: .public)")
@@ -3005,7 +3010,7 @@ final class AppState {
             latestDiscoverReport = report
             discoverDiffSession = DiscoverDiffSession.merged(discoverDiffSession, report: report)
             if let added = report.added, !added.isEmpty {
-                discoverDiffSession = DiscoverDiffSession.afterAdd(discoverDiffSession, addedIDs: added)
+                discoverDiffSession = DiscoverDiffSession.afterAdd(discoverDiffSession, addedKeys: addKeys)
                 modelsCatalogVersion += 1
             }
             return .report(report)

@@ -124,14 +124,18 @@ enum DiscoverDiffSession {
         return next
     }
 
-    /// Drops just-added ids from session-NEW immediately: the --add run's
+    /// Drops just-added models from session-NEW immediately: the --add run's
     /// envelope still lists them in the pool (the CLI computes the listing
     /// before persisting the add), so the pool-intersection rule alone would
-    /// keep them badged one run too long.
-    static func afterAdd(_ state: State, addedIDs: [String]) -> State {
-        let ids = Set(addedIDs)
+    /// keep them badged one run too long. Takes provider-qualified
+    /// "provider|id" keys, never bare ids: two providers can list the same
+    /// bare id, and a bare-id match would silently clear the OTHER
+    /// provider's still-un-added NEW badge, which never re-announces since
+    /// the CLI diff is one-shot.
+    static func afterAdd(_ state: State, addedKeys: [String]) -> State {
+        let keys = Set(addedKeys)
         var next = state
-        next.newKeys = state.newKeys.filter { !ids.contains(modelID(of: $0)) }
+        next.newKeys = state.newKeys.subtracting(keys)
         return next
     }
 

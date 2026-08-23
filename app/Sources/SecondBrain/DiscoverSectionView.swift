@@ -208,7 +208,12 @@ struct DiscoverSectionView: View {
             cap = VerifyFlow.costCap(preview: preview)
         }
         do {
-            let outcome = try await appState.runModelsDiscover(add: [model.modelID], validate: validate, costCap: cap)
+            let outcome = try await appState.runModelsDiscover(
+                add: [model.modelID],
+                addKeys: [DiscoveryNudge.modelKey(provider: model.provider, modelID: model.modelID)],
+                validate: validate,
+                costCap: cap
+            )
             errorMessage = nil
             switch outcome {
             case .report(let report):
