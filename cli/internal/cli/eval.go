@@ -16,11 +16,12 @@ import (
 )
 
 var (
-	evalN       int
-	evalRegen   bool
-	evalCostCap float64
-	evalYes     bool
-	evalSeed    int64
+	evalN        int
+	evalRegen    bool
+	evalCostCap  float64
+	evalYes      bool
+	evalSeed     int64
+	evalEstimate bool
 )
 
 // EvalConfig is the retrieval configuration a scorecard was measured under.
@@ -70,6 +71,7 @@ func init() {
 	evalCmd.PersistentFlags().Float64Var(&evalCostCap, "cost-cap", 0.25, "Abort if the estimated QA-generation cost exceeds this many USD")
 	evalCmd.PersistentFlags().BoolVar(&evalYes, "yes", false, "Skip the cost-confirmation prompt")
 	evalCmd.PersistentFlags().Int64Var(&evalSeed, "seed", 0, "Deterministic QA-set sampling seed")
+	evalCmd.PersistentFlags().BoolVar(&evalEstimate, "estimate", false, "Print the cost estimate and exit without calling any model")
 	evalCmd.GroupID = "ai"
 	rootCmd.AddCommand(evalCmd)
 }
@@ -98,7 +100,109 @@ func qaCacheHas(path string, n int) bool {
 	return len(loadQACache(path)) >= n
 }
 
+// EvalEstimateReport is the `2nb eval [answers|tune] --estimate --json` shape:
+// the projected cost of the run, computed locally with no model calls, so a
+// GUI can show the same confirm a terminal user gets from the interactive
+// prompt and derive its --cost-cap from a number that matches the CLI's own
+// estimator (a GUI-invented estimate below the CLI's would make the derived
+// cap refuse every run).
+type EvalEstimateReport struct {
+	Command       string  `json:"command"` // eval | answers | tune
+	N             int     `json:"n"`
+	QACached      bool    `json:"qa_cached"`
+	GenerationUSD float64 `json:"generation_usd"` // one-time QA generation; 0 when cached
+	EmbedUSD      float64 `json:"embed_usd"`      // the per-run query embeds
+	AnswersUSD    float64 `json:"answers_usd"`    // answers + judging; 0 except for answers
+	TotalUSD      float64 `json:"total_usd"`
+	CostCap       float64 `json:"cost_cap"`
+}
+
+// buildEvalEstimate assembles the estimate from the shared cost math
+// (estimateEvalCostUSD / estimateAnswersCostUSD, the same functions the
+// interactive confirm gates on). Pure, so the composition is unit-testable
+// without a vault or a catalog fetch.
+func buildEvalEstimate(command string, cached bool, n int, genM, embM ai.ModelInfo, judges []ai.ModelInfo, costCap float64) EvalEstimateReport {
+	_, gen, emb := estimateEvalCostUSD(genM, embM, n)
+	rep := EvalEstimateReport{Command: command, N: n, QACached: cached, EmbedUSD: emb, CostCap: costCap}
+	if !cached {
+		rep.GenerationUSD = gen
+	}
+	if command == "answers" {
+		rep.AnswersUSD = estimateAnswersCostUSD(genM, judges, n)
+	}
+	rep.TotalUSD = rep.GenerationUSD + rep.EmbedUSD + rep.AnswersUSD
+	return rep
+}
+
+// runEvalEstimate handles `--estimate` for eval and its subcommands: report
+// the projected cost and exit. Deliberately requires neither embeddings nor a
+// reachable provider: it is the preview a GUI shows before any spend, so it
+// must work on exactly the vaults the real run would refuse.
+func runEvalEstimate(cmd *cobra.Command, command string) error {
+	v, err := openVault()
+	if err != nil {
+		return err
+	}
+	defer v.Close()
+	setupFileLogging(v)
+	cfg := v.Config.AI
+
+	n := evalN
+	if n < 1 {
+		n = 1
+	}
+	cachedItems := loadQACache(evalQAPath(v))
+	cached := len(cachedItems) >= 2 && !evalRegen
+	if cached && len(cachedItems) < n {
+		// The real run scores at most the cached set; estimating on the
+		// larger --n would overstate the per-run embed cost.
+		n = len(cachedItems)
+	}
+
+	models, merr := loadVerifiedModelCatalog(context.Background(), cfg, v.Root)
+	if merr != nil {
+		models = ai.BuiltinCatalog() // builtin pricing is enough for an estimate
+	}
+	genM, _ := lookupModelInfo(models, cfg.Provider, cfg.GenerationModel)
+	embM, _ := lookupModelInfo(models, cfg.Provider, cfg.EmbeddingModel)
+	var judges []ai.ModelInfo
+	if command == "answers" {
+		if len(evalJudges) == 0 {
+			judges = []ai.ModelInfo{genM} // self-judged default
+		} else {
+			for _, id := range evalJudges {
+				jm, _ := lookupModelInfo(models, ai.InferProvider(id), id)
+				judges = append(judges, jm)
+			}
+		}
+	}
+	report := buildEvalEstimate(command, cached, n, genM, embM, judges, evalCostCap)
+
+	if format := getFormat(cmd); format != "" {
+		return writeOut(cmd, format, report)
+	}
+
+	label := "2nb eval"
+	if command != "eval" {
+		label += " " + command
+	}
+	fmt.Printf("Estimated cost for `%s`: ~$%.4f (no model was called; local estimate)\n", label, report.TotalUSD)
+	if report.QACached {
+		fmt.Printf("  QA set: cached (%d questions), no generation cost\n", report.N)
+	} else {
+		fmt.Printf("  QA generation (one-time): ~$%.4f for %d questions\n", report.GenerationUSD, report.N)
+	}
+	fmt.Printf("  Query embeds (per run): ~$%.4f\n", report.EmbedUSD)
+	if command == "answers" {
+		fmt.Printf("  Answers + judging: ~$%.4f\n", report.AnswersUSD)
+	}
+	return nil
+}
+
 func runEval(cmd *cobra.Command, args []string) error {
+	if evalEstimate {
+		return runEvalEstimate(cmd, "eval")
+	}
 	v, err := openVault()
 	if err != nil {
 		return err

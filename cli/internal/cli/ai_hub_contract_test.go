@@ -99,6 +99,11 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	benchModelFlag, benchProbeFlag, benchProviderFlag = "", "", ""
 	benchSummaryScope = "global"
 	benchHistoryLimit = 20
+	// Eval flags (previously unreset; a prior test's --estimate/--n would
+	// leak into the next invocation).
+	evalN, evalRegen, evalYes, evalEstimate = 20, false, false, false
+	evalCostCap, evalSeed = 0.25, 0
+	evalJudges = nil
 	createType, createTitle, createAllowDuplicate = "note", "", false
 	createPath = ""
 	createOverwrite, createAppend = false, false

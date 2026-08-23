@@ -126,7 +126,9 @@ func TestEval_E2E_Bedrock(t *testing.T) {
 	}
 
 	// Second run reuses the cached QA set (no regeneration) — qa_cached=true.
-	out2, err := runCLIArgs(t, root, "eval", "--json", "--n", "3", "--yes")
+	// Pins the GUI's exact argv shape (Testing tab Quality pane): --yes plus a
+	// derived --cost-cap, which a cached run must never trip.
+	out2, err := runCLIArgs(t, root, "eval", "--json", "--n", "3", "--yes", "--cost-cap", "0.51")
 	if err != nil {
 		t.Fatalf("eval re-run: %v", err)
 	}
@@ -149,6 +151,107 @@ func TestEval_NoEmbeddings(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no embeddings") {
 		t.Errorf("expected a 'no embeddings' hint, got: %v", err)
+	}
+}
+
+// TestBuildEvalEstimate covers the estimate composition without a vault or a
+// live catalog: cached kills the generation term, answers adds the jury term,
+// and the total is always the sum of the parts.
+func TestBuildEvalEstimate(t *testing.T) {
+	genM := ai.ModelInfo{ID: "g", Provider: "bedrock", PriceIn: 10, PriceOut: 30}
+	embM := ai.ModelInfo{ID: "e", Provider: "bedrock", PriceIn: 0.1}
+
+	fresh := buildEvalEstimate("eval", false, 20, genM, embM, nil, 0.25)
+	if fresh.GenerationUSD <= 0 || fresh.EmbedUSD < 0 {
+		t.Fatalf("uncached estimate must carry the generation cost: %+v", fresh)
+	}
+	if fresh.TotalUSD != fresh.GenerationUSD+fresh.EmbedUSD+fresh.AnswersUSD {
+		t.Errorf("total must sum the parts: %+v", fresh)
+	}
+
+	cached := buildEvalEstimate("eval", true, 20, genM, embM, nil, 0.25)
+	if cached.GenerationUSD != 0 {
+		t.Errorf("cached estimate must zero the one-time generation cost: %+v", cached)
+	}
+	if cached.EmbedUSD != fresh.EmbedUSD {
+		t.Errorf("query embeds recur every run, cached or not: %+v vs %+v", cached, fresh)
+	}
+
+	answers := buildEvalEstimate("answers", true, 20, genM, embM, []ai.ModelInfo{genM}, 0.25)
+	if answers.AnswersUSD <= 0 {
+		t.Errorf("answers estimate must carry the answers+judging cost: %+v", answers)
+	}
+	if answers.TotalUSD <= cached.TotalUSD {
+		t.Errorf("answers must cost more than the bare scorecard: %+v", answers)
+	}
+}
+
+// TestEvalEstimate_Contract drives `--estimate` through the real CLI argv the
+// GUI sends. Credential-free by design: an estimate must work on exactly the
+// vaults the real run would refuse (no embeddings, no reachable provider).
+func TestEvalEstimate_Contract(t *testing.T) {
+	_, root := newContractVault(t)
+
+	out, err := runCLIArgs(t, root, "eval", "--estimate", "--json")
+	if err != nil {
+		t.Fatalf("eval --estimate: %v", err)
+	}
+	var rep EvalEstimateReport
+	if err := json.Unmarshal(out, &rep); err != nil {
+		t.Fatalf("decode estimate: %v\noutput: %s", err, out)
+	}
+	if rep.Command != "eval" || rep.QACached || rep.N != 20 || rep.TotalUSD < 0 {
+		t.Errorf("fresh-vault estimate looks wrong: %+v", rep)
+	}
+	if rep.AnswersUSD != 0 {
+		t.Errorf("bare eval estimate must not carry an answers term: %+v", rep)
+	}
+
+	// Seed a QA cache: the estimate must flip to cached, drop the generation
+	// term, and clamp n to the cache size.
+	qaPath := filepath.Join(root, ".2ndbrain", "eval", "qa.json")
+	if err := os.MkdirAll(filepath.Dir(qaPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	items := []eval.QAItem{{Question: "q1", SourceID: "d1"}, {Question: "q2", SourceID: "d2"}, {Question: "q3", SourceID: "d3"}}
+	data, _ := json.Marshal(items)
+	if err := os.WriteFile(qaPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out2, err := runCLIArgs(t, root, "eval", "--estimate", "--json")
+	if err != nil {
+		t.Fatalf("cached eval --estimate: %v", err)
+	}
+	var rep2 EvalEstimateReport
+	if err := json.Unmarshal(out2, &rep2); err != nil {
+		t.Fatalf("decode cached estimate: %v\noutput: %s", err, out2)
+	}
+	if !rep2.QACached || rep2.GenerationUSD != 0 || rep2.N != 3 {
+		t.Errorf("cached estimate must zero generation and clamp n to the cache: %+v", rep2)
+	}
+
+	out3, err := runCLIArgs(t, root, "eval", "answers", "--estimate", "--json")
+	if err != nil {
+		t.Fatalf("eval answers --estimate: %v", err)
+	}
+	var rep3 EvalEstimateReport
+	if err := json.Unmarshal(out3, &rep3); err != nil {
+		t.Fatalf("decode answers estimate: %v\noutput: %s", err, out3)
+	}
+	if rep3.Command != "answers" || rep3.AnswersUSD < 0 {
+		t.Errorf("answers estimate looks wrong: %+v", rep3)
+	}
+
+	out4, err := runCLIArgs(t, root, "eval", "tune", "--estimate", "--json")
+	if err != nil {
+		t.Fatalf("eval tune --estimate: %v", err)
+	}
+	var rep4 EvalEstimateReport
+	if err := json.Unmarshal(out4, &rep4); err != nil {
+		t.Fatalf("decode tune estimate: %v\noutput: %s", err, out4)
+	}
+	if rep4.Command != "tune" || rep4.AnswersUSD != 0 {
+		t.Errorf("tune estimate looks wrong: %+v", rep4)
 	}
 }
 
