@@ -134,9 +134,15 @@ struct DiscoverSectionView: View {
             Button("Add") { Task { await add(model, validate: false) } }
                 .controlSize(.small)
                 .disabled(running)
-            Button("Add + Validate") { Task { await add(model, validate: true) } }
-                .controlSize(.small)
-                .disabled(running)
+            // Only probeable rows offer the validate leg: the CLI's verify
+            // path skips rerank/incompatible entries, and because --add
+            // persists BEFORE --validate, a guaranteed refusal would leave
+            // the add on disk with this run's envelope never emitted.
+            if model.modelType != "rerank" && model.compatible != false {
+                Button("Add + Validate") { Task { await add(model, validate: true) } }
+                    .controlSize(.small)
+                    .disabled(running)
+            }
         }
     }
 
@@ -228,6 +234,17 @@ struct DiscoverSectionView: View {
             }
         } catch {
             errorMessage = error.localizedDescription
+            // The CLI persists --add BEFORE --validate and emits JSON only
+            // on full success, so a validate refusal can leave the model in
+            // the catalog while afterAdd and the catalog-version bump never
+            // ran (the row would stay NEW and a retry would hit
+            // already-in-catalog). Reconcile from reality with a free cached
+            // re-listing: a persisted add has graduated out of the pool, so
+            // the session pool-intersection clears its NEW badge, and the
+            // version bump refreshes the pickers. If the add never
+            // persisted, the pool still lists it and the badge stays.
+            _ = try? await appState.runModelsDiscover()
+            appState.modelsCatalogVersion += 1
         }
     }
 }
