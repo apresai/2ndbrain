@@ -51,9 +51,18 @@ jobs:
             TEXT='**README currency**: resolved (README updated, or no user-facing surface changed on the current head).'
           fi
           BODY="$(printf '%s\n%s' "$MARKER" "$TEXT")"
-          EXISTING=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+          # --paginate: on a busy PR the marker comment can fall past the
+          # first page (30 comments oldest-first) and an unpaginated lookup
+          # would post a duplicate on every subsequent run.
+          # Fail-soft throughout: on fork PRs github.token is read-only and
+          # the comment calls 403; this check is documented as never failing
+          # the build, so a lost comment degrades to the ::notice annotation
+          # above rather than a red check.
+          EXISTING=$(gh api --paginate "repos/${{ github.repository }}/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" 2>/dev/null | head -1 || true)
           if [ -n "$EXISTING" ]; then
-            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING" -f body="$BODY" > /dev/null
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING" -f body="$BODY" > /dev/null \
+              || echo "comment update skipped (read-only token, e.g. a fork PR); the notice annotation above stands"
           elif [ "$STALE" = "true" ]; then
-            gh api "repos/${{ github.repository }}/issues/$PR/comments" -f body="$BODY" > /dev/null
+            gh api "repos/${{ github.repository }}/issues/$PR/comments" -f body="$BODY" > /dev/null \
+              || echo "comment skipped (read-only token, e.g. a fork PR); the notice annotation above stands"
           fi
