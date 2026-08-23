@@ -135,6 +135,45 @@ func validateNudgeOnFreshVaultActives() {
     #expect(WorkingModelPresentation.shouldNudgeValidate([legacy], activeIDs: [legacy.modelID]))
 }
 
+@Test("Working-set summary counts proven models in the Answers/Search vocabulary")
+func workingSetSummaryCounts() {
+    let haiku = decodeModel(#"{"id":"haiku","name":"Haiku","provider":"bedrock","type":"generation","working":true,"tested_at":"2026-08-20T00:00:00Z"}"#)
+    let sonnet = decodeModel(#"{"id":"sonnet","name":"Sonnet","provider":"bedrock","type":"generation","working":true,"tested_at":"2026-08-20T00:00:00Z"}"#)
+    let nova = decodeModel(#"{"id":"nova","name":"Nova 2","provider":"bedrock","type":"embedding","working":true,"tested_at":"2026-08-20T00:00:00Z"}"#)
+    let denied = decodeModel(#"{"id":"opus","name":"Opus","provider":"bedrock","type":"generation","working":false,"tested_at":"2026-08-20T00:00:00Z","test_error":"403"}"#)
+    let otherProvider = decodeModel(#"{"id":"gemma","name":"Gemma","provider":"ollama","type":"generation","working":true}"#)
+    let line = WorkingModelPresentation.workingSetSummary(
+        [haiku, sonnet, nova, denied, otherProvider],
+        provider: "bedrock",
+        activeIDs: ["haiku", "nova"]
+    )
+    #expect(line == "Working set: 2 answers models, 1 search model.")
+}
+
+@Test("Working-set summary nudges instead of showing a fake zero")
+func workingSetSummaryNudges() {
+    // Pre-flag CLI: no row carries the working key.
+    let legacy = decodeModel(#"{"id":"haiku","name":"Haiku","provider":"bedrock","type":"generation","recommended":true}"#)
+    #expect(WorkingModelPresentation.workingSetSummary([legacy], provider: "bedrock", activeIDs: [])
+        == "Working set unknown on this CLI version — run Validate.")
+
+    // Flag present, nothing working (every probe failed).
+    let failed = decodeModel(#"{"id":"haiku","name":"Haiku","provider":"bedrock","type":"generation","working":false,"tested_at":"2026-08-20T00:00:00Z","test_error":"403"}"#)
+    #expect(WorkingModelPresentation.workingSetSummary([failed], provider: "bedrock", activeIDs: [])
+        == "No working models yet — run Validate.")
+
+    // Fresh vault: only untested actives are working, so the count carries
+    // the validate nudge.
+    let activeGen = decodeModel(#"{"id":"haiku","name":"Haiku","provider":"bedrock","type":"generation","working":true}"#)
+    let activeEmbed = decodeModel(#"{"id":"nova","name":"Nova 2","provider":"bedrock","type":"embedding","working":true}"#)
+    let line = WorkingModelPresentation.workingSetSummary(
+        [activeGen, activeEmbed],
+        provider: "bedrock",
+        activeIDs: ["haiku", "nova"]
+    )
+    #expect(line == "Working set: 1 answers model, 1 search model. Run Validate to probe the rest.")
+}
+
 @Test("Why line never uses embed quality_score for generation")
 func whyIgnoresEmbedQuality() {
     let gen = decodeModel(#"""

@@ -33,19 +33,22 @@ func dashboardTabHasIconAndLabel() {
 
 /// The sidebar is the thing this change is about, so its size is asserted
 /// rather than left to drift back. Eight entries is what made "is my vault
-/// healthy?" a three-tab question. Six is deliberate: the Settings sidebar
-/// tab was added as a first-class destination, and this pin is bumped with it.
+/// healthy?" a three-tab question. Seven is deliberate: the Settings sidebar
+/// tab (6) and now the Testing tab, which consolidates validation,
+/// benchmarks, and the performance observatory into one destination — this
+/// pin is bumped with each, never silently.
 @Test("DashboardTab: the sidebar stays small")
 func dashboardTabCount() {
-    #expect(DashboardTab.allCases.count == 6)
+    #expect(DashboardTab.allCases.count == 7)
 }
 
 /// Settings is a destination, not a status group, and it sits last the way
-/// Mac sidebars put settings at the bottom. Pinning the full order also
-/// catches an accidental reshuffle when the next tab lands.
-@Test("DashboardTab: secondary keeps its order, Settings last")
+/// Mac sidebars put settings at the bottom. Testing sits before Health:
+/// measuring comes up more often than product parity. Pinning the full order
+/// also catches an accidental reshuffle when the next tab lands.
+@Test("DashboardTab: secondary keeps its order, Testing before Health, Settings last")
 func dashboardTabSecondaryOrder() {
-    #expect(DashboardTab.secondary == [.models, .notes, .health, .activity, .settings])
+    #expect(DashboardTab.secondary == [.models, .notes, .testing, .health, .activity, .settings])
     #expect(DashboardTab.secondary.last == .settings)
 }
 
@@ -72,28 +75,42 @@ func deepLinksRouteToTabAndPane() {
 
     // The sidebar Settings tab (OpenSettingsTabButton with a vault bound).
     #expect(DashboardRoute.tab(for: .settings) == .settings)
+
+    // The Testing tab ("Testing & Benchmarks…" menu item). It names no pane,
+    // so it deliberately keeps the last-used one.
+    #expect(DashboardRoute.tab(for: .testing) == .testing)
+    #expect(DashboardRoute.testingSection(for: .testing) == nil)
 }
 
 /// A target that does not land in a group must not carry a pane, or routing
 /// would silently move a pane the user is not looking at.
 @Test("DashboardRoute: non-group targets request no pane")
 func deepLinksWithoutPanesRequestNone() {
-    for target in [DashboardRoute.Target.aiHub, .lintResults, .settings] {
+    for target in [DashboardRoute.Target.aiHub, .lintResults, .settings, .testing] {
         #expect(DashboardRoute.activitySection(for: target) == nil)
         #expect(DashboardRoute.healthSection(for: target) == nil)
     }
     // A target lands in at most one group.
     #expect(DashboardRoute.healthSection(for: .mcpStatus) == nil)
     #expect(DashboardRoute.activitySection(for: .vaultStatus) == nil)
+    for target in [DashboardRoute.Target.aiHub, .mcpStatus, .gitActivity, .lintResults, .vaultStatus, .settings] {
+        #expect(DashboardRoute.testingSection(for: target) == nil)
+    }
 }
 
 /// The group containers host the existing inline views behind a segmented
 /// picker; a section dropped from either enum is a status view that silently
-/// became unreachable.
-@Test("Health and Activity keep every section they absorbed")
+/// became unreachable. Health went 3 → 2 deliberately: Performance moved to
+/// the Testing tab, whose own four sections are pinned here so it cannot
+/// silently lose one either.
+@Test("Health, Activity, and Testing keep every section they absorbed")
 func groupSectionsCoverAbsorbedViews() {
-    #expect(HealthView.Section.allCases.count == 3)
+    #expect(HealthView.Section.allCases.count == 2)
+    #expect(!HealthView.Section.allCases.contains(where: { $0.rawValue == "Performance" }))
     #expect(ActivityView.Section.allCases.count == 2)
+    #expect(TestingView.Section.allCases.count == 4)
+    #expect(TestingView.Section.allCases.map(\.rawValue) == ["Validate", "Benchmarks", "Performance", "Quality"])
     for s in HealthView.Section.allCases { #expect(!s.rawValue.isEmpty) }
     for s in ActivityView.Section.allCases { #expect(!s.rawValue.isEmpty) }
+    for s in TestingView.Section.allCases { #expect(!s.rawValue.isEmpty) }
 }

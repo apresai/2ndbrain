@@ -116,6 +116,28 @@ enum WorkingModelPresentation {
         return onlyActivesAreWorking(models, activeIDs: activeIDs) && nothingProbed(models)
     }
 
+    /// One-line working-set summary for the Testing tab's Validate pane:
+    /// "Working set: 3 answers models, 1 search model" — the models this
+    /// account has proven it can invoke (the CLI `working` flag), in the
+    /// pickers' Answers/Search vocabulary. A pre-flag CLI or an unvalidated
+    /// account gets a validate nudge instead of a fake zero.
+    static func workingSetSummary(_ models: [CatalogModelInfo], provider: String, activeIDs: Set<String>) -> String {
+        guard hasWorkingFlag(models) else {
+            return "Working set unknown on this CLI version — run Validate."
+        }
+        let ofProvider = models.filter { $0.provider == provider }
+        let gen = ofProvider.filter { $0.modelType == "generation" && $0.working == true }.count
+        let embed = ofProvider.filter { $0.modelType == "embedding" && $0.working == true }.count
+        if gen == 0 && embed == 0 {
+            return "No working models yet — run Validate."
+        }
+        var line = "Working set: \(gen) answers model\(gen == 1 ? "" : "s"), \(embed) search model\(embed == 1 ? "" : "s")."
+        if shouldNudgeValidate(models, activeIDs: activeIDs) {
+            line += " Run Validate to probe the rest."
+        }
+        return line
+    }
+
     static func why(
         _ model: CatalogModelInfo,
         isShippedDefault: Bool,

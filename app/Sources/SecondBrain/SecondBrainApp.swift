@@ -112,6 +112,15 @@ struct SecondBrainApp: App {
                 .keyboardShortcut(",", modifiers: [.command, .shift])
                 .disabled(appState.vault == nil)
 
+                // Testing tab — validation, benchmarks, and the performance
+                // observatory in one destination. Names no pane, so it keeps
+                // the last-used one (DashboardRoute.testingSection).
+                Button("Testing & Benchmarks...") {
+                    appState.showTesting = true
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(appState.vault == nil)
+
                 Divider()
 
                 Button("MCP Server Configuration...") {
