@@ -31,15 +31,21 @@ enum CLIWatchdog {
     /// (3 x 240s attempts + backoff) + 30s slack — one `models test` probe.
     static let cliMaxProbeDeadlineMirror: TimeInterval = 753
     /// cli/internal/cli/doctor_cmd.go doctorModelTierTimeout:
-    /// 2 x MaxProbeDeadline() + 30s — doctor tier 1's two SEQUENTIAL probes,
-    /// the longest request/response command the app invokes.
+    /// 2 x MaxProbeDeadline() + 30s — doctor tier 1's two SEQUENTIAL probes.
     static let cliDoctorTierMirror: TimeInterval = 1536
+    /// cli/internal/cli/doctor_cmd.go doctorVaultTierTimeout:
+    /// mcp.DoctorExercisedBudget() + 10s, where DoctorExercisedBudget
+    /// (cli/internal/mcp/server.go) = tCheap 10s + tCheap 10s + tSearch 90s
+    /// + 10s slack = 120s — doctor tier 2's vault/engine checks, which a
+    /// vault-bound `doctor --json` runs AFTER tier 1 on the same wall clock.
+    static let cliDoctorVaultTierMirror: TimeInterval = 130
 
     /// Absolute bound on one request/response CLI invocation, wall clock:
-    /// the longest inner ceiling (doctor tier 1) plus generous slack for
-    /// the version-parity fetch and process spin-up around it. A hang bound,
+    /// the longest inner sequence (a vault-bound doctor runs tier 1 THEN
+    /// tier 2, each under its own Go ceiling) plus generous slack for the
+    /// version-parity fetch and process spin-up around it. A hang bound,
     /// never a sleep: normal calls exit in seconds regardless.
-    static let timeout: TimeInterval = cliDoctorTierMirror + 120
+    static let timeout: TimeInterval = cliDoctorTierMirror + cliDoctorVaultTierMirror + 120
 
     /// Grace between SIGTERM (which lets the CLI die cleanly) and SIGKILL
     /// (for a child that ignores it).

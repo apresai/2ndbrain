@@ -19,6 +19,9 @@ struct TestingView: View {
     }
 
     @Binding var section: Section
+    /// The Benchmarks pane's single-flight claim, owned by ContentView so it
+    /// survives this tab (and the pane) being torn down mid-run.
+    var benchRun: BenchRunModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,7 +40,7 @@ struct TestingView: View {
                 // same dual-host idiom as SettingsView(isInline:)).
                 SimpleModelsView(validateOnly: true)
             case .benchmarks:
-                TestingBenchmarksView()
+                TestingBenchmarksView(benchRun: benchRun)
             case .performance:
                 MetricsView(isPresented: .constant(true), isInline: true)
             case .quality:
@@ -76,12 +79,17 @@ struct TestingQualityPlaceholder: View {
 struct TestingBenchmarksView: View {
     @Environment(AppState.self) var appState
 
+    /// Shared single-flight claim for bench runs (see BenchRunModel): owned
+    /// by ContentView, NOT view-local, so leaving and re-entering this pane
+    /// while a run's Task is still streaming cannot start a second
+    /// concurrent `models bench`.
+    var benchRun: BenchRunModel
+
     @State private var models: [CatalogModelInfo] = []
     @State private var favorites: [BenchFavoriteInfo] = []
     @State private var aiStatus: AIStatusInfo?
     @State private var selectedModelID = ""
     @State private var probe = "generate"
-    @State private var running = false
     @State private var events: [BenchmarkEvent] = []
     @State private var history: [BenchRunInfo] = []
     @State private var historyLoaded = false
@@ -97,7 +105,7 @@ struct TestingBenchmarksView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     runSection
-                    if !events.isEmpty || running {
+                    if !events.isEmpty || benchRun.running {
                         eventsSection
                     }
                     historySection
@@ -125,7 +133,7 @@ struct TestingBenchmarksView: View {
                     .textCase(.uppercase)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if loading || running { ProgressView().controlSize(.small) }
+                if loading || benchRun.running { ProgressView().controlSize(.small) }
             }
             HStack(spacing: 8) {
                 Picker("Model", selection: Binding(
@@ -153,7 +161,7 @@ struct TestingBenchmarksView: View {
                 .labelsHidden()
                 .fixedSize()
                 Button("Run") { Task { await runOne() } }
-                    .disabled(running || selectedModelID.isEmpty)
+                    .disabled(benchRun.running || selectedModelID.isEmpty)
             }
             Text(BenchProbes.costProbe(probe) == nil
                  ? "This probe scores locally — no API calls, no cost."
@@ -162,7 +170,7 @@ struct TestingBenchmarksView: View {
                 .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 Button("Run favorites (full battery)") { Task { await runFavorites() } }
-                    .disabled(running)
+                    .disabled(benchRun.running)
                 Text(favoritesCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -323,10 +331,11 @@ struct TestingBenchmarksView: View {
         // Claim the single-flight slot BEFORE the first await (the cost preview
         // shells the CLI): a check-then-set across an await is the exact race
         // VerifyRunModel closes, and a second click during the confirm dialog
-        // would start a second run.
-        guard !running, let model = models.first(where: { $0.modelID == selectedModelID }) else { return }
-        running = true
-        defer { running = false }
+        // would start a second run. The claim lives in the shared BenchRunModel
+        // so it also holds across this pane being torn down and recreated.
+        guard let model = models.first(where: { $0.modelID == selectedModelID }) else { return }
+        guard benchRun.beginRun() else { return }
+        defer { benchRun.endRun() }
         // Local probes (retrieval scores stored embeddings, search is BM25
         // over the index) bill nothing, so they skip the spend confirm.
         if let costProbe = BenchProbes.costProbe(probe) {
@@ -355,9 +364,20 @@ struct TestingBenchmarksView: View {
 
     private func runFavorites() async {
         // Same rule as runOne: claim the slot before the cost-preview awaits.
-        guard !running else { return }
-        running = true
-        defer { running = false }
+        guard benchRun.beginRun() else { return }
+        defer { benchRun.endRun() }
+        // Refresh favorites STRICTLY before estimating: the CLI's battery
+        // runs the REAL favorites list, so a failed fetch collapsed to []
+        // (the reload path's best-effort read) would price the active models
+        // while the CLI bills the favorites. A failed fetch aborts with no
+        // spend; a genuinely empty list falls back to the actives below,
+        // which matches the CLI's own selection for a bare `models bench`.
+        do {
+            favorites = try await appState.fetchBenchFavorites()
+        } catch {
+            errorMessage = "Couldn't read the benchmark favorites, so the cost estimate would not match what the battery runs. Nothing was started. (\(error.localizedDescription))"
+            return
+        }
         // Estimate the PAID part of the full battery per target (search and
         // retrieval bill nothing) so the confirm shows a real number. The
         // targets mirror the CLI's own selection: favorites, else the active

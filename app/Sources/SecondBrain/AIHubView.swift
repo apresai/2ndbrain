@@ -645,7 +645,12 @@ struct AIHubView: View {
             }
             // Patient-probe copy under the streamed progress: a cold model
             // can hold one probe for minutes without that being a hang.
-            if verifyRun.running {
+            // Gated on progress, not running: beginRun() claims the
+            // single-flight slot BEFORE the cost-preview confirm, and the
+            // hint must not appear while the user is still deciding whether
+            // to spend (progress opens only after the confirm, when probes
+            // are actually streaming — the same gate SimpleModelsView uses).
+            if verifyRun.progress != nil {
                 ColdStartHint()
             }
         }

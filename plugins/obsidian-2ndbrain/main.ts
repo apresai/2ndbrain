@@ -279,11 +279,18 @@ export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
 // - index: `index` can legitimately run for minutes on a large vault
 //   (re-embedding through a remote provider), so it gets no timeout —
 //   killing it mid-run would leave the index partially embedded.
-// - ask: 780s. Contains the Go `ai.MantleWorstCase` (723s: 3 attempts x
-//   240s `MantleAttemptTimeout` + 3s backoff), the longest one generation
-//   call can take before the CLI's own bounds resolve it, plus retrieval
-//   and startup slack. A cold-starting reasoning model can think for
-//   minutes before its first byte; that is a working model, not a hang.
+// - ask: 2220s. A chat/--history ask can run THREE sequential worst-case
+//   transport legs before the CLI's own bounds resolve it: the
+//   history-condense generation (rewriting the follow-up into a standalone
+//   retrieval query), the query embed, and the answer generation. Each leg
+//   is bounded by a 723s worst case (the Go `ai.MantleWorstCase`: 3
+//   attempts x 240s `MantleAttemptTimeout` + 3s backoff; the classic SDK's
+//   3 x 240s attempts + backoff is the same shape), so the containment
+//   floor is 3 x 723s = 2169s; 2220s adds startup/retrieval slack and
+//   rounds up. The old 780s contained only ONE leg and killed a working
+//   multi-leg ask mid-flight. A cold-starting reasoning model can think
+//   for minutes before its first byte; that is a working model, not a
+//   hang.
 // - doctor: 180s. The plugin only runs the free `doctor --versions` parity
 //   check (a cached release lookup with a 15s network timeout), so this is
 //   pure slack; the full self-test doctor is never run from the plugin.
@@ -294,7 +301,7 @@ export function commandTimeoutMs(cmd: string | undefined): number {
 		case 'index':
 			return 0;
 		case 'ask':
-			return 780_000;
+			return 2_220_000;
 		case 'doctor':
 			return 180_000;
 		default:

@@ -758,12 +758,17 @@ describe('commandTimeoutMs', () => {
 		).toBe(0);
 	});
 
-	it('bounds ask above the Go ai.MantleWorstCase transport budget', () => {
+	it('bounds ask above THREE sequential Go ai.MantleWorstCase transport legs', () => {
+		// A chat/--history ask runs up to three sequential worst-case legs
+		// before the CLI's own bounds resolve it: the history-condense
+		// generation, the query embed, and the answer generation, each
+		// bounded by one 723s transport worst case (mantle retries, or the
+		// classic SDK's 3 x 240s attempts + backoff).
 		expect(
 			commandTimeoutMs('ask'),
-			`ask timeout must exceed Go ai.MantleWorstCase (${mantleWorstCaseMs}ms = 3 attempts x 240s MantleAttemptTimeout + 3s backoff, cli/internal/ai/timeouts.go): an outer bound at or below the inner one fires first and fails a working-but-cold model, the exact inversion PR1 removed from the CLI`
-		).toBeGreaterThan(mantleWorstCaseMs);
-		expect(commandTimeoutMs('ask')).toBe(780_000);
+			`ask timeout must exceed 3 x Go ai.MantleWorstCase (3 x ${mantleWorstCaseMs}ms = ${3 * mantleWorstCaseMs}ms; each leg is 3 attempts x 240s MantleAttemptTimeout + 3s backoff, cli/internal/ai/timeouts.go): a chat/--history ask can run three sequential worst-case legs (history-condense generation, query embed, answer generation), and an outer bound at or below their sum fires first and fails a working-but-cold model, the exact inversion PR1 removed from the CLI`
+		).toBeGreaterThan(3 * mantleWorstCaseMs);
+		expect(commandTimeoutMs('ask')).toBe(2_220_000);
 	});
 
 	it('bounds doctor at 180s (the plugin only runs the free --versions form)', () => {
