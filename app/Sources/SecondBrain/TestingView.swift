@@ -702,7 +702,7 @@ struct TestingQualityView: View {
                     .textCase(.uppercase)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if runningLabel != nil { ProgressView().controlSize(.small) }
+                if runningLabel == "scorecard" { ProgressView().controlSize(.small) }
             }
             Text(estimateLoaded ? EvalFlow.qaContext(estimate: estimate) : "Loading cost preview…")
                 .font(.caption)
@@ -858,7 +858,7 @@ struct TestingQualityView: View {
 
     private func loadEstimate() async {
         guard appState.vault != nil else { return }
-        estimate = try? await appState.evalEstimate()
+        estimate = EvalFlow.usable(try? await appState.evalEstimate())
         estimateLoaded = true
     }
 
@@ -876,7 +876,7 @@ struct TestingQualityView: View {
     ) async {
         guard benchRun.beginRun() else { return }
         defer { benchRun.endRun() }
-        let fresh = try? await appState.evalEstimate(subcommand: subcommand)
+        let fresh = EvalFlow.usable(try? await appState.evalEstimate(subcommand: subcommand))
         if subcommand == nil { estimate = fresh ?? estimate }
         if fresh == nil, !EvalFlow.mayRunWithoutEstimate(subcommand: subcommand) {
             // answers bills above the bare-eval default cap the fallback
@@ -891,8 +891,12 @@ struct TestingQualityView: View {
         do {
             try await run(EvalFlow.costCap(estimate: fresh))
             // The run may have just generated the QA set; refresh the
-            // cached-state line so the next confirm prices a cached run.
-            estimate = try? await appState.evalEstimate()
+            // cached-state line so the next confirm prices a cached run. A
+            // FAILED refresh keeps the prior estimate rather than replacing
+            // it with nil ("couldn't load" copy right after a success).
+            if let refreshed = EvalFlow.usable(try? await appState.evalEstimate()) {
+                estimate = refreshed
+            }
             estimateLoaded = true
         } catch {
             errorMessage = error.localizedDescription

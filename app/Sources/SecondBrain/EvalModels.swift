@@ -151,15 +151,27 @@ enum EvalFlow {
     /// never on the amount the user just approved (VerifyFlow.costCap's
     /// convention).
     static func costCap(estimate: EvalEstimateInfo?) -> Double {
-        guard let estimate else { return cliDefaultCostCap }
+        guard let estimate = usable(estimate) else { return cliDefaultCostCap }
         return estimate.totalUSD * 2 + 0.01
     }
 
+    /// Normalizes an estimate to nil when it cannot price the run: absent,
+    /// or a ZERO total (the estimator succeeded but the pricing tables did
+    /// not know the model). A zero total otherwise derives a ~$0.01
+    /// --cost-cap that slips past the nil-estimate refusal and aborts an
+    /// answers run mid-flight after partial spend, and renders a misleading
+    /// $0.00 confirm.
+    static func usable(_ estimate: EvalEstimateInfo?) -> EvalEstimateInfo? {
+        guard let estimate, estimate.totalUSD > 0 else { return nil }
+        return estimate
+    }
+
     /// Adapts the CLI estimate to the shared PaidOperationConfirm dialog. A
-    /// nil estimate degrades to the numberless confirm (never block the
-    /// action on the estimator).
+    /// nil or zero-priced estimate degrades to the numberless confirm
+    /// (never block the action on the estimator, never show a $0.00 price
+    /// for a run that will bill).
     static func confirmPreview(estimate: EvalEstimateInfo?) -> CostPreviewResponse? {
-        guard let estimate else { return nil }
+        guard let estimate = usable(estimate) else { return nil }
         return CostPreviewResponse(estimates: [], totalUSD: estimate.totalUSD)
     }
 

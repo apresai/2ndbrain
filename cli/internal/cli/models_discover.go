@@ -45,7 +45,7 @@ first run seeds the baseline silently: it reports the pool with no NEW badge.
 (invoke strategy + region), so an explicit mantle-listed id stops silently
 classic-probing: after --add, plain 2nb models test <id> and every invoke
 route over the right plane. A bare id that two providers both list is
-refused; qualify it as provider|id. The entry stays tier=unverified until a probe
+refused; qualify it as 'provider|id' (quoted: | is a shell pipe). The entry stays tier=unverified until a probe
 passes. --validate probes the added ids immediately (cost-gated like
 2nb models verify; --yes for non-interactive).`,
 	Args: cobra.NoArgs,
@@ -234,9 +234,11 @@ func discoverAddModels(v *vault.Vault, scope ai.UserCatalogScope, pool, catalog 
 	for _, id := range ids {
 		found := matches(pool, id)
 		if len(found) > 1 {
+			// Single-quote each form: | is a shell pipe, and this message
+			// exists to be pasted.
 			forms := make([]string, len(found))
 			for i, m := range found {
-				forms[i] = m.Provider + "|" + m.ID
+				forms[i] = "'" + m.Provider + "|" + m.ID + "'"
 			}
 			return nil, exitWithError(ExitValidation, fmt.Sprintf("%s matches more than one provider's discovery; qualify it as one of: %s (nothing was added)", id, strings.Join(forms, ", ")))
 		}
