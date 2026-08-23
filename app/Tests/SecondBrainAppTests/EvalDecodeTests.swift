@@ -122,6 +122,19 @@ func evalFlowCostCap() {
     // The fallback must match the CLI's own default (eval.go --cost-cap),
     // never silently tighten it.
     #expect(EvalFlow.costCap(estimate: nil) == 0.25)
+    // A zero-priced estimate (estimator succeeded, pricing tables did not
+    // know the model) is UNUSABLE: it must not derive a ~$0.01 cap that
+    // slips past the nil-estimate refusal and aborts a billing run
+    // mid-flight, and it must not render a $0.00 confirm.
+    let zero = try! JSONDecoder().decode(
+        EvalEstimateInfo.self,
+        from: Data(#"{"command":"answers","n":20,"qa_cached":true,"generation_usd":0,"embed_usd":0,"answers_usd":0,"total_usd":0,"cost_cap":0.25}"#.utf8)
+    )
+    #expect(EvalFlow.usable(zero) == nil)
+    #expect(EvalFlow.usable(nil) == nil)
+    #expect(EvalFlow.usable(estimate) != nil)
+    #expect(EvalFlow.costCap(estimate: zero) == 0.25)
+    #expect(EvalFlow.confirmPreview(estimate: zero) == nil)
     // The bare scorecard and tune share the cost profile (QA acquisition +
     // embeds, one upfront gate) the CLI's 0.25 default cap was sized for, so
     // both may run on the nil-estimate fallback. Only answers refuses: its
