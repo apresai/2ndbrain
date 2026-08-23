@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (empty - ready for next release)
 
+## [0.19.2] - 2026-08-23
+
+### Added
+- `2nb models discover`: discovery as a verb with per-source cache ages, a NEW/GONE diff against a machine-local baseline, `--refresh`, `--add <id>` (persists the discovered row with its routing so mantle-plane ids invoke correctly), and `--validate` behind verify's cost gate (#225)
+- macOS Testing tab consolidating everything measurable: Validate (vendor checkboxes, per-account access and working-set summaries), Benchmarks (model x probe runs, favorites management, a models x probes compare matrix, the embed-throughput curve, history), Performance (moved in from Health), and a Quality pane running the `2nb eval` retrieval scorecard, answer jury, and tune sweep behind estimate-derived cost gates; AI menu "Testing & Benchmarks…" (Cmd+Shift+T) (#224, #230)
+- GUI Discover card in the Testing tab: per-source discovery-cache ages, Refresh, one-click Add and Add + Validate for NEW models, an informational GONE list, plus a CLI-backed discovery nudge banner in the Models tab (#229)
+- Settings as a first-class sidebar tab: the same four-tab SettingsView hosted inline, with the Cmd+, window kept (#221)
+- `eval --estimate`: print the projected cost of any eval run without calling a model; the Quality pane prices its confirm dialogs from it (#230)
+- Timeout edges: Obsidian plugin per-command timeouts derived from the CLI's transport budgets, an app-side CLI hang watchdog, and a shared cold-start hint after 15 seconds of an in-flight probe (#223)
+
+### Changed
+- Timeout core: probe and doctor deadlines are now derived from the resolved route's transport worst case instead of flat caps, with the nesting pinned by tests, so a slow cold-starting model is never failed, only a hang (#222)
+- README brought current for the models discover verb and the Testing and Settings tabs (#233)
+
+### Fixed
+- `models discover`: only discovery failures block the seen-baseline update, a model adopted into the catalog is never badged GONE, and the GONE list renders even when the pool comes back empty (#228)
+- Review-finding sweeps across four rounds: zero-priced estimate gating, Discover refresh and spinner behavior, the shell-quoted setup hint, provider-qualified `--add` on cross-provider id collisions, the tune estimate fallback, watchdog containment, Validate request routing, bench single-flight, and the ask timeout budget (#226, #227, #231, #232)
+
+
 ## [0.19.1] - 2026-08-21
 
 ### Fixed
