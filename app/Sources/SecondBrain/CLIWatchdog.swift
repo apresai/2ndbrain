@@ -8,20 +8,38 @@ import Foundation
 /// The CLI self-bounds every provider call (cli/internal/ai/timeouts.go), so
 /// in normal operation the child always exits on its own and this never
 /// fires. It exists for the pathological cases those bounds cannot cover: a
-/// wedged binary, a stuck filesystem, a suspended child. Ten minutes sits
-/// far above the realistic cold-model path (one mantle attempt is bounded at
-/// 240s, and the app's request/response calls run at most two sequential
-/// probes), so a slow working model is never killed, only a hang. The
-/// streaming runners (verify / bench / index) are deliberately NOT under
-/// this bound; see their comments in AppState.
+/// wedged binary, a stuck filesystem, a suspended child. The bound must
+/// therefore STRICTLY CONTAIN the CLI's own longest documented deadline for
+/// any command these helpers run, or the app reproduces one layer up the
+/// exact outer-shorter-than-inner inversion the timeout initiative exists
+/// to eliminate (a working-but-slow provider call killed by its caller).
+/// The streaming runners (verify / bench / index) are deliberately NOT
+/// under this bound; see their comments in AppState.
 ///
 /// Escalation: SIGTERM at `timeout`, then SIGKILL after `killGrace` for a
 /// child that ignores SIGTERM. The escalation ladder is a pure function
 /// (`verdict(elapsed:isRunning:)`) so it is unit-testable without spawning
 /// processes; `CLIWatchdogTimer` is the runtime arm of the same constants.
 enum CLIWatchdog {
-    /// Absolute bound on one request/response CLI invocation, wall clock.
-    static let timeout: TimeInterval = 600
+    /// Mirrors of the Go ceilings the watchdog must contain. There is no
+    /// shared build artifact across the language boundary, so these are
+    /// hand-mirrored with their derivations, the same convention as the
+    /// plugin's commandTimeoutMs table; CLIWatchdogTests asserts the
+    /// containment so a Go-side raise that outgrows the watchdog fails a
+    /// test here instead of silently reintroducing the inversion.
+    /// cli/internal/ai/timeouts.go MaxProbeDeadline(): 723s worst case
+    /// (3 x 240s attempts + backoff) + 30s slack — one `models test` probe.
+    static let cliMaxProbeDeadlineMirror: TimeInterval = 753
+    /// cli/internal/cli/doctor_cmd.go doctorModelTierTimeout:
+    /// 2 x MaxProbeDeadline() + 30s — doctor tier 1's two SEQUENTIAL probes,
+    /// the longest request/response command the app invokes.
+    static let cliDoctorTierMirror: TimeInterval = 1536
+
+    /// Absolute bound on one request/response CLI invocation, wall clock:
+    /// the longest inner ceiling (doctor tier 1) plus generous slack for
+    /// the version-parity fetch and process spin-up around it. A hang bound,
+    /// never a sleep: normal calls exit in seconds regardless.
+    static let timeout: TimeInterval = cliDoctorTierMirror + 120
 
     /// Grace between SIGTERM (which lets the CLI die cleanly) and SIGKILL
     /// (for a child that ignores it).

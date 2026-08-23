@@ -33,18 +33,22 @@ func watchdogIgnoresExitedChild() {
     }
 }
 
-@Test("Watchdog constants: 10 minutes, above the realistic cold-model path")
+@Test("Watchdog constants strictly contain the mirrored CLI ceilings")
 func watchdogConstants() {
-    // 10 minutes is the planned absolute bound for request/response helpers.
-    #expect(CLIWatchdog.timeout == 600)
-    // It must sit above one mantle per-attempt bound (Go
-    // ai.MantleAttemptTimeout, 240s) with room for a second sequential probe:
-    // the app's request/response calls run at most two probes back to back
-    // (Home Test, doctor tier 1), so 2 x 240s must fit under the watchdog or
-    // a slow-but-working pair of cold probes would be killed by the app while
-    // the CLI is still legitimately waiting.
-    let mantleAttemptSeconds: TimeInterval = 240
-    #expect(CLIWatchdog.timeout > 2 * mantleAttemptSeconds)
+    // The watchdog must STRICTLY CONTAIN the CLI's own longest documented
+    // deadlines for the commands these helpers run, or the app reproduces
+    // the outer-shorter-than-inner inversion one layer up (a working cold
+    // probe killed by its caller). The mirrors carry the Go derivations:
+    // MaxProbeDeadline 753s (3 x 240s + backoff + 30s slack, one models-test
+    // probe) and doctorModelTierTimeout 1536s (doctor tier 1's two
+    // SEQUENTIAL probes: 2 x 753s + 30s). If a Go-side raise outgrows the
+    // watchdog, this is the test that fails instead of the user's probe.
+    #expect(CLIWatchdog.cliMaxProbeDeadlineMirror == 753,
+            "mirror drifted from cli/internal/ai/timeouts.go MaxProbeDeadline (3x240s + 3s backoff + 30s slack)")
+    #expect(CLIWatchdog.cliDoctorTierMirror == 2 * CLIWatchdog.cliMaxProbeDeadlineMirror + 30,
+            "mirror drifted from doctor_cmd.go doctorModelTierTimeout (2 x MaxProbeDeadline + 30s)")
+    #expect(CLIWatchdog.timeout > CLIWatchdog.cliMaxProbeDeadlineMirror)
+    #expect(CLIWatchdog.timeout > CLIWatchdog.cliDoctorTierMirror)
     #expect(CLIWatchdog.killGrace > 0)
 }
 
