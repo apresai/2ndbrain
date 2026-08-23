@@ -320,7 +320,13 @@ struct TestingBenchmarksView: View {
     }
 
     private func runOne() async {
+        // Claim the single-flight slot BEFORE the first await (the cost preview
+        // shells the CLI): a check-then-set across an await is the exact race
+        // VerifyRunModel closes, and a second click during the confirm dialog
+        // would start a second run.
         guard !running, let model = models.first(where: { $0.modelID == selectedModelID }) else { return }
+        running = true
+        defer { running = false }
         // Local probes (retrieval scores stored embeddings, search is BM25
         // over the index) bill nothing, so they skip the spend confirm.
         if let costProbe = BenchProbes.costProbe(probe) {
@@ -331,9 +337,7 @@ struct TestingBenchmarksView: View {
                 operation: "Benchmark \(model.modelID)"
             ) else { return }
         }
-        running = true
         events = []
-        defer { running = false }
         do {
             try await appState.benchmarkModel(
                 modelID: model.modelID,
@@ -350,7 +354,10 @@ struct TestingBenchmarksView: View {
     }
 
     private func runFavorites() async {
+        // Same rule as runOne: claim the slot before the cost-preview awaits.
         guard !running else { return }
+        running = true
+        defer { running = false }
         // Estimate the PAID part of the full battery per target (search and
         // retrieval bill nothing) so the confirm shows a real number. The
         // targets mirror the CLI's own selection: favorites, else the active
@@ -369,9 +376,7 @@ struct TestingBenchmarksView: View {
         }
         let combined = previewed ? CostPreviewResponse(estimates: estimates, totalUSD: total) : nil
         guard confirmPaidOperation(preview: combined, operation: "Benchmark favorites") else { return }
-        running = true
         events = []
-        defer { running = false }
         do {
             try await appState.benchmarkFavorites { event in
                 events.append(event)

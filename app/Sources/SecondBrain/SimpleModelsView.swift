@@ -505,7 +505,7 @@ struct SimpleModelsView: View {
             // guessed provider. Vendor toggles also change which models are
             // enabled, so this still runs on every reload, not only
             // discover:true ones.
-            updateDiscoveryNudge()
+            updateDiscoveryNudge(canSeed: discover)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -529,11 +529,19 @@ struct SimpleModelsView: View {
     /// seeds the snapshot with the current catalog silently instead of
     /// badging the whole shipped model list as new; see
     /// `DiscoveryNudge.shouldSuppressFirstRun`.
-    private func updateDiscoveryNudge() {
+    private func updateDiscoveryNudge(canSeed: Bool) {
         guard let provider = aiStatus?.provider else { return }
         let seen = appState.discoverySeenModelKeys
         guard !DiscoveryNudge.shouldSuppressFirstRun(seen: seen, provider: provider) else {
-            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+            // Seed ONLY from a discover-sourced catalog: a non-discover
+            // reload's models list is often a subset of the live listing,
+            // and seeding from it under-specifies the snapshot so later
+            // full discovers falsely badge long-known models as new. A
+            // first run reached via a non-discover reload just stays
+            // un-seeded until the next discover load seeds it.
+            if canSeed {
+                appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+            }
             discoveryNewIDs = []
             return
         }
@@ -607,6 +615,14 @@ struct SimpleModelsView: View {
         // + confirm, so a rapid double-tap cannot launch two runs.
         guard verifyRun.beginRun() else { return }
         defer { verifyRun.endRun() }
+        // pendingValidateRequest can fire this before reload has populated
+        // aiStatus; resolving the provider from a guessed "bedrock" default
+        // would then persist seen keys under the wrong provider and poison
+        // per-provider first-run suppression. Fetch it when missing; the
+        // fallback remains only for probing when the fetch itself fails.
+        if aiStatus == nil {
+            aiStatus = try? await appState.fetchAIStatus()
+        }
         let provider = aiStatus?.provider ?? "bedrock"
         let candidateIDs: [String]
         if let only {
@@ -643,7 +659,12 @@ struct SimpleModelsView: View {
             // The user has now seen (and partly probed) this discovery
             // state; record the provider's full current catalog so later
             // vendor-checkbox toggles never re-badge long-known models.
-            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+            // Recorded only under a REAL provider, never the probing
+            // fallback: a snapshot keyed to a guessed provider poisons
+            // first-run suppression for the actual one.
+            if let realProvider = aiStatus?.provider {
+                appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: realProvider))
+            }
             await reload(discover: true)
         } catch {
             errorMessage = error.localizedDescription
