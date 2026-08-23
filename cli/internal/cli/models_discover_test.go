@@ -333,6 +333,36 @@ func TestContract_ModelsDiscoverAddErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "already in the catalog") {
 		t.Fatalf("catalog id must refuse with the verify hint, got: %v", err)
 	}
+
+	// The provider-qualified form adds exactly its row end-to-end.
+	report := discoverJSON(t, root, "--add", "bedrock|fake.mantle-model-v1")
+	if len(report.Added) != 1 || report.Added[0] != "fake.mantle-model-v1" {
+		t.Fatalf("qualified --add must persist the row: %+v", report.Added)
+	}
+}
+
+// TestDiscoverMatchAddID pins the --add resolution rules: a bare id unique
+// in the pool resolves; a bare id two providers both list returns BOTH
+// matches (the command refuses, never first-match-wins); a provider-
+// qualified "provider|id" resolves exactly its row.
+func TestDiscoverMatchAddID(t *testing.T) {
+	pool := []ai.ModelInfo{
+		{ID: "foo", Provider: "openrouter"},
+		{ID: "foo", Provider: "ollama"},
+		{ID: "bar", Provider: "bedrock"},
+	}
+	if got := discoverMatchAddID(pool, "bar"); len(got) != 1 || got[0].Provider != "bedrock" {
+		t.Fatalf("unique bare id must resolve: %+v", got)
+	}
+	if got := discoverMatchAddID(pool, "foo"); len(got) != 2 {
+		t.Fatalf("cross-provider bare id must return both matches for refusal: %+v", got)
+	}
+	if got := discoverMatchAddID(pool, "ollama|foo"); len(got) != 1 || got[0].Provider != "ollama" {
+		t.Fatalf("qualified id must resolve exactly its provider's row: %+v", got)
+	}
+	if got := discoverMatchAddID(pool, "bedrock|foo"); len(got) != 0 {
+		t.Fatalf("qualified id with no matching provider row must not match: %+v", got)
+	}
 }
 
 // TestDiscoverBaselineSavable_UnrelatedWarningsDoNotBlock pins the seen-

@@ -122,13 +122,14 @@ func evalFlowCostCap() {
     // The fallback must match the CLI's own default (eval.go --cost-cap),
     // never silently tighten it.
     #expect(EvalFlow.costCap(estimate: nil) == 0.25)
-    // Only the bare scorecard may run on the nil-estimate fallback: its only
-    // cost is the QA generation the CLI's 0.25 default cap was sized for.
-    // answers/tune bill above it and a too-low explicit cap aborts MID-RUN
-    // after partial spend, so a nil estimate refuses those runs.
+    // The bare scorecard and tune share the cost profile (QA acquisition +
+    // embeds, one upfront gate) the CLI's 0.25 default cap was sized for, so
+    // both may run on the nil-estimate fallback. Only answers refuses: its
+    // jury generation bills above the default and a too-low explicit cap
+    // aborts MID-RUN after partial spend.
     #expect(EvalFlow.mayRunWithoutEstimate(subcommand: nil))
     #expect(!EvalFlow.mayRunWithoutEstimate(subcommand: "answers"))
-    #expect(!EvalFlow.mayRunWithoutEstimate(subcommand: "tune"))
+    #expect(EvalFlow.mayRunWithoutEstimate(subcommand: "tune"))
 }
 
 @Test("Confirm preview adapts the estimate; nil degrades to the numberless confirm")
