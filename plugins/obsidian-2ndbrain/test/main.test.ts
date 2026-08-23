@@ -124,6 +124,7 @@ import {
 	trimChatHistory,
 	mcpSnippetFor,
 	isUnknownFlagError,
+	commandTimeoutMs,
 	MCP_CLIENTS,
 	type ChatTurn,
 	type DiffRow,
@@ -737,5 +738,44 @@ describe('computeLineDiff', () => {
 		// The fallback still satisfies the reconstruction invariant.
 		expect(reconstruct(rows, ['context', 'del'])).toBe(a);
 		expect(reconstruct(rows, ['context', 'add'])).toBe(b);
+	});
+});
+
+// commandTimeoutMs mirrors the CLI's own transport budgets in
+// cli/internal/ai/timeouts.go. There is no shared artifact across the
+// TypeScript/Go boundary, so this test carries the derivation: if the Go
+// constants change, the failure message says what to re-derive.
+describe('commandTimeoutMs', () => {
+	// Go: ai.MantleWorstCase = mantleMaxAttempts(3) x MantleAttemptTimeout(240s)
+	// + mantleRetryBackoffWorstTotal(3s) = 723s, the longest one generation
+	// call can take before the CLI's own bounds resolve it.
+	const mantleWorstCaseMs = (3 * 240 + 3) * 1000;
+
+	it('gives index no timeout (0 disables the execFile bound)', () => {
+		expect(
+			commandTimeoutMs('index'),
+			'index must stay unbounded: it legitimately runs for minutes on a large vault, and killing it mid-run leaves the index partially embedded'
+		).toBe(0);
+	});
+
+	it('bounds ask above the Go ai.MantleWorstCase transport budget', () => {
+		expect(
+			commandTimeoutMs('ask'),
+			`ask timeout must exceed Go ai.MantleWorstCase (${mantleWorstCaseMs}ms = 3 attempts x 240s MantleAttemptTimeout + 3s backoff, cli/internal/ai/timeouts.go): an outer bound at or below the inner one fires first and fails a working-but-cold model, the exact inversion PR1 removed from the CLI`
+		).toBeGreaterThan(mantleWorstCaseMs);
+		expect(commandTimeoutMs('ask')).toBe(780_000);
+	});
+
+	it('bounds doctor at 180s (the plugin only runs the free --versions form)', () => {
+		expect(
+			commandTimeoutMs('doctor'),
+			'doctor --versions is a cached release lookup with a 15s network timeout; 180s is pure slack, and the plugin never runs the model-calling self-test form'
+		).toBe(180_000);
+	});
+
+	it('defaults everything else to the historical 120s', () => {
+		for (const cmd of ['search', 'meta', 'list', 'polish', 'mcp', undefined]) {
+			expect(commandTimeoutMs(cmd), `default for ${String(cmd)}`).toBe(120_000);
+		}
 	});
 });

@@ -268,6 +268,40 @@ export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
 	return ['--vault', vaultPath, ...args];
 }
 
+// commandTimeoutMs is the per-command execFile timeout (ms) for runCommand.
+// The flat 120s that used to bound every command sat INSIDE the CLI's own
+// transport budgets on the `ask` path, so a slow-but-working cold model was
+// killed by the plugin while the CLI was still legitimately waiting. Each
+// entry now derives from the CLI's self-bounds (cli/internal/ai/timeouts.go),
+// so the plugin's outer bound can never fire before the CLI's inner one and a
+// timeout here means a genuine hang, not a slow model:
+//
+// - index: `index` can legitimately run for minutes on a large vault
+//   (re-embedding through a remote provider), so it gets no timeout —
+//   killing it mid-run would leave the index partially embedded.
+// - ask: 780s. Contains the Go `ai.MantleWorstCase` (723s: 3 attempts x
+//   240s `MantleAttemptTimeout` + 3s backoff), the longest one generation
+//   call can take before the CLI's own bounds resolve it, plus retrieval
+//   and startup slack. A cold-starting reasoning model can think for
+//   minutes before its first byte; that is a working model, not a hang.
+// - doctor: 180s. The plugin only runs the free `doctor --versions` parity
+//   check (a cached release lookup with a 15s network timeout), so this is
+//   pure slack; the full self-test doctor is never run from the plugin.
+// - default: 120s, unchanged, for the interactive search/meta/list calls
+//   that answer in milliseconds and only hit the bound when hung.
+export function commandTimeoutMs(cmd: string | undefined): number {
+	switch (cmd) {
+		case 'index':
+			return 0;
+		case 'ask':
+			return 780_000;
+		case 'doctor':
+			return 180_000;
+		default:
+			return 120_000;
+	}
+}
+
 // isUnknownFlagError reports whether a failed CLI invocation failed BECAUSE the
 // installed 2nb does not know a flag we passed, as opposed to failing for any
 // other reason. Cobra's wording is "unknown flag: --x" / "unknown shorthand
@@ -1239,12 +1273,10 @@ export default class BrainPlugin extends Plugin {
 
 			// maxBuffer: the 1 MB default truncates large search/ask output and
 			// rejects with a buffer error.
-			// timeout: `index` can legitimately run for minutes on a large vault
-			// (re-embedding through a remote provider), so it gets no timeout —
-			// killing it mid-run would leave the index partially embedded.
-			// Interactive search/ask are bounded so a hung CLI can't block the UI.
-			const isIndex = args[0] === 'index';
-			const options = { cwd: vaultPath, maxBuffer: 16 * 1024 * 1024, timeout: isIndex ? 0 : 120000 };
+			// timeout: per-command via commandTimeoutMs, derived from the CLI's
+			// own self-bounds so a hung CLI can't block the UI while a slow
+			// cold model still finishes (see the table on commandTimeoutMs).
+			const options = { cwd: vaultPath, maxBuffer: 16 * 1024 * 1024, timeout: commandTimeoutMs(args[0]) };
 
 			const child = execFile(cliPath, pinVaultArgs(vaultPath, args), options, (error, stdout, stderr) => {
 				if (error) {
