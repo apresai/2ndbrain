@@ -21,8 +21,8 @@ func TestToolBudgetsNested(t *testing.T) {
 	}
 	// tGenerate wraps one retrieval embed plus a generation call whose worst
 	// case is the mantle plane's full retry budget.
-	if tGenerate < ai.MantleWorstCase+mcpEmbedBudget {
-		t.Errorf("tGenerate = %v does not contain the mantle worst case %v + the retrieval embed budget %v; a working-but-slow reasoning model would be killed by the tool deadline", tGenerate, ai.MantleWorstCase, mcpEmbedBudget)
+	if tGenerate <= ai.MantleWorstCase+mcpEmbedBudget {
+		t.Errorf("tGenerate = %v must STRICTLY exceed (never equal) the mantle worst case %v + the retrieval embed budget %v; a working-but-slow reasoning model would be killed by the tool deadline", tGenerate, ai.MantleWorstCase, mcpEmbedBudget)
 	}
 	// The doctor budget contains every engine tool it exercises sequentially
 	// (kb_info, kb_list, kb_search) at that tool's full per-tool timeout.

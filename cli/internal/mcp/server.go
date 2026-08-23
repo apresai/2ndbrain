@@ -58,7 +58,11 @@ const (
 	// plus a generation call whose worst case is the mantle plane's full
 	// retry budget. The old flat 120s sat far inside that budget and killed
 	// working cold-start reasoning models mid-answer.
-	tGenerate = ai.MantleWorstCase + mcpEmbedBudget
+	// The trailing slack covers the pre-generation work (Available probe,
+	// retrieval, context assembly) so the tool bound can never fire while
+	// the inner transport bound would still legitimately succeed: strict
+	// containment, never equality, same rule as tSearch.
+	tGenerate = ai.MantleWorstCase + mcpEmbedBudget + 30*time.Second
 	tIndex    = 300 * time.Second
 )
 
