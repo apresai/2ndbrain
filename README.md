@@ -160,6 +160,11 @@ Browse verified models across all providers, test any model, and benchmark your 
 # Discover and auto-promote all passing models in one step
 2nb models list --discover --promote
 
+# Discovery as a verb: cache ages per source, NEW/GONE since your last check
+2nb models discover               # cached read-through + diff
+2nb models discover --refresh     # drop the cache, walk the vendor planes live
+2nb models discover --add <id> --validate   # persist a discovery with its routing, then probe it (cost-gated)
+
 # Benchmark your favorites
 2nb models bench fav amazon.nova-micro-v1:0
 2nb models bench fav us.anthropic.claude-haiku-4-5-20251001-v1:0
@@ -493,11 +498,13 @@ A native SwiftUI + AppKit configuration and companion app. It is **not an editor
 
 Configuration lives in the **Settings window (Cmd+,)**: General, AI (connection, API key, the two active models, and a **Test everything** button that calls them for real), Advanced (every tuning knob), and Integrations (which AI tools can reach this vault).
 
-The sidebar is the remaining four status tabs:
+The rest of the sidebar:
 
 - **Models**: the model catalog with provider cards, active model slots, per-model test and benchmark, and vendor policy (Cmd+Shift+,)
 - **Notes**: `2nb lint` findings with one-click repairs, guided link fixes, and bulk dead-link removal
-- **Health**: **Vault** (index coverage, embedding portability, AI reachability, stale docs) · **Performance** (`2nb metrics`) · **Updates** (app, CLI, and plugin versions against the latest release, with one-click upgrades)
+- **Testing** (Cmd+Shift+T): everything measurable in one place: **Validate** (which models your account can really invoke, plus a Discover card with per-source cache ages and one-click add/validate of newly listed models), **Benchmarks** (run one model x probe or the favorites battery, a models x probes compare matrix, the embed-throughput curve, bench history), **Performance** (`2nb metrics`), and **Quality** (the `2nb eval` retrieval scorecard, LLM-jury answer grades, and tuning-sweep suggestions, every run cost-previewed before any spend)
+- **Health**: **Vault** (index coverage, embedding portability, AI reachability, stale docs) · **Updates** (app, CLI, and plugin versions against the latest release, with one-click upgrades)
+- **Settings**: the same four Settings tabs hosted inline, so configuration is reachable without knowing Cmd+,
 - **Activity**: **Git** (recent commits, 1/3/7/30-day window; click for per-file diffs — Cmd+Shift+G) · **MCP Server** (live server processes and recent tool invocations — Cmd+Shift+M)
 
 Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Sync Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
