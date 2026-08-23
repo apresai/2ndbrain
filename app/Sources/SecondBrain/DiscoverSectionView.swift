@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The Testing tab's Discover card: per-source discovery-cache ages, a
-/// Refresh that re-walks the vendor planes live (free — a control-plane
-/// listing, no model invokes — but seconds, so it shows progress), the NEW
+/// Refresh that re-walks the vendor planes live (free, a control-plane
+/// listing with no model invokes, but seconds, so it shows progress), the NEW
 /// list with one-click Add and Add + Validate, and the GONE list rendered
 /// informationally.
 ///
@@ -91,7 +91,7 @@ struct DiscoverSectionView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(source.stale ? .orange : .secondary)
             }
-            Text("Refresh re-walks the listings live — a free catalog read, no model is invoked.")
+            Text("Refresh re-walks the listings live: a free catalog read, no model is invoked.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }

@@ -92,7 +92,7 @@ private let addValidateEnvelope = #"""
 
 /// What a PRE-discover CLI emits for the same argv: cobra parents with a
 /// RunE swallow unknown subcommands, so `models discover --json` runs as
-/// `models list --json` — exit 0, top-level ARRAY (measured live on 0.19.1).
+/// `models list --json`: exit 0, top-level ARRAY (measured live on 0.19.1).
 private let preDiscoverCLIPayload = #"""
 [
   {"id": "amazon.nova-2-multimodal-embeddings-v1:0", "name": "Amazon Nova Embeddings v2", "provider": "bedrock", "type": "embedding"},

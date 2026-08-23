@@ -1,6 +1,6 @@
 import Foundation
 
-/// Types and pure logic for `2nb models discover` — discovery as a verb:
+/// Types and pure logic for `2nb models discover` (discovery as a verb):
 /// per-source cache ages, the discovered pool, and the machine-local NEW/GONE
 /// diff. The Testing tab's Discover card and the Models tab's nudge banner
 /// both render from these; every view decision that can be computed without
@@ -61,7 +61,7 @@ enum DiscoverRunOutcome {
 /// Capability gate for `models discover`. Exit status proves NOTHING here:
 /// cobra parents with a RunE swallow unknown subcommands, so a pre-discover
 /// CLI runs `2nb models discover --json` as `models list --json` with a stray
-/// positional arg — exit 0, top-level JSON ARRAY (measured live on 0.19.1).
+/// positional arg: exit 0, top-level JSON ARRAY (measured live on 0.19.1).
 /// The envelope, an OBJECT carrying `sources`, is the real signal.
 enum DiscoverCLIProbe {
     enum Outcome {
@@ -94,8 +94,8 @@ enum DiscoverCLIProbe {
 }
 
 /// Session-scoped accumulation of the server-side NEW/GONE diff. The CLI's
-/// diff is one-shot — every run advances the machine-local seen baseline, so
-/// NEW and GONE report once and then clear — and the GUI runs discover from
+/// diff is one-shot (every run advances the machine-local seen baseline, so
+/// NEW and GONE report once and then clear), and the GUI runs discover from
 /// more than one surface (the Models tab's nudge probe, the Discover card's
 /// load, Refresh). Without accumulation, whichever surface ran first would
 /// eat the diff before the other rendered it, and a reload between the run
