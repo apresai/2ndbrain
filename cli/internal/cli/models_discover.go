@@ -143,7 +143,7 @@ func runModelsDiscover(cmd *cobra.Command, args []string) error {
 	// update the baseline (sticky GONE badges, first-run seeding never
 	// happening). A failed source's keys still ride forward through
 	// NextSeenKeys whenever the save proceeds.
-	baselineSaved := discoverBaselineSavable(pool, failed)
+	baselineSaved := discoverBaselineSavable(diff.FirstRun, pool, failed)
 	if baselineSaved {
 		if saveErr := ai.SaveDiscoverySeen(v.Config.AI.Bedrock, ai.NextSeenKeys(pool, seen, failed)); saveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: save discovery baseline: %v\n", saveErr)
@@ -337,16 +337,29 @@ func discoverValidateModels(ctx context.Context, v *vault.Vault, scope ai.UserCa
 }
 
 // discoverBaselineSavable reports whether this run's listing is trustworthy
-// enough to persist as the NEW/GONE seen baseline. A non-empty pool proves a
-// source answered. An empty pool is trusted only when NO discovery source
-// failed (ai.FailedDiscoveryProviders, which classifies the
-// "<source> discovery failed" and partial-listing warning shapes): an empty
-// pool alongside a failed source usually means discovery itself produced
-// nothing (offline, no credentials), and saving then would blow away the
-// baseline and re-announce every model as NEW once discovery recovers.
-// Warnings that are NOT discovery failures (a vendor-policy active-model
-// note, a quarantined policy file) never block the save.
-func discoverBaselineSavable(pool []ai.ModelInfo, failed map[string]bool) bool {
+// enough to persist as the NEW/GONE seen baseline.
+//
+// On a SUBSEQUENT run (a baseline exists) the answer is always yes: per-source
+// conservatism lives in NextSeenKeys, which carries a failed source's keys
+// forward untouched and updates only the sources that answered, so saving can
+// never blow away a failed source's baseline. Blocking here instead was the
+// sticky-GONE bug one layer up: a permanently unavailable optional provider
+// (Ollama not running is probed on every listing and fails on any machine
+// without a local daemon) plus a legitimately empty pool froze the baseline
+// forever, re-reporting the same GONE set on every run.
+//
+// The FIRST run (no baseline) stays conservative: seed only when the pool is
+// non-empty (a source demonstrably answered) or no discovery source failed
+// (ai.FailedDiscoveryProviders, which classifies the "<source> discovery
+// failed" and partial-listing warning shapes). Seeding an empty baseline off
+// a wholly failed listing would badge the entire catalog as NEW once
+// discovery recovers. Warnings that are NOT discovery failures (a
+// vendor-policy active-model note, a quarantined policy file) never block
+// either path.
+func discoverBaselineSavable(firstRun bool, pool []ai.ModelInfo, failed map[string]bool) bool {
+	if !firstRun {
+		return true
+	}
 	return len(pool) > 0 || len(failed) == 0
 }
 

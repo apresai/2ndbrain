@@ -351,8 +351,8 @@ func TestDiscoverBaselineSavable_UnrelatedWarningsDoNotBlock(t *testing.T) {
 	if len(failed) != 0 {
 		t.Fatalf("unrelated warnings misclassified as discovery failures: %v", failed)
 	}
-	if !discoverBaselineSavable(nil, failed) {
-		t.Fatal("empty pool with only unrelated warnings must save the baseline")
+	if !discoverBaselineSavable(true, nil, failed) {
+		t.Fatal("first-run empty pool with only unrelated warnings must seed the baseline")
 	}
 
 	// The savable verdict seeds a first run on disk: the exact save sequence
@@ -391,13 +391,21 @@ func TestDiscoverBaselineGate_DiscoveryFailureBlocksAndCarries(t *testing.T) {
 	if !failed["bedrock"] || len(failed) != 1 {
 		t.Fatalf("partial mantle failure must classify as a bedrock discovery failure (and the policy note must not): %v", failed)
 	}
-	if discoverBaselineSavable(nil, failed) {
-		t.Fatal("empty pool with a failed discovery source must not save the baseline")
+	if discoverBaselineSavable(true, nil, failed) {
+		t.Fatal("a FIRST-RUN empty pool with a failed discovery source must not seed the baseline")
+	}
+	// On a subsequent run the same condition SAVES: NextSeenKeys carries the
+	// failed source's keys forward, so the save cannot lose them, and blocking
+	// instead froze the baseline forever whenever an optional provider (a
+	// machine with no local Ollama daemon) fails on every listing, which
+	// re-reported the identical GONE set indefinitely.
+	if !discoverBaselineSavable(false, nil, failed) {
+		t.Fatal("a subsequent-run empty pool must save even alongside a failed source (NextSeenKeys is the conservatism)")
 	}
 
 	pool := []ai.ModelInfo{{ID: "fresh", Provider: "ollama"}}
-	if !discoverBaselineSavable(pool, failed) {
-		t.Fatal("a non-empty pool saves even alongside a failed source")
+	if !discoverBaselineSavable(true, pool, failed) {
+		t.Fatal("a non-empty pool seeds even alongside a failed source")
 	}
 	seen := &ai.DiscoverySeen{Keys: []string{"bedrock|mantle-only-model", "ollama|stale-model"}}
 	got := ai.NextSeenKeys(pool, seen, failed)
@@ -479,13 +487,17 @@ func TestContract_ModelsDiscoverHumanGoneWithEmptyPool(t *testing.T) {
 		}
 	}
 
-	// The JSON envelope agrees: empty pool, GONE keys intact.
+	// The baseline ADVANCED on that run even though the pool was empty and
+	// ollama's discovery failed (dead port): NextSeenKeys carried ollama's
+	// keys and dropped the graduated bedrock ones, so the follow-up run
+	// reports the departure exactly once instead of the same GONE set
+	// forever (the sticky-GONE staleness a global empty-pool block caused).
 	report := discoverJSON(t, root)
 	if len(report.Models) != 0 {
 		t.Fatalf("pool should be empty after graduation: %+v", report.Models)
 	}
-	if len(report.Gone) == 0 {
-		t.Fatalf("gone must survive an empty pool: %+v", report)
+	if len(report.Gone) != 0 {
+		t.Fatalf("gone must clear once the advanced baseline is saved (reported once, not forever): %+v", report)
 	}
 }
 
