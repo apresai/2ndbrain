@@ -38,6 +38,22 @@ func benchableModelsFilter() {
     #expect(out.map(\.modelID) == ["nova", "haiku"])
 }
 
+@Test("Benchable models preserve the incoming order within each type")
+func benchableModelsPreserveBestOrder() {
+    func model(_ json: String) -> CatalogModelInfo {
+        try! JSONDecoder().decode(CatalogModelInfo.self, from: Data(json.utf8))
+    }
+    // The picker feeds `models list --sort best`, whose JSON order encodes
+    // the CLI's measured ranking; an alphabetical re-sort here would erase
+    // it. "zeta" ranks above "alpha" in the feed and must stay above it.
+    let genBest = model(#"{"id":"zeta","name":"Zeta","provider":"bedrock","type":"generation","compatible":true}"#)
+    let genWorse = model(#"{"id":"alpha","name":"Alpha","provider":"bedrock","type":"generation","compatible":true}"#)
+    let embBest = model(#"{"id":"nova-z","name":"NovaZ","provider":"bedrock","type":"embedding","compatible":true}"#)
+    let embWorse = model(#"{"id":"nova-a","name":"NovaA","provider":"bedrock","type":"embedding","compatible":true}"#)
+    let out = BenchProbes.benchableModels([genBest, embBest, genWorse, embWorse])
+    #expect(out.map(\.modelID) == ["nova-z", "nova-a", "zeta", "alpha"])
+}
+
 @Test("Favorites-battery estimate groups the paid probes per model type")
 func batteryPreviewGroupsSplit() {
     let groups = BenchProbes.batteryPreviewGroups([

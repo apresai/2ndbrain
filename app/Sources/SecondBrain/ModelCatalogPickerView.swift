@@ -439,11 +439,13 @@ struct ModelCatalogPickerView: View {
         DetailSection(title: "Benchmark", systemImage: "speedometer") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
+                    // Shared vocabulary with the Testing tab's probe picker
+                    // (BenchProbes.options): type-gated, and it carries the
+                    // zero-API search probe the hardcoded list used to drop.
                     Picker("Probe", selection: $benchmarkProbeSelection) {
-                        Text("Embed").tag("embed")
-                        Text("Generate").tag("generate")
-                        Text("RAG").tag("rag")
-                        Text("Retrieval").tag("retrieval")
+                        ForEach(BenchProbes.options(forModelType: model.modelType), id: \.self) { p in
+                            Text(BenchProbes.label(p)).tag(p)
+                        }
                     }
                     .frame(width: 180)
                     Button {
@@ -653,10 +655,11 @@ struct ModelCatalogPickerView: View {
             return
         }
         defer { appState.benchRun.endRun() }
-        // The retrieval probe scores stored embeddings locally (zero API
-        // calls), so it needs no spend confirm.
-        if probe != "retrieval" {
-            guard await confirmPaidOperation(appState: appState, modelIDs: [model.modelID], probe: costProbe(probe), operation: "Benchmark \(model.modelID)") else { return }
+        // The zero-API probes (retrieval scores stored embeddings locally,
+        // search is BM25 over the index) need no spend confirm;
+        // BenchProbes.costProbe classifies, same as the Testing tab.
+        if let spendProbe = BenchProbes.costProbe(probe) {
+            guard await confirmPaidOperation(appState: appState, modelIDs: [model.modelID], probe: spendProbe, operation: "Benchmark \(model.modelID)") else { return }
         }
         isBenchmarking = true
         benchmarkEvents = []
@@ -789,7 +792,7 @@ struct ModelCatalogPickerView: View {
 
     private func benchmarkProbe(_ probe: String) -> String {
         switch probe {
-        case "embed", "generate", "rag", "retrieval": return probe
+        case "embed", "generate", "search", "rag", "retrieval": return probe
         default:
             return selectedModel?.modelType == "embedding" ? "embed" : "generate"
         }

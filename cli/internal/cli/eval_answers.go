@@ -100,6 +100,9 @@ func judgeGenerator(ctx context.Context, cfg ai.AIConfig, modelID, vaultRoot str
 }
 
 func runEvalAnswers(cmd *cobra.Command, args []string) error {
+	if evalEstimate {
+		return runEvalEstimate(cmd, "answers")
+	}
 	v, err := openVault()
 	if err != nil {
 		return err

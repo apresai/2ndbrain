@@ -119,6 +119,12 @@ func tuneEntry(m eval.ConfigMetrics) TuneEntry {
 }
 
 func runEvalTune(cmd *cobra.Command, args []string) error {
+	if evalEstimate {
+		// Tune's only spend is the shared QA acquisition (generation when
+		// uncached) plus one query-embed batch; the "eval"-shaped estimate
+		// covers exactly that, labeled with the invoking subcommand.
+		return runEvalEstimate(cmd, "tune")
+	}
 	v, err := openVault()
 	if err != nil {
 		return err
