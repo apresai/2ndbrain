@@ -40,15 +40,22 @@ func watchdogConstants() {
     // the outer-shorter-than-inner inversion one layer up (a working cold
     // probe killed by its caller). The mirrors carry the Go derivations:
     // MaxProbeDeadline 753s (3 x 240s + backoff + 30s slack, one models-test
-    // probe) and doctorModelTierTimeout 1536s (doctor tier 1's two
-    // SEQUENTIAL probes: 2 x 753s + 30s). If a Go-side raise outgrows the
-    // watchdog, this is the test that fails instead of the user's probe.
+    // probe), doctorModelTierTimeout 1536s (doctor tier 1's two SEQUENTIAL
+    // probes: 2 x 753s + 30s), and doctorVaultTierTimeout 130s (tier 2:
+    // mcp.DoctorExercisedBudget 120s = tCheap 10s + tCheap 10s + tSearch 90s
+    // + 10s slack, plus 10s). A vault-bound `doctor --json` runs BOTH tiers
+    // sequentially plus the version-parity fetch, so the watchdog contains
+    // their SUM, not just tier 1. If a Go-side raise outgrows the watchdog,
+    // this is the test that fails instead of the user's probe.
     #expect(CLIWatchdog.cliMaxProbeDeadlineMirror == 753,
             "mirror drifted from cli/internal/ai/timeouts.go MaxProbeDeadline (3x240s + 3s backoff + 30s slack)")
     #expect(CLIWatchdog.cliDoctorTierMirror == 2 * CLIWatchdog.cliMaxProbeDeadlineMirror + 30,
             "mirror drifted from doctor_cmd.go doctorModelTierTimeout (2 x MaxProbeDeadline + 30s)")
+    #expect(CLIWatchdog.cliDoctorVaultTierMirror == 130,
+            "mirror drifted from doctor_cmd.go doctorVaultTierTimeout (mcp.DoctorExercisedBudget() + 10s, where DoctorExercisedBudget = tCheap 10s + tCheap 10s + tSearch 90s + 10s slack = 120s, cli/internal/mcp/server.go)")
     #expect(CLIWatchdog.timeout > CLIWatchdog.cliMaxProbeDeadlineMirror)
-    #expect(CLIWatchdog.timeout > CLIWatchdog.cliDoctorTierMirror)
+    #expect(CLIWatchdog.timeout > CLIWatchdog.cliDoctorTierMirror + CLIWatchdog.cliDoctorVaultTierMirror,
+            "a vault-bound doctor runs tier 1 THEN tier 2 on one wall clock; a watchdog that contains only tier 1 SIGTERMs a working run partway through tier 2")
     #expect(CLIWatchdog.killGrace > 0)
 }
 

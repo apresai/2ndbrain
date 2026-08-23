@@ -451,7 +451,7 @@ struct ModelCatalogPickerView: View {
                     } label: {
                         Label(isBenchmarking ? "Running" : "Benchmark", systemImage: "timer")
                     }
-                    .disabled(isBenchmarking || model.compatible == false)
+                    .disabled(isBenchmarking || appState.benchRun.running || model.compatible == false)
                 }
                 if let benchmark = model.benchmark {
                     Text("Latest: \(benchmark.avgLatencyMs.map { "\($0)ms avg" } ?? "-") · quality \(formatQuality(benchmark.qualityScore)) · docs \(benchmark.vaultDocCount ?? 0)")
@@ -643,6 +643,16 @@ struct ModelCatalogPickerView: View {
 
     private func benchmark(_ model: CatalogModelInfo) async {
         let probe = benchmarkProbe(benchmarkProbeSelection)
+        // Claim the SHARED single-flight slot before the first await: the
+        // Testing tab's Benchmarks pane runs `models bench` through the same
+        // AppState-owned BenchRunModel, and without this claim the picker
+        // could stream a second concurrent bench into the same bench.db
+        // while a favorites battery is still running.
+        guard appState.benchRun.beginRun() else {
+            errorText = "Another benchmark is already running."
+            return
+        }
+        defer { appState.benchRun.endRun() }
         // The retrieval probe scores stored embeddings locally (zero API
         // calls), so it needs no spend confirm.
         if probe != "retrieval" {

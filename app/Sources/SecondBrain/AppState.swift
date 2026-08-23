@@ -161,6 +161,11 @@ final class AppState {
     // a banner explaining why. Cleared on the next successful run.
     var lastSemanticWarnings: [String] = []
     var isIndexing = false
+    /// Single-flight claim for `models bench`, shared by EVERY bench entry
+    /// point (the Testing tab's Benchmarks pane and the catalog picker's
+    /// per-model Benchmark button), so no two surfaces can stream two
+    /// concurrent bench runs into the same bench.db.
+    let benchRun = BenchRunModel()
     var indexError: String?
     var embeddingProgress: EmbeddingProgress?
     var indexProgress: IndexProgress?
@@ -884,7 +889,7 @@ final class AppState {
         indexProgress?.phase == .complete || indexProgress?.phase == .failed
     }
 
-    /// Streaming runner: deliberately NOT under the CLIWatchdog 10-minute
+    /// Streaming runner: deliberately NOT under the CLIWatchdog absolute
     /// bound. A full index/re-embed legitimately runs for many minutes on a
     /// large vault, and an app-side kill would leave the index partially
     /// embedded (the same reason the Obsidian plugin gives `index` no
@@ -2489,9 +2494,21 @@ final class AppState {
     /// Ramps embed concurrency over a discarded sample to find the account's
     /// real throughput ceiling. PAID (real embedding calls) and slow
     /// (minutes); callers must confirm first.
+    ///
+    /// Deliberately OUTSIDE the CLIWatchdog absolute bound
+    /// (hangWatchdog: false), for the same reason the streaming runners are:
+    /// the probe ramps hundreds of real embedding calls across escalating
+    /// concurrency levels with no overall CLI deadline, so a slow or
+    /// throttled account can legitimately hold it past the watchdog while
+    /// still making progress. The CLI's own bounds contain the run instead
+    /// (each ramp level runs under a 3-minute context in
+    /// cli/internal/cli/ai_embed_probe.go probeOneLevel, over a finite level
+    /// list, and every embed call carries its transport deadline), so a hang
+    /// still ends; an app-side SIGTERM would discard a still-progressing
+    /// PAID probe and bill the user for a result they never see.
     func embedProbe() async throws -> EmbedProbeInfo {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["ai", "embed-probe", "--json", "--porcelain"], cwd: vault.rootURL)
+        let data = try await runCLI(["ai", "embed-probe", "--json", "--porcelain"], cwd: vault.rootURL, hangWatchdog: false)
         return try JSONDecoder().decode(EmbedProbeInfo.self, from: data)
     }
 
@@ -2801,7 +2818,7 @@ final class AppState {
     /// run (which exits non-zero with an empty stream and no error event) is a
     /// visible failure rather than a silent no-op.
     ///
-    /// Streaming runner: deliberately NOT under the CLIWatchdog 10-minute
+    /// Streaming runner: deliberately NOT under the CLIWatchdog absolute
     /// bound. The CLI self-bounds the whole run (`models verify
     /// --max-duration`, default 30m) and each probe inside it (strategy-aware
     /// deadlines, cli/internal/ai/timeouts.go), and an app-side kill would
@@ -3157,9 +3174,10 @@ final class AppState {
                 }
             }
 
-            // Absolute hang guard: SIGTERM at 10 min, SIGKILL after a grace.
-            // The CLI self-bounds every provider call, so this only ever fires
-            // on a genuine wedge, never on a slow working model (CLIWatchdog).
+            // Absolute hang guard: SIGTERM at CLIWatchdog.timeout, SIGKILL
+            // after a grace. The CLI self-bounds every provider call, so this
+            // only ever fires on a genuine wedge, never on a slow working
+            // model (CLIWatchdog).
             let watchdog = CLIWatchdogTimer(process: process, command: cmd) { message in
                 log.error("\(message, privacy: .public)")
                 errorLogger?.log(message)
@@ -3197,7 +3215,13 @@ final class AppState {
         }
     }
 
-    func runCLI(_ args: [String], cwd: URL) async throws -> Data {
+    /// - Parameter hangWatchdog: opts one invocation out of the CLIWatchdog
+    ///   absolute bound. Reserved for a command that deliberately runs longer
+    ///   than the watchdog's request/response ceiling while still making
+    ///   progress (only `ai embed-probe` today; see `embedProbe` for the
+    ///   rationale, which mirrors the streaming runners'). Every other call
+    ///   keeps the default `true`.
+    func runCLI(_ args: [String], cwd: URL, hangWatchdog: Bool = true) async throws -> Data {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("CLI exec: \(cmd, privacy: .public)")
@@ -3238,14 +3262,17 @@ final class AppState {
             }
 
             // Absolute hang guard (see CLIWatchdog): fires only on a genuine
-            // wedge, never on a slow working model.
-            let watchdog = CLIWatchdogTimer(process: process, command: cmd) { message in
-                log.error("\(message, privacy: .public)")
-                errorLogger?.log(message)
-            }
+            // wedge, never on a slow working model. nil when the caller
+            // opted out via hangWatchdog: false.
+            let watchdog: CLIWatchdogTimer? = hangWatchdog
+                ? CLIWatchdogTimer(process: process, command: cmd) { message in
+                    log.error("\(message, privacy: .public)")
+                    errorLogger?.log(message)
+                }
+                : nil
 
             process.terminationHandler = { proc in
-                watchdog.cancel()
+                watchdog?.cancel()
                 // Detach the handlers so no late reads fire after we resume.
                 stdout.fileHandleForReading.readabilityHandler = nil
                 stderr.fileHandleForReading.readabilityHandler = nil
@@ -3268,7 +3295,7 @@ final class AppState {
 
             do {
                 try process.run()
-                watchdog.arm()
+                watchdog?.arm()
             } catch {
                 log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 errorLogger?.log("CLI \(cmd) launch failed", error: error)

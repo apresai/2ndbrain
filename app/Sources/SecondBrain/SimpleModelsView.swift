@@ -91,7 +91,15 @@ struct SimpleModelsView: View {
             // value is never observed and the request sticks, silently doing
             // nothing now and firing on some later unrelated toggle. The
             // Validate pass itself still cost-confirms before spending.
-            guard requested else { return }
+            //
+            // Only the Models-tab host consumes the flag. The Testing tab's
+            // validate-only instance can be mounted when the request is set,
+            // and the routing is about to navigate the window to the Models
+            // tab; a validateOnly host that consumed the flag first would
+            // then be torn down by that navigation, killing the run's
+            // surface while the flag is already cleared, so the request
+            // silently evaporates (ValidateRequestRouting pins this).
+            guard ValidateRequestRouting.consumes(requested: requested, validateOnly: validateOnly) else { return }
             appState.pendingValidateRequest = false
             Task { await runValidate() }
         }
@@ -690,6 +698,23 @@ struct SimpleModelsView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+/// Which SimpleModelsView host consumes `AppState.pendingValidateRequest`.
+/// Split out of the view so the invariant is unit-testable without SwiftUI.
+///
+/// The flag is a one-shot cross-window request (Settings sets it, the main
+/// window's Models tab runs it), but SimpleModelsView has TWO hosts: the
+/// Models tab (validateOnly false) and the Testing tab's Validate pane
+/// (validateOnly true). Both observe the flag; exactly ONE may consume it.
+/// The Models-tab host is the consumer because that is where the post-save
+/// routing sends the window: a mounted Testing pane that consumed the flag
+/// first would immediately be torn down by that navigation, discarding the
+/// request after clearing it.
+enum ValidateRequestRouting {
+    static func consumes(requested: Bool, validateOnly: Bool) -> Bool {
+        requested && !validateOnly
     }
 }
 

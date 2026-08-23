@@ -89,8 +89,9 @@ func settingsViewsConstruct() {
 @Test("Testing tab views can be constructed")
 @MainActor
 func testingViewsConstruct() {
-    let testing = TestingView(section: .constant(.validate))
-    let benchmarks = TestingBenchmarksView()
+    let benchRun = BenchRunModel()
+    let testing = TestingView(section: .constant(.validate), benchRun: benchRun)
+    let benchmarks = TestingBenchmarksView(benchRun: benchRun)
     let quality = TestingQualityPlaceholder()
     // The Validate pane hosts the Models tab's mechanics in validate-only
     // mode (one implementation, two hosts).
