@@ -178,6 +178,13 @@ final class AppState {
     var showMCPStatus = false
     var mcpStatuses: [MCPServerStatusInfo] = []
     private var mcpStatusTimer: Timer?
+    /// In-flight guard for the 5s MCP-status poll: a tick that runs slow (a
+    /// wedged CLI riding out the CLIWatchdog bound) must not stack a second
+    /// `mcp status` process on top of the first, tick after tick. Overlapping
+    /// ticks are skipped instead; the next idle tick refreshes normally.
+    /// Main-actor confined (AppState is @MainActor), and the guard-and-set
+    /// happens synchronously before the first await, so it cannot race.
+    private var mcpStatusRefreshInFlight = false
     // AI-client integration status for the Home "AI Clients" card: which 2nb
     // skills are installed (skillStatuses, across all client slugs) and which
     // clients have the MCP server configured (mcpConfiguredAll, one entry per
@@ -873,6 +880,11 @@ final class AppState {
         indexProgress?.phase == .complete || indexProgress?.phase == .failed
     }
 
+    /// Streaming runner: deliberately NOT under the CLIWatchdog 10-minute
+    /// bound. A full index/re-embed legitimately runs for many minutes on a
+    /// large vault, and an app-side kill would leave the index partially
+    /// embedded (the same reason the Obsidian plugin gives `index` no
+    /// timeout). Progress streams on stderr, so a live run is visibly alive.
     func startIndex() {
         guard let vault else { return }
         // One index at a time. A second Rebuild fired while one is still
@@ -1340,6 +1352,9 @@ final class AppState {
     /// streaming JSONL progress into `localModelDownload` for a progress bar.
     /// The models cache is global (not vault-specific); the vault is passed only
     /// when present, for consistency. Never throws — failures land on the state.
+    /// Streaming runner: not under the CLIWatchdog bound; the CLI's own 60s
+    /// idle watchdog aborts a stalled transfer, and a multi-GB download
+    /// legitimately outlives any fixed wall clock.
     func downloadLocalModels(_ ids: [String]) async {
         guard !ids.isEmpty, localModelDownload?.finished != false else { return }
         localModelDownload = LocalModelDownload(models: ids)
@@ -2175,6 +2190,11 @@ final class AppState {
     // MARK: - MCP Observability
 
     func refreshMCPStatus() async {
+        // Skip the tick when the previous refresh is still running; see
+        // mcpStatusRefreshInFlight.
+        guard !mcpStatusRefreshInFlight else { return }
+        mcpStatusRefreshInFlight = true
+        defer { mcpStatusRefreshInFlight = false }
         guard let vault else {
             mcpStatuses = []
             return
@@ -2658,6 +2678,12 @@ final class AppState {
         _ = try await runCLI(args, cwd: vault.rootURL)
     }
 
+    /// Streaming runner: deliberately NOT under the CLIWatchdog 10-minute
+    /// bound. The CLI self-bounds each bench probe with a strategy-aware
+    /// deadline (cli/internal/ai/timeouts.go), and an app-side kill would
+    /// orphan a partially persisted run: bench.db rows and the per-model
+    /// summary land as the run streams, so killing it mid-run leaves history
+    /// that no completed run explains.
     func benchmarkModel(modelID: String, provider: String, type: String, probe: String, onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
         guard let vault else { throw CLIError.noVault }
         let fullArgs = CLIPath.args(
@@ -2733,6 +2759,14 @@ final class AppState {
     /// carrying the stderr text (`VerifyFlow.classify`), so a cost-cap-exceeded
     /// run (which exits non-zero with an empty stream and no error event) is a
     /// visible failure rather than a silent no-op.
+    ///
+    /// Streaming runner: deliberately NOT under the CLIWatchdog 10-minute
+    /// bound. The CLI self-bounds the whole run (`models verify
+    /// --max-duration`, default 30m) and each probe inside it (strategy-aware
+    /// deadlines, cli/internal/ai/timeouts.go), and an app-side kill would
+    /// orphan a partially persisted run: verify persists every probe result
+    /// to the user catalog as it streams, so results already saved would
+    /// carry no `done` summary to explain them.
     func verifyModels(
         provider: String,
         costCap: Double,
@@ -3005,6 +3039,7 @@ final class AppState {
     /// Vault-independent CLI spawn (machine-local commands such as
     /// `config bedrock`). Never logs stdin.
     /// Runs a vault-independent `2nb` command, throwing on a non-zero exit.
+    /// Hang-guarded via runCLIGlobalRaw's CLIWatchdog.
     func runCLIGlobal(_ args: [String], stdin: Data? = nil) async throws -> Data {
         let result = try await runCLIGlobalRaw(args, stdin: stdin)
         guard result.status == 0 else {
@@ -3081,7 +3116,16 @@ final class AppState {
                 }
             }
 
+            // Absolute hang guard: SIGTERM at 10 min, SIGKILL after a grace.
+            // The CLI self-bounds every provider call, so this only ever fires
+            // on a genuine wedge, never on a slow working model (CLIWatchdog).
+            let watchdog = CLIWatchdogTimer(process: process, command: cmd) { message in
+                log.error("\(message, privacy: .public)")
+                errorLogger?.log(message)
+            }
+
             process.terminationHandler = { proc in
+                watchdog.cancel()
                 stdout.fileHandleForReading.readabilityHandler = nil
                 stderr.fileHandleForReading.readabilityHandler = nil
                 drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
@@ -3103,6 +3147,7 @@ final class AppState {
 
             do {
                 try process.run()
+                watchdog.arm()
             } catch {
                 log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 errorLogger?.log("CLI \(cmd) launch failed", error: error)
@@ -3151,7 +3196,15 @@ final class AppState {
                 }
             }
 
+            // Absolute hang guard (see CLIWatchdog): fires only on a genuine
+            // wedge, never on a slow working model.
+            let watchdog = CLIWatchdogTimer(process: process, command: cmd) { message in
+                log.error("\(message, privacy: .public)")
+                errorLogger?.log(message)
+            }
+
             process.terminationHandler = { proc in
+                watchdog.cancel()
                 // Detach the handlers so no late reads fire after we resume.
                 stdout.fileHandleForReading.readabilityHandler = nil
                 stderr.fileHandleForReading.readabilityHandler = nil
@@ -3174,6 +3227,7 @@ final class AppState {
 
             do {
                 try process.run()
+                watchdog.arm()
             } catch {
                 log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 errorLogger?.log("CLI \(cmd) launch failed", error: error)
@@ -3205,7 +3259,13 @@ final class AppState {
                     drain.appendStdout(chunk)
                 }
             }
+            // Absolute hang guard (see CLIWatchdog): fires only on a genuine
+            // wedge, never on a slow working model.
+            let watchdog = CLIWatchdogTimer(process: process, command: cmd) { message in
+                log.error("\(message, privacy: .public)")
+            }
             process.terminationHandler = { proc in
+                watchdog.cancel()
                 stdout.fileHandleForReading.readabilityHandler = nil
                 drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
                 if proc.terminationStatus != 0 {
@@ -3215,6 +3275,7 @@ final class AppState {
             }
             do {
                 try process.run()
+                watchdog.arm()
             } catch {
                 log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 continuation.resume(throwing: error)

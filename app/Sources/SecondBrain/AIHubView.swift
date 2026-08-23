@@ -634,24 +634,31 @@ struct AIHubView: View {
     /// doubles as the in-flight status line.
     @ViewBuilder
     private var accessSummaryRow: some View {
-        HStack(spacing: 8) {
-            if verifying, let p = verifyProgress {
-                ProgressView().controlSize(.small)
-                Text(verifyProgressLine(p))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-            } else {
-                Text(lastVerifySummary.map { "Validated: \($0)" } ?? accessSummaryLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Validate models") { startValidateModels() }
-                    .controlSize(.small)
-                    .buttonStyle(.bordered)
-                    .disabled(appState.isIndexing || aiStatus == nil)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if verifying, let p = verifyProgress {
+                    ProgressView().controlSize(.small)
+                    Text(verifyProgressLine(p))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                } else {
+                    Text(lastVerifySummary.map { "Validated: \($0)" } ?? accessSummaryLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Validate models") { startValidateModels() }
+                        .controlSize(.small)
+                        .buttonStyle(.bordered)
+                        .disabled(appState.isIndexing || aiStatus == nil)
+                }
+            }
+            // Patient-probe copy under the streamed progress: a cold model
+            // can hold one probe for minutes without that being a hang.
+            if verifying {
+                ColdStartHint()
             }
         }
     }
