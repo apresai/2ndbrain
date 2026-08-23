@@ -58,7 +58,6 @@ struct ContentView: View {
     // Owned here for the same reason as the sections: the Benchmarks pane's
     // single-flight claim must survive the pane being torn down and recreated
     // while a bench run's Task is still streaming (see BenchRunModel).
-    @State private var benchRun = BenchRunModel()
 
     var body: some View {
         mainLayout
@@ -162,7 +161,7 @@ struct ContentView: View {
                     case .notes:
                         LintResultsView(isPresented: .constant(true), isInline: true)
                     case .testing:
-                        TestingView(section: $testingSection, benchRun: benchRun)
+                        TestingView(section: $testingSection, benchRun: appState.benchRun)
                     case .health:
                         HealthView(section: $healthSection)
                     case .activity:

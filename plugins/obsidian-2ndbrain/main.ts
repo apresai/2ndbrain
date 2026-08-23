@@ -279,14 +279,16 @@ export function pinVaultArgs(vaultPath: string, args: string[]): string[] {
 // - index: `index` can legitimately run for minutes on a large vault
 //   (re-embedding through a remote provider), so it gets no timeout —
 //   killing it mid-run would leave the index partially embedded.
-// - ask: 2220s. A chat/--history ask can run THREE sequential worst-case
+// - ask: 2940s. A chat/--history ask can run FOUR sequential worst-case
 //   transport legs before the CLI's own bounds resolve it: the
 //   history-condense generation (rewriting the follow-up into a standalone
-//   retrieval query), the query embed, and the answer generation. Each leg
-//   is bounded by a 723s worst case (the Go `ai.MantleWorstCase`: 3
+//   retrieval query), the query embed, a SECOND embed when the rewritten
+//   query retrieves nothing and askOnce falls back to retrieving the raw
+//   question (cli/internal/cli/ask.go), and the answer generation. Each
+//   leg is bounded by a 723s worst case (the Go `ai.MantleWorstCase`: 3
 //   attempts x 240s `MantleAttemptTimeout` + 3s backoff; the classic SDK's
 //   3 x 240s attempts + backoff is the same shape), so the containment
-//   floor is 3 x 723s = 2169s; 2220s adds startup/retrieval slack and
+//   floor is 4 x 723s = 2892s; 2940s adds startup/retrieval slack and
 //   rounds up. The old 780s contained only ONE leg and killed a working
 //   multi-leg ask mid-flight. A cold-starting reasoning model can think
 //   for minutes before its first byte; that is a working model, not a
@@ -301,7 +303,7 @@ export function commandTimeoutMs(cmd: string | undefined): number {
 		case 'index':
 			return 0;
 		case 'ask':
-			return 2_220_000;
+			return 2_940_000;
 		case 'doctor':
 			return 180_000;
 		default:

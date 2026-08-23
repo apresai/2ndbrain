@@ -9,10 +9,12 @@ import Observation
 /// sections tears the pane down while its unstructured run Task keeps
 /// streaming the CLI, and a fresh pane's `running` starts false, so a second
 /// concurrent `models bench` could be started against the same bench.db.
-/// Hoisting the flag here (owned by ContentView and passed in, the same
-/// ownership pattern as the Testing section selection and VerifyRunModel's
-/// per-surface state) makes the claim survive pane recreation: the new pane
-/// sees the in-flight run and refuses a second one.
+/// Hoisting the flag here (owned by AppState so every bench entry point
+/// shares ONE claim: the Testing pane receives it by parameter, and the
+/// catalog picker's per-model Benchmark button reaches it through the
+/// AppState environment) makes the claim survive pane recreation and span
+/// surfaces: a new pane or a different surface sees the in-flight run and
+/// refuses a second one.
 ///
 /// Mirrors VerifyRunModel's begin/end contract: callers claim via
 /// `beginRun()` BEFORE their first await (the cost preview shells the CLI,

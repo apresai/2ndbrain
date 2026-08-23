@@ -161,6 +161,11 @@ final class AppState {
     // a banner explaining why. Cleared on the next successful run.
     var lastSemanticWarnings: [String] = []
     var isIndexing = false
+    /// Single-flight claim for `models bench`, shared by EVERY bench entry
+    /// point (the Testing tab's Benchmarks pane and the catalog picker's
+    /// per-model Benchmark button), so no two surfaces can stream two
+    /// concurrent bench runs into the same bench.db.
+    let benchRun = BenchRunModel()
     var indexError: String?
     var embeddingProgress: EmbeddingProgress?
     var indexProgress: IndexProgress?
@@ -884,7 +889,7 @@ final class AppState {
         indexProgress?.phase == .complete || indexProgress?.phase == .failed
     }
 
-    /// Streaming runner: deliberately NOT under the CLIWatchdog 10-minute
+    /// Streaming runner: deliberately NOT under the CLIWatchdog absolute
     /// bound. A full index/re-embed legitimately runs for many minutes on a
     /// large vault, and an app-side kill would leave the index partially
     /// embedded (the same reason the Obsidian plugin gives `index` no
