@@ -135,13 +135,19 @@ func runModelsDiscover(cmd *cobra.Command, args []string) error {
 	failed := ai.FailedDiscoveryProviders(merged.Warnings)
 	diff := ai.DiffAgainstSeen(pool, merged.Verified, seen, failed)
 
-	// Persist the baseline only after a successful listing. An empty pool
-	// alongside warnings means discovery itself produced nothing (offline, no
-	// credentials); saving then would blow away the baseline and re-announce
-	// every model as NEW once discovery recovers.
-	if len(pool) > 0 || len(merged.Warnings) == 0 {
+	// Persist the baseline only after a successful listing. The gate keys on
+	// DISCOVERY-SOURCE failures (the classified `failed` set), never on
+	// BuildModelList warnings wholesale: warnings also carry non-discovery
+	// notes (vendor-policy active-model warnings, a quarantined policy file),
+	// and blocking on those left an empty pool permanently unable to seed or
+	// update the baseline (sticky GONE badges, first-run seeding never
+	// happening). A failed source's keys still ride forward through
+	// NextSeenKeys whenever the save proceeds.
+	baselineSaved := discoverBaselineSavable(pool, failed)
+	if baselineSaved {
 		if saveErr := ai.SaveDiscoverySeen(v.Config.AI.Bedrock, ai.NextSeenKeys(pool, seen, failed)); saveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: save discovery baseline: %v\n", saveErr)
+			baselineSaved = false
 		}
 	}
 
@@ -159,7 +165,7 @@ func runModelsDiscover(cmd *cobra.Command, args []string) error {
 	}
 
 	if humanMode {
-		printDiscoverListing(report)
+		printDiscoverListing(report, baselineSaved)
 	}
 
 	if len(discoverAdd) > 0 {
@@ -330,10 +336,26 @@ func discoverValidateModels(ctx context.Context, v *vault.Vault, scope ai.UserCa
 	return results, nil
 }
 
+// discoverBaselineSavable reports whether this run's listing is trustworthy
+// enough to persist as the NEW/GONE seen baseline. A non-empty pool proves a
+// source answered. An empty pool is trusted only when NO discovery source
+// failed (ai.FailedDiscoveryProviders, which classifies the
+// "<source> discovery failed" and partial-listing warning shapes): an empty
+// pool alongside a failed source usually means discovery itself produced
+// nothing (offline, no credentials), and saving then would blow away the
+// baseline and re-announce every model as NEW once discovery recovers.
+// Warnings that are NOT discovery failures (a vendor-policy active-model
+// note, a quarantined policy file) never block the save.
+func discoverBaselineSavable(pool []ai.ModelInfo, failed map[string]bool) bool {
+	return len(pool) > 0 || len(failed) == 0
+}
+
 // printDiscoverListing renders the human report: source ages, the discovered
 // pool, and the NEW/GONE diff. Warnings go to stderr so piped stdout stays a
-// clean listing.
-func printDiscoverListing(report discoverReport) {
+// clean listing. The first-run note and the diff render even when the pool is
+// empty: a run whose discoveries all graduated into the catalog still owes
+// the user its GONE entries (the JSON envelope always carried them).
+func printDiscoverListing(report discoverReport, baselineSaved bool) {
 	for _, w := range report.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
@@ -349,21 +371,22 @@ func printDiscoverListing(report discoverReport) {
 
 	if len(report.Models) == 0 {
 		fmt.Println("No discovered models outside your catalog.")
-		return
+	} else {
+		fmt.Printf("Discovered models not yet in your catalog (%d):\n", len(report.Models))
+		w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tROUTE")
+		for _, m := range report.Models {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", m.Provider, m.Type, m.ID, discoverRouteLabel(m))
+		}
+		w.Flush()
 	}
-
-	fmt.Printf("Discovered models not yet in your catalog (%d):\n", len(report.Models))
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tROUTE")
-	for _, m := range report.Models {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", m.Provider, m.Type, m.ID, discoverRouteLabel(m))
-	}
-	w.Flush()
 	fmt.Println()
 
 	switch {
-	case report.FirstRun:
+	case report.FirstRun && baselineSaved:
 		fmt.Printf("First run: recorded %d model(s) as the baseline; future runs flag NEW arrivals.\n", len(report.Models))
+	case report.FirstRun:
+		fmt.Println("First run: baseline not saved (see warnings); the next successful listing seeds it.")
 	case len(report.New) == 0 && len(report.Gone) == 0:
 		fmt.Println("No changes since the last check.")
 	default:
