@@ -40,14 +40,15 @@ type cachedDiscovery struct {
 	Models  []ModelInfo `json:"models"`
 }
 
-// discoveryCacheVersion is 2: the classic-plane generation compatibility gate
+// DiscoveryCacheVersion is 2: the classic-plane generation compatibility gate
 // (bedrockModelSupported) widened from a per-vendor allowlist to a
 // default-allow, so a v1 cache written before this change would keep serving
 // the narrow, pre-widening catalog for up to 24h. Bumping the version
 // invalidates every existing entry (including the mantle-plane caches PR2
 // adds under a separate namespace) so the next discovery call re-fetches
-// live and reflects the new gate.
-const discoveryCacheVersion = 2
+// live and reflects the new gate. Exported so tests that seed synthetic
+// cache entries stamp the version this binary actually accepts.
+const DiscoveryCacheVersion = 2
 
 // ListBedrockVendorModelsCached is ListBedrockVendorModels with a 24h disk
 // cache. A fresh entry short-circuits the AWS calls entirely; on a live
@@ -101,7 +102,7 @@ func discoveryCachePath(cfg BedrockConfig) (string, error) {
 // region + profile in its own bedrock-mantle-* namespace, so classic and
 // mantle entries for the same region can never shadow each other. Same
 // envelope, TTL, and stale-fallback treatment as the classic cache; no
-// discoveryCacheVersion bump — a brand-new namespace has no stale files
+// DiscoveryCacheVersion bump — a brand-new namespace has no stale files
 // to invalidate.
 func mantleDiscoveryCachePath(cfg BedrockConfig, region string) (string, error) {
 	dir, err := discoveryCacheDir()
@@ -197,7 +198,7 @@ func readDiscoveryCache(path, region string, freshOnly bool) ([]ModelInfo, bool)
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, false
 	}
-	if doc.Version != discoveryCacheVersion || doc.Region != region || len(doc.Models) == 0 {
+	if doc.Version != DiscoveryCacheVersion || doc.Region != region || len(doc.Models) == 0 {
 		return nil, false
 	}
 	return doc.Models, true
@@ -210,7 +211,7 @@ func writeDiscoveryCache(path, region string, models []ModelInfo) error {
 		return nil
 	}
 	data, err := json.Marshal(cachedDiscovery{
-		Version: discoveryCacheVersion,
+		Version: DiscoveryCacheVersion,
 		Region:  region,
 		Models:  models,
 	})
