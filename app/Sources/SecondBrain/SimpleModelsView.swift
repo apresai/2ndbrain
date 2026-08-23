@@ -7,15 +7,23 @@ import SwiftUI
 struct SimpleModelsView: View {
     @Environment(AppState.self) var appState
 
+    /// Validate-only host mode for the Testing tab's Validate pane: the same
+    /// vendor checkboxes and Validate flow (one implementation, two hosts —
+    /// the SettingsView(isInline:) idiom), plus the per-account access
+    /// summary and the working-set summary, without the pickers, the
+    /// discovery banner, or the full catalog. The Models tab stays the
+    /// default (`false`) and is unchanged.
+    var validateOnly: Bool = false
+
     @State private var aiStatus: AIStatusInfo?
     @State private var models: [CatalogModelInfo] = []
     @State private var policies: [VendorPolicyResult] = []
     @State private var selectedVendors: Set<String> = []
     @State private var loading = true
     @State private var savingPolicy = false
-    @State private var verifying = false
-    @State private var verifyProgress: AIHubView.VerifyProgress?
-    @State private var lastVerifySummary: String?
+    /// Shared run state for the streamed Validate flow (see VerifyRunModel —
+    /// the one applyVerifyEvent fold this view used to duplicate).
+    @State private var verifyRun = VerifyRunModel()
     @State private var validateEstimate: CostPreviewResponse?
     @State private var errorMessage: String?
     @State private var vendorGuardMessage: String?
@@ -32,8 +40,10 @@ struct SimpleModelsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
+            if !validateOnly {
+                header
+                Divider()
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if appState.vault == nil {
@@ -44,12 +54,14 @@ struct SimpleModelsView: View {
                         // still act from here instead of hitting a dead end.
                         OpenSettingsTabButton("Open AI settings…", tab: .ai)
                             .controlSize(.small)
+                    } else if validateOnly {
+                        staleBanner
+                        accessSummarySection
+                        vendorSection
+                        validateSection
+                        workingSetSummarySection
                     } else {
-                        if staleVerdicts {
-                            Label(StaleVerdicts.bannerText, systemImage: "clock.arrow.circlepath")
-                                .font(.callout)
-                                .foregroundStyle(.orange)
-                        }
+                        staleBanner
                         vendorSection
                         discoveryNudgeBanner
                         validateSection
@@ -128,6 +140,40 @@ struct SimpleModelsView: View {
         )
     }
 
+    @ViewBuilder
+    private var staleBanner: some View {
+        if staleVerdicts {
+            Label(StaleVerdicts.bannerText, systemImage: "clock.arrow.circlepath")
+                .font(.callout)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    /// Validate-only: the per-account access summary ("7 verified, 3 no
+    /// access, checked 2d ago") plus the key-state chip, since this pane is
+    /// where a bad-credentials verdict renders in the Testing tab.
+    private var accessSummarySection: some View {
+        HStack {
+            Text(AccessSummary.line(aiStatus?.modelAccess))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            credentialsChip
+        }
+    }
+
+    /// Validate-only: what the account has PROVEN it can invoke, in the
+    /// pickers' Answers/Search vocabulary.
+    private var workingSetSummarySection: some View {
+        Text(WorkingModelPresentation.workingSetSummary(
+            models,
+            provider: aiStatus?.provider ?? "bedrock",
+            activeIDs: activeModelIDs
+        ))
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
     private var vendorSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -184,7 +230,7 @@ struct SimpleModelsView: View {
                 Spacer()
                 Button("Validate new models") { Task { await validateNewModels() } }
                     .controlSize(.small)
-                    .disabled(verifying)
+                    .disabled(verifyRun.running)
                 Button("Dismiss") { dismissDiscoveryNudge() }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
@@ -197,10 +243,10 @@ struct SimpleModelsView: View {
     private var validateSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Button(verifying ? "Validating…" : "Validate") {
+                Button(verifyRun.running ? "Validating…" : "Validate") {
                     Task { await runValidate() }
                 }
-                .disabled(verifying || appState.vault == nil)
+                .disabled(verifyRun.running || appState.vault == nil)
                 if let estimate = validateEstimate {
                     Text(String(format: "Validate · est. $%.4f", estimate.totalUSD) + regionSuffix)
                         .font(.caption)
@@ -211,7 +257,7 @@ struct SimpleModelsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            if let progress = verifyProgress {
+            if let progress = verifyRun.progress {
                 Text("Validating \(progress.current)/\(progress.total) \(progress.lastLine)")
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -219,8 +265,8 @@ struct SimpleModelsView: View {
                 // minutes; without this the deliberately generous probe
                 // deadline reads as a hang.
                 ColdStartHint()
-            } else if let lastVerifySummary {
-                Text(lastVerifySummary)
+            } else if let summary = verifyRun.lastSummary {
+                Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -459,7 +505,7 @@ struct SimpleModelsView: View {
             // guessed provider. Vendor toggles also change which models are
             // enabled, so this still runs on every reload, not only
             // discover:true ones.
-            updateDiscoveryNudge()
+            updateDiscoveryNudge(canSeed: discover)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -483,11 +529,19 @@ struct SimpleModelsView: View {
     /// seeds the snapshot with the current catalog silently instead of
     /// badging the whole shipped model list as new; see
     /// `DiscoveryNudge.shouldSuppressFirstRun`.
-    private func updateDiscoveryNudge() {
+    private func updateDiscoveryNudge(canSeed: Bool) {
         guard let provider = aiStatus?.provider else { return }
         let seen = appState.discoverySeenModelKeys
         guard !DiscoveryNudge.shouldSuppressFirstRun(seen: seen, provider: provider) else {
-            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+            // Seed ONLY from a discover-sourced catalog: a non-discover
+            // reload's models list is often a subset of the live listing,
+            // and seeding from it under-specifies the snapshot so later
+            // full discovers falsely badge long-known models as new. A
+            // first run reached via a non-discover reload just stays
+            // un-seeded until the next discover load seeds it.
+            if canSeed {
+                appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+            }
             discoveryNewIDs = []
             return
         }
@@ -557,9 +611,18 @@ struct SimpleModelsView: View {
     /// button, `only: nil`). Both paths share the same cost-preview /
     /// confirm / verify-stream body below.
     private func runValidate(only: [String]? = nil) async {
-        guard !verifying else { return }
-        verifying = true
-        defer { verifying = false }
+        // Claim the single-flight slot at entry, BEFORE the async cost preview
+        // + confirm, so a rapid double-tap cannot launch two runs.
+        guard verifyRun.beginRun() else { return }
+        defer { verifyRun.endRun() }
+        // pendingValidateRequest can fire this before reload has populated
+        // aiStatus; resolving the provider from a guessed "bedrock" default
+        // would then persist seen keys under the wrong provider and poison
+        // per-provider first-run suppression. Fetch it when missing; the
+        // fallback remains only for probing when the fetch itself fails.
+        if aiStatus == nil {
+            aiStatus = try? await appState.fetchAIStatus()
+        }
         let provider = aiStatus?.provider ?? "bedrock"
         let candidateIDs: [String]
         if let only {
@@ -586,41 +649,25 @@ struct SimpleModelsView: View {
         validateEstimate = preview
         guard confirmPaidOperation(preview: preview, operation: "Validate") else { return }
         let cap = VerifyFlow.costCap(preview: preview)
-        lastVerifySummary = nil
-        verifyProgress = AIHubView.VerifyProgress(current: 0, total: candidateIDs.count)
-        defer { verifyProgress = nil }
+        verifyRun.startStream(expectedTotal: candidateIDs.count)
         do {
             // Same IDs as the cost-preview confirm. Empty IDs would add
             // --discover and let the CLI rebuild a larger pool than shown.
             try await appState.verifyModels(provider: provider, costCap: cap, modelIDs: candidateIDs) { event in
-                applyVerifyEvent(event)
+                verifyRun.apply(event)
             }
             // The user has now seen (and partly probed) this discovery
             // state; record the provider's full current catalog so later
             // vendor-checkbox toggles never re-badge long-known models.
-            appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+            // Recorded only under a REAL provider, never the probing
+            // fallback: a snapshot keyed to a guessed provider poisons
+            // first-run suppression for the actual one.
+            if let realProvider = aiStatus?.provider {
+                appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: realProvider))
+            }
             await reload(discover: true)
         } catch {
             errorMessage = error.localizedDescription
-        }
-    }
-
-    private func applyVerifyEvent(_ event: VerifyEvent) {
-        switch event.event {
-        case "start":
-            verifyProgress = AIHubView.VerifyProgress(current: 0, total: event.total ?? 0)
-        case "result":
-            var p = verifyProgress ?? AIHubView.VerifyProgress()
-            p.current = event.n ?? p.current
-            if let total = event.total { p.total = total }
-            if let r = event.result {
-                p.lastLine = "\(r.ok ? "PASS" : "FAIL") \(r.modelID)"
-            }
-            verifyProgress = p
-        case "done":
-            lastVerifySummary = VerifyFlow.summaryText(event.summary)
-        default:
-            break
         }
     }
 
