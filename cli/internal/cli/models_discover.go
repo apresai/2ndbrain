@@ -44,7 +44,8 @@ first run seeds the baseline silently: it reports the pool with no NEW badge.
 --add <id> persists a discovered row into the user catalog WITH its routing
 (invoke strategy + region), so an explicit mantle-listed id stops silently
 classic-probing: after --add, plain 2nb models test <id> and every invoke
-route over the right plane. The entry stays tier=unverified until a probe
+route over the right plane. A bare id that two providers both list is
+refused; qualify it as provider|id. The entry stays tier=unverified until a probe
 passes. --validate probes the added ids immediately (cost-gated like
 2nb models verify; --yes for non-interactive).`,
 	Args: cobra.NoArgs,
@@ -53,7 +54,7 @@ passes. --validate probes the added ids immediately (cost-gated like
 
 func init() {
 	modelsDiscoverCmd.Flags().BoolVar(&discoverRefresh, "refresh", false, "Drop the cached listings and perform a live discovery walk now")
-	modelsDiscoverCmd.Flags().StringSliceVar(&discoverAdd, "add", nil, "Persist a discovered model id into the user catalog with its routing (repeatable)")
+	modelsDiscoverCmd.Flags().StringSliceVar(&discoverAdd, "add", nil, "Persist a discovered model id into the user catalog with its routing (repeatable; qualify as provider|id when two providers list the same id)")
 	modelsDiscoverCmd.Flags().BoolVar(&discoverValidate, "validate", false, "Probe the ids named by --add immediately (cost-gated like models verify)")
 	modelsDiscoverCmd.Flags().BoolVar(&discoverYes, "yes", false, "Skip the interactive probe-cost confirmation")
 	modelsDiscoverCmd.Flags().StringVar(&discoverScope, "scope", "vault", "Catalog scope for --add and --validate results: vault or global")
@@ -201,29 +202,56 @@ func runModelsDiscover(cmd *cobra.Command, args []string) error {
 // from the pool row: BuildModelList applies vendor-policy verdicts to
 // discovered rows, and persisting one would freeze the policy as a per-model
 // override. Tier stays unverified until a probe passes.
-func discoverAddModels(v *vault.Vault, scope ai.UserCatalogScope, pool, catalog []ai.ModelInfo, ids []string, humanMode bool) ([]ai.ModelInfo, error) {
-	find := func(list []ai.ModelInfo, id string) *ai.ModelInfo {
-		for i := range list {
-			if list[i].ID == id {
-				return &list[i]
-			}
-		}
-		return nil
+// discoverMatchAddID resolves one --add argument against a listing. An id
+// may be provider-qualified as "provider|id" (the key form the diff baseline
+// and the GUI session already use). A bare id that matches more than one
+// provider's row is returned as MULTIPLE matches so the caller refuses,
+// never first-match-wins: the caller cannot know which provider would
+// persist, and a GUI that cleared its clicked row's badge while the CLI
+// added the other provider's row would desync for good (the diff is
+// one-shot).
+func discoverMatchAddID(list []ai.ModelInfo, id string) []*ai.ModelInfo {
+	provider, bare, qualified := "", id, false
+	if p, rest, ok := strings.Cut(id, "|"); ok {
+		provider, bare, qualified = p, rest, true
 	}
+	var out []*ai.ModelInfo
+	for i := range list {
+		if list[i].ID == bare && (!qualified || list[i].Provider == provider) {
+			out = append(out, &list[i])
+		}
+	}
+	return out
+}
+
+func discoverAddModels(v *vault.Vault, scope ai.UserCatalogScope, pool, catalog []ai.ModelInfo, ids []string, humanMode bool) ([]ai.ModelInfo, error) {
+	matches := discoverMatchAddID
 	// Validate EVERY id before persisting ANY: a per-id validate-then-save
 	// loop aborted on the first invalid id with earlier ids already durably
 	// written and never mentioned in the error, an all-or-nothing command
 	// silently becoming partial (review finding, confidence 92).
 	resolved := make([]*ai.ModelInfo, 0, len(ids))
 	for _, id := range ids {
-		m := find(pool, id)
-		if m == nil {
-			if find(catalog, id) != nil {
-				return nil, exitWithError(ExitValidation, fmt.Sprintf("%s is already in the catalog; probe it with `2nb models verify %s` instead (nothing was added)", id, id))
+		found := matches(pool, id)
+		if len(found) > 1 {
+			forms := make([]string, len(found))
+			for i, m := range found {
+				forms[i] = m.Provider + "|" + m.ID
+			}
+			return nil, exitWithError(ExitValidation, fmt.Sprintf("%s matches more than one provider's discovery; qualify it as one of: %s (nothing was added)", id, strings.Join(forms, ", ")))
+		}
+		if len(found) == 0 {
+			// Hints quote the bare id: verify and the pool listing use it.
+			_, bare, qualified := strings.Cut(id, "|")
+			if !qualified {
+				bare = id
+			}
+			if len(matches(catalog, id)) > 0 {
+				return nil, exitWithError(ExitValidation, fmt.Sprintf("%s is already in the catalog; probe it with `2nb models verify %s` instead (nothing was added)", id, bare))
 			}
 			return nil, exitWithError(ExitValidation, fmt.Sprintf("%s is not in the discovered pool; run `2nb models discover` to list ids, or --refresh for a live listing (nothing was added)", id))
 		}
-		resolved = append(resolved, m)
+		resolved = append(resolved, found[0])
 	}
 	var added []ai.ModelInfo
 	for _, m := range resolved {

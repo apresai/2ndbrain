@@ -214,9 +214,13 @@ struct DiscoverSectionView: View {
             cap = VerifyFlow.costCap(preview: preview)
         }
         do {
+            // Pass the provider-qualified form the CLI now accepts, so the
+            // add can never resolve a DIFFERENT provider's same-id row than
+            // the one clicked (bare ids are refused when ambiguous).
+            let key = DiscoveryNudge.modelKey(provider: model.provider, modelID: model.modelID)
             let outcome = try await appState.runModelsDiscover(
-                add: [model.modelID],
-                addKeys: [DiscoveryNudge.modelKey(provider: model.provider, modelID: model.modelID)],
+                add: [key],
+                addKeys: [key],
                 validate: validate,
                 costCap: cap
             )

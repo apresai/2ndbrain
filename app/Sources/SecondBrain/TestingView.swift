@@ -879,7 +879,7 @@ struct TestingQualityView: View {
         let fresh = try? await appState.evalEstimate(subcommand: subcommand)
         if subcommand == nil { estimate = fresh ?? estimate }
         if fresh == nil, !EvalFlow.mayRunWithoutEstimate(subcommand: subcommand) {
-            // answers/tune bill above the bare-eval default cap the fallback
+            // answers bills above the bare-eval default cap the fallback
             // would pass, and a too-low cap aborts mid-run after partial
             // spend; refuse and let the user retry the estimate instead.
             errorMessage = "Couldn't load the cost estimate for this run; not starting it without one. Try again."
