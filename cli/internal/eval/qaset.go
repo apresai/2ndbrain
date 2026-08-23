@@ -111,7 +111,7 @@ Output ONLY the question, nothing else.`, c.SourceTitle, body)
 	// 1024 for a one-line question: classic-plane always-reasoning models
 	// bill reasoning against this budget, and 120 truncated a working
 	// generator mid-reasoning before the question appeared.
-	return gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: 1024, Temperature: ai.Ptr(0.3), ReasoningEffort: "none"})
+	return gen.Generate(ctx, prompt, ai.GenOpts{MaxTokens: QAGenMaxTokens, Temperature: ai.Ptr(0.3), ReasoningEffort: "none"})
 }
 
 // candidateDocs returns notes with enough body text to ground a question.

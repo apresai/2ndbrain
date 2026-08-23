@@ -60,14 +60,17 @@ func init() {
 }
 
 // estimateAnswersCostUSD projects the per-run cost: one RAG answer per item
-// (parent-document context ~2500 tok in / ~512 out) plus one grading per
-// judge per item (~1200 in / ~40 out).
+// (parent-document context ~2500 tok in, output bounded by the shared RAG
+// answer budget) plus one grading per judge per item (~1200 in, output
+// bounded by the jury budget). Output terms quote the real spend ceilings
+// (ai.RAGGenMaxTokens, ai.JuryMaxTokens) so the confirm gate can never
+// under-report what a run may bill; typical runs bill far less.
 func estimateAnswersCostUSD(genM ai.ModelInfo, judges []ai.ModelInfo, n int) float64 {
 	total := ai.EstimateCostWithSpec(genM, ai.ProbeBenchRAG,
-		ai.ProbeSpec{InputTokens: 2500 * n, OutputTokens: 512 * n, Requests: n}).USD
+		ai.ProbeSpec{InputTokens: 2500 * n, OutputTokens: ai.RAGGenMaxTokens * n, Requests: n}).USD
 	for _, j := range judges {
 		total += ai.EstimateCostWithSpec(j, ai.ProbeBenchGen,
-			ai.ProbeSpec{InputTokens: 1200 * n, OutputTokens: 40 * n, Requests: n}).USD
+			ai.ProbeSpec{InputTokens: 1200 * n, OutputTokens: eval.JuryMaxTokens * n, Requests: n}).USD
 	}
 	return total
 }

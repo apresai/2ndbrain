@@ -93,6 +93,12 @@ func bedrockModelSupported(modelID, modelType string) (bool, string) {
 			return false, "2nb doesn't support Bedrock image-generation models"
 		case strings.HasPrefix(lower, "amazon.nova-reel"):
 			return false, "2nb doesn't support Bedrock video-generation models"
+		case strings.HasPrefix(lower, "luma."):
+			// Luma's entire Bedrock lineup (Ray) is video generation, so the
+			// deny is vendor-wide, like stability. above: a text probe of a
+			// video model is a known modality mismatch, not something the
+			// default-allow arm should admit.
+			return false, "2nb doesn't support Bedrock video-generation models"
 		case strings.HasPrefix(lower, "stability."):
 			// Stability AI's entire Bedrock lineup is image generation
 			// (stable-image-*, sd3*, stable-diffusion-xl*), so the deny is

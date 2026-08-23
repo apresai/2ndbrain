@@ -180,6 +180,8 @@ func TestBedrockModelSupported_GenerationDefaultAllow(t *testing.T) {
 	}{
 		{"amazon.nova-canvas-v1:0", "image-generation"},
 		{"amazon.nova-reel-v1:0", "video-generation"},
+		{"luma.ray-v2:0", "video-generation"},
+		{"luma.ray-flash-2-v1:0", "video-generation"},
 		{"stability.stable-image-core-v1:0", "image-generation"},
 		{"stability.sd3-large-v1:0", "image-generation"},
 		{"stability.sd3-5-large-v1:0", "image-generation"},

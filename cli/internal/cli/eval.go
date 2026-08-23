@@ -279,11 +279,11 @@ func evalConfirmCost(ctx context.Context, cmd *cobra.Command, cfg ai.AIConfig, r
 }
 
 // estimateEvalCostUSD projects the one-time cost of building an n-question QA set
-// (read a note ~1500 tok + write a question ~80 tok per item on the generation
+// (read a note ~1500 tok + write a question bounded by eval.QAGenMaxTokens per item (the spend ceiling, quoted so the gate never under-reports) on the generation
 // model) plus the n short query-embeds scoring makes each run.
 func estimateEvalCostUSD(genM, embM ai.ModelInfo, n int) (total, gen, emb float64) {
 	g := ai.EstimateCostWithSpec(genM, ai.ProbeBenchGen,
-		ai.ProbeSpec{InputTokens: 1500 * n, OutputTokens: 80 * n, Requests: n})
+		ai.ProbeSpec{InputTokens: 1500 * n, OutputTokens: eval.QAGenMaxTokens * n, Requests: n})
 	e := ai.EstimateCostWithSpec(embM, ai.ProbeBenchEmbed,
 		ai.ProbeSpec{InputTokens: 20 * n, Requests: n})
 	return g.USD + e.USD, g.USD, e.USD

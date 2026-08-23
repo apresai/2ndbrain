@@ -13,6 +13,8 @@ import AppKit
 /// credentials, the two active models, and the verdict.
 struct SettingsAIView: View {
     @Environment(AppState.self) var appState
+    @State private var reloading = false
+    @State private var reloadPending = false
     @Environment(\.settingsHostIsInline) private var isInlineHost
 
     @State private var bedrock: BedrockMachineStatus?
@@ -292,8 +294,17 @@ struct SettingsAIView: View {
     private func reload() async {
         // Single-flight against dual-host reload stacking; see
         // SettingsGeneralView.reload.
-        guard appState.beginSettingsReload("ai") else { return }
-        defer { appState.endSettingsReload("ai") }
+        if reloading { reloadPending = true; return }
+        reloading = true
+        defer {
+            reloading = false
+            // Coalesce, never drop: a reload requested while one was in flight
+            // (a post-write refresh racing the .task load) re-runs once so the
+            // view always ends on post-mutation data. Single-flight is per
+            // INSTANCE by design: each host loads its own @State, and
+            // concurrent read-only status reloads across hosts are harmless.
+            if reloadPending { reloadPending = false; Task { await reload() } }
+        }
         // The credential row is the reason this page exists, so a failure to
         // read it is reported rather than rendered as "no key". The AI status
         // and vault region legitimately fail with no vault bound, which is a
