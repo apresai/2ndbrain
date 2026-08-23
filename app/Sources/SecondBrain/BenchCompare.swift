@@ -64,7 +64,12 @@ enum BenchCompareMatrix {
                         Cell(
                             latencyMs: run.latencyMs,
                             ok: run.ok,
-                            quality: quality(fromDetail: run.detail),
+                            // Only the retrieval probe's detail is the
+                            // structured "mrr@K=..." string; generate/rag
+                            // details are free-text model output, and a
+                            // reply that happens to contain that substring
+                            // would render a bogus q= on a latency-only cell.
+                            quality: run.probe == "retrieval" ? quality(fromDetail: run.detail) : nil,
                             detail: run.detail
                         )
                     }
