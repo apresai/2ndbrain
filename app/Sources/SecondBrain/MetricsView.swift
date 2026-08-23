@@ -210,7 +210,7 @@ struct MetricsView: View {
                     Text("Last \(b.operation == "reembed" ? "re-embed" : "index") build")
                         .font(.headline)
                     Spacer()
-                    Text(relativeDate(b.ts))
+                    Text(Formatters.relativeDate(b.ts))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -220,7 +220,7 @@ struct MetricsView: View {
                         .foregroundStyle(.orange)
                 }
                 HStack(spacing: 24) {
-                    bigStat(duration(b.durationMs), "build time")
+                    bigStat(Formatters.duration(b.durationMs), "build time")
                     if let d = b.docsPerSec, d > 0 {
                         bigStat(String(format: "%.1f", d), "docs/sec")
                     }
@@ -256,7 +256,7 @@ struct MetricsView: View {
             statRow("Documents", "\(g.docCount)  (\(g.embeddedCount) embedded, \(Int((g.embeddingCoverage * 100).rounded()))% coverage)")
             statRow("Chunks", "\(g.chunkCount)")
             statRow("Stale (90d+)", "\(g.staleCount)")
-            statRow("Index DB", "\(bytes(g.indexDbBytes))  (+\(bytes(g.walBytes)) WAL)")
+            statRow("Index DB", "\(Formatters.bytes(g.indexDbBytes))  (+\(Formatters.bytes(g.walBytes)) WAL)")
             if let model = g.embeddingModel, !model.isEmpty {
                 statRow("Embedding", "\(model)\(g.embeddingDims.map { "  (\($0) dims)" } ?? "")")
             }
@@ -283,10 +283,10 @@ struct MetricsView: View {
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .frame(width: 60, alignment: .leading)
-                        Text("avg \(durationD(a.avgMs))")
+                        Text("avg \(Formatters.durationD(a.avgMs))")
                             .font(.callout.monospacedDigit())
                             .frame(width: 100, alignment: .leading)
-                        Text("p50 \(duration(a.p50Ms))")
+                        Text("p50 \(Formatters.duration(a.p50Ms))")
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                         if let ti = a.tokensIn, let to = a.tokensOut, ti > 0 || to > 0 {
@@ -321,7 +321,7 @@ struct MetricsView: View {
                     Text(opLabel(op.operation))
                         .font(.callout)
                         .frame(width: 110, alignment: .leading)
-                    Text(duration(op.durationMs))
+                    Text(Formatters.duration(op.durationMs))
                         .font(.callout.monospacedDigit())
                         .frame(width: 70, alignment: .leading)
                     Text(recentDetail(op))
@@ -335,7 +335,7 @@ struct MetricsView: View {
                             .clipShape(Capsule())
                     }
                     Spacer()
-                    Text(relativeDate(op.ts))
+                    Text(Formatters.relativeDate(op.ts))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -411,29 +411,7 @@ struct MetricsView: View {
         }
     }
 
-    private func duration(_ ms: Int) -> String { durationD(Double(ms)) }
-
-    private func durationD(_ ms: Double) -> String {
-        if ms < 1000 { return "\(Int(ms.rounded()))ms" }
-        if ms < 60000 { return String(format: "%.1fs", ms / 1000) }
-        let total = Int(ms)
-        return "\(total / 60000)m\(String(format: "%02d", (total % 60000) / 1000))s"
-    }
-
-    private func bytes(_ n: Int) -> String {
-        let units = ["B", "KB", "MB", "GB", "TB"]
-        var v = Double(n), i = 0
-        while v >= 1024 && i < units.count - 1 { v /= 1024; i += 1 }
-        return i == 0 ? "\(n) B" : String(format: "%.1f %@", v, units[i])
-    }
-
-    private func relativeDate(_ raw: String) -> String {
-        let iso = ISO8601DateFormatter()
-        if let date = iso.date(from: raw) {
-            let fmt = RelativeDateTimeFormatter()
-            fmt.unitsStyle = .short
-            return fmt.localizedString(for: date, relativeTo: Date())
-        }
-        return raw
-    }
+    // Duration / bytes / relative-date rendering lives in the shared
+    // `Formatters` (extracted from this view so the Testing tab's benchmark
+    // feed formats identically).
 }
