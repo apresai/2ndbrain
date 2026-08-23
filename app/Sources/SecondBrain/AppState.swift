@@ -2346,6 +2346,15 @@ final class AppState {
         return (try? JSONDecoder().decode([BenchRunInfo].self, from: data)) ?? []
     }
 
+    /// Benchmark favorites from the vault's bench.db (`models bench favs
+    /// --json`). Same null-for-empty CLI behavior as history, so decode falls
+    /// back to an empty list.
+    func fetchBenchFavorites() async throws -> [BenchFavoriteInfo] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["models", "bench", "favs", "--json", "--porcelain"], cwd: vault.rootURL)
+        return (try? JSONDecoder().decode([BenchFavoriteInfo].self, from: data)) ?? []
+    }
+
     // MARK: - Advanced settings (config visibility)
 
     /// Writes one vault config key via `2nb config set`. Validation lives in
@@ -2678,18 +2687,46 @@ final class AppState {
         _ = try await runCLI(args, cwd: vault.rootURL)
     }
 
-    /// Streaming runner: deliberately NOT under the CLIWatchdog 10-minute
+    /// Argv for `models bench --json`. A nil/empty modelID runs the favorites
+    /// battery (the CLI's own --model-less path: every favorited model, or the
+    /// active embedding + generation pair when no favorites exist); a
+    /// nil/empty probe runs the full battery appropriate to each model's type.
+    /// Extracted so the Testing tab's run buttons are argv-testable.
+    nonisolated static func benchArgs(modelID: String?, provider: String?, probe: String?) -> [String] {
+        var args = ["models", "bench"]
+        if let modelID, !modelID.isEmpty {
+            args += ["--model", modelID]
+            if let provider, !provider.isEmpty {
+                args += ["--provider", provider]
+            }
+        }
+        if let probe, !probe.isEmpty {
+            args += ["--probe", probe]
+        }
+        args += ["--json", "--porcelain"]
+        return args
+    }
+
+    func benchmarkModel(modelID: String, provider: String, type: String, probe: String, onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
+        try await streamBenchEvents(args: Self.benchArgs(modelID: modelID, provider: provider, probe: probe), onEvent: onEvent)
+    }
+
+    /// Runs the favorites battery: `models bench` with no --model (every
+    /// favorited model, falling back to the active models) and no --probe
+    /// (the full battery per model type), streaming the same NDJSON events.
+    func benchmarkFavorites(onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
+        try await streamBenchEvents(args: Self.benchArgs(modelID: nil, provider: nil, probe: nil), onEvent: onEvent)
+    }
+
+    /// Streaming runner: deliberately NOT under the CLIWatchdog absolute
     /// bound. The CLI self-bounds each bench probe with a strategy-aware
     /// deadline (cli/internal/ai/timeouts.go), and an app-side kill would
     /// orphan a partially persisted run: bench.db rows and the per-model
     /// summary land as the run streams, so killing it mid-run leaves history
     /// that no completed run explains.
-    func benchmarkModel(modelID: String, provider: String, type: String, probe: String, onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
+    private func streamBenchEvents(args: [String], onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
         guard let vault else { throw CLIError.noVault }
-        let fullArgs = CLIPath.args(
-            ["models", "bench", "--model", modelID, "--provider", provider, "--probe", probe, "--json", "--porcelain"],
-            vault: vault.rootURL
-        )
+        let fullArgs = CLIPath.args(args, vault: vault.rootURL)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("AI Hub action: \(cmd, privacy: .public)")
         let errorLogger = self.errorLogger
@@ -4209,6 +4246,22 @@ struct BenchRunInfo: Codable, Identifiable {
         case modelID = "model_id"
         case latencyMs = "latency_ms"
         case vaultDocCount = "vault_doc_count"
+    }
+}
+
+/// One row of `2nb models bench favs --json` (bench.Favorite in the CLI).
+struct BenchFavoriteInfo: Codable, Identifiable {
+    var id: String { provider + "|" + modelID }
+    let provider: String
+    let modelID: String
+    let modelType: String
+    let addedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case provider
+        case modelID = "model_id"
+        case modelType = "model_type"
+        case addedAt = "added_at"
     }
 }
 
