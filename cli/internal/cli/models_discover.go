@@ -204,15 +204,23 @@ func discoverAddModels(v *vault.Vault, scope ai.UserCatalogScope, pool, catalog 
 		}
 		return nil
 	}
-	var added []ai.ModelInfo
+	// Validate EVERY id before persisting ANY: a per-id validate-then-save
+	// loop aborted on the first invalid id with earlier ids already durably
+	// written and never mentioned in the error, an all-or-nothing command
+	// silently becoming partial (review finding, confidence 92).
+	resolved := make([]*ai.ModelInfo, 0, len(ids))
 	for _, id := range ids {
 		m := find(pool, id)
 		if m == nil {
 			if find(catalog, id) != nil {
-				return nil, exitWithError(ExitValidation, fmt.Sprintf("%s is already in the catalog; probe it with `2nb models verify %s` instead", id, id))
+				return nil, exitWithError(ExitValidation, fmt.Sprintf("%s is already in the catalog; probe it with `2nb models verify %s` instead (nothing was added)", id, id))
 			}
-			return nil, exitWithError(ExitValidation, fmt.Sprintf("%s is not in the discovered pool; run `2nb models discover` to list ids, or --refresh for a live listing", id))
+			return nil, exitWithError(ExitValidation, fmt.Sprintf("%s is not in the discovered pool; run `2nb models discover` to list ids, or --refresh for a live listing (nothing was added)", id))
 		}
+		resolved = append(resolved, m)
+	}
+	var added []ai.ModelInfo
+	for _, m := range resolved {
 		entry, exists := ai.UserCatalogEntry(scope, v.Root, m.Provider, m.ID)
 		if !exists {
 			entry = ai.ModelInfo{

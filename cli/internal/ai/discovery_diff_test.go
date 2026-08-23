@@ -343,3 +343,25 @@ func TestInvalidateDiscoveryCache_RemovesCachesKeepsBaseline(t *testing.T) {
 		t.Fatalf("second invalidate = (%v, %v), want (none, nil)", removed, err)
 	}
 }
+
+// TestFailedDiscoveryProviders_PartialRegionWarning pins that a PARTIAL
+// region failure (some regions listed, some did not) engages the GONE/seen
+// shield exactly like a total failure: the region loops emit the recognized
+// "<source> discovery failed" shape for partial listings, because a silently
+// missing region would report its exclusive models GONE and drop them from
+// the seen baseline (per-region mantle catalogs genuinely differ).
+func TestFailedDiscoveryProviders_PartialRegionWarning(t *testing.T) {
+	warnings := []string{
+		"bedrock-mantle discovery failed: partial listing: region(s) us-west-2 failed: connection reset",
+	}
+	failed := FailedDiscoveryProviders(warnings)
+	if !failed["bedrock"] {
+		t.Fatalf("partial mantle region failure did not engage the bedrock shield: %v", failed)
+	}
+	classic := FailedDiscoveryProviders([]string{
+		"bedrock discovery failed: partial listing: region(s) us-east-2 failed: timeout",
+	})
+	if !classic["bedrock"] {
+		t.Fatalf("partial classic region failure did not engage the shield: %v", classic)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -225,6 +226,7 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 		var models []ModelInfo
 		seen := map[string]bool{}
 		var firstErr error
+		var failedRegions []string
 		succeeded := false
 		for _, region := range ResolveBedrockRegions(cfg.Bedrock) {
 			regionCfg := cfg.Bedrock
@@ -234,6 +236,7 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 				if firstErr == nil {
 					firstErr = err
 				}
+				failedRegions = append(failedRegions, region)
 				continue
 			}
 			succeeded = true
@@ -247,6 +250,16 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 		if !succeeded {
 			addWarning("bedrock", firstErr)
 			return
+		}
+		// A PARTIAL failure (some regions listed, some did not) must still
+		// warn in the recognized "<source> discovery failed" shape: the
+		// discover diff's GONE shield (FailedDiscoveryProviders) and the
+		// seen-snapshot save key off these warnings, and a silently missing
+		// region would otherwise report that region's whole catalog as GONE
+		// and drop it from the seen state (review finding on the discover
+		// command).
+		if len(failedRegions) > 0 {
+			addWarning("bedrock", fmt.Errorf("partial listing: region(s) %s failed: %v", strings.Join(failedRegions, ", "), firstErr))
 		}
 		mu.Lock()
 		all = append(all, models...)
@@ -300,6 +313,7 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 		var models []ModelInfo
 		seen := map[string]bool{}
 		var firstErr error
+		var failedRegions []string
 		succeeded := false
 		for _, region := range mantleDiscoveryRegions(cfg.Bedrock) {
 			regionModels, err := mlist(ctx, cfg.Bedrock, region)
@@ -307,6 +321,7 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 				if firstErr == nil {
 					firstErr = err
 				}
+				failedRegions = append(failedRegions, region)
 				continue
 			}
 			succeeded = true
@@ -320,6 +335,13 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 		if !succeeded {
 			addWarning("bedrock-mantle", firstErr)
 			return
+		}
+		// Same partial-failure rule as the classic loop: per-region catalogs
+		// genuinely differ on the mantle plane (grok-4.6 lists only in
+		// us-west-2), so one silently missing region makes its exclusive
+		// models look GONE.
+		if len(failedRegions) > 0 {
+			addWarning("bedrock-mantle", fmt.Errorf("partial listing: region(s) %s failed: %v", strings.Join(failedRegions, ", "), firstErr))
 		}
 		mu.Lock()
 		all = append(all, models...)
