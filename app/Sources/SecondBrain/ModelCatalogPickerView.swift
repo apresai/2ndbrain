@@ -785,13 +785,10 @@ struct ModelCatalogPickerView: View {
         }
     }
 
+    // One display line per streamed bench event, shared with the Testing
+    // tab's live feed.
     private func eventLine(_ event: BenchmarkEvent) -> String {
-        if let result = event.result {
-            let status = result.skipped == true ? "SKIP" : (result.ok ? "PASS" : "FAIL")
-            let detail = result.detail.map { " \($0)" } ?? ""
-            return "\(result.probe) \(status) \(result.latencyMs)ms\(detail)"
-        }
-        return event.message ?? event.event
+        BenchProbes.eventLine(event)
     }
 }
 

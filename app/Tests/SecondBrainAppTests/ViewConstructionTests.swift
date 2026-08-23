@@ -85,3 +85,19 @@ func settingsViewsConstruct() {
     #expect(String(describing: type(of: advanced)) == "SettingsAdvancedView")
     #expect(String(describing: type(of: integrations)) == "SettingsIntegrationsView")
 }
+
+@Test("Testing tab views can be constructed")
+@MainActor
+func testingViewsConstruct() {
+    let testing = TestingView(section: .constant(.validate))
+    let benchmarks = TestingBenchmarksView()
+    let quality = TestingQualityPlaceholder()
+    // The Validate pane hosts the Models tab's mechanics in validate-only
+    // mode (one implementation, two hosts).
+    let validate = SimpleModelsView(validateOnly: true)
+
+    #expect(String(describing: type(of: testing)) == "TestingView")
+    #expect(String(describing: type(of: benchmarks)) == "TestingBenchmarksView")
+    #expect(String(describing: type(of: quality)) == "TestingQualityPlaceholder")
+    #expect(String(describing: type(of: validate)) == "SimpleModelsView")
+}

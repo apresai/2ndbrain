@@ -7,6 +7,14 @@ import SwiftUI
 struct SimpleModelsView: View {
     @Environment(AppState.self) var appState
 
+    /// Validate-only host mode for the Testing tab's Validate pane: the same
+    /// vendor checkboxes and Validate flow (one implementation, two hosts —
+    /// the SettingsView(isInline:) idiom), plus the per-account access
+    /// summary and the working-set summary, without the pickers, the
+    /// discovery banner, or the full catalog. The Models tab stays the
+    /// default (`false`) and is unchanged.
+    var validateOnly: Bool = false
+
     @State private var aiStatus: AIStatusInfo?
     @State private var models: [CatalogModelInfo] = []
     @State private var policies: [VendorPolicyResult] = []
@@ -32,8 +40,10 @@ struct SimpleModelsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
+            if !validateOnly {
+                header
+                Divider()
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if appState.vault == nil {
@@ -44,12 +54,14 @@ struct SimpleModelsView: View {
                         // still act from here instead of hitting a dead end.
                         OpenSettingsTabButton("Open AI settings…", tab: .ai)
                             .controlSize(.small)
+                    } else if validateOnly {
+                        staleBanner
+                        accessSummarySection
+                        vendorSection
+                        validateSection
+                        workingSetSummarySection
                     } else {
-                        if staleVerdicts {
-                            Label(StaleVerdicts.bannerText, systemImage: "clock.arrow.circlepath")
-                                .font(.callout)
-                                .foregroundStyle(.orange)
-                        }
+                        staleBanner
                         vendorSection
                         discoveryNudgeBanner
                         validateSection
@@ -126,6 +138,40 @@ struct SimpleModelsView: View {
             lastVerifiedAt: aiStatus?.modelAccess?.lastVerifiedAt,
             tokenUpdatedAt: bedrockStatus?.tokenUpdatedAt
         )
+    }
+
+    @ViewBuilder
+    private var staleBanner: some View {
+        if staleVerdicts {
+            Label(StaleVerdicts.bannerText, systemImage: "clock.arrow.circlepath")
+                .font(.callout)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    /// Validate-only: the per-account access summary ("7 verified, 3 no
+    /// access, checked 2d ago") plus the key-state chip, since this pane is
+    /// where a bad-credentials verdict renders in the Testing tab.
+    private var accessSummarySection: some View {
+        HStack {
+            Text(AccessSummary.line(aiStatus?.modelAccess))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            credentialsChip
+        }
+    }
+
+    /// Validate-only: what the account has PROVEN it can invoke, in the
+    /// pickers' Answers/Search vocabulary.
+    private var workingSetSummarySection: some View {
+        Text(WorkingModelPresentation.workingSetSummary(
+            models,
+            provider: aiStatus?.provider ?? "bedrock",
+            activeIDs: activeModelIDs
+        ))
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     private var vendorSection: some View {

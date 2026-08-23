@@ -105,6 +105,10 @@ final class AppState {
     /// observes it and starts a Validate pass (still cost-confirmed there).
     var pendingValidateRequest = false
 
+    /// Deep-link flag for the Testing tab ("Testing & Benchmarks…" menu
+    /// item), wired in ContentView like the other show* flags.
+    var showTesting = false
+
     private static let lowDiskThreshold: Int64 = 50 * 1024 * 1024
 
     // Merge conflict controllers (one per active dialog, retained so the NSWindow stays alive)

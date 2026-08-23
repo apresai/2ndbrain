@@ -29,6 +29,7 @@ enum DashboardRoute {
         case lintResults
         case vaultStatus
         case settings
+        case testing
     }
 
     static func tab(for target: Target) -> DashboardTab {
@@ -38,6 +39,7 @@ enum DashboardRoute {
         case .lintResults: return .notes
         case .vaultStatus: return .health
         case .settings: return .settings
+        case .testing: return .testing
         }
     }
 
@@ -57,6 +59,15 @@ enum DashboardRoute {
         default: return nil
         }
     }
+
+    /// The Testing pane a target wants. Currently nil for every target: the
+    /// bare `.testing` menu item names no pane, so it deliberately keeps the
+    /// last-used one (the same rationale as ContentView owning the section
+    /// state). Future deep links that name a pane (a Discover or Quality
+    /// entry point) land here.
+    static func testingSection(for target: Target) -> TestingView.Section? {
+        nil
+    }
 }
 
 /// Health: the state of this vault and of the three installed products.
@@ -69,7 +80,8 @@ enum DashboardRoute {
 struct HealthView: View {
     enum Section: String, CaseIterable, Identifiable {
         case vault = "Vault"
-        case performance = "Performance"
+        // Performance moved to the Testing tab (everything measurable in one
+        // destination); Health keeps vault state and product parity.
         case updates = "Updates"
         var id: String { rawValue }
     }
@@ -89,8 +101,6 @@ struct HealthView: View {
             switch section {
             case .vault:
                 VaultStatusView(isPresented: .constant(true), isInline: true)
-            case .performance:
-                MetricsView(isPresented: .constant(true), isInline: true)
             case .updates:
                 UpdatesView()
             }

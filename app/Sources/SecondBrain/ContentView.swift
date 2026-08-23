@@ -16,6 +16,10 @@ enum DashboardTab: String, CaseIterable, Identifiable {
     case home = "Home"
     case models = "Models"
     case notes = "Notes"
+    /// Everything measurable in one place: validation, benchmarks, the
+    /// performance observatory (moved in from Health), and quality next.
+    /// Before Health: measuring comes up more often than product parity.
+    case testing = "Testing"
     case health = "Health"
     case activity = "Activity"
     /// The same four-tab Settings content as Cmd+,, hosted inline
@@ -28,13 +32,14 @@ enum DashboardTab: String, CaseIterable, Identifiable {
     /// Everything below Home. No longer labelled "Advanced": with the knobs
     /// moved out, these are ordinary status views, and calling them advanced
     /// discouraged people from opening the ones that answer real questions.
-    static var secondary: [DashboardTab] { [.models, .notes, .health, .activity, .settings] }
+    static var secondary: [DashboardTab] { [.models, .notes, .testing, .health, .activity, .settings] }
 
     var systemImage: String {
         switch self {
         case .home: return "house"
         case .models: return "bolt.horizontal"
         case .notes: return "checkmark.seal"
+        case .testing: return "gauge"
         case .health: return "stethoscope"
         case .activity: return "clock.arrow.circlepath"
         case .settings: return "gearshape"
@@ -49,6 +54,7 @@ struct ContentView: View {
     // tab, and so the pane survives leaving and returning to the tab.
     @State private var healthSection: HealthView.Section = .vault
     @State private var activitySection: ActivityView.Section = .git
+    @State private var testingSection: TestingView.Section = .validate
 
     var body: some View {
         mainLayout
@@ -72,6 +78,9 @@ struct ContentView: View {
             }
             .onChange(of: appState.showSettingsPane) { _, show in
                 if show { route(.settings); appState.showSettingsPane = false }
+            }
+            .onChange(of: appState.showTesting) { _, show in
+                if show { route(.testing); appState.showTesting = false }
             }
             .sheet(isPresented: Binding(
                 get: { appState.showMCPSetup },
@@ -117,6 +126,7 @@ struct ContentView: View {
     private func route(_ target: DashboardRoute.Target) {
         if let health = DashboardRoute.healthSection(for: target) { healthSection = health }
         if let activity = DashboardRoute.activitySection(for: target) { activitySection = activity }
+        if let testing = DashboardRoute.testingSection(for: target) { testingSection = testing }
         selection = DashboardRoute.tab(for: target)
     }
 
@@ -147,6 +157,8 @@ struct ContentView: View {
                         SimpleModelsView()
                     case .notes:
                         LintResultsView(isPresented: .constant(true), isInline: true)
+                    case .testing:
+                        TestingView(section: $testingSection)
                     case .health:
                         HealthView(section: $healthSection)
                     case .activity:
