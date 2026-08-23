@@ -189,6 +189,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 	// Probe concurrently; persist every result, pass and fail, so the catalog
 	// records this account's real access state.
 	results := make([]*ai.TestProbeResult, 0, len(candidates))
+	cutOff := 0 // probes interrupted by --max-duration; reported, never persisted
 	total := len(candidates)
 	startEvent := verifyEvent{Event: "start", Total: total, EstimatedUSD: totalUSD}
 	if len(regions) > 1 {
@@ -227,6 +228,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		// persisting; skipping a save is the safe direction for the rare
 		// result racing the cap's edge.
 		if probeCtx.Err() != nil && result.Code == ai.TestErrTimeout {
+			cutOff++
 			results = append(results, result)
 			emitVerifyEvent(enc, verifyEvent{Event: "result", N: n, Total: total, Result: result})
 			if humanMode {
@@ -278,7 +280,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		return output.Write(os.Stdout, getFormat(cmd), report)
 	}
 
-	printVerifyByVendor(results)
+	printVerifyByVendor(results, cutOff)
 	return nil
 }
 
@@ -424,7 +426,7 @@ func verifySummary(results []*ai.TestProbeResult) map[string]int {
 // printVerifyByVendor renders the per-account access report grouped by vendor
 // and family, newest version first, with remediation printed once per
 // distinct failure code.
-func printVerifyByVendor(results []*ai.TestProbeResult) {
+func printVerifyByVendor(results []*ai.TestProbeResult, cutOff int) {
 	byVendor := map[string][]*ai.TestProbeResult{}
 	for _, r := range results {
 		v := ai.VendorOf(r.ModelID, r.Provider)
@@ -471,6 +473,15 @@ func printVerifyByVendor(results []*ai.TestProbeResult) {
 		for _, c := range codes {
 			fmt.Printf("fix %s: %s\n", c, remediations[ai.TestErrorCode(c)])
 		}
+	}
+	// The footer must not claim a save for rows the --max-duration cap
+	// interrupted: those verdicts are deliberately NOT persisted (the cap
+	// stops the run, it does not rewrite the catalog), so an unconditional
+	// "Results saved" would contradict the per-row "verdict not saved" lines.
+	if cutOff > 0 {
+		fmt.Printf("\n%d result(s) saved (%s catalog); %d cut off by --max-duration and NOT saved (prior verdicts stand, re-run to verify them). The STATE column of `2nb models list` reflects the saved results. Verified at %s.\n",
+			len(results)-cutOff, verifyScope, cutOff, time.Now().UTC().Format(time.RFC3339))
+		return
 	}
 	fmt.Printf("\nResults saved (%s catalog) — the STATE column of `2nb models list` now reflects your account. Verified at %s.\n",
 		verifyScope, time.Now().UTC().Format(time.RFC3339))
