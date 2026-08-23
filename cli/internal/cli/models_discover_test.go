@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -331,6 +332,172 @@ func TestContract_ModelsDiscoverAddErrors(t *testing.T) {
 	_, err = runCLIArgs(t, root, "models", "discover", "--add", "openai.gpt-5.5")
 	if err == nil || !strings.Contains(err.Error(), "already in the catalog") {
 		t.Fatalf("catalog id must refuse with the verify hint, got: %v", err)
+	}
+}
+
+// TestDiscoverBaselineSavable_UnrelatedWarningsDoNotBlock pins the seen-
+// baseline save gate: it keys on classified DISCOVERY failures, never on
+// BuildModelList warnings wholesale. An empty pool plus only non-discovery
+// warnings (a vendor-policy active-model note, a quarantined policy file)
+// must still save, so first-run seeding happens and a graduated-empty pool
+// can never leave GONE badges sticky. The saved baseline is verified on disk
+// through the same ai functions the command calls.
+func TestDiscoverBaselineSavable_UnrelatedWarningsDoNotBlock(t *testing.T) {
+	unrelated := []string{
+		`vendor policy (bedrock): active generation model us.anthropic.claude-haiku-4-5-20251001-v1:0 stays enabled although vendor "anthropic" is not in the enable-only list`,
+		"vendor policy file /x/models-policy.yaml was unreadable and is inactive (a malformed file is quarantined to /x/models-policy.yaml.bak); re-apply it with `2nb models policy set`",
+	}
+	failed := ai.FailedDiscoveryProviders(unrelated)
+	if len(failed) != 0 {
+		t.Fatalf("unrelated warnings misclassified as discovery failures: %v", failed)
+	}
+	if !discoverBaselineSavable(true, nil, failed) {
+		t.Fatal("first-run empty pool with only unrelated warnings must seed the baseline")
+	}
+
+	// The savable verdict seeds a first run on disk: the exact save sequence
+	// the command performs, under a sandboxed XDG cache dir.
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	cfg := ai.BedrockConfig{}
+	seen, err := ai.LoadDiscoverySeen(cfg)
+	if err != nil || seen != nil {
+		t.Fatalf("fresh cache dir must have no baseline, got (%+v, %v)", seen, err)
+	}
+	if err := ai.SaveDiscoverySeen(cfg, ai.NextSeenKeys(nil, seen, failed)); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	seeded, err := ai.LoadDiscoverySeen(cfg)
+	if err != nil || seeded == nil {
+		t.Fatalf("baseline did not seed: (%+v, %v)", seeded, err)
+	}
+	if d := ai.DiffAgainstSeen(nil, nil, seeded, nil); d.FirstRun {
+		t.Fatal("a seeded baseline must end first-run mode")
+	}
+}
+
+// TestDiscoverBaselineGate_DiscoveryFailureBlocksAndCarries pins the kept
+// conservatism around the gate: a partial-region "<source> discovery failed"
+// warning still blocks an empty-pool save, and when a save does proceed
+// (non-empty pool) the failed source's keys ride forward through NextSeenKeys
+// and stay shielded from GONE, while a succeeded source's genuinely delisted
+// key drops and is badged.
+func TestDiscoverBaselineGate_DiscoveryFailureBlocksAndCarries(t *testing.T) {
+	warnings := []string{
+		"bedrock-mantle discovery failed: partial listing: region(s) us-west-2 failed: connection reset",
+		`vendor policy (bedrock): active generation model m stays enabled although vendor "x" is not in the enable-only list`,
+	}
+	failed := ai.FailedDiscoveryProviders(warnings)
+	if !failed["bedrock"] || len(failed) != 1 {
+		t.Fatalf("partial mantle failure must classify as a bedrock discovery failure (and the policy note must not): %v", failed)
+	}
+	if discoverBaselineSavable(true, nil, failed) {
+		t.Fatal("a FIRST-RUN empty pool with a failed discovery source must not seed the baseline")
+	}
+	// On a subsequent run the same condition SAVES: NextSeenKeys carries the
+	// failed source's keys forward, so the save cannot lose them, and blocking
+	// instead froze the baseline forever whenever an optional provider (a
+	// machine with no local Ollama daemon) fails on every listing, which
+	// re-reported the identical GONE set indefinitely.
+	if !discoverBaselineSavable(false, nil, failed) {
+		t.Fatal("a subsequent-run empty pool must save even alongside a failed source (NextSeenKeys is the conservatism)")
+	}
+
+	pool := []ai.ModelInfo{{ID: "fresh", Provider: "ollama"}}
+	if !discoverBaselineSavable(true, pool, failed) {
+		t.Fatal("a non-empty pool seeds even alongside a failed source")
+	}
+	seen := &ai.DiscoverySeen{Keys: []string{"bedrock|mantle-only-model", "ollama|stale-model"}}
+	got := ai.NextSeenKeys(pool, seen, failed)
+	want := []string{"bedrock|mantle-only-model", "ollama|fresh"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NextSeenKeys = %v, want %v (failed bedrock key carried, succeeded ollama's delisted key dropped)", got, want)
+	}
+	d := ai.DiffAgainstSeen(pool, nil, seen, failed)
+	if len(d.Gone) != 1 || d.Gone[0] != "ollama|stale-model" {
+		t.Fatalf("Gone = %v, want only the succeeded source's delisted key (failed bedrock shielded)", d.Gone)
+	}
+}
+
+// writeDiscoverCacheListing rewrites one discovery cache file in the current
+// XDG sandbox with the given models (fresh mtime, current cache version).
+func writeDiscoverCacheListing(t *testing.T, name, region string, models []ai.ModelInfo) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("XDG_CACHE_HOME"), "2nb", "discovery")
+	data, err := json.Marshal(struct {
+		Version int            `json:"version"`
+		Region  string         `json:"region"`
+		Models  []ai.ModelInfo `json:"models"`
+	}{ai.DiscoveryCacheVersion, region, models})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestContract_ModelsDiscoverHumanGoneWithEmptyPool pins the human rendering
+// when the discovered pool is EMPTY because every listing already graduated
+// into the catalog: the GONE section must still render (the old early return
+// dropped it even though the JSON envelope carried the entries), alongside a
+// clear nothing-new line for the pool itself.
+func TestContract_ModelsDiscoverHumanGoneWithEmptyPool(t *testing.T) {
+	_, root := newContractVault(t)
+	seedDiscoverCaches(t, []ai.ModelInfo{fakeMantleRow("fake.mantle-model-v1")})
+	// Pin ollama to a dead port so its discovery outcome is deterministic: a
+	// live local ollama would otherwise contribute rows and unempty the pool.
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.ollama.endpoint", "http://127.0.0.1:9"); err != nil {
+		t.Fatalf("set endpoint: %v", err)
+	}
+
+	// First run: non-empty pool, the baseline seeds with the fake keys.
+	first := discoverJSON(t, root)
+	if !first.FirstRun || len(first.Models) == 0 {
+		t.Fatalf("expected a first run with a non-empty pool: %+v", first)
+	}
+
+	// Rewrite every cached listing to carry ONLY models the merged catalog
+	// already knows: mergeDiscovered grafts them onto their catalog rows, so
+	// the pool is empty while every bedrock source still answers from cache.
+	// (Empty cached listings would not work: readDiscoveryCache rejects
+	// zero-model entries, which would force a live walk.)
+	writeDiscoverCacheListing(t, "bedrock-us-east-1-default.json", "us-east-1", []ai.ModelInfo{{
+		ID: "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
+	}})
+	for _, region := range []string{"us-east-1", "us-east-2", "us-west-2"} {
+		writeDiscoverCacheListing(t, "bedrock-mantle-"+region+"-default.json", region, []ai.ModelInfo{{
+			ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
+			InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: region,
+		}})
+	}
+
+	out, err := runCLIArgs(t, root, "models", "discover")
+	if err != nil {
+		t.Fatalf("models discover: %v (out=%s)", err, truncate(out, 500))
+	}
+	for _, want := range []string{
+		"No discovered models outside your catalog.",
+		"Gone from discovery since last check",
+		"bedrock|fake.classic-model-v1",
+		"bedrock|fake.mantle-model-v1",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("empty-pool human output missing %q:\n%s", want, out)
+		}
+	}
+
+	// The baseline ADVANCED on that run even though the pool was empty and
+	// ollama's discovery failed (dead port): NextSeenKeys carried ollama's
+	// keys and dropped the graduated bedrock ones, so the follow-up run
+	// reports the departure exactly once instead of the same GONE set
+	// forever (the sticky-GONE staleness a global empty-pool block caused).
+	report := discoverJSON(t, root)
+	if len(report.Models) != 0 {
+		t.Fatalf("pool should be empty after graduation: %+v", report.Models)
+	}
+	if len(report.Gone) != 0 {
+		t.Fatalf("gone must clear once the advanced baseline is saved (reported once, not forever): %+v", report)
 	}
 }
 
