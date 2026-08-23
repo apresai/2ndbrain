@@ -465,7 +465,7 @@ final class AppState {
     func refreshFiles() {
         guard let vault else { return }
         let mdFiles = vault.listMarkdownFiles()
-        var items = mdFiles.map { url in
+        let items = mdFiles.map { url in
             FileItem(
                 url: url,
                 name: url.deletingPathExtension().lastPathComponent,
@@ -2169,7 +2169,7 @@ final class AppState {
     /// filename (case-insensitive). Heading component (after `#`), if
     /// present, sets editorScrollTarget after opening.
     func openWikilink(_ target: String) {
-        guard let vault else { return }
+        guard vault != nil else { return }
 
         // Strip alias (`target|alias` → `target`).
         let withoutAlias = target.split(separator: "|").first.map(String.init) ?? target
@@ -2296,18 +2296,22 @@ final class AppState {
     /// Argv for `models list --json`. `--discover` walks the vendor control
     /// plane; omit it after a policy checkbox so we only re-read the merged
     /// catalog.
-    nonisolated static func modelsListArgs(discover: Bool) -> [String] {
+    nonisolated static func modelsListArgs(discover: Bool, sortBest: Bool = false) -> [String] {
         var args = ["models", "list", "--json", "--porcelain"]
         if discover { args.append("--discover") }
+        if sortBest { args.append(contentsOf: ["--sort", "best"]) }
         return args
     }
 
     /// Fetches the merged catalog. `discover: true` is the Hub / first-load
     /// / Validate path; after a vendor-policy write, pass false so a
-    /// checkbox does not re-walk Bedrock.
-    func fetchModelsCatalog(discover: Bool) async throws -> [CatalogModelInfo] {
+    /// checkbox does not re-walk Bedrock. `sortBest: true` asks the CLI for
+    /// its measured-evidence ranking (`--sort best`: bench quality, then
+    /// tested-passing, recommended, tier, latency); the Benchmarks model
+    /// picker uses it so bench data ranks the choices.
+    func fetchModelsCatalog(discover: Bool, sortBest: Bool = false) async throws -> [CatalogModelInfo] {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.modelsListArgs(discover: discover), cwd: vault.rootURL)
+        let data = try await runCLI(Self.modelsListArgs(discover: discover, sortBest: sortBest), cwd: vault.rootURL)
         struct MergedList: Decodable {
             let verified: [CatalogModelInfo]
             let unverified: [CatalogModelInfo]?
@@ -2362,6 +2366,93 @@ final class AppState {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(["models", "bench", "favs", "--json", "--porcelain"], cwd: vault.rootURL)
         return (try? JSONDecoder().decode([BenchFavoriteInfo].self, from: data)) ?? []
+    }
+
+    /// Latest run per (model, probe) pair from bench.db (`models bench
+    /// compare --json`, the same []bench.Run shape as history; JSON null
+    /// when no runs are recorded, so decode falls back to an empty list).
+    func fetchBenchCompare() async throws -> [BenchRunInfo] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["models", "bench", "compare", "--json", "--porcelain"], cwd: vault.rootURL)
+        return (try? JSONDecoder().decode([BenchRunInfo].self, from: data)) ?? []
+    }
+
+    /// Adds a model to the benchmark favorites (`models bench fav`).
+    /// Passing the provider explicitly (instead of the CLI's id inference)
+    /// keeps the stored favorite identical to the catalog row it came from.
+    func addBenchFavorite(modelID: String, provider: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await runCLI(["models", "bench", "fav", modelID, "--provider", provider, "--porcelain"], cwd: vault.rootURL)
+    }
+
+    /// Removes a model from the benchmark favorites (`models bench unfav`).
+    func removeBenchFavorite(modelID: String, provider: String) async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await runCLI(["models", "bench", "unfav", modelID, "--provider", provider, "--porcelain"], cwd: vault.rootURL)
+    }
+
+    // MARK: - Quality eval (Testing tab Quality pane)
+
+    /// Argv for `2nb eval [answers|tune] --estimate --json`: the CLI-computed
+    /// cost preview for an eval run. Local (no model calls), and it works on
+    /// vaults the real run would refuse, so the pane can price the confirm
+    /// before any spend.
+    nonisolated static func evalEstimateArgs(subcommand: String?) -> [String] {
+        var args = ["eval"]
+        if let subcommand, !subcommand.isEmpty { args.append(subcommand) }
+        args += ["--estimate", "--json", "--porcelain"]
+        return args
+    }
+
+    /// Argv for a real eval run: `--yes` (the PaidOperationConfirm already
+    /// happened in the GUI) plus a derived `--cost-cap` so the CLI's spend
+    /// guard still trips on a runaway but never on the amount the user just
+    /// approved (the VerifyFlow convention).
+    nonisolated static func evalRunArgs(subcommand: String?, costCap: Double) -> [String] {
+        var args = ["eval"]
+        if let subcommand, !subcommand.isEmpty { args.append(subcommand) }
+        args += ["--json", "--yes", "--cost-cap", String(format: "%.4f", costCap), "--porcelain"]
+        return args
+    }
+
+    /// The CLI's own cost estimate for an eval run (nil subcommand = the
+    /// retrieval scorecard; "answers" / "tune" for the subcommands).
+    func evalEstimate(subcommand: String? = nil) async throws -> EvalEstimateInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(Self.evalEstimateArgs(subcommand: subcommand), cwd: vault.rootURL)
+        return try JSONDecoder().decode(EvalEstimateInfo.self, from: data)
+    }
+
+    /// Runs the retrieval scorecard (`2nb eval --json --yes --cost-cap`).
+    ///
+    /// Deliberately OUTSIDE the CLIWatchdog absolute bound (hangWatchdog:
+    /// false), like the streaming runners and embedProbe: an uncached run
+    /// makes n real generation calls (QA-set build) plus n query embeds,
+    /// each self-bounded by the CLI's strategy-aware transport deadlines,
+    /// and an app-side SIGTERM would bill the user for a QA set they never
+    /// see cached.
+    func runEvalScorecard(costCap: Double) async throws -> EvalReportInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(Self.evalRunArgs(subcommand: nil, costCap: costCap), cwd: vault.rootURL, hangWatchdog: false)
+        return try JSONDecoder().decode(EvalReportInfo.self, from: data)
+    }
+
+    /// Runs the answer-quality jury (`2nb eval answers`). Same watchdog
+    /// exemption rationale as runEvalScorecard, and this is the costly one
+    /// (n answers + n x judges gradings).
+    func runEvalAnswers(costCap: Double) async throws -> EvalAnswersInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(Self.evalRunArgs(subcommand: "answers", costCap: costCap), cwd: vault.rootURL, hangWatchdog: false)
+        return try JSONDecoder().decode(EvalAnswersInfo.self, from: data)
+    }
+
+    /// Runs the tuning sweep (`2nb eval tune`). Suggest-only on the CLI side:
+    /// nothing is written; the pane renders the suggested `config set`
+    /// commands and never applies them.
+    func runEvalTune(costCap: Double) async throws -> EvalTuneInfo {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(Self.evalRunArgs(subcommand: "tune", costCap: costCap), cwd: vault.rootURL, hangWatchdog: false)
+        return try JSONDecoder().decode(EvalTuneInfo.self, from: data)
     }
 
     // MARK: - Advanced settings (config visibility)

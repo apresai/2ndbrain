@@ -93,13 +93,13 @@ func testingViewsConstruct() {
     let benchRun = BenchRunModel()
     let testing = TestingView(section: .constant(.validate), benchRun: benchRun)
     let benchmarks = TestingBenchmarksView(benchRun: benchRun)
-    let quality = TestingQualityPlaceholder()
+    let quality = TestingQualityView(benchRun: benchRun)
     // The Validate pane hosts the Models tab's mechanics in validate-only
     // mode (one implementation, two hosts).
     let validate = SimpleModelsView(validateOnly: true)
 
     #expect(String(describing: type(of: testing)) == "TestingView")
     #expect(String(describing: type(of: benchmarks)) == "TestingBenchmarksView")
-    #expect(String(describing: type(of: quality)) == "TestingQualityPlaceholder")
+    #expect(String(describing: type(of: quality)) == "TestingQualityView")
     #expect(String(describing: type(of: validate)) == "SimpleModelsView")
 }
