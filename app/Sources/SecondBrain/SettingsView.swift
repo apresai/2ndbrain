@@ -128,6 +128,8 @@ struct SettingsView: View {
 /// update from here. Deliberately short.
 struct SettingsGeneralView: View {
     @Environment(AppState.self) var appState
+    @State private var reloading = false
+    @State private var reloadPending = false
     @State private var pluginVersion: String?
     @State private var busy = false
     @State private var message: String?
@@ -174,8 +176,17 @@ struct SettingsGeneralView: View {
         // Single-flight: Settings renders in two hosts (the Cmd+, window and
         // the sidebar tab), so reloads can be requested while one is already
         // running; the Bool collapses re-entrant reloads within this host.
-        guard appState.beginSettingsReload("general") else { return }
-        defer { appState.endSettingsReload("general") }
+        if reloading { reloadPending = true; return }
+        reloading = true
+        defer {
+            reloading = false
+            // Coalesce, never drop: a reload requested while one was in flight
+            // (a post-write refresh racing the .task load) re-runs once so the
+            // view always ends on post-mutation data. Single-flight is per
+            // INSTANCE by design: each host loads its own @State, and
+            // concurrent read-only status reloads across hosts are harmless.
+            if reloadPending { reloadPending = false; Task { await reload() } }
+        }
         pluginVersion = appState.vault.flatMap { ObsidianPlugin.installedVersion(vaultRoot: $0.rootURL) }
     }
 
@@ -200,6 +211,8 @@ struct SettingsGeneralView: View {
 /// would create a second place for those rules to drift.
 struct SettingsAdvancedView: View {
     @Environment(AppState.self) var appState
+    @State private var reloading = false
+    @State private var reloadPending = false
     @State private var status: AIStatusInfo?
     @State private var models: [CatalogModelInfo] = []
 
@@ -220,8 +233,17 @@ struct SettingsAdvancedView: View {
     private func reload() async {
         // Single-flight against dual-host reload stacking; see
         // SettingsGeneralView.reload.
-        guard appState.beginSettingsReload("advanced") else { return }
-        defer { appState.endSettingsReload("advanced") }
+        if reloading { reloadPending = true; return }
+        reloading = true
+        defer {
+            reloading = false
+            // Coalesce, never drop: a reload requested while one was in flight
+            // (a post-write refresh racing the .task load) re-runs once so the
+            // view always ends on post-mutation data. Single-flight is per
+            // INSTANCE by design: each host loads its own @State, and
+            // concurrent read-only status reloads across hosts are harmless.
+            if reloadPending { reloadPending = false; Task { await reload() } }
+        }
         status = try? await appState.fetchAIStatus()
         if let provider = status?.provider {
             models = (try? await appState.fetchModels(provider: provider)) ?? []
