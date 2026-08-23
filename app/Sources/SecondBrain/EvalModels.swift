@@ -134,6 +134,18 @@ enum EvalFlow {
     /// the CLI default rather than silently tightening it.
     static let cliDefaultCostCap = 0.25
 
+    /// Whether a run may proceed when the estimate could not be loaded. Only
+    /// the bare scorecard may: its only cost is the one-time QA generation,
+    /// which the CLI's own 0.25 default cap was sized for. answers (and to a
+    /// lesser degree tune) typically bill above that default, and passing a
+    /// too-low explicit `--cost-cap` does not refuse up front, it aborts
+    /// MID-RUN after the shared QA gate may already have billed generation.
+    /// A nil estimate on those runs refuses instead of spending into an
+    /// abort.
+    static func mayRunWithoutEstimate(subcommand: String?) -> Bool {
+        subcommand == nil
+    }
+
     /// The `--cost-cap` for an eval run: double the CLI's estimate plus a
     /// cent of headroom, so the spend guard still trips on a runaway but
     /// never on the amount the user just approved (VerifyFlow.costCap's
