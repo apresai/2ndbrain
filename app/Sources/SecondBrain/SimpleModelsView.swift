@@ -215,6 +215,10 @@ struct SimpleModelsView: View {
                 Text("Validating \(progress.current)/\(progress.total) \(progress.lastLine)")
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
+                // Patient-probe copy: a cold model can hold one probe for
+                // minutes; without this the deliberately generous probe
+                // deadline reads as a hang.
+                ColdStartHint()
             } else if let lastVerifySummary {
                 Text(lastVerifySummary)
                     .font(.caption)

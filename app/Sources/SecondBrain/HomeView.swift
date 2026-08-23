@@ -270,6 +270,13 @@ struct HomeView: View {
             }
             .disabled(saving || testing || appState.vault == nil)
             .padding(.top, 4)
+            // Patient-probe copy: a cold model's first response can take
+            // minutes; without this the generous probe deadline reads as a
+            // hang. Hosted inside the in-flight branch so each Test run
+            // starts a fresh 15s countdown.
+            if testing {
+                ColdStartHint()
+            }
         }
     }
 

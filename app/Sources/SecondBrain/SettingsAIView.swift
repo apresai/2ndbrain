@@ -260,6 +260,13 @@ struct SettingsAIView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Patient-probe copy: doctor probes both active models with
+            // deliberately generous deadlines, so a cold model's first
+            // response can take minutes; without this that reads as a hang.
+            if testing {
+                ColdStartHint()
+            }
+
             if let testError {
                 Label(testError, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
