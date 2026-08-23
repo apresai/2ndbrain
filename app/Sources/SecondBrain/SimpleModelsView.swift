@@ -13,9 +13,9 @@ struct SimpleModelsView: View {
     @State private var selectedVendors: Set<String> = []
     @State private var loading = true
     @State private var savingPolicy = false
-    @State private var verifying = false
-    @State private var verifyProgress: AIHubView.VerifyProgress?
-    @State private var lastVerifySummary: String?
+    /// Shared run state for the streamed Validate flow (see VerifyRunModel —
+    /// the one applyVerifyEvent fold this view used to duplicate).
+    @State private var verifyRun = VerifyRunModel()
     @State private var validateEstimate: CostPreviewResponse?
     @State private var errorMessage: String?
     @State private var vendorGuardMessage: String?
@@ -184,7 +184,7 @@ struct SimpleModelsView: View {
                 Spacer()
                 Button("Validate new models") { Task { await validateNewModels() } }
                     .controlSize(.small)
-                    .disabled(verifying)
+                    .disabled(verifyRun.running)
                 Button("Dismiss") { dismissDiscoveryNudge() }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
@@ -197,10 +197,10 @@ struct SimpleModelsView: View {
     private var validateSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Button(verifying ? "Validating…" : "Validate") {
+                Button(verifyRun.running ? "Validating…" : "Validate") {
                     Task { await runValidate() }
                 }
-                .disabled(verifying || appState.vault == nil)
+                .disabled(verifyRun.running || appState.vault == nil)
                 if let estimate = validateEstimate {
                     Text(String(format: "Validate · est. $%.4f", estimate.totalUSD) + regionSuffix)
                         .font(.caption)
@@ -211,7 +211,7 @@ struct SimpleModelsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            if let progress = verifyProgress {
+            if let progress = verifyRun.progress {
                 Text("Validating \(progress.current)/\(progress.total) \(progress.lastLine)")
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -219,8 +219,8 @@ struct SimpleModelsView: View {
                 // minutes; without this the deliberately generous probe
                 // deadline reads as a hang.
                 ColdStartHint()
-            } else if let lastVerifySummary {
-                Text(lastVerifySummary)
+            } else if let summary = verifyRun.lastSummary {
+                Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -557,9 +557,10 @@ struct SimpleModelsView: View {
     /// button, `only: nil`). Both paths share the same cost-preview /
     /// confirm / verify-stream body below.
     private func runValidate(only: [String]? = nil) async {
-        guard !verifying else { return }
-        verifying = true
-        defer { verifying = false }
+        // Claim the single-flight slot at entry, BEFORE the async cost preview
+        // + confirm, so a rapid double-tap cannot launch two runs.
+        guard verifyRun.beginRun() else { return }
+        defer { verifyRun.endRun() }
         let provider = aiStatus?.provider ?? "bedrock"
         let candidateIDs: [String]
         if let only {
@@ -586,14 +587,12 @@ struct SimpleModelsView: View {
         validateEstimate = preview
         guard confirmPaidOperation(preview: preview, operation: "Validate") else { return }
         let cap = VerifyFlow.costCap(preview: preview)
-        lastVerifySummary = nil
-        verifyProgress = AIHubView.VerifyProgress(current: 0, total: candidateIDs.count)
-        defer { verifyProgress = nil }
+        verifyRun.startStream(expectedTotal: candidateIDs.count)
         do {
             // Same IDs as the cost-preview confirm. Empty IDs would add
             // --discover and let the CLI rebuild a larger pool than shown.
             try await appState.verifyModels(provider: provider, costCap: cap, modelIDs: candidateIDs) { event in
-                applyVerifyEvent(event)
+                verifyRun.apply(event)
             }
             // The user has now seen (and partly probed) this discovery
             // state; record the provider's full current catalog so later
@@ -602,25 +601,6 @@ struct SimpleModelsView: View {
             await reload(discover: true)
         } catch {
             errorMessage = error.localizedDescription
-        }
-    }
-
-    private func applyVerifyEvent(_ event: VerifyEvent) {
-        switch event.event {
-        case "start":
-            verifyProgress = AIHubView.VerifyProgress(current: 0, total: event.total ?? 0)
-        case "result":
-            var p = verifyProgress ?? AIHubView.VerifyProgress()
-            p.current = event.n ?? p.current
-            if let total = event.total { p.total = total }
-            if let r = event.result {
-                p.lastLine = "\(r.ok ? "PASS" : "FAIL") \(r.modelID)"
-            }
-            verifyProgress = p
-        case "done":
-            lastVerifySummary = VerifyFlow.summaryText(event.summary)
-        default:
-            break
         }
     }
 
