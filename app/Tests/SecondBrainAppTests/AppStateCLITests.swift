@@ -89,6 +89,7 @@ func appStateSetModelSimilarityThreshold() async throws {
             local: nil,
             tier: nil,
             invokeStrategy: nil,
+            region: nil,
             enabled: nil,
             active: nil,
             configHint: nil,

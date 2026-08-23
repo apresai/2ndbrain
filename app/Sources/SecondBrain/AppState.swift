@@ -2941,6 +2941,87 @@ final class AppState {
         UserDefaults.standard.set(Array(current.union(keys)), forKey: DiscoveryNudge.key)
     }
 
+    // MARK: - Discovery as a verb (models discover)
+
+    /// Whether the resolved CLI supports `2nb models discover`. nil = not yet
+    /// probed this app run; probed at most once (the first run settles it)
+    /// and kept in memory only, so a `brew upgrade` mid-flight is picked up
+    /// on the next launch. Detection is payload-shape based, never exit-code
+    /// based: a pre-discover CLI answers the verb as `models list` — exit 0,
+    /// top-level array (see `DiscoverCLIProbe`).
+    var modelsDiscoverSupported: Bool?
+
+    /// The most recent `models discover` envelope, shared between the
+    /// Testing tab's Discover card and the Models tab's nudge banner so both
+    /// render one run's listing instead of racing to re-run a command whose
+    /// NEW/GONE diff is one-shot (each run advances the CLI's machine-local
+    /// baseline).
+    var latestDiscoverReport: DiscoverReportInfo?
+
+    /// Session accumulation of the one-shot NEW/GONE diff across runs; see
+    /// `DiscoverDiffSession` for the rules.
+    var discoverDiffSession = DiscoverDiffSession.State()
+
+    /// Argv for `models discover`. `--yes` rides with `--validate` because
+    /// the GUI has already cost-confirmed (PaidOperationConfirm) and the CLI
+    /// refuses to spend on a non-interactive stdin without it; `costCap` is
+    /// the confirmed estimate's cap (VerifyFlow.costCap), passed explicitly
+    /// so the CLI's spend guard still trips on a runaway.
+    nonisolated static func modelsDiscoverArgs(refresh: Bool, add: [String], validate: Bool, costCap: Double?) -> [String] {
+        var args = ["models", "discover", "--json", "--porcelain"]
+        if refresh { args.append("--refresh") }
+        for id in add { args += ["--add", id] }
+        if validate {
+            args += ["--validate", "--yes"]
+            if let costCap {
+                args += ["--cost-cap", String(format: "%.4f", costCap)]
+            }
+        }
+        return args
+    }
+
+    /// Runs `2nb models discover` and folds the envelope into the shared
+    /// report + session diff. Settles `modelsDiscoverSupported` on the way:
+    /// a `models list`-shaped payload or an unknown-flag exit marks the CLI
+    /// pre-discover (returned as `.unsupported`, not thrown, so the nudge
+    /// probe can fall back silently); every other failure throws and leaves
+    /// the capability verdict untouched. A run that added or validated
+    /// models bumps `modelsCatalogVersion` (the user catalog changed).
+    @discardableResult
+    func runModelsDiscover(refresh: Bool = false, add: [String] = [], validate: Bool = false, costCap: Double? = nil) async throws -> DiscoverRunOutcome {
+        guard let vault else { throw CLIError.noVault }
+        let args = Self.modelsDiscoverArgs(refresh: refresh, add: add, validate: validate, costCap: costCap)
+        log.info("Discover action: 2nb \(args.joined(separator: " "), privacy: .public)")
+        let data: Data
+        do {
+            data = try await runCLI(args, cwd: vault.rootURL)
+        } catch CLIError.nonZeroExit(_, let message) where DiscoverCLIProbe.indicatesUnsupported(stderr: message) {
+            modelsDiscoverSupported = false
+            return .unsupported
+        }
+        switch DiscoverCLIProbe.classify(data) {
+        case .supported(let report):
+            modelsDiscoverSupported = true
+            latestDiscoverReport = report
+            discoverDiffSession = DiscoverDiffSession.merged(discoverDiffSession, report: report)
+            if let added = report.added, !added.isEmpty {
+                discoverDiffSession = DiscoverDiffSession.afterAdd(discoverDiffSession, addedIDs: added)
+                modelsCatalogVersion += 1
+            }
+            return .report(report)
+        case .unsupported:
+            modelsDiscoverSupported = false
+            return .unsupported
+        case .undecodable:
+            throw CLIError.nonZeroExit(0, message: "models discover returned an unrecognized payload")
+        }
+    }
+
+    /// The user has acted on (or dismissed) the provider's session-NEW set.
+    func clearDiscoverSessionNew(provider: String) {
+        discoverDiffSession = DiscoverDiffSession.clearingNew(discoverDiffSession, provider: provider)
+    }
+
     // MARK: - Vendor policy (enable-only per provider)
 
     /// GUI vendor policy is machine-local and sticky across vaults. Vault
@@ -3953,6 +4034,9 @@ struct CatalogModelInfo: Codable, Identifiable {
     let local: Bool?
     let tier: String?
     let invokeStrategy: String?
+    /// Bedrock region pin (mantle listings carry their listing region; a
+    /// verify pass can pin a non-primary region). Absent when unpinned.
+    let region: String?
     let enabled: Bool?
     let active: Bool?
     let configHint: String?
@@ -4000,6 +4084,7 @@ struct CatalogModelInfo: Codable, Identifiable {
         case local
         case tier
         case invokeStrategy = "invoke_strategy"
+        case region
         case enabled
         case active
         case configHint = "config_hint"
