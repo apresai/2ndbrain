@@ -60,6 +60,12 @@ struct SimpleModelsView: View {
                         vendorSection
                         validateSection
                         workingSetSummarySection
+                        Divider()
+                        // The Discover card (per-source cache ages, Refresh,
+                        // NEW with Add / Add + Validate, GONE) lives on the
+                        // Testing tab's Validate pane only; the Models tab
+                        // keeps the lighter nudge banner.
+                        DiscoverSectionView()
                     } else {
                         staleBanner
                         vendorSection
@@ -513,7 +519,7 @@ struct SimpleModelsView: View {
             // guessed provider. Vendor toggles also change which models are
             // enabled, so this still runs on every reload, not only
             // discover:true ones.
-            updateDiscoveryNudge(canSeed: discover)
+            await updateDiscoveryNudge(canSeed: discover)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -528,32 +534,62 @@ struct SimpleModelsView: View {
         stagedEmpty = false
     }
 
-    /// Recomputes `discoveryNewIDs` against the persisted seen snapshot.
-    /// Requires a known active provider (`aiStatus` populated) so a
-    /// snapshot is never seeded, or read, under a guessed provider name
-    /// (bedrock is only a display fallback elsewhere in this view, never
-    /// safe to write into a per-provider persisted key). On the very first
-    /// run for that provider (no key for it has ever been recorded) this
-    /// seeds the snapshot with the current catalog silently instead of
-    /// badging the whole shipped model list as new; see
+    /// Recomputes `discoveryNewIDs`. Two sources, chosen by
+    /// `DiscoveryNudge.nudgeSource`:
+    ///
+    /// CLI-backed (preferred once the installed CLI proves it supports
+    /// `models discover`; probed at most once per app run, by payload shape —
+    /// an old CLI answers the verb as `models list`, exit 0, so exit codes
+    /// prove nothing): the banner's NEW set comes from the report's `new[]`
+    /// (session-accumulated, since the server-side diff is one-shot), and the
+    /// baseline advance is server-side, so dismissed/probed bookkeeping is
+    /// just a session-key clear plus a reload. The CLI's first run seeds its
+    /// baseline silently (`new` is empty), so a freshly seeded pool is never
+    /// badged; the UserDefaults snapshot still filters, so a model dismissed
+    /// under the snapshot era is never re-announced after a CLI upgrade.
+    /// The probe runs only from the Models-tab host on discover-sourced
+    /// reloads: the Testing pane's Discover card owns its own runs, and a
+    /// checkbox reload must not walk the vendor planes.
+    ///
+    /// Snapshot fallback (older CLI), unchanged: requires a known active
+    /// provider (`aiStatus` populated) so the snapshot is never seeded, or
+    /// read, under a guessed provider name. On the very first run for that
+    /// provider this seeds the snapshot with the current catalog silently
+    /// instead of badging the whole shipped model list as new; see
     /// `DiscoveryNudge.shouldSuppressFirstRun`.
-    private func updateDiscoveryNudge(canSeed: Bool) {
+    private func updateDiscoveryNudge(canSeed: Bool) async {
         guard let provider = aiStatus?.provider else { return }
-        let seen = appState.discoverySeenModelKeys
-        guard !DiscoveryNudge.shouldSuppressFirstRun(seen: seen, provider: provider) else {
-            // Seed ONLY from a discover-sourced catalog: a non-discover
-            // reload's models list is often a subset of the live listing,
-            // and seeding from it under-specifies the snapshot so later
-            // full discovers falsely badge long-known models as new. A
-            // first run reached via a non-discover reload just stays
-            // un-seeded until the next discover load seeds it.
-            if canSeed {
-                appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
-            }
-            discoveryNewIDs = []
-            return
+        if !validateOnly && canSeed && appState.modelsDiscoverSupported != false {
+            // Settles the capability on the first run; a transient failure
+            // leaves it unsettled (snapshot fallback this reload, re-probe
+            // on the next).
+            _ = try? await appState.runModelsDiscover()
         }
-        discoveryNewIDs = DiscoveryNudge.newIDs(models: models, provider: provider, seen: seen ?? [])
+        switch DiscoveryNudge.nudgeSource(cliSupported: appState.modelsDiscoverSupported) {
+        case .cliBacked:
+            discoveryNewIDs = DiscoveryNudge.cliBackedNewIDs(
+                models: models,
+                provider: provider,
+                sessionNewKeys: appState.discoverDiffSession.newKeys,
+                seen: appState.discoverySeenModelKeys
+            )
+        case .snapshot:
+            let seen = appState.discoverySeenModelKeys
+            guard !DiscoveryNudge.shouldSuppressFirstRun(seen: seen, provider: provider) else {
+                // Seed ONLY from a discover-sourced catalog: a non-discover
+                // reload's models list is often a subset of the live listing,
+                // and seeding from it under-specifies the snapshot so later
+                // full discovers falsely badge long-known models as new. A
+                // first run reached via a non-discover reload just stays
+                // un-seeded until the next discover load seeds it.
+                if canSeed {
+                    appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+                }
+                discoveryNewIDs = []
+                return
+            }
+            discoveryNewIDs = DiscoveryNudge.newIDs(models: models, provider: provider, seen: seen ?? [])
+        }
     }
 
     /// "Validate new models": probes exactly the banner's IDs via the same
@@ -568,10 +604,14 @@ struct SimpleModelsView: View {
     /// provider's FULL current catalog (not just the badged subset): a
     /// disabled model left unseen here would re-badge as "new" the moment
     /// its vendor checkbox is toggled on, mislabeling a filter change as a
-    /// discovery event.
+    /// discovery event. Under the CLI-backed source the session-NEW keys
+    /// clear too (the CLI baseline already advanced server-side when the
+    /// report was fetched); the snapshot write stays regardless so the
+    /// fallback path remains coherent after a CLI downgrade.
     private func dismissDiscoveryNudge() {
         guard let provider = aiStatus?.provider, !discoveryNewIDs.isEmpty else { return }
         appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: provider))
+        appState.clearDiscoverSessionNew(provider: provider)
         discoveryNewIDs = []
     }
 
@@ -666,12 +706,16 @@ struct SimpleModelsView: View {
             }
             // The user has now seen (and partly probed) this discovery
             // state; record the provider's full current catalog so later
-            // vendor-checkbox toggles never re-badge long-known models.
-            // Recorded only under a REAL provider, never the probing
-            // fallback: a snapshot keyed to a guessed provider poisons
-            // first-run suppression for the actual one.
+            // vendor-checkbox toggles never re-badge long-known models,
+            // and clear the session-NEW keys so the CLI-backed banner does
+            // not recompute the same set (its server-side baseline already
+            // advanced when the report was fetched). Recorded only under a
+            // REAL provider, never the probing fallback: a snapshot keyed
+            // to a guessed provider poisons first-run suppression for the
+            // actual one.
             if let realProvider = aiStatus?.provider {
                 appState.recordDiscoverySeen(DiscoveryNudge.allProviderKeys(models, provider: realProvider))
+                appState.clearDiscoverSessionNew(provider: realProvider)
             }
             await reload(discover: true)
         } catch {
@@ -899,6 +943,37 @@ enum DiscoveryNudge {
         probeableAndEnabled(models, provider: provider)
             .map(\.modelID)
             .filter { !seen.contains(modelKey(provider: provider, modelID: $0)) }
+    }
+
+    /// Which source feeds the banner's NEW set. CLI-backed once the
+    /// installed CLI has PROVEN it supports `models discover` (a settled
+    /// `true`); the UserDefaults snapshot both for a proven-old CLI
+    /// (`false`) and while the capability is still unprobed (`nil`), so an
+    /// unreachable or mid-upgrade CLI degrades to the old behavior instead
+    /// of showing nothing.
+    enum Source: Equatable {
+        case cliBacked
+        case snapshot
+    }
+
+    static func nudgeSource(cliSupported: Bool?) -> Source {
+        cliSupported == true ? .cliBacked : .snapshot
+    }
+
+    /// CLI-backed banner set: the session-accumulated server-side NEW keys
+    /// (`DiscoverDiffSession`), resolved against the current catalog through
+    /// the same probeable-and-enabled predicate as the snapshot path — so
+    /// "Validate new models" still probes exactly what the banner counted —
+    /// minus anything the UserDefaults snapshot already showed (a model
+    /// dismissed under the old snapshot-based banner must not be
+    /// re-announced after a CLI upgrade). The CLI's first run seeds its
+    /// baseline silently (`new` is empty), so a freshly seeded pool never
+    /// reaches the session keys and is never badged.
+    static func cliBackedNewIDs(models: [CatalogModelInfo], provider: String, sessionNewKeys: Set<String>, seen: Set<String>?) -> [String] {
+        probeableAndEnabled(models, provider: provider)
+            .map(\.modelID)
+            .filter { sessionNewKeys.contains(modelKey(provider: provider, modelID: $0)) }
+            .filter { !(seen ?? []).contains(modelKey(provider: provider, modelID: $0)) }
     }
 
     /// True when no key for `provider` has ever been recorded to the seen
