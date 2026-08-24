@@ -25,7 +25,9 @@ This is the deterministic, AI-free sibling of "polish --repair-links": it runs
 NO generation provider, so it works offline and never touches your prose — only
 the broken links. A broken target is rewritten only when its normalized name
 maps to exactly one note; ambiguous or unmatched targets are reported and left
-untouched (never guessed). Asset embeds and code are never touched.
+untouched (never guessed). Asset embeds and code are never touched. The
+emission is syntax-aware: wikilink occurrences get the pretty candidate, while
+markdown occurrences get a path-based destination that actually resolves.
 
 By default it PREVIEWS (prints the proposed result without writing). With
 --write it applies the repairs in place and snapshots the original, so the
