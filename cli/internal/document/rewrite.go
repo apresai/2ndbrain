@@ -227,7 +227,15 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 			continue
 		}
 
+		// Obsidian percent-encodes spaces when it generates markdown links, so
+		// match the raw form first (a literal-% filename wins exactly), then
+		// retry the decoded form. Decode happens AFTER the #? split above so a
+		// literal %23 in a filename can never be mis-split as an anchor.
+		decoded := DecodeLinkTarget(pathPart)
 		form, ok := matchForm(pathPart, oldForms)
+		if !ok && decoded != pathPart {
+			form, ok = matchForm(decoded, oldForms)
+		}
 		if !ok {
 			continue
 		}
@@ -242,6 +250,14 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 		replacement := newPath + ".md"
 		if form == formBasename {
 			replacement = newBase + ".md"
+		}
+		// Percent-encode the emitted destination when the authored link was
+		// encoded (preserve the author's convention) or the new path needs it
+		// to stay a valid bare CommonMark destination (spaces, parens, ...).
+		// Encoding runs BEFORE the no-op check so a folder-only move under an
+		// encoded bare link is a no-op rather than a phantom rewrite.
+		if decoded != pathPart || mdLinkNeedsEncoding(replacement) {
+			replacement = EncodeLinkTarget(replacement)
 		}
 		if replacement == pathPart {
 			continue // no-op (path text already matches the replacement)
@@ -346,6 +362,9 @@ func targetForms(oldTarget string) map[string]matchKind {
 // normalizeTarget canonicalizes a wikilink target or a vault-relative path for
 // matching: backslashes to forward slashes, a stripped leading slash, and a
 // stripped ".md" extension. Mirrors the normalization in store.ResolveLinks.
+// Percent-decoding is deliberately NOT part of this normalization: markdown
+// comparison sites retry through DecodeLinkTarget (linkencode.go) on a raw
+// miss, so wikilink matching stays byte-exact.
 func normalizeTarget(s string) string {
 	s = strings.ReplaceAll(s, "\\", "/")
 	s = strings.TrimPrefix(s, "/")
