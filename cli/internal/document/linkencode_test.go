@@ -59,16 +59,13 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMdLinkNeedsEncoding(t *testing.T) {
-	if mdLinkNeedsEncoding("notes/clean.md") {
-		t.Fatal("clean path should not need encoding")
-	}
-	for _, s := range []string{"a b.md", "50%.md", "a(b).md", "a#b.md", "a?b.md"} {
-		if !mdLinkNeedsEncoding(s) {
-			t.Fatalf("%q should need encoding", s)
+func TestEncodeLinkTarget_IdentityWhenClean(t *testing.T) {
+	// EncodeLinkTarget must be an identity (same string, no rewrite) for paths
+	// with no escape-set bytes: the rewrite loop relies on this to encode
+	// unconditionally without perturbing clean destinations.
+	for _, s := range []string{"notes/clean.md", "\x00probe-dst.md", "café.md"} {
+		if got := EncodeLinkTarget(s); got != s {
+			t.Fatalf("EncodeLinkTarget(%q) = %q, want identity", s, got)
 		}
-	}
-	if mdLinkNeedsEncoding("\x00probe-dst.md") {
-		t.Fatal("probe sentinel must not need encoding")
 	}
 }

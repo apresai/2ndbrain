@@ -86,15 +86,10 @@ func TestLint_SkipsAssetsAndAnchors(t *testing.T) {
 func TestLint_PercentEncodedMarkdownLinkResolves(t *testing.T) {
 	_, root := newContractVault(t)
 
-	write := func(name, content string) {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("My Note.md", "---\nid: m1\ntitle: My Note\ntype: note\nstatus: draft\n---\nSpaces in my path.\n")
-	write("ref.md", "---\nid: r1\ntitle: Ref\ntype: note\nstatus: draft\n---\n"+
+	writeNote(t, root, "My Note.md", "My Note", "Spaces in my path.")
+	writeNote(t, root, "ref.md", "Ref",
 		"Good encoded [x](My%20Note.md). Asset [y](img%20name.png). "+
-		"Broken encoded [z](Missing%20Note.md).\n")
+			"Broken encoded [z](Missing%20Note.md).")
 
 	out, err := runCLIArgs(t, root, "lint", "--json")
 	if err != nil {

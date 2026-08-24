@@ -33,34 +33,26 @@ func DecodeLinkTarget(pathPart string) string {
 // that break a bare CommonMark link destination or 2nb's own link parsing.
 // '%' is included for round-trip fidelity (a literal-'%' filename must encode
 // to a form that decodes back to itself); '/' is deliberately absent (path
-// separators stay verbatim, which is why url.PathEscape cannot be used).
+// separators stay verbatim, which is why url.PathEscape cannot be used, and
+// (&url.URL{Path: p}).EscapedPath() over-escapes UTF-8 bytes we keep verbatim).
 const mdLinkEscapeSet = "% #?()"
 
-// EncodeLinkTarget percent-encodes exactly the bytes in mdLinkEscapeSet as
-// uppercase %XX, leaving '/' and every other byte (including non-ASCII UTF-8)
-// verbatim. DecodeLinkTarget(EncodeLinkTarget(s)) == s for every s.
-func EncodeLinkTarget(path string) string {
-	if !strings.ContainsAny(path, mdLinkEscapeSet) {
-		return path
-	}
+// mdLinkEscaper percent-encodes exactly the mdLinkEscapeSet bytes as uppercase
+// %XX. Built from the set so the escape alphabet has one definition; the
+// Replacer returns its input unchanged when nothing matches (no allocation).
+var mdLinkEscaper = func() *strings.Replacer {
 	const hex = "0123456789ABCDEF"
-	var b strings.Builder
-	b.Grow(len(path) + 8)
-	for i := 0; i < len(path); i++ {
-		c := path[i]
-		if strings.IndexByte(mdLinkEscapeSet, c) >= 0 {
-			b.WriteByte('%')
-			b.WriteByte(hex[c>>4])
-			b.WriteByte(hex[c&0xF])
-		} else {
-			b.WriteByte(c)
-		}
+	pairs := make([]string, 0, len(mdLinkEscapeSet)*2)
+	for i := 0; i < len(mdLinkEscapeSet); i++ {
+		c := mdLinkEscapeSet[i]
+		pairs = append(pairs, string(c), string([]byte{'%', hex[c>>4], hex[c&0xF]}))
 	}
-	return b.String()
-}
+	return strings.NewReplacer(pairs...)
+}()
 
-// mdLinkNeedsEncoding reports whether a path emitted as a bare markdown link
-// destination requires percent-encoding to stay a valid, parseable link.
-func mdLinkNeedsEncoding(path string) bool {
-	return strings.ContainsAny(path, mdLinkEscapeSet)
+// EncodeLinkTarget percent-encodes exactly the bytes in mdLinkEscapeSet,
+// leaving '/' and every other byte (including non-ASCII UTF-8) verbatim.
+// DecodeLinkTarget(EncodeLinkTarget(s)) == s for every s.
+func EncodeLinkTarget(path string) string {
+	return mdLinkEscaper.Replace(path)
 }

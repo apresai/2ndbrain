@@ -205,6 +205,13 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 		edits = append(edits, edit{start: m[2], end: m[2] + len(target), newText: replacement})
 	}
 
+	// Markdown replacements are loop-invariant: encode them once. Encoding is
+	// an identity on clean paths, so applying it unconditionally is safe; it
+	// keeps a rewritten destination a valid bare CommonMark destination when
+	// the new path contains a space, %, #, ?, or parenthesis.
+	mdNewPath := EncodeLinkTarget(newPath + ".md")
+	mdNewBase := EncodeLinkTarget(newBase + ".md")
+
 	for _, m := range mdLinkRe.FindAllStringSubmatchIndex(scan, -1) {
 		// Group 2 (m[4]:m[5]) is the (target) portion inside the parentheses.
 		rawTarget := scan[m[4]:m[5]]
@@ -229,12 +236,14 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 
 		// Obsidian percent-encodes spaces when it generates markdown links, so
 		// match the raw form first (a literal-% filename wins exactly), then
-		// retry the decoded form. Decode happens AFTER the #? split above so a
-		// literal %23 in a filename can never be mis-split as an anchor.
-		decoded := DecodeLinkTarget(pathPart)
+		// retry the decoded form on a miss. Decode happens AFTER the #? split
+		// above so a literal %23 in a filename can never be mis-split as an
+		// anchor.
 		form, ok := matchForm(pathPart, oldForms)
-		if !ok && decoded != pathPart {
-			form, ok = matchForm(decoded, oldForms)
+		if !ok {
+			if decoded := DecodeLinkTarget(pathPart); decoded != pathPart {
+				form, ok = matchForm(decoded, oldForms)
+			}
 		}
 		if !ok {
 			continue
@@ -247,20 +256,18 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 		// unlike wikilinks which drop it. A bare basename match stays a bare
 		// basename; a path match becomes the new path. We never invent a folder
 		// prefix a bare authored link didn't have.
-		replacement := newPath + ".md"
+		replacement := mdNewPath
 		if form == formBasename {
-			replacement = newBase + ".md"
+			replacement = mdNewBase
 		}
-		// Percent-encode the emitted destination when the authored link was
-		// encoded (preserve the author's convention) or the new path needs it
-		// to stay a valid bare CommonMark destination (spaces, parens, ...).
-		// Encoding runs BEFORE the no-op check so a folder-only move under an
-		// encoded bare link is a no-op rather than a phantom rewrite.
-		if decoded != pathPart || mdLinkNeedsEncoding(replacement) {
-			replacement = EncodeLinkTarget(replacement)
-		}
-		if replacement == pathPart {
-			continue // no-op (path text already matches the replacement)
+		// No-op when the destination is unchanged modulo percent-encoding: a
+		// rewrite whose only effect would be respelling the same destination
+		// (raw spaces to %20 or back) must not count as a change, or a
+		// folder-only move would churn referencing notes, and repair-links
+		// would "repair" a link to its own spelling, burning the note's single
+		// polish --undo snapshot without fixing anything.
+		if replacement == pathPart || DecodeLinkTarget(replacement) == DecodeLinkTarget(pathPart) {
+			continue
 		}
 		// Edit only the path part inside the parentheses (m[4] through
 		// m[4]+len(pathPart)); the #anchor/?query suffix and the closing ")"

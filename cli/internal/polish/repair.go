@@ -113,6 +113,14 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 			if n > 0 {
 				body = rewritten
 				res.Repaired = append(res.Repaired, LinkRepair{Raw: target, NewTarget: newTarget})
+			} else {
+				// A unique candidate whose rewrite changes nothing: the
+				// canonical spelling of the candidate IS the authored target
+				// (modulo percent-encoding), so rewriting cannot fix the link.
+				// Report it rather than dropping it silently, or a UI's
+				// one-click repair row would survive every application with
+				// no visible outcome.
+				res.Skipped = append(res.Skipped, LinkRepair{Raw: target, NewTarget: newTarget, Reason: "no_change"})
 			}
 		case 0:
 			res.Skipped = append(res.Skipped, LinkRepair{Raw: target, Reason: "no_match"})

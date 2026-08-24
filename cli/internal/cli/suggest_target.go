@@ -435,6 +435,9 @@ const dominantScoreRatio = 1.4
 // repair-links would rewrite to, and it may have matched via an alias the
 // title/basename word check cannot see).
 func assignConfidence(results []SuggestLinkResult, target string, uniqueDrift map[string]bool) {
+	// Decode once (loop-invariant): a percent-encoded markdown target grades
+	// on its words ("my note"), not on "%20"-glued tokens.
+	target = document.DecodeLinkTarget(target)
 	for i := range results {
 		if uniqueDrift[results[i].Path] {
 			results[i].Confidence = "high"
@@ -468,9 +471,7 @@ func hasHighConfidence(results []SuggestLinkResult) bool {
 // normalization the repair index uses (polish.NormalizeName), equals or is a
 // whole-word subset of the candidate's folded title or basename.
 func targetWordMatch(target, title, path string) bool {
-	// Decode a percent-encoded markdown target first so confidence grades on
-	// words ("my note"), not on "%20"-glued tokens.
-	folded := polish.NormalizeName(document.DecodeLinkTarget(target))
+	folded := polish.NormalizeName(target)
 	base := strings.TrimSuffix(filepath.Base(path), ".md")
 	return isWholeWordSubset(folded, polish.NormalizeName(title)) ||
 		isWholeWordSubset(folded, polish.NormalizeName(base))

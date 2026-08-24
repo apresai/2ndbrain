@@ -364,11 +364,19 @@ func TestRewriteWikiLinks_MarkdownLinks(t *testing.T) {
 			wantCount: 1,
 		},
 		{
-			name:      "folder-only move under encoded bare link is a no-op (encode before no-op check)",
+			name:      "folder-only move under encoded bare link is a no-op",
 			body:      "See [x](My%20Note.md) here.",
 			oldTarget: "a/My Note.md",
 			newTarget: "b/My Note.md",
 			want:      "See [x](My%20Note.md) here.",
+			wantCount: 0,
+		},
+		{
+			name:      "folder-only move under raw-space bare link is a no-op, never a respell",
+			body:      "See [x](My Note.md) here.",
+			oldTarget: "a/My Note.md",
+			newTarget: "b/My Note.md",
+			want:      "See [x](My Note.md) here.",
 			wantCount: 0,
 		},
 		{

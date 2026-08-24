@@ -144,12 +144,19 @@ func (idx *lookupIndex) uniqueDocID(name string) (string, bool) {
 // resolved docID, or "" when nothing matches unambiguously. The target must
 // already be slash-normalized with any leading slash stripped; the #anchor was
 // split off at parse time.
+//
+// Deliberately NOT collapsible with Resolver.resolveOnce: tier B differs. Here
+// an ambiguous name FALLS THROUGH to the title/alias tiers (a wikilink with an
+// ambiguous basename but a unique title still resolves); resolveOnce STOPS
+// with *AmbiguousTargetError so ResolveTarget fails loudly instead of guessing.
 func (idx *lookupIndex) resolveID(target string) string {
+	withExt := target + ".md"
+
 	// A. Exact full-path match (path is unique).
 	if id, ok := idx.exactPaths[target]; ok {
 		return id
 	}
-	if id, ok := idx.exactPaths[target+".md"]; ok {
+	if id, ok := idx.exactPaths[withExt]; ok {
 		return id
 	}
 
@@ -157,7 +164,7 @@ func (idx *lookupIndex) resolveID(target string) string {
 	if id, ok := idx.uniqueDocID(target); ok {
 		return id
 	}
-	if id, ok := idx.uniqueDocID(target + ".md"); ok {
+	if id, ok := idx.uniqueDocID(withExt); ok {
 		return id
 	}
 
