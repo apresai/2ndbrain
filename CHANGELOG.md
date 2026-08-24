@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
-- `repair-links`, `polish --repair-links`, and `relink` now emit syntax-aware destinations: a broken markdown link is repaired to a path-based destination that actually resolves (bare basename when unique, else the full vault-relative path), instead of a title+`.md` form no resolver tier accepts, while wikilinks keep the pretty title. Also suppresses the phantom `no_change` skip when one repair fixed both the wikilink and markdown spellings of a name. (#TBD)
+- `repair-links`, `polish --repair-links`, and `relink` now emit syntax-aware destinations: a broken markdown link is repaired to a path-based destination that actually resolves (bare basename when unique, else the full vault-relative path), instead of a title+`.md` form no resolver tier accepts, while wikilinks keep the pretty title. Also suppresses the phantom `no_change` skip when one repair fixed both the wikilink and markdown spellings of a name. (#238)
 - Percent-encoded markdown links (`[x](My%20Note.md)`, the form Obsidian generates for paths with spaces) are now first-class everywhere: they resolve as real links (backlinks, graph, `unresolved`, lint, repair candidates all see them), and `move`/`rename` discovers, matches, and rewrites them, percent-encoding rewritten destinations as needed and never respelling an unchanged destination. Reindex recommended: `2nb index` (free, no re-embed) so previously-unresolved encoded links pick up their targets. (#237)
 
 ## [0.19.2] - 2026-08-23
