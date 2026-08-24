@@ -431,6 +431,90 @@ func TestRewriteWikiLinks_PreservesSurroundingText(t *testing.T) {
 	}
 }
 
+// TestRewriteLinksSyntaxAware pins the per-syntax destination contract used by
+// repair and relink: wikilink occurrences get wikiTarget (the pretty form),
+// while every matched markdown occurrence gets mdDest substituted verbatim
+// (encoded as needed), ignoring the authored bare-vs-path shape. A title-based
+// markdown destination resolves through no resolver tier, which is why the
+// markdown side takes a caller-verified path form.
+func TestRewriteLinksSyntaxAware(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		oldTarget  string
+		wikiTarget string
+		mdDest     string
+		want       string
+		wantCount  int
+	}{
+		{
+			name:       "md occurrence gets mdDest, wiki occurrence gets wikiTarget, one pass",
+			body:       "See [[guide to models]] and [x](guide to models.md).",
+			oldTarget:  "guide to models",
+			wikiTarget: "Guide To Models",
+			mdDest:     "guide-to-models.md",
+			want:       "See [[Guide To Models]] and [x](guide-to-models.md).",
+			wantCount:  2,
+		},
+		{
+			name:       "anchor suffix and label preserved under verbatim mdDest",
+			body:       "See [setup](auth%20flow.md#Setup) here.",
+			oldTarget:  "auth flow.md",
+			wikiTarget: "Auth Flow",
+			mdDest:     "auth-flow.md",
+			want:       "See [setup](auth-flow.md#Setup) here.",
+			wantCount:  1,
+		},
+		{
+			name:       "mdDest containing spaces is percent-encoded",
+			body:       "See [x](auth%20flow.md) here.",
+			oldTarget:  "auth flow.md",
+			wikiTarget: "Auth Flow",
+			mdDest:     "guides/Auth Flow.md",
+			want:       "See [x](guides/Auth%20Flow.md) here.",
+			wantCount:  1,
+		},
+		{
+			name:       "mdDest equal to the authored target is a no-op",
+			body:       "See [x](auth-flow.md) here.",
+			oldTarget:  "auth-flow.md",
+			wikiTarget: "Auth Flow",
+			mdDest:     "auth-flow.md",
+			want:       "See [x](auth-flow.md) here.",
+			wantCount:  0,
+		},
+		{
+			name:       "path-authored md occurrence also gets mdDest verbatim",
+			body:       "See [x](notes/auth%20flow.md) here.",
+			oldTarget:  "notes/auth flow.md",
+			wikiTarget: "Auth Flow",
+			mdDest:     "auth-flow.md",
+			want:       "See [x](auth-flow.md) here.",
+			wantCount:  1,
+		},
+		{
+			name:       "wikilink-only body: mdDest unused, pretty form emitted",
+			body:       "See [[auth flow]] here.",
+			oldTarget:  "auth flow",
+			wikiTarget: "Auth Flow",
+			mdDest:     "auth-flow.md",
+			want:       "See [[Auth Flow]] here.",
+			wantCount:  1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, count := RewriteLinksSyntaxAware(tt.body, tt.oldTarget, tt.wikiTarget, tt.mdDest)
+			if got != tt.want {
+				t.Errorf("body mismatch:\n got: %q\nwant: %q", got, tt.want)
+			}
+			if count != tt.wantCount {
+				t.Errorf("count = %d, want %d", count, tt.wantCount)
+			}
+		})
+	}
+}
+
 // TestUnlinkWikiLink covers the "remove the link, keep the words" resolution:
 // brackets are stripped, the visible text (alias or target) is preserved, and
 // code/embeds are never touched. Matching is exact (case/separator-sensitive).
