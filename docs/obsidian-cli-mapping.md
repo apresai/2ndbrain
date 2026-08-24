@@ -52,6 +52,12 @@ part of the query).
 
 A `#heading` / `#^block` anchor on the target is stripped before matching.
 
+The fuzzy resolver (`store.ResolveTarget`) shares its lookup index with wikilink
+resolution (`buildLookupIndex`), so `file=` matching behaves exactly like
+`[[wikilink]]` resolution and the two can never diverge. Commands select the
+mode via a hidden `--resolve exact|fuzzy|auto` flag that this compatibility shim
+sets; it is deliberately absent from `--help`.
+
 ### Output formats (`--format` / `format=`)
 
 `json`, `csv`, `tsv`, `yaml`, `raw`, `md` (markdown body, same as raw for a
@@ -105,7 +111,7 @@ For other commands (`search`/`search-content`, `unresolved`, `list`/`files`),
 | move / rename a note | `2nb move <src> <dst>` / `2nb rename <src> <name>` | Link-aware (rewrites wikilinks + markdown links); mandatory `--dry-run` preview. |
 | list vaults | `2nb list-vaults` → `2nb vault list` | |
 | set default vault | `2nb set-default-vault path=…` → `2nb vault set …` | |
-| add vault | `2nb add-vault path=… --set-default` → `2nb vault create …` | `--set-default` is a no-op (create already activates). |
+| add vault | `2nb add-vault path=… --set-default` → `2nb vault create …` | `--set-default` is a no-op: 2nb follows the vault Obsidian has open, so `vault create` records the vault in recents without activating it (open it in Obsidian, or pass `--vault`). |
 
 ## Intentionally out of scope
 

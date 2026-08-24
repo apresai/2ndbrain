@@ -56,8 +56,7 @@ brew install --cask apresai/tap/secondbrain   # optional
 If a file-synced vault carries a pre-flip saved calibration (for Nova, the old symmetric
 `0.65`), `2nb ai` warns and semantic search silently degrades to BM25-only. The asymmetric
 query purpose collapsed the cosine scale (true-match cosine p50 is roughly `0.34`), so `0.65`
-now rejects every real match. See the "Similarity Threshold" section of the repo `CLAUDE.md`
-for the full rationale.
+now rejects every real match. See [search-tuning.md](search-tuning.md) for the full rationale.
 
 Fix it on the machine that inherited the stale value:
 

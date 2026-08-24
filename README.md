@@ -336,7 +336,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--tsv` for machine-readable o
 ### Defaults and search scoring
 
 - **Parent-command defaults**: running a command group without a subcommand invokes its most-useful read-only action: `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works on every command.
-- **Similarity threshold** — hybrid search drops vector hits whose cosine similarity is below the active threshold so barely-related neighbors stop padding result lists. Resolution order: explicit vault config (`2nb config set ai.similarity_threshold 0.25`) > user calibration saved by `2nb models calibrate --save` > per-model recommendation from the builtin catalog > global default `0.20`. Builtin recommendations: Nova-2 `0.25` (measured; queries embed with Nova's asymmetric `GENERIC_RETRIEVAL` purpose, which collapses the cosine scale — see CLAUDE.md), Nemotron `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`, all-minilm `0.35` (all estimated from each model's training objective — run `2nb models calibrate` to tune for your vault). Override per-query with `2nb search "foo" --threshold 0.35`. `2nb ai status` shows the active value and which tier supplied it.
+- **Similarity threshold** — hybrid search drops vector hits whose cosine similarity is below the active threshold so barely-related neighbors stop padding result lists. Resolution order: explicit vault config (`2nb config set ai.similarity_threshold 0.25`) > user calibration saved by `2nb models calibrate --save` > per-model recommendation from the builtin catalog > global default `0.20`. Builtin recommendations: Nova-2 `0.25` (measured; queries embed with Nova's asymmetric `GENERIC_RETRIEVAL` purpose, which collapses the cosine scale; see [docs/search-tuning.md](docs/search-tuning.md)), Nemotron `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`, all-minilm `0.35` (all estimated from each model's training objective — run `2nb models calibrate` to tune for your vault). Override per-query with `2nb search "foo" --threshold 0.35`. `2nb ai status` shows the active value and which tier supplied it.
 - **Calibration** — `2nb models calibrate` samples random chunk pairs from your vault, reports the noise-floor cosine distribution (p50/p90/p95/p99), and recommends a threshold. Add `--save` to persist it to the per-vault user catalog (or `--save --scope global` for all vaults).
 - **Score display** — `2nb search` now shows `(rrf=X.XXX, cos=Y.YYY)` on each result. The `rrf` is the Reciprocal Rank Fusion score used for ranking; `cos` is the raw cosine similarity from the vector channel, which is what you actually want to look at when judging whether a result is relevant. If legitimate matches are being cut, lower the threshold; if noise is slipping through, raise it.
 - **Hybrid weighting** — `2nb config set ai.vector_weight 1.5` (or `ai.bm25_weight`) biases the RRF fusion toward semantic or keyword recall. Both default to `1.0` (equal-weight RRF); raise `ai.vector_weight` to lean on the vector channel, `ai.bm25_weight` for exact-term-heavy vaults.
@@ -367,10 +367,14 @@ tar czf vault.tar.gz \
   --exclude='.2ndbrain/recovery' \
   --exclude='.2ndbrain/mcp' \
   --exclude='.2ndbrain/bench.db' \
+  --exclude='.2ndbrain/metrics.db' \
+  --exclude='.2ndbrain/eval' \
   my-vault/
 ```
 
 Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets the vault's as-embedded state and avoids re-embedding from scratch. For git-shared team vaults, `2nb vault create` writes a `.gitignore` that excludes personal/local state (config, DBs, logs, recovery) and commits only `schemas.yaml`. Missing or corrupt `config.yaml` / `index.db` self-heal on next open with a one-line stderr warning — the vault never bricks.
+
+**Privacy caveat:** embeddings are a lossy reconstruction of the source text, so shipping a vault with embeddings is functionally equivalent to shipping (approximate) content, and the `.2ndbrain/eval/` QA cache embeds note bodies verbatim. Strip both when the receiver should not see the content; a `--strip-embeddings` export mode is future work.
 
 > **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`; multi-turn asks via `--history` add `rewritten_query`). If you were parsing a raw array/object, extract `.results` / `.answer`.
 

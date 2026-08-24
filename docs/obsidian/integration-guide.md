@@ -90,7 +90,7 @@ The Obsidian plugin delegates operations to the `2nb` binary.
 
 When executing commands, the plugin resolves the path to the CLI using the following sequence:
 1. Configured CLI Path: If the plugin's "2nb CLI Path" setting is not the default `2nb`, that value is used as-is.
-2. Plugin-managed binary: A `2nb` the plugin downloaded into its own `bin/` folder wins over Homebrew/PATH probing.
+2. Plugin-managed binary: A `2nb` the plugin downloaded into its own `bin/` folder wins over Homebrew/PATH probing only when it is at least as new (version-aware `resolveCliPath`), so a stale managed copy can never shadow a fresh `brew upgrade`; `ensureCliFresh` re-downloads a managed copy that falls behind.
 3. macOS Homebrew ARM: Checks `/opt/homebrew/bin/2nb`.
 4. macOS Homebrew Intel: Checks `/usr/local/bin/2nb`.
 5. Go Binary Folder: Checks `~/go/bin/2nb` inside the user's home folder.
@@ -112,4 +112,4 @@ When writing tests or adding integration points for 2ndbrain:
 
 * No Mock Tests Policy: All tests must run against real local database states or live API endpoints. Simulation mocks and stub implementations are not allowed.
 * Temporary Vaults: Unit tests should create temporary vaults using the test utilities under `internal/testutil` to ensure database cleanups between test cases.
-* CGO Constraints: SQLite features rely on `CGO_ENABLED=1` and `-tags fts5` during Go compilation. Ensure these flags are set in your local build script.
+* Pure-Go Build (no CGO): the CLI uses `modernc.org/sqlite`, a CGO-free SQLite driver with FTS5 compiled in, so the shipped binary builds with `CGO_ENABLED=0` and no `-tags fts5` (sqlite-vec ships in modernc's `vec/` package). Do not add `CGO_ENABLED=1` or an fts5 build tag to build scripts; cross-compilation to any GOOS/GOARCH works from one host with no C toolchain. Tests keep CGO enabled only because the `-race` detector requires it.
