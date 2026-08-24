@@ -41,9 +41,9 @@ basename stays a basename, a path stays a path). A markdown link keeps its
 [label] text, any #anchor or ?query suffix, and its ".md" extension; markdown
 links to external URLs (http, mailto, and similar) and anchor-only targets are
 skipped. Percent-encoded markdown targets (the [x](My%20Note.md) form Obsidian
-generates for paths with spaces) are matched by their decoded form, and the
-rewritten destination is re-encoded whenever the authored link was encoded or
-the new path contains a space, %, #, ?, or parenthesis.
+generates for paths with spaces) are matched by their decoded form; a rewritten
+destination is percent-encoded as needed (spaces, %, #, ?, parentheses), and a
+rewrite that would only respell the same destination is skipped as a no-op.
 
 The target file is moved LAST, after every referencing note is rewritten, so an
 interruption mid-run leaves links pointing at the still-present old name rather
@@ -207,6 +207,11 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 		}
 
 		if count == 0 {
+			// A referencing note whose links all no-op (an over-matched
+			// decode-retry discovery, or a pure respell) is dropped from the
+			// plan; leave a trace so "move found my note and did nothing" is
+			// diagnosable from the log.
+			slog.Debug("move: referencing note needs no rewrite", "path", refPath)
 			continue
 		}
 		result.Rewritten = append(result.Rewritten, moveRewrite{Path: refPath, Count: count})

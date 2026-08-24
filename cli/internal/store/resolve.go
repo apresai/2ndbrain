@@ -264,7 +264,7 @@ func (r *Resolver) Resolve(name string) (string, error) {
 	}
 
 	path, err := r.resolveOnce(name)
-	if err == ErrTargetNotFound {
+	if errors.Is(err, ErrTargetNotFound) {
 		if decoded := document.DecodeLinkTarget(name); decoded != name {
 			return r.resolveOnce(decoded)
 		}

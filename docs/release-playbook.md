@@ -30,7 +30,7 @@ When a release changes indexing or embedding LOGIC (chunk boundaries, chunk-to-v
 
 The counters are stamped into the index DB's `meta` table on a full index or force-reembed (`vault.StampAfterIndex`) and compared at runtime by `vault.CheckIndexFreshness`, which surfaces `upgrade_reindex_recommended` / `upgrade_reembed_recommended` through `derivePortability`, so `vault status`, `ai status`, and `config doctor` all prompt the fix. Always prompt, never auto-spend.
 
-`make check-index-generation` runs in release CI and fails if `chunk.go` or `embed.go` changed since the last tag without a generation bump. Either bump the appropriate constant, or add a `Reindex-Not-Needed: <reason>` commit trailer when the change genuinely needs no reindex.
+`make check-index-generation` runs in release CI and fails if a watched indexing/embedding/resolution file changed since the last tag without a generation bump. Either bump the appropriate constant, or add a `Reindex-Not-Needed: <reason>` commit trailer when the change genuinely needs no reindex.
 
 When you bump a generation, add a warning line to the CHANGELOG ("reindex recommended: `2nb index --force-reembed`") so it also lands in the release notes.
 

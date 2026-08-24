@@ -91,7 +91,17 @@ func runRepairLinks(cmd *cobra.Command, args []string) error {
 
 	var warnings []string
 	if len(rr.Skipped) > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d broken link(s) left unrepaired (no confident target)", len(rr.Skipped)))
+		reasons := map[string]int{}
+		for _, sk := range rr.Skipped {
+			reasons[sk.Reason]++
+		}
+		parts := make([]string, 0, len(reasons))
+		for _, r := range []string{"no_match", "ambiguous", "no_change"} {
+			if n := reasons[r]; n > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", n, r))
+			}
+		}
+		warnings = append(warnings, fmt.Sprintf("%d broken link(s) left unrepaired (%s)", len(rr.Skipped), strings.Join(parts, ", ")))
 	}
 
 	result := PolishResult{

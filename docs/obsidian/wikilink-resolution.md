@@ -7,7 +7,7 @@ status: complete
 
 # Wikilink Resolution Algorithm
 
-This document defines the resolution algorithm utilized by 2ndbrain to resolve wikilinks, matching Obsidian's path resolution strategy.
+This document defines the resolution algorithm utilized by 2ndbrain to resolve wikilinks, matching Obsidian's path resolution strategy (with the percent-encoding divergences noted below).
 
 ## Resolution Sequence
 
@@ -18,20 +18,22 @@ When the parser encounters a link `[[Target]]`, it attempts to resolve the desti
 3. **Title Match:** Exactly one document whose frontmatter `title` equals `Target`.
 4. **Alias Match:** Exactly one document listing `Target` in its frontmatter `aliases` array.
 
----
-
 ### Percent-encoded targets
 
 A target that resolves to nothing in its raw form is retried once in its
 percent-decoded form (`document.DecodeLinkTarget`), so an Obsidian-generated
 markdown link like `[x](My%20Note.md)` resolves to `My Note.md`. The raw form
 always wins first: a vault containing a literal `My%20Note.md` note keeps exact
-precedence, and no double-keyed index entries are created (so the retry can
-never manufacture an ambiguity). One caveat: the `links` table carries no
+precedence, and no double-keyed index entries are created, so a target that
+resolves today can never become ambiguous. (A previously-broken target may
+surface an ambiguity among its decoded matches; that is reported exactly the
+way a raw ambiguity is.) One caveat: the `links` table carries no
 syntax marker, so the retry also applies to wikilink-sourced rows; a deliberate
 `[[My%20Note]]` wikilink whose decoded form names a real note resolves in 2nb
 even though Obsidian would not decode it. This only affects targets that were
 unresolvable as written.
+
+---
 
 ## Worked Collision Examples
 
