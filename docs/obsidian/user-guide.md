@@ -6,7 +6,7 @@ This guide covers setting up, configuring, and using the 2ndbrain companion ecos
 
 The 2ndbrain ecosystem consists of three parts:
 * Go CLI: Command line tool and MCP server that indexes your vault and runs the AI (AWS Bedrock by default; Ollama/OpenRouter opt-in).
-* macOS App: Companion status dashboard (Home, Models, Notes, Health, Activity) with configuration in the Settings window (Cmd+,). It is not an editor and never modifies your notes. Obsidian is the editor.
+* macOS App: Companion status dashboard (Home, Models, Notes, Testing, Health, Activity, Settings) with configuration in the Settings window (Cmd+,) and the sidebar's Settings entry. It is not an editor and never modifies your notes. Obsidian is the editor.
 * Obsidian Plugin: Thin community plugin that connects the Obsidian UI with the CLI.
 
 ---
@@ -54,14 +54,15 @@ open /Applications/SecondBrain.app
 
 ### Configuration and Status
 
-Configuration lives in the Settings window (**Cmd+,**): General, AI, Advanced, and Integrations. The sidebar holds the status panels:
-* Home: Consolidated common-case screen with a vault card (an Obsidian-match badge and a plugin install/update row), an AI card (Bedrock + Claude Haiku 4.5 + Nova-2 with a ready dot and Test), a Claude Code card (skill + MCP-configured rows), and an index card (doc/embedding counts, an "awaiting embedding" hint, and Sync / Re-embed All; notes edited in Obsidian re-index automatically).
+Configuration lives in Settings: the Settings window (**Cmd+,**) and the sidebar's last entry host the same four tabs (General, AI, Advanced, Integrations). The rest of the sidebar holds the status panels:
+* Home: Consolidated common-case screen with a vault card (an Obsidian-match badge and a plugin install/update row), an AI card (Bedrock + Claude Haiku 4.5 + Nova-2 with a ready dot and Test), an AI Clients summary (how many AI clients can reach this vault, linking to Settings → Integrations, where the per-client configuration lives), and an index card (doc/embedding counts, an "awaiting embedding" hint, and Sync / Re-embed All; notes edited in Obsidian re-index automatically).
 * Models: Pick Bedrock vendors (sticky), **Validate** (list + invoke), then choose Answers and Search from models this account can actually call. Cost and last-test latency sit on each row. Thinking depth (Off/Low/Medium/High) appears only for mantle models (Grok, GPT-5.5). The old full catalog lives behind a disclosure.
 * Notes: Scans for broken wikilinks and YAML frontmatter schema errors, with one-click repairs and guided link fixes.
-* Health: **Vault** (path, document count, index coverage, embedding portability, stale notes) · **Performance** (index and query timings) · **Updates** (app, CLI, and plugin versions against the latest release).
+* Testing: Everything measurable in one destination: **Validate** (the Models tab's validation flow plus model discovery) · **Benchmarks** (per-model probes, favorites, a compare matrix) · **Performance** (index and query timings) · **Quality** (retrieval scorecard, answer grades, tuning sweep).
+* Health: **Vault** (path, document count, index coverage, embedding portability, stale notes) · **Updates** (app, CLI, and plugin versions against the latest release).
 * Activity: **Git** (recent commits and uncommitted changes) · **MCP Server** (connected clients like Cursor or Claude Code, and their tool execution logs).
 
-Settings (**Cmd+,**) is where configuration lives:
+Settings (**Cmd+,**, or the sidebar's last entry) is where configuration lives:
 
 * General: the active vault (it follows Obsidian) and the Obsidian plugin.
 * AI: your provider, region, and API key — stored in `~/.config/2nb/bedrock.json`, which the dashboard and a terminal `2nb` both read, never in the vault. A new key is probed before it is saved (a rejected key does not replace a working one). **Test everything** calls the active models for real and tells you whether your key was accepted. Model *choice* lives on the Models tab after a vault is bound.
@@ -95,6 +96,8 @@ In the plugin settings tab:
 * **Download / update CLI:** fetch or refresh the managed `2nb` binary.
 * **2nb CLI Path:** absolute path to your `2nb` binary if you aren't using the managed copy or PATH.
 * **Vault:** read-only — shows the vault `2nb` is bound to (always the open Obsidian vault) and its index state. The plugin pins every command to the open vault, so it can never operate on a different one.
+* **AI Clients:** one row per supported client (Claude Code, Warp, Claude Desktop, Codex), each showing skill-installed status (where the client has a skill), MCP-configured status (from `2nb mcp configured --all --json`; "configured" is the durable check, since clients launch the server on demand), and, for claude-code/claude-desktop/codex, a Global instructions status (from `2nb instructions configured --all --json`). A per-client **Configure** button shells `2nb setup --client <key>` (vault-pinned), with a Copy-setup-snippet fallback (shell-quoted for the Codex `codex mcp add` line).
+* **Components:** CLI, macOS app, and Obsidian plugin rows showing each one's installed version, whether it is in sync with the latest release, and the fix command for any gap, plus an **Update plugin** button that shells `2nb plugin install`. Sourced from `2nb doctor --versions --json` (the free, no-model-calls form; the plugin retries the legacy flagless form only when the CLI provably rejects `--versions`), and it degrades per-row with the resolved path plus `--version` when doctor is unavailable.
 
 ---
 
@@ -106,3 +109,5 @@ The plugin registers commands in your Obsidian Command Palette:
 * Ask AI (RAG Q&A): Enter questions about your vault data. 2ndbrain retrieves context chunks using hybrid search and streams the answer. Source note links appear as tags at the bottom.
 * Find Similar Notes: Right click or open the Command Palette from a note to run a similarity search based on the active file name.
 * Rebuild AI Index: Refresh the search index without leaving Obsidian.
+* Open chat: toggle the right-sidebar chat panel (also via the ribbon icon). The panel holds a true multi-turn conversation: each message passes prior turns to `2nb ask --history -` over stdin, and answers render with degradation warnings and source chips (shared with the Ask AI modal). An older CLI without `--history` degrades to single-shot with an upgrade hint.
+* Polish current note: available from the command palette, the sparkle ribbon icon, the note-header toolbar action, and the right-click editor menu. It runs `2nb polish <path> --write --json --links --repair-links` (apply-then-review, after flushing unsaved edits so the external write cannot clobber them), then opens a colored line-diff modal with **Keep** / **Undo**; Undo shells `polish --undo`, confirming before `--force` if the note changed since. A single-flight lock serializes the four trigger surfaces.

@@ -147,7 +147,7 @@ optional updater and the path for CLI/plugin users who never install the app; ke
 C as the opportunistic `PATH` fallback.** A is the only option that ships
 notarized bits, works offline on first launch, and locks the engine version to the
 app it was tested with. B recreates and compounds the bundled-CLI Gatekeeper trap
-(see the signing notes in the root `CLAUDE.md`) because the third-party binary is
+(see the signing notes in `docs/release-playbook.md`) because the third-party binary is
 not ours to notarize.
 
 ### End-to-end sequence to make llama-local work
@@ -169,8 +169,8 @@ user-supplied `llama-server`).
 
 - Code: `cli/internal/llama/`, `cli/internal/ai/llamacpp.go`,
   `cli/internal/cli/ai_engine.go`, `app/Sources/SecondBrain/AIHubView.swift`
-- Model download + rerank background: the "AI Providers" and "Reranking" sections
-  of the root `CLAUDE.md`; `THIRD_PARTY_NOTICES.md`
+- Model download + rerank background: `docs/ai-providers.md` and the Reranking section
+  of `docs/search-tuning.md`; `THIRD_PARTY_NOTICES.md`
 - Signing/Gatekeeper caveat (why bundling beats downloading): the macOS signing
   notes in the root `CLAUDE.md`
 - re:Gist's in-process approach (for contrast):

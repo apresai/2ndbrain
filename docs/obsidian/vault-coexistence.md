@@ -30,6 +30,7 @@ vault-root/
 │   ├── config.yaml         # AI provider and local configuration profile
 │   ├── schemas.yaml        # Schema templates (the one committable sidecar file)
 │   ├── bench.db            # Benchmark history + favorites (created on first bench)
+│   ├── metrics.db          # Performance observatory: index/search/ask operation timings (created lazily on first recorded op)
 │   ├── models.yaml         # Per-vault model catalog overrides (created on first per-vault model add)
 │   ├── models/             # Reserved per-vault model directory (created at init)
 │   ├── mcp/                # <pid>.json status file per running mcp-server

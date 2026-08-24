@@ -46,7 +46,7 @@ Run the command without the dry-run flag to apply the updates:
 **Expected output:**
 ```
 Scanning legacy vault at: /path/to/my-vault
-Upgrading database schema v2 to v3... Done
+Upgrading database schema to the current version... Done
 Ensured ".2ndbrain/" is listed in the root .gitignore
 Migration complete. Run "2nb index" to rebuild the index and refresh embeddings.
 ```
@@ -60,7 +60,7 @@ Migration complete. Run "2nb index" to rebuild the index and refresh embeddings.
 * Frontmatter variables (including existing `id`, `type`, and `status` properties) are left untouched.
 
 ### Changed (Sidecar Reorganization)
-* The SQLite database schema is updated to version 3 (adds the `aliases` table and `block_id` columns).
+* The SQLite database schema is upgraded to the current version (v4 as of 0.19.x; v3 added the `aliases` table and `block_id` columns, v4 the `meta` generation-stamp table).
 * The `.gitignore` file is updated to ensure the `.2ndbrain/` folder is excluded from version control.
 
 Document identity is unchanged: 2ndbrain identifies documents by their vault-relative path (with a surrogate UUID generated at index time only for files that lack an `id`). After migrating, run `2nb index` to rebuild chunks, links, aliases, and embeddings.

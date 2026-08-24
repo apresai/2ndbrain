@@ -58,9 +58,9 @@ delegate: []
 # Doc-currency: before releasing, if these paths changed since the last tag, the
 # matching docs must have been updated too.
 docs:
-  - { when: "cli/**",     check: [README.md, CLAUDE.md] }
-  - { when: "app/**",     check: [README.md, CLAUDE.md] }
-  - { when: "plugins/**", check: [README.md, CLAUDE.md] }
+  - { when: "cli/**",     check: [README.md, docs/cli-reference.md] }
+  - { when: "app/**",     check: [README.md, docs/macos-app.md] }
+  - { when: "plugins/**", check: [README.md, docs/obsidian/user-guide.md] }
 
 # Dynamic release-asset existence check (no hardcoded artifact filenames).
 artifact_check: "gh release view v{version} --json assets"

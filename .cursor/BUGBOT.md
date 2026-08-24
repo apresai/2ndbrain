@@ -52,5 +52,8 @@ cross-layer contract drift is a top review target.
 
 - No em-dashes or en-dashes as prose punctuation in comments or docs;
   rewrite with commas, colons, periods, or parentheses.
-- User-facing changes update README.md and CLAUDE.md in the same PR (the
-  `readme-currency` check annotates when README is untouched).
+- User-facing changes update README.md, the relevant docs/ reference file,
+  and the command's --help text in the same PR (the `readme-currency` check
+  annotates when README is untouched). CLAUDE.md carries only rules,
+  invariants, and pointers; a PR adds at most a few sentences of new rules
+  there (`make check-claude-md-size` enforces a 100k-char cap).

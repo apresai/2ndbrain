@@ -2,6 +2,8 @@
 
 2ndbrain ships with six built-in document types, each with a template and schema.
 
+**Required frontmatter per type:** `adr`, `runbook`, `prd`, and `prfaq` require `title` + `status`; `note` requires only `title`; `postmortem` requires `title` + `status` + `incident-date`.
+
 ## ADR (Architecture Decision Record)
 
 **Schema fields:**

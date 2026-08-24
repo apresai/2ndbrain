@@ -51,8 +51,8 @@ git fetch origin main --quiet
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated (gh auth login)"
 
 if [ "${SKIP_TESTS:-}" != "1" ]; then
-  echo "==> Test gate (cd cli && make test); SKIP_TESTS=1 to skip on re-runs"
-  make -C cli test
+  echo "==> Test gate (make test: doc gates + Go tests); SKIP_TESTS=1 to skip on re-runs"
+  make test
 else
   echo "==> Test gate SKIPPED (SKIP_TESTS=1)"
 fi

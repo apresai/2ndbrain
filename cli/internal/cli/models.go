@@ -149,7 +149,7 @@ func init() {
 
 	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama (auto-detected if omitted)")
 	modelsTestCmd.Flags().StringVar(&testModelType, "type", "", "Model type: embedding or generation (auto-detected if omitted)")
-	modelsTestCmd.Flags().BoolVar(&testSave, "save", false, "Add model to user catalog if probe passes")
+	modelsTestCmd.Flags().BoolVar(&testSave, "save", false, "Save the probe result to the user catalog, pass or fail (a pass sets tier=user_verified; a failure records the classified test error)")
 	modelsTestCmd.Flags().StringVar(&testSaveScope, "scope", "vault", "Catalog scope when --save is set: vault or global")
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("type", completeModelTypes)

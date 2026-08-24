@@ -7,7 +7,7 @@ description: 2ndbrain (2nb) knowledge base for Obsidian-native vaults. Use to se
 
 This project uses **2ndbrain** (`2nb`), an AI companion for Obsidian-native markdown vaults with a Go CLI, a native macOS dashboard, and an MCP server. All documents live as plain `.md` files with YAML frontmatter in a **vault** directory. The CLI and the macOS app share a SQLite index at `<vault>/.2ndbrain/index.db` via WAL mode.
 
-> **About this skill.** It is maintained in the **2ndbrain repo** — the source of truth is `cli/internal/skills/content/2ndbrain-skill.md`, mirrored to `.agents/skills/2nb/SKILL.md` (+ `.warp/skills/2nb/SKILL.md`, `.claude/skills/2nb/SKILL.md`) so any agent that opens the repo discovers it with zero install. The repo's full project reference is `CLAUDE.md`; the condensed agent reference is `AGENTS.md`. `2nb skills install <agent>` installs this same content for Claude Code, Cursor, Warp, and other agents; `make sync-skills` regenerates the in-repo mirrors and CI fails on drift.
+> **About this skill.** It is maintained in the **2ndbrain repo**: the source of truth is `cli/internal/skills/content/2ndbrain-skill.md`, mirrored to `.agents/skills/2nb/SKILL.md` (+ `.warp/skills/2nb/SKILL.md`, `.claude/skills/2nb/SKILL.md`) so any agent that opens the repo discovers it with zero install. The repo's rules and invariants live in `CLAUDE.md`, which points into `docs/` for the full reference detail; the condensed agent reference is `AGENTS.md`. `2nb skills install <agent>` installs this same content for Claude Code, Cursor, Warp, and other agents; `make sync-skills` regenerates the in-repo mirrors and CI fails on drift.
 
 ## First — orient yourself in the vault (the 5-command drill)
 

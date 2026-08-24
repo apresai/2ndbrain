@@ -41,6 +41,26 @@ check-skills-sync:
 check-index-generation:
 	@scripts/check-index-generation.sh
 
+# CLAUDE.md is agent-loaded context with a hard 150k-char harness truncation
+# limit. Keep rules here, reference in docs/ (see the "Documentation discipline"
+# section in CLAUDE.md). The 100k cap leaves headroom so growth is caught long
+# before content silently stops loading.
+check-claude-md-size:
+	@test -f CLAUDE.md || { echo "FAIL: CLAUDE.md not found (check-claude-md-size must run from the repo root)"; exit 1; }
+	@size=$$(wc -c < CLAUDE.md | tr -d ' '); \
+	if [ "$$size" -gt 100000 ]; then \
+		echo "FAIL: CLAUDE.md is $$size chars (cap 100000). Move detail to docs/ per its Documentation discipline section."; \
+		exit 1; \
+	else \
+		echo "CLAUDE.md size OK: $$size chars (cap 100000)"; \
+	fi
+
+# Every relative .md link in CLAUDE.md, README.md, and docs/ must resolve to a
+# real file, so a doc rename can never silently orphan the pointers CLAUDE.md
+# now relies on. See scripts/check-docs-links.sh.
+check-docs-links:
+	@scripts/check-docs-links.sh
+
 # One-shot version set across every product: make set-version V=0.8.0
 set-version:
 	@test -n "$(V)" || { echo "usage: make set-version V=x.y.z"; exit 1; }
@@ -156,7 +176,7 @@ clean-dmg:
 	       $(ARTIFACT_DIR)/SecondBrain-*.dmg $(ARTIFACT_DIR)/SecondBrain-*.zip \
 	  && echo "Removed local SecondBrain-* installer artifacts (.dmg/.zip)"
 
-test:
+test: check-claude-md-size check-docs-links
 	$(MAKE) -C cli test
 
 # Golden-path end-to-end battery: one curated scenario per critical flow
