@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/testutil"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
@@ -63,17 +64,16 @@ func TestRepairBrokenLinks_RepairsCaseDriftLeavesRestAlone(t *testing.T) {
 	}
 }
 
-// TestRepairBrokenLinks_EncodedTargetUnrepairableIsReported pins the no_change
-// skip: a percent-encoded markdown link whose unique repair candidate spells
-// the same destination it already has (modulo encoding) cannot be fixed by
-// rewriting, and must be REPORTED as skipped rather than silently dropped, so
-// a UI's one-click repair row cannot survive every application invisibly.
-func TestRepairBrokenLinks_EncodedTargetUnrepairableIsReported(t *testing.T) {
+// TestRepairBrokenLinks_MarkdownTargetGetsPathDestination pins the
+// syntax-aware contract: a broken markdown link whose unique candidate is a
+// note TITLE is repaired to the note's PATH-based destination (a title+".md"
+// markdown destination resolves through no tier), the reported NewTarget stays
+// the pretty candidate, and the written destination actually resolves.
+func TestRepairBrokenLinks_MarkdownTargetGetsPathDestination(t *testing.T) {
 	v := testutil.NewTestVault(t)
-	// The note's basename is kebab-case, so the encoded target cannot resolve
-	// (resolver is case/separator-sensitive), but the repair index folds the
-	// title "Guide To Models" to the same normalized name as the decoded
-	// target, producing exactly one candidate.
+	// The note's basename is kebab-case ("guide-to-models.md"), so the encoded
+	// title-form target cannot resolve, but the repair index folds the title
+	// to the same normalized name, producing exactly one candidate.
 	testutil.CreateAndIndex(t, v, "Guide To Models", "note", note("Guide To Models", "Models guide."))
 	src := testutil.CreateAndIndex(t, v, "Ref Doc", "note",
 		note("Ref Doc", "See [x](Guide%20To%20Models.md) for detail.\n"))
@@ -82,14 +82,105 @@ func TestRepairBrokenLinks_EncodedTargetUnrepairableIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RepairBrokenLinks: %v", err)
 	}
-	if len(res.Repaired) != 0 {
-		t.Fatalf("nothing should be repaired (the rewrite would be a respell), got %+v", res.Repaired)
+	if len(res.Repaired) != 1 || res.Repaired[0].Raw != "Guide%20To%20Models.md" || res.Repaired[0].NewTarget != "Guide To Models" {
+		t.Fatalf("expected one repair with the pretty NewTarget, got %+v", res.Repaired)
 	}
-	if len(res.Skipped) != 1 || res.Skipped[0].Raw != "Guide%20To%20Models.md" || res.Skipped[0].Reason != "no_change" {
-		t.Fatalf("expected one no_change skip for the encoded target, got %+v", res.Skipped)
+	if len(res.Skipped) != 0 {
+		t.Fatalf("expected no skips, got %+v", res.Skipped)
 	}
-	if res.Body != src.Body {
-		t.Fatalf("body must be untouched")
+	if !strings.Contains(res.Body, "[x](guide-to-models.md)") {
+		t.Fatalf("markdown occurrence should get the path-based destination: %q", res.Body)
+	}
+	// The written destination must resolve to the intended note.
+	docs, aliases, err := vault.CollectLiveDocs(v.Root)
+	if err != nil {
+		t.Fatalf("CollectLiveDocs: %v", err)
+	}
+	path, err := store.NewResolver(docs, aliases).Resolve("guide-to-models.md")
+	if err != nil || path != "guide-to-models.md" {
+		t.Fatalf("rewritten destination must resolve to the note, got %q, %v", path, err)
+	}
+}
+
+// TestRepairBrokenLinks_MarkdownTargetFullPathWhenBasenameAmbiguous pins the
+// full-path branch of MarkdownDestinationFor: when the chosen note's basename
+// is shared with another note, the bare basename would be ambiguous at the
+// resolver's name tier, so the markdown destination is the full vault-relative
+// path.
+func TestRepairBrokenLinks_MarkdownTargetFullPathWhenBasenameAmbiguous(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	// Two notes share the basename "models-guide.md"; only one carries the
+	// unique title the broken target folds to.
+	writeUnindexedNote(t, v, "a/models-guide.md", "Guide To Models", "The real guide.")
+	writeUnindexedNote(t, v, "b/models-guide.md", "Other Unique Thing", "Different note.")
+	src := testutil.CreateAndIndex(t, v, "Ref Doc", "note",
+		note("Ref Doc", "See [x](Guide%20To%20Models.md) for detail.\n"))
+
+	res, err := RepairBrokenLinks(v, src.Body)
+	if err != nil {
+		t.Fatalf("RepairBrokenLinks: %v", err)
+	}
+	if len(res.Repaired) != 1 {
+		t.Fatalf("expected one repair, got repaired=%+v skipped=%+v", res.Repaired, res.Skipped)
+	}
+	if !strings.Contains(res.Body, "[x](a/models-guide.md)") {
+		t.Fatalf("ambiguous basename must force the full path: %q", res.Body)
+	}
+}
+
+// TestRepairBrokenLinks_BothSyntaxesOneNameSinglePass pins the phantom-skip
+// suppression: one repair fixes BOTH the wikilink and markdown spellings of a
+// name (the rewrite matches extension-insensitively), so the later same-name
+// iteration must not report a no_change skip for a link that was just fixed.
+func TestRepairBrokenLinks_BothSyntaxesOneNameSinglePass(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	testutil.CreateAndIndex(t, v, "Auth Flow", "note", note("Auth Flow", "How auth works."))
+	src := testutil.CreateAndIndex(t, v, "Ref Doc", "note",
+		note("Ref Doc", "See [[auth flow]] and [x](auth%20flow.md) here.\n"))
+
+	res, err := RepairBrokenLinks(v, src.Body)
+	if err != nil {
+		t.Fatalf("RepairBrokenLinks: %v", err)
+	}
+	if len(res.Repaired) != 1 || res.Repaired[0].Raw != "auth flow" {
+		t.Fatalf("expected exactly one repair keyed on the first spelling, got %+v", res.Repaired)
+	}
+	if len(res.Skipped) != 0 {
+		t.Fatalf("phantom no_change skip must be suppressed, got %+v", res.Skipped)
+	}
+	if !strings.Contains(res.Body, "[[Auth Flow]]") {
+		t.Fatalf("wikilink should get the pretty title: %q", res.Body)
+	}
+	if !strings.Contains(res.Body, "[x](auth-flow.md)") {
+		t.Fatalf("markdown occurrence should get the path form: %q", res.Body)
+	}
+}
+
+// TestRepairBrokenLinks_CandidateResolveFailureFallsBack pins the fallback:
+// when the candidate title byte-collides with two notes' basenames, the
+// resolver stops on ambiguity (where wikilink resolution would fall through),
+// so repair keeps today's single-target behavior instead of guessing a path.
+func TestRepairBrokenLinks_CandidateResolveFailureFallsBack(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	// The intended note: unique folded title "Notes".
+	writeUnindexedNote(t, v, "misc/random-name.md", "Notes", "The notes note.")
+	// Two notes whose basename is byte-exactly "Notes.md", making the
+	// candidate string "Notes" ambiguous at the resolver's name tier. Their
+	// shared title keeps their own canonicals empty.
+	writeUnindexedNote(t, v, "a/Notes.md", "Dup", "One.")
+	writeUnindexedNote(t, v, "b/Notes.md", "Dup", "Two.")
+	src := testutil.CreateAndIndex(t, v, "Ref Doc", "note",
+		note("Ref Doc", "See [[notes]] here.\n"))
+
+	res, err := RepairBrokenLinks(v, src.Body)
+	if err != nil {
+		t.Fatalf("RepairBrokenLinks: %v", err)
+	}
+	if len(res.Repaired) != 1 || res.Repaired[0].NewTarget != "Notes" {
+		t.Fatalf("fallback should still repair the wikilink, got repaired=%+v skipped=%+v", res.Repaired, res.Skipped)
+	}
+	if !strings.Contains(res.Body, "[[Notes]]") {
+		t.Fatalf("wikilink should get the candidate as today: %q", res.Body)
 	}
 }
 
