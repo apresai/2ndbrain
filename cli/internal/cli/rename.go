@@ -9,9 +9,10 @@ import (
 
 var renameCmd = &cobra.Command{
 	Use:   "rename <src> <newname>",
-	Short: "Rename a note in place, rewriting every [[wikilink]] that points at it",
+	Short: "Rename a note in place, rewriting every [[wikilink]] and markdown link that points at it",
 	Long: `Rename a note to <newname> within its current folder, rewriting every
-[[wikilink]] across the vault that points at it. This is a thin wrapper over
+[[wikilink]] and markdown-style [text](path.md) link across the vault that
+points at it. This is a thin wrapper over
 ` + "`2nb move`" + `: the destination is the source's directory joined with
 <newname> (the ".md" extension is added if you omit it). All of move's behavior
 applies, including --dry-run and the ambiguity guard.`,

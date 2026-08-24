@@ -22,9 +22,10 @@ var (
 
 var moveCmd = &cobra.Command{
 	Use:   "move <src> <dst>",
-	Short: "Move or rename a note, rewriting every [[wikilink]] that points at it",
+	Short: "Move or rename a note, rewriting every [[wikilink]] and markdown link that points at it",
 	Long: `Move (or rename) a note to a new vault-relative path and rewrite every
-[[wikilink]] across the vault that points at it, so links stay valid.
+[[wikilink]] and markdown-style [text](path.md) link across the vault that
+points at it, so links stay valid.
 
 This is the strongest write surface in 2nb: it is the only command that edits
 OTHER notes' bodies. Use --dry-run first to preview the rename, the exact links
@@ -34,9 +35,12 @@ that would be rewritten, and any links it would skip as ambiguous. Without
 points at the one being moved).
 
 Links inside fenced or inline code are never touched. The #heading / #^block /
-|alias suffix and any leading "!" embed marker on a link are preserved; only the
-target portion is rewritten, in the same shape the author used (a bare basename
-stays a basename, a path stays a path).
+|alias suffix and any leading "!" embed marker on a wikilink are preserved; only
+the target portion is rewritten, in the same shape the author used (a bare
+basename stays a basename, a path stays a path). A markdown link keeps its
+[label] text, any #anchor or ?query suffix, and its ".md" extension; markdown
+links to external URLs (http, mailto, and similar) and anchor-only targets are
+skipped.
 
 The target file is moved LAST, after every referencing note is rewritten, so an
 interruption mid-run leaves links pointing at the still-present old name rather
