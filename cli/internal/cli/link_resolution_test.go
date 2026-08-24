@@ -113,6 +113,38 @@ func TestRelink_WriteRepointsToChosenNote(t *testing.T) {
 	}
 }
 
+// TestRelink_TitleToFixesMarkdownOccurrence pins the syntax-aware emission:
+// a --to naming a note by TITLE fixes a markdown occurrence by writing the
+// note's PATH-based destination (a title+".md" markdown destination resolves
+// through no tier), while the reported NewTarget stays the bare --to form.
+func TestRelink_TitleToFixesMarkdownOccurrence(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "guide-to-models.md", "Guide To Models", "# Guide To Models\n\nThe guide.")
+	writeNote(t, root, "src.md", "Src", "See [y](old%20target.md) here.")
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	out, err := runCLIArgs(t, root, "relink", "src.md", "--from", "old%20target.md", "--to", "Guide To Models", "--write", "--json", "--porcelain")
+	if err != nil {
+		t.Fatalf("relink --write: %v\n%s", err, out)
+	}
+	var res PolishResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if len(res.LinksRepaired) != 1 || res.LinksRepaired[0].NewTarget != "Guide To Models" {
+		t.Errorf("NewTarget should stay the bare --to form, got %+v", res.LinksRepaired)
+	}
+	if res.Warning != "" {
+		t.Errorf("a resolving --to must not warn, got %q", res.Warning)
+	}
+	text := readFileString(t, root+"/src.md")
+	if !strings.Contains(text, "[y](guide-to-models.md)") {
+		t.Errorf("markdown occurrence should get the path-based destination:\n%s", text)
+	}
+}
+
 func TestRelink_PreviewDoesNotWrite(t *testing.T) {
 	_, root := newContractVault(t)
 	writeNote(t, root, "go-mod-why.md", "Go Mod Why", "# Go Mod Why\n\nx")

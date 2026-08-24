@@ -36,8 +36,24 @@ import (
 //     replacement form: a bare basename link becomes the new basename, a path
 //     link becomes the new path. A markdown link additionally keeps its ".md"
 //     extension since the file-path form is the markdown convention.
+//     (RewriteLinksSyntaxAware overrides the markdown derivation with a
+//     caller-supplied destination; this function never does.)
 func RewriteWikiLinks(body, oldTarget, newTarget string) (string, int) {
-	return rewriteWikiLinks(body, oldTarget, newTarget, false)
+	return rewriteWikiLinks(body, oldTarget, newTarget, false, "")
+}
+
+// RewriteLinksSyntaxAware is RewriteWikiLinks with a per-syntax destination:
+// wikilink occurrences are rewritten to wikiTarget exactly as RewriteWikiLinks
+// would, while EVERY matched markdown occurrence gets the caller-supplied
+// mdDest substituted verbatim (percent-encoded as needed), ignoring the
+// bare-vs-path form derivation. Repair and relink use it because their chosen
+// destination may be a note TITLE: titles resolve for wikilinks (title tier)
+// but a title+".md" markdown destination resolves through no tier, so the
+// markdown emission must be a path-based form the caller has verified resolves
+// (see polish.MarkdownDestinationFor). Move/rename keep RewriteWikiLinks: they
+// always rewrite path-to-path, where the derived form is already resolvable.
+func RewriteLinksSyntaxAware(body, oldTarget, wikiTarget, mdDest string) (string, int) {
+	return rewriteWikiLinks(body, oldTarget, wikiTarget, false, mdDest)
 }
 
 // RewriteWikiLinksPathOnly is RewriteWikiLinks restricted to path-bearing link
@@ -48,7 +64,7 @@ func RewriteWikiLinks(body, oldTarget, newTarget string) (string, int) {
 // still can be, so the path-form links are rewritten and the bare ones are left
 // for the operator to resolve.
 func RewriteWikiLinksPathOnly(body, oldTarget, newTarget string) (string, int) {
-	return rewriteWikiLinks(body, oldTarget, newTarget, true)
+	return rewriteWikiLinks(body, oldTarget, newTarget, true, "")
 }
 
 // UnlinkWikiLink returns a copy of body in which every [[wikilink]] whose target
@@ -140,10 +156,13 @@ func UnlinkWikiLink(body, target string) (string, int) {
 	return out.String(), count
 }
 
-// rewriteWikiLinks is the shared engine for the two exported variants. When
+// rewriteWikiLinks is the shared engine for the exported variants. When
 // pathOnly is true, bare-basename matches are skipped. It rewrites both
 // [[wikilink]] and markdown [label](target) forms that resolve to oldTarget.
-func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string, int) {
+// A non-empty mdOverride replaces the markdown pass's derived destinations
+// (both the bare and path forms) with EncodeLinkTarget(mdOverride) verbatim;
+// the wikilink pass is unaffected by it.
+func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool, mdOverride string) (string, int) {
 	oldForms := targetForms(oldTarget)
 	if len(oldForms) == 0 {
 		return body, 0
@@ -208,9 +227,16 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 	// Markdown replacements are loop-invariant: encode them once. Encoding is
 	// an identity on clean paths, so applying it unconditionally is safe; it
 	// keeps a rewritten destination a valid bare CommonMark destination when
-	// the new path contains a space, %, #, ?, or parenthesis.
+	// the new path contains a space, %, #, ?, or parenthesis. An mdOverride
+	// (RewriteLinksSyntaxAware) substitutes the caller's pre-verified
+	// destination for BOTH forms: the caller has already chosen the shortest
+	// resolvable form, so the authored bare-vs-path shape no longer drives it.
 	mdNewPath := EncodeLinkTarget(newPath + ".md")
 	mdNewBase := EncodeLinkTarget(newBase + ".md")
+	if mdOverride != "" {
+		enc := EncodeLinkTarget(mdOverride)
+		mdNewPath, mdNewBase = enc, enc
+	}
 
 	for _, m := range mdLinkRe.FindAllStringSubmatchIndex(scan, -1) {
 		// Group 2 (m[4]:m[5]) is the (target) portion inside the parentheses.

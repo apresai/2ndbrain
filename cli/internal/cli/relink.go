@@ -18,12 +18,18 @@ import (
 
 var relinkCmd = &cobra.Command{
 	Use:   "relink <path>",
-	Short: "Repoint a broken [[wikilink]] to a chosen existing note (no AI)",
-	Long: `Rewrites every [[wikilink]] in a note whose authored target equals --from so it
-points at --to instead, preserving any #heading / #^block / |alias suffix and the
-author's bare-vs-path form. This is the "apply a Did-you-mean suggestion" action:
-the GUI offers ranked existing-note candidates (see "2nb suggest-target") and
-relink commits the one the user picks.
+	Short: "Repoint a broken link (wikilink or markdown) to a chosen existing note (no AI)",
+	Long: `Rewrites every link (wikilink or markdown) in a note whose authored target
+equals --from so it points at --to instead, preserving any #heading / #^block /
+|alias suffix (and, for wikilinks, the author's bare-vs-path form). This is the
+"apply a Did-you-mean suggestion" action: the GUI offers ranked existing-note
+candidates (see "2nb suggest-target") and relink commits the one the user picks.
+
+When --to resolves to a note on the live filesystem, markdown occurrences are
+written with a PATH-based destination derived from that note (bare basename
+when it uniquely resolves, else the full vault-relative path): a title-form
+markdown destination would resolve through no tier. An unresolvable --to falls
+back to the verbatim rewrite and warns.
 
 Matching is EXACT (case- and separator-sensitive), so relink only touches the
 specific broken link you named, never a near-miss. By default it PREVIEWS; with
@@ -59,7 +65,38 @@ func runRelink(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 
 	start := time.Now()
-	newBody, n := document.RewriteWikiLinks(parsed.Body, relinkFrom, relinkTo)
+
+	// Resolve --to against the LIVE FILESYSTEM (vault.CollectLiveDocs, the same
+	// walk lint reports from) BEFORE rewriting: when it names a real note, the
+	// markdown occurrences of --from must get a PATH-based destination derived
+	// from that note (a title+".md" markdown destination resolves through no
+	// tier), while wikilink occurrences keep --to verbatim. Resolving live
+	// rather than via the index DB means a note created moments ago that isn't
+	// indexed yet resolves cleanly, and a note deleted on disk but still in the
+	// DB does not. The resolution stays advisory: an unresolvable --to falls
+	// back to the verbatim single-target rewrite (and warns below), and a
+	// failed walk just skips the syntax-aware path.
+	toResolved := false
+	walkOK := false
+	var mdDest string
+	if docs, aliases, lerr := vault.CollectLiveDocs(v.Root); lerr == nil {
+		walkOK = true
+		resolver := store.NewResolver(docs, aliases)
+		if path, rerr := resolver.Resolve(relinkTo); rerr == nil {
+			toResolved = true
+			mdDest = polish.MarkdownDestinationFor(path, resolver)
+		}
+	} else {
+		slog.Debug("relink: live walk failed; rewriting --to verbatim and skipping the does-not-resolve check", "err", lerr)
+	}
+
+	var newBody string
+	var n int
+	if toResolved {
+		newBody, n = document.RewriteLinksSyntaxAware(parsed.Body, relinkFrom, relinkTo, mdDest)
+	} else {
+		newBody, n = document.RewriteWikiLinks(parsed.Body, relinkFrom, relinkTo)
+	}
 
 	result := PolishResult{
 		Path:       rel,
@@ -72,22 +109,16 @@ func runRelink(cmd *cobra.Command, args []string) error {
 	if n > 0 {
 		result.LinksRepaired = []polish.LinkRepair{{Raw: relinkFrom, NewTarget: document.Basename(relinkTo)}}
 		// relink is meant to point at an EXISTING note (the "apply a Did-you-mean
-		// suggestion" action). Warn, but don't block, when --to resolves to no
-		// note on the LIVE FILESYSTEM (vault.CollectLiveDocs, the same walk lint
-		// reports from), so a typo isn't silently left as a still-broken link.
-		// Resolving live rather than via the index DB means a note created
-		// moments ago that isn't indexed yet resolves cleanly (no false warning),
-		// and a note deleted on disk but still in the DB does warn. The check is
-		// advisory, so a failed walk skips it rather than failing the relink.
-		if docs, aliases, lerr := vault.CollectLiveDocs(v.Root); lerr == nil {
-			if _, rerr := store.NewResolver(docs, aliases).Resolve(relinkTo); rerr != nil {
-				warnings = append(warnings, fmt.Sprintf("--to %q does not resolve to an existing note; the link may remain broken", relinkTo))
-			}
-		} else {
-			slog.Debug("relink: live walk failed, skipping the --to advisory check", "err", lerr)
+		// suggestion" action). Warn, but don't block, when the walk SUCCEEDED
+		// and --to still resolved to no note, so a typo isn't silently left as
+		// a still-broken link. A failed walk proves nothing about --to, so it
+		// stays silent here (Debug-logged above), matching the old advisory
+		// behavior.
+		if walkOK && !toResolved {
+			warnings = append(warnings, fmt.Sprintf("--to %q does not resolve to an existing note; the link may remain broken", relinkTo))
 		}
 	} else {
-		warnings = append(warnings, fmt.Sprintf("no [[%s]] link found to repoint", relinkFrom))
+		warnings = append(warnings, fmt.Sprintf("no link with target %q found to repoint", relinkFrom))
 	}
 
 	if relinkWrite && n > 0 {

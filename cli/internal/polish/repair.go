@@ -2,6 +2,7 @@ package polish
 
 import (
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -84,7 +85,8 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 		}
 	}
 
-	handled := make(map[string]bool) // dedupe by authored target so one distinct link is rewritten once
+	handled := make(map[string]bool)       // dedupe by authored target so one distinct link is rewritten once
+	repairedNorms := make(map[string]bool) // fold keys of targets already fixed this run (see the n==0 branch)
 	for _, link := range document.ExtractWikiLinks(body) {
 		target := strings.TrimSpace(link.Target)
 		if target == "" || handled[target] {
@@ -109,17 +111,47 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 		switch len(candidates) {
 		case 1:
 			newTarget := candidates[0]
-			rewritten, n := document.RewriteWikiLinks(body, target, newTarget)
+			// Syntax-aware emission: wikilink occurrences get the pretty
+			// candidate (titles resolve at the title tier), while markdown
+			// occurrences need a PATH-based destination, because a title+".md"
+			// markdown destination resolves through no tier. Recover the
+			// chosen note's path by resolving the candidate: whatever note
+			// [[candidate]] resolves to at read time is the note the markdown
+			// form must point at, so both syntaxes stay on one note.
+			var rewritten string
+			var n int
+			if path, prerr := resolver.Resolve(newTarget); prerr == nil {
+				rewritten, n = document.RewriteLinksSyntaxAware(body, target, newTarget, MarkdownDestinationFor(path, resolver))
+			} else {
+				// The candidate does not resolve byte-exactly (realistically:
+				// its title collides with 2+ notes' basenames, an ambiguity
+				// Resolve stops on where wikilink resolution would fall
+				// through to the title tier). Keep today's single-target
+				// behavior in that corner; a markdown occurrence stays as
+				// broken as it was, so leave a trace for diagnosability.
+				slog.Debug("repair: candidate does not resolve byte-exactly; markdown occurrences keep the authored form",
+					"target", target, "candidate", newTarget, "err", prerr)
+				rewritten, n = document.RewriteWikiLinks(body, target, newTarget)
+			}
 			if n > 0 {
 				body = rewritten
+				repairedNorms[foldKey(target)] = true
 				res.Repaired = append(res.Repaired, LinkRepair{Raw: target, NewTarget: newTarget})
 			} else {
-				// A unique candidate whose rewrite changes nothing: the
-				// canonical spelling of the candidate IS the authored target
-				// (modulo percent-encoding), so rewriting cannot fix the link.
-				// Report it rather than dropping it silently, or a UI's
-				// one-click repair row would survive every application with
-				// no visible outcome.
+				// One earlier repair can fix BOTH syntaxes of a name (the
+				// rewrite matches extension-insensitively), so a later
+				// same-name spelling legitimately finds nothing left to do:
+				// suppress that phantom rather than reporting an unrepaired
+				// link that was in fact just fixed.
+				if repairedNorms[foldKey(target)] {
+					continue
+				}
+				// Defensive: a unique candidate whose rewrite changes nothing
+				// and whose name was NOT already repaired this run. No known
+				// producer reaches this since markdown emissions became
+				// path-based (the old producer, an encoded respell of the
+				// same destination, is now a real repair), but report rather
+				// than drop silently if one ever does.
 				res.Skipped = append(res.Skipped, LinkRepair{Raw: target, NewTarget: newTarget, Reason: "no_change"})
 			}
 		case 0:
@@ -131,6 +163,37 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 
 	res.Body = body
 	return res, nil
+}
+
+// MarkdownDestinationFor returns the shortest markdown-link destination that
+// resolves to the note at path: the bare basename when the resolver maps it
+// back to exactly this path (byte-exact name tier; the resolver, not the
+// repair index's folded uniqueness counts, is the oracle for "this basename
+// resolves", since the index's NormalizeName fold over-rejects), else the full
+// vault-relative path. Used wherever a repair or relink must emit a markdown
+// destination: titles resolve for wikilinks but never as markdown paths.
+//
+// Caveat: Resolver.Resolve stops on a name-tier ambiguity where wikilink
+// resolution would fall through to the title tier, so a basename shadowed by
+// 2+ notes yields the full path here even when a wikilink of the same name
+// would still resolve. That is the safe direction: the full path always
+// resolves.
+func MarkdownDestinationFor(path string, resolver *store.Resolver) string {
+	base := filepath.Base(path)
+	if p, err := resolver.Resolve(base); err == nil && p == path {
+		return base
+	}
+	return path
+}
+
+// foldKey folds an authored target the same way RepairIndex.Lookup effectively
+// does (backslashes normalized, ".md" trimmed, percent-decoded, then
+// NormalizeName), so two spellings of one name (a wikilink "auth flow" and a
+// markdown "auth%20flow.md") produce the same key. Trim runs before decode,
+// mirroring Lookup's order.
+func foldKey(target string) string {
+	t := strings.TrimSuffix(strings.ReplaceAll(target, "\\", "/"), ".md")
+	return NormalizeName(document.DecodeLinkTarget(t))
 }
 
 // RepairIndex maps a normalized name (note basename, title, or alias) to the set
