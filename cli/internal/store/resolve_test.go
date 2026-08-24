@@ -87,6 +87,64 @@ func TestResolveTarget_NotFound(t *testing.T) {
 	}
 }
 
+// TestResolveTarget_PercentEncoded pins the decode retry on the user-facing
+// resolver: an Obsidian-encoded markdown target resolves by full path and by
+// bare name, a malformed escape is NotFound, and a literal-% filename keeps
+// raw-first precedence over the decoded form.
+func TestResolveTarget_PercentEncoded(t *testing.T) {
+	db := openTestDB(t)
+	docs := []*document.Document{
+		{ID: "sp", Path: "notes/My Note.md", Title: "My Note", Type: "note", Status: "draft"},
+	}
+	for _, d := range docs {
+		if err := db.UpsertDocument(d); err != nil {
+			t.Fatalf("upsert %s: %v", d.ID, err)
+		}
+	}
+
+	for _, tc := range []struct{ name, input, want string }{
+		{"encoded full path", "notes/My%20Note.md", "notes/My Note.md"},
+		{"encoded bare name", "My%20Note", "notes/My Note.md"},
+		{"encoded bare name with .md", "My%20Note.md", "notes/My Note.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := db.ResolveTarget(tc.input)
+			if err != nil {
+				t.Fatalf("ResolveTarget(%q): %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Errorf("ResolveTarget(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+
+	if _, err := db.ResolveTarget("50%ZZ"); !errors.Is(err, ErrTargetNotFound) {
+		t.Fatalf("malformed escape: want ErrTargetNotFound, got %v", err)
+	}
+
+	// Precedence: a literal-% note wins the raw form; the spaced note keeps
+	// the spaced form; neither becomes ambiguous (no double-keyed index).
+	if err := db.UpsertDocument(&document.Document{
+		ID: "lit", Path: "notes/My%20Note.md", Title: "Literal Percent", Type: "note", Status: "draft",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.ResolveTarget("notes/My%20Note.md")
+	if err != nil {
+		t.Fatalf("literal precedence: %v", err)
+	}
+	if got != "notes/My%20Note.md" {
+		t.Errorf("raw form should win the literal note, got %q", got)
+	}
+	got, err = db.ResolveTarget("notes/My Note.md")
+	if err != nil {
+		t.Fatalf("spaced form: %v", err)
+	}
+	if got != "notes/My Note.md" {
+		t.Errorf("spaced form should keep the spaced note, got %q", got)
+	}
+}
+
 func TestResolveTarget_AmbiguousBasename(t *testing.T) {
 	db := seedResolveVault(t)
 	_, err := db.ResolveTarget("dup")

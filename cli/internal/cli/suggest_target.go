@@ -468,7 +468,9 @@ func hasHighConfidence(results []SuggestLinkResult) bool {
 // normalization the repair index uses (polish.NormalizeName), equals or is a
 // whole-word subset of the candidate's folded title or basename.
 func targetWordMatch(target, title, path string) bool {
-	folded := polish.NormalizeName(target)
+	// Decode a percent-encoded markdown target first so confidence grades on
+	// words ("my note"), not on "%20"-glued tokens.
+	folded := polish.NormalizeName(document.DecodeLinkTarget(target))
 	base := strings.TrimSuffix(filepath.Base(path), ".md")
 	return isWholeWordSubset(folded, polish.NormalizeName(title)) ||
 		isWholeWordSubset(folded, polish.NormalizeName(base))

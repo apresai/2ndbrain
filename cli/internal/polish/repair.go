@@ -147,6 +147,15 @@ func (r *RepairIndex) Lookup(authored string) []string {
 		return nil
 	}
 	set := r.byNorm[NormalizeName(authored)]
+	if len(set) == 0 {
+		// Retry the percent-decoded form (Obsidian encodes spaces in generated
+		// markdown links) so an encoded broken target still finds candidates.
+		// The raw fold wins first, and a decoded %2F re-introduces the
+		// path-qualified guard above.
+		if decoded := document.DecodeLinkTarget(authored); decoded != authored && !strings.Contains(decoded, "/") {
+			set = r.byNorm[NormalizeName(decoded)]
+		}
+	}
 	targets := make([]string, 0, len(set))
 	for t := range set {
 		targets = append(targets, t)

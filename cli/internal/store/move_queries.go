@@ -3,6 +3,8 @@ package store
 import (
 	"fmt"
 	"strings"
+
+	"github.com/apresai/2ndbrain/internal/document"
 )
 
 // LinksByRawName returns one LinkRef per UNRESOLVED link whose raw target
@@ -46,7 +48,18 @@ func (db *DB) LinksByRawName(oldPath string) ([]LinkRef, error) {
 		if err := rows.Scan(&r.Path, &r.Title, &r.Heading, &r.Alias, &r.TargetRaw); err != nil {
 			return nil, fmt.Errorf("scan unresolved link: %w", err)
 		}
+		matched := false
 		if _, ok := forms[normalizeRawName(r.TargetRaw)]; ok {
+			matched = true
+		} else if decoded := document.DecodeLinkTarget(r.TargetRaw); decoded != r.TargetRaw {
+			// Obsidian percent-encodes spaces in generated markdown links;
+			// retry the decoded form so an encoded-only referrer is still
+			// discovered for rewriting. Raw form wins first (a literal-%
+			// filename matches exactly). Over-matching is harmless: the
+			// rewrite pass re-checks per-syntax and skips non-matches.
+			_, matched = forms[normalizeRawName(decoded)]
+		}
+		if matched {
 			r.Resolved = false
 			refs = append(refs, r)
 		}
@@ -89,7 +102,9 @@ func rawNameForms(path string) map[string]struct{} {
 
 // normalizeRawName canonicalizes a link target or path for name matching:
 // backslashes to forward slashes, leading slash stripped, ".md" extension
-// stripped. Mirrors the normalization in ResolveLinks.
+// stripped. Mirrors the normalization in ResolveLinks. Percent-decoding is
+// deliberately not folded in here: comparison sites retry through
+// document.DecodeLinkTarget on a raw miss (raw form wins first).
 func normalizeRawName(s string) string {
 	s = strings.ReplaceAll(s, "\\", "/")
 	s = strings.TrimPrefix(s, "/")

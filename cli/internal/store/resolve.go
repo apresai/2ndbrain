@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/apresai/2ndbrain/internal/document"
 )
 
 // ErrTargetNotFound is returned by ResolveTarget when no document matches the
@@ -137,6 +139,41 @@ func (idx *lookupIndex) uniqueDocID(name string) (string, bool) {
 	return "", false
 }
 
+// resolveID runs the silent-on-ambiguity tier chain used by ResolveLinks
+// (exact path, unique name/suffix, unique title, unique alias) and returns the
+// resolved docID, or "" when nothing matches unambiguously. The target must
+// already be slash-normalized with any leading slash stripped; the #anchor was
+// split off at parse time.
+func (idx *lookupIndex) resolveID(target string) string {
+	// A. Exact full-path match (path is unique).
+	if id, ok := idx.exactPaths[target]; ok {
+		return id
+	}
+	if id, ok := idx.exactPaths[target+".md"]; ok {
+		return id
+	}
+
+	// B. Shortest-unique-name match (path suffix or basename).
+	if id, ok := idx.uniqueDocID(target); ok {
+		return id
+	}
+	if id, ok := idx.uniqueDocID(target + ".md"); ok {
+		return id
+	}
+
+	// C. Title match.
+	if ids, ok := idx.titles[target]; ok && len(ids) == 1 {
+		return ids[0]
+	}
+
+	// D. Alias match.
+	if ids, ok := idx.aliases[target]; ok && len(ids) == 1 {
+		return ids[0]
+	}
+
+	return ""
+}
+
 // pathsForSet returns the sorted vault-relative paths for a docID set.
 func (idx *lookupIndex) pathsForSet(set map[string]struct{}) []string {
 	paths := make([]string, 0, len(set))
@@ -200,10 +237,17 @@ func NewResolver(docs []DocInfo, aliases map[string][]string) *Resolver {
 // A leading slash, backslashes, and any trailing #heading / #^block anchor are
 // stripped before matching. Returns ErrTargetNotFound when nothing matches, or
 // *AmbiguousTargetError (with candidate paths) when a tier matches >1 document.
+//
+// A percent-encoded markdown target (Obsidian encodes spaces in generated
+// markdown links) is retried in decoded form, but only when the raw form
+// resolves to nothing: the raw form wins first so a literal-% filename keeps
+// exact precedence, and an ambiguity from either attempt propagates as-is.
 func (r *Resolver) Resolve(name string) (string, error) {
 	name = strings.ReplaceAll(name, "\\", "/")
 	name = strings.TrimPrefix(name, "/")
 	// Strip a trailing #heading or #^block anchor (resolution is by note).
+	// The decode retry below runs on the already-split name, so a literal %23
+	// in a filename can never be mis-split as an anchor.
 	if i := strings.Index(name, "#"); i >= 0 {
 		name = name[:i]
 	}
@@ -212,6 +256,17 @@ func (r *Resolver) Resolve(name string) (string, error) {
 		return "", ErrTargetNotFound
 	}
 
+	path, err := r.resolveOnce(name)
+	if err == ErrTargetNotFound {
+		if decoded := document.DecodeLinkTarget(name); decoded != name {
+			return r.resolveOnce(decoded)
+		}
+	}
+	return path, err
+}
+
+// resolveOnce runs the tier chain for one already-normalized name.
+func (r *Resolver) resolveOnce(name string) (string, error) {
 	idx := r.idx
 
 	// A. Exact full-path match (path is unique).
