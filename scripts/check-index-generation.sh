@@ -10,13 +10,18 @@
 # last tag (for a comment/refactor/no-op change to a watched file).
 set -euo pipefail
 
-# High-signal files whose changes almost always require a re-embed. Kept narrow
-# (not e.g. bedrock.go, which mixes embed + generation code) so the guard stays
-# low-noise; a Nova embed-format/purpose change is a manual release-checklist
-# consideration.
+# High-signal files whose changes almost always require a re-embed or reindex.
+# Kept narrow (not e.g. bedrock.go, which mixes embed + generation code) so the
+# guard stays low-noise; a Nova embed-format/purpose change is a manual
+# release-checklist consideration. The store resolution files are watched
+# because ResolveLinks outcomes (links.target_id) are persisted index state: a
+# resolution-logic change leaves existing vaults stale until `2nb index`
+# (IndexGeneration territory, not EmbedGeneration).
 WATCHED=(
   cli/internal/document/chunk.go
   cli/internal/embed/embed.go
+  cli/internal/store/docs.go
+  cli/internal/store/resolve.go
 )
 GEN_FILE="cli/internal/vault/generation.go"
 
