@@ -11,7 +11,7 @@
 | `kb_ask` | `question` (required) | RAG Q&A with source citations |
 | `kb_read` | `path` (required), `chunk` | Read full document or specific heading section |
 | `kb_list` | `type`, `status`, `tag`, `limit` | List documents with metadata filters |
-| `kb_create` | `title` (required), `type` (required) | Create document from template with auto UUID |
+| `kb_create` | `title` (required), `type` (required), `path` (optional vault-relative subdirectory, created if missing) | Create document from template with auto UUID |
 | `kb_update_meta` | `path` (required), `fields` (required) | Update frontmatter with schema validation |
 | `kb_append` | `path` (required), `text` (required) | Append text to the end of a document body (explicit body write; reindexes + re-embeds) |
 | `kb_replace_section` | `path` (required), `section` (required), `text` (required) | Replace the content under one heading, leaving siblings untouched (explicit body write) |

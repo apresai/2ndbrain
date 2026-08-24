@@ -4,9 +4,9 @@ Obsidian-native AI companion. **Obsidian stays your editor**; the Go CLI (`2nb`)
 
 **Write-surface guarantees** (the product's core safety contract; keep every change inside it):
 
-- `2nb` writes only a gitignored `.2ndbrain/` sidecar. Note bodies change only via explicit, user-invoked commands (`append`, `prepend`, `replace`, `polish --write`, and the link fixers with `--write`); frontmatter only via `meta` (which has always rewritten files in place).
+- `2nb` writes only a gitignored `.2ndbrain/` sidecar. Note bodies change only via explicit, user-invoked commands (`append`, `prepend`, `replace`, `daily append`/`prepend`, `task`, `polish --write`, and the link fixers with `--write`); frontmatter only via `meta` (which has always rewritten files in place).
 - `polish --write` snapshots the original under `.2ndbrain/recovery/polish/` first, so `polish --undo` reverts it (a whole-file restore that refuses to clobber post-polish edits without `--force`). `repair-links`, `relink`, and `unlink` share that per-note snapshot slot.
-- `move`/`rename` is the strongest write surface: it rewrites every `[[wikilink]]` AND markdown-style `[text](path.md)` link across the vault that points at the moved note. It is gated by a mandatory `--dry-run` preview, crash-safe ordering (the target file moves LAST, after referencing notes are rewritten, so an interruption leaves links pointing at the still-present old name), and an ambiguity guard (a non-`--force` move is refused when a bare `[[name]]` could point at more than one note; `--force` rewrites only path-qualified links). Deliberately CLI-only, never an MCP tool.
+- `move`/`rename` is the strongest write surface: it rewrites every `[[wikilink]]` AND markdown-style `[text](path.md)` link across the vault that points at the moved note. Preview with `--dry-run` first; the enforced gates are crash-safe ordering (the target file moves LAST, after referencing notes are rewritten, so an interruption leaves links pointing at the still-present old name), and an ambiguity guard (a non-`--force` move is refused when a bare `[[name]]` could point at more than one note; `--force` rewrites only path-qualified links). Deliberately CLI-only, never an MCP tool.
 - One further explicit exception: `2nb plugin install` writes the plugin bundle under `.obsidian/plugins/obsidian-2ndbrain/`; never notes, never Obsidian settings.
 
 ## Repository Layout
@@ -36,7 +36,7 @@ Reference detail lives here, not in this file (see Documentation discipline at t
 - [`templates.md`](docs/templates.md): built-in document type templates and schemas
 - [`polish-prompt-eval.md`](docs/polish-prompt-eval.md) / [`link-prompt-eval.md`](docs/link-prompt-eval.md): how the polish and link-suggest prompts were chosen (measured, reproducible)
 - [`adr/0001-vector-search.md`](docs/adr/0001-vector-search.md): vector-search architecture decision (per-chunk sqlite-vec primary)
-- [`vault-structure.md`](docs/vault-structure.md): on-disk vault layout + SQLite table reference (index.db, bench.db, metrics.db)
+- [`vault-structure.md`](docs/vault-structure.md): SQLite table reference (index.db, bench.db, metrics.db; current) plus legacy layout sections (superseded, see [obsidian/README.md](docs/obsidian/README.md))
 - [`obsidian/README.md`](docs/obsidian/README.md): Obsidian-native pivot documentation and architectural model
 - [`multi-machine-setup.md`](docs/multi-machine-setup.md): what 2nb state ports across machines vs stays machine-local
 - [`claude-md-snippet.md`](docs/claude-md-snippet.md): copy-paste CLAUDE.md block for agent users of 2nb
@@ -52,7 +52,7 @@ Format `major.minor.build`; the single source of truth is the `VERSION` file at 
 
 Both products ship via Homebrew (`brew install apresai/tap/2nb`; `brew install --cask apresai/tap/secondbrain`). The machine-readable release contract is [`.release.yaml`](.release.yaml) (read by the `oss-release` skill); keep it in sync with the Makefile.
 
-**`make release-all` is the front door** (canonical clone only; needs gitignored `scripts/sign.env`): test gate, bump (`BUMP=build|minor|major|none`), tag, wait for CI, then sign/notarize/publish the app + cask, verifying every product shipped at one version. The two-step model underneath: (1) GitHub Actions on tag push ships the CLI + plugin via GoReleaser to `apresai/homebrew-tap` (pure Go, both architectures from one runner; **CI never builds the macOS app or cask**); (2) `make release-app` locally builds, Developer ID-signs, notarizes, staples, and publishes the DMG + cask (signing keys never enter CI). `release-app` is checkpointed and resumable (`build/release-state-<VERSION>.json`); `make release-app-status` reports without changing anything; `RELEASE_NOWAIT=1` submits and exits; `make release-local` is a CLI-only local release. The app bundles a version-matched `2nb` at `Contents/Resources/2nb` and strips its quarantine at launch (`CLIPath.prepareBundledCLI()`); the cask still depends on the `twonb` formula so the terminal and plugin have a PATH `2nb`. Signing order, notarization self-heal, DMG sweep rules, and every failure mode: [docs/release-playbook.md](docs/release-playbook.md).
+**`make release-all` is the front door** (canonical clone only; needs gitignored `scripts/sign.env`): test gate, bump (`BUMP=build|minor|major|none`), tag, wait for CI, then sign/notarize/publish the app + cask, verifying every product shipped at one version. The two-step model underneath: (1) GitHub Actions on tag push ships the CLI via GoReleaser to `apresai/homebrew-tap` (pure Go, both architectures from one runner) and uploads the Obsidian plugin assets to the GitHub release (**CI never builds the macOS app or cask**); (2) `make release-app` locally builds, Developer ID-signs, notarizes, staples, and publishes the DMG + cask (signing keys never enter CI). `release-app` is checkpointed and resumable (`build/release-state-<VERSION>.json`); `make release-app-status` reports without changing anything; `RELEASE_NOWAIT=1` submits and exits; `make release-local` is a CLI-only local release. The app bundles a version-matched `2nb` at `Contents/Resources/2nb` and strips its quarantine at launch (`CLIPath.prepareBundledCLI()`); the cask still depends on the `twonb` formula so the terminal and plugin have a PATH `2nb`. Signing order, notarization self-heal, DMG sweep rules, and every failure mode: [docs/release-playbook.md](docs/release-playbook.md).
 
 ## Build
 
@@ -60,7 +60,7 @@ Both products ship via Homebrew (`brew install apresai/tap/2nb`; `brew install -
 make build              # Both CLI and app (regenerates Version.swift)
 make build-cli          # cli/bin/2nb only
 make build-app          # macOS app
-cd cli && make test     # All Go tests
+make test               # CLAUDE.md size gate + all Go tests
 cd cli && make install  # Install to /usr/local/bin/2nb
 ```
 
@@ -73,7 +73,7 @@ open app/.build/arm64-apple-macosx/debug/SecondBrain.app
 ## Testing
 
 ```bash
-make test               # Go unit tests
+make test               # CLAUDE.md size gate + Go unit tests
 make test-battery       # Golden-path E2E battery (cli/battery_test.go)
 make test-usage         # MCP write->query index round-trips + real-binary E2E battery; catches index-consistency regressions (AI steps skip without creds)
 make test-swift         # Swift unit tests
@@ -169,7 +169,7 @@ Full per-command reference (flags, JSON shapes, invariants): **[docs/cli-referen
 | `aliases` | Frontmatter aliases mapped to documents |
 | `export-context` | CLAUDE.md-compatible context bundle |
 | `delete` | Delete doc from disk + index. Prompts `[y/N]`; agents pass `--force` (an unanswered prompt times out after 60s WITHOUT deleting) |
-| `move <src> <dst>` / `rename <src> <name>` | Link-rewriting move/rename (see write-surface guarantees; mandatory `--dry-run` preview) |
+| `move <src> <dst>` / `rename <src> <name>` | Link-rewriting move/rename (see write-surface guarantees; preview with `--dry-run` first) |
 | `import-obsidian` / `export-obsidian` / `migrate` | Legacy conversion + legacy-vault migration (`migrate --dry-run`; never mutates source markdown) |
 | `mcp-server` | Stdio MCP server; exits with its client (parent-death watchdog); idle self-exit is opt-in (`--idle-timeout`) |
 | `mcp status` / `mcp reap` / `mcp configured` / `mcp doctor` | Live server processes / stale-orphan cleanup backstop / durable per-client is-it-configured check / in-process self-test that hard-fails a vault whose semantic channel silently degraded to BM25 |
@@ -200,7 +200,7 @@ Full per-command reference (flags, JSON shapes, invariants): **[docs/cli-referen
 | `models bench fav\|unfav\|favs\|history\|compare` | Benchmark favorites and history views |
 | `skills list\|install\|uninstall\|show` / `skills doctor` | SKILL.md management per agent (version-stamped; `skills list` self-heals stale unmodified installs) / verify the skill + that `2nb` resolves on PATH |
 | `config show\|get\|set\|set-key\|bedrock\|doctor` | Config read/write with validation; `config bedrock` manages machine-local `~/.config/2nb/bedrock.json` (masked `token_suffix`, included regions, `--prefer-stored-token`); `config doctor` diagnoses AI config (defects fail, environmental issues warn) |
-| `doctor` (alias `verify`) | THE end-to-end proof, and the only command that exits non-zero when the setup is broken: tier 1 probes the active models with NO vault; tier 2 folds in `config doctor` + `mcp doctor` wholesale. Calls models for real; automatic/repeating callers MUST use the free `--versions` form |
+| `doctor` (alias `verify`) | THE end-to-end proof that the setup actually works: tier 1 probes the active models with NO vault; tier 2 folds in `config doctor` + `mcp doctor` wholesale. Calls models for real; automatic/repeating callers MUST use the free `--versions` form |
 | `update` | Release check across CLI/app/plugin (24h cache, refetched when behind an install; never hard-errors offline) |
 | `completion` / `completion install` | Shell completion scripts / idempotent zsh install |
 
@@ -232,7 +232,7 @@ Full reference with the measured numbers and re-measure commands: **[docs/search
 
 ### Vault Portability
 
-(The 0.5.0 path-based identity and non-mutating sidecar doctrine lives in [docs/obsidian/identity-model.md](docs/obsidian/identity-model.md).) A vault is self-contained: markdown + `.2ndbrain/index.db` + `config.yaml`; `tar czf` and open elsewhere. **The DB is the source of truth** for what produced the stored embeddings (`documents.embedding_model` + BLOB length); config is user preference only, and `2nb index` never writes derived state back to `config.yaml` (no merge conflicts in git-shared vaults).
+(The 0.5.0 path-based identity ADR is [docs/obsidian/identity-model.md](docs/obsidian/identity-model.md); the sidecar read/write boundary is [docs/obsidian/vault-coexistence.md](docs/obsidian/vault-coexistence.md).) A vault is self-contained: markdown + `.2ndbrain/index.db` + `config.yaml`; `tar czf` and open elsewhere. **The DB is the source of truth** for what produced the stored embeddings (`documents.embedding_model` + BLOB length); config is user preference only, and `2nb index` never writes derived state back to `config.yaml` (no merge conflicts in git-shared vaults).
 
 | DB state | Outcome | Fix |
 |---|---|---|
@@ -288,7 +288,7 @@ Tool table with parameters, setup snippets, and server internals (sidecar `<pid>
 
 ## Obsidian Plugin (`plugins/obsidian-2ndbrain`)
 
-A thin wrapper that shells out to `2nb`; Obsidian remains the editor. Source of record: `plugins/obsidian-2ndbrain/main.ts`. Install via BRAT or release assets; end users never run npm. Feature detail (commands, chat panel, polish flow, managed CLI download, settings sections): docs/obsidian/user-guide.md and docs/obsidian/integration-guide.md. The rules:
+A thin wrapper that shells out to `2nb`; Obsidian remains the editor. Source of record: `plugins/obsidian-2ndbrain/main.ts`. Install via BRAT or release assets; end users never run npm. Feature detail (commands, chat panel, polish flow, managed CLI download, settings sections): [docs/obsidian/user-guide.md](docs/obsidian/user-guide.md) and [docs/obsidian/integration-guide.md](docs/obsidian/integration-guide.md). The rules:
 
 - **Every CLI call is pinned to the open Obsidian vault** via `--vault adapter.getBasePath()` (`pinVaultArgs`), so 2nb can never resolve a different vault from the registry or cwd.
 - **Per-command timeouts carry their derivations in the unit-test failure messages** (`commandTimeoutMs`): `index` unbounded (killing it mid-run leaves a partial index), `ask` 2940s (four sequential legs of the Go `ai.MantleWorstCase` 723s transport budget + slack; the plugin must never kill a working cold model the CLI is still legitimately waiting on), `doctor` 180s, default 120s.
@@ -298,7 +298,7 @@ A thin wrapper that shells out to `2nb`; Obsidian remains the editor. Source of 
 
 ## Vault Format
 
-Layout, schemas, and the SQLite table reference (index.db incl. the schema v4 `meta` generation stamps and `vec_chunks`, bench.db, metrics.db): **[docs/vault-structure.md](docs/vault-structure.md)** and **[docs/templates.md](docs/templates.md)** (document types). Quick facts: documents are plain `.md` with YAML frontmatter (`id` UUID, `title`, `type`, `status`, `tags`, `created`, `modified`); wikilinks `[[target]]` / `[[target#heading]]` / `[[target|alias]]`; `.canvas`/`.base` files are indexed as read-only synthetic views (never written back). The `.2ndbrain/` sidecar holds `config.yaml`, `schemas.yaml` (the only committable file in team vaults), `index.db`, `models.yaml`, `models-policy.yaml`, `bench.db`, `metrics.db`, `eval/`, `mcp/`, `recovery/`, `logs/`; `2nb vault create` writes a `.gitignore` covering the personal/local state.
+Layout, schemas, and the SQLite table reference (index.db incl. the schema v4 `meta` generation stamps and `vec_chunks`, bench.db, metrics.db): **[docs/vault-structure.md](docs/vault-structure.md)** and **[docs/templates.md](docs/templates.md)** (document types). Quick facts: documents are plain `.md` with YAML frontmatter (`title`, `type`, `status`, `tags`, `created`, `modified`); note identity is path-based ([docs/obsidian/identity-model.md](docs/obsidian/identity-model.md)): an `id` UUID is read and preserved when present, and template-created notes include one, but it is never required; wikilinks `[[target]]` / `[[target#heading]]` / `[[target|alias]]`; `.canvas`/`.base` files are indexed as read-only synthetic views (never written back). The `.2ndbrain/` sidecar holds `config.yaml`, `schemas.yaml` (the only committable file in team vaults), `index.db`, `models.yaml`, `models-policy.yaml`, `bench.db`, `metrics.db`, `eval/`, `mcp/`, `recovery/`, `logs/`; `2nb vault create` writes a `.gitignore` covering the personal/local state.
 
 ## Obsidian Conversion
 

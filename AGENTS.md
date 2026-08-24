@@ -3,7 +3,7 @@
 Obsidian-native AI companion. **Obsidian stays the editor**; the Go CLI (`2nb`) + MCP server are the engine that indexes, searches, and answers (RAG) over a real Obsidian vault. A thin Obsidian plugin and a macOS configuration dashboard wrap the CLI. `2nb` writes only a gitignored `.2ndbrain/` sidecar and never rewrites your markdown (one explicit, user-invoked exception: `2nb plugin install` writes the plugin bundle under `.obsidian/plugins/obsidian-2ndbrain/`).
 
 > [!NOTE]
-> [CLAUDE.md](CLAUDE.md) at the repo root is the full, maintained project reference (architecture, release pipeline, command catalog, app internals). This file is the condensed version for coding agents; when the two disagree, trust CLAUDE.md and fix this file.
+> [CLAUDE.md](CLAUDE.md) at the repo root carries the maintained rules and invariants, and points into `docs/` for the full reference detail (start at [docs/cli-reference.md](docs/cli-reference.md), [docs/macos-app.md](docs/macos-app.md), [docs/ai-providers.md](docs/ai-providers.md), [docs/search-tuning.md](docs/search-tuning.md), [docs/release-playbook.md](docs/release-playbook.md)). This file is the condensed version for coding agents; when they disagree, trust CLAUDE.md plus the docs/ files it points to, and fix this file.
 
 ## Repository Layout
 

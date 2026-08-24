@@ -302,12 +302,12 @@ Export to Obsidian format: copies markdown, creates `.obsidian/` with a default 
 
 ### migrate
 
-Migrate a legacy 2ndbrain vault to the Obsidian-native format (schema v3); `--dry-run` previews without modifying. Non-mutating: source markdown is never changed.
+Migrate a legacy 2ndbrain vault to the Obsidian-native format (the current index schema; v4 as of 0.19.x); `--dry-run` previews without modifying. Non-mutating: source markdown is never changed.
 ## MCP & Agent Integration
 
 ### mcp-server
 
-Starts the MCP server on stdio transport. The server stays alive while its client is connected: it exits instantly when the client closes the connection (stdin EOF) and promptly when the client process dies, so a closed or crashed session never leaves an orphan holding the index open, and a live-but-quiet session is never killed. The orphan reaper is a parent-death watchdog (`internal/mcp/parent.go`): a `getppid()` poll that exits when the parent (the client) goes away. The activity-based idle self-exit (`internal/mcp/idle.go`, a lock-free atomic activity clock plus an in-flight counter) is opt-in and OFF by default; enable an inactivity cap with `--idle-timeout <dur>` or `$2NB_MCP_IDLE_TIMEOUT` (for example `1h`; `0` means never).
+Starts the MCP server on stdio transport. The server exits with its client (a parent-death watchdog reaps orphans promptly); the idle self-exit is opt-in and OFF by default (`--idle-timeout <dur>` or `$2NB_MCP_IDLE_TIMEOUT`; `0` means never). Lifecycle detail, sidecar status files, and metrics recording live in [mcp-integration.md](mcp-integration.md) (Server internals).
 
 ### mcp-setup
 
@@ -319,7 +319,7 @@ Lists live MCP server processes and recent tool invocations (`--json`).
 
 ### mcp reap
 
-Terminates stale or orphaned `mcp-server` processes for this vault (SIGTERM only; the server handles it cleanly). Reaps servers whose last activity is older than `--older-than` (default 6h), never the current process and never an active server, and re-verifies the sidecar's start time before signaling to dodge PID reuse. `--dry-run` previews. With the parent-death watchdog on `mcp-server` reaping orphans promptly, this is a rarely-needed backstop. JSON: `{reaped[], skipped[], threshold, dry_run}`.
+Terminates stale or orphaned `mcp-server` processes for this vault; a rarely-needed backstop now that the parent-death watchdog reaps orphans promptly. `--older-than` (default 6h), `--dry-run`; JSON: `{reaped[], skipped[], threshold, dry_run}`. Safety detail (SIGTERM-only, PID-reuse guard): [mcp-integration.md](mcp-integration.md) (Server internals).
 
 ### mcp configured
 
@@ -501,7 +501,7 @@ Interactive end-to-end flow: providers → discover → easy-mode → cost previ
 
 ### models bench
 
-Benchmarks a model against the vault. `--probe embed|generate|retrieval|search|rag`. The `retrieval` probe is zero-API (it scores stored embeddings). History lives in `.2ndbrain/bench.db`; a per-model summary is written at `--summary-scope` (default `global`) and surfaced in `models list`'s BENCH column and `--sort best`. `--json` emits line-delimited events.
+Benchmarks a model against the vault. `--probe embed|generate|retrieval|search|rag`. The `retrieval` and `search` probes are zero-API (they score stored embeddings and the local index). History lives in `.2ndbrain/bench.db`; a per-model summary is written at `--summary-scope` (default `global`) and surfaced in `models list`'s BENCH column and `--sort best`. `--json` emits line-delimited events.
 
 ### models bench fav / unfav / favs / history / compare
 

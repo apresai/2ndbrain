@@ -66,3 +66,15 @@ jobs:
             gh api "repos/${{ github.repository }}/issues/$PR/comments" -f body="$BODY" > /dev/null \
               || echo "comment skipped (read-only token, e.g. a fork PR); the notice annotation above stands"
           fi
+
+  # Unlike readme-currency above, this job DOES block: CLAUDE.md over the size
+  # cap or a broken relative doc link is a defect, not a judgment call. It runs
+  # at PR time so the failure lands before merge, not after a release tag.
+  doc-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: CLAUDE.md size cap
+        run: make check-claude-md-size
+      - name: Relative doc links resolve
+        run: make check-docs-links

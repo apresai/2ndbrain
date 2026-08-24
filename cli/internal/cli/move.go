@@ -28,7 +28,7 @@ var moveCmd = &cobra.Command{
 points at it, so links stay valid.
 
 This is the strongest write surface in 2nb: it is the only command that edits
-OTHER notes' bodies. Use --dry-run first to preview the rename, the exact links
+OTHER notes' bodies. Use --dry-run first to preview the rename, the per-note links
 that would be rewritten, and any links it would skip as ambiguous. Without
 --force, a move is refused when the pre-scan finds a blocking ambiguity (a bare
 [[name]] link whose name matches more than one note, so we can't be sure it

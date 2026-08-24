@@ -25,7 +25,7 @@ all-minilm `0.35`. The rest are estimates from training objectives.
 ### Nova asymmetric purpose (and why the threshold is low)
 
 Queries embed with Nova's `GENERIC_RETRIEVAL` purpose while documents stay `GENERIC_INDEX`:
-`ai.WithPurpose(ai.PurposeQuery)` at the 8 query call sites, while the index path keeps the
+`ai.WithPurpose(ai.PurposeQuery)` at the query-embed call sites, while the index path keeps the
 default `PurposeIndex`. Measured on a real 151-doc vault, this lifts MRR@10 from 0.951 to 0.962
 and Recall@10 from 0.987 to 1.0, and widens match/noise separation from 0.077 to 0.115. But it
 collapses the cosine scale: true-match cosine drops to p50≈0.34 and unrelated-pair cosine to

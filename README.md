@@ -29,7 +29,8 @@ The app and its `.dmg` are both Developer ID-signed, Apple-notarized, and staple
 The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives in **[docs/quick-start.md](docs/quick-start.md)**. The CLI fast path:
 
 ```bash
-# Point 2nb at your existing Obsidian vault (or scaffold a fresh one)
+# Register your existing Obsidian vault in recents (2nb follows the vault
+# Obsidian has open; open it there, or pass --vault to any command)
 2nb vault set ~/path/to/your-obsidian-vault
 2nb vault create ~/vault                      # only for a brand-new vault
 
@@ -191,6 +192,8 @@ Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bed
 
 ## CLI Commands
 
+The tables below are the overview; the full per-command reference (every flag, JSON shape, and cross-command invariant) is **[docs/cli-reference.md](docs/cli-reference.md)**.
+
 Commands are organized into groups (`2nb --help` shows the full list).
 
 **Global flags:** `--json`, `--csv`, `--yaml`, `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--vault`, `--unconfigured` (permit a write to a vault Obsidian doesn't know — without it such a write is refused), `--copy` (also copy output to the clipboard), `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
@@ -335,7 +338,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--tsv` for machine-readable o
 
 ### Defaults and search scoring
 
-- **Parent-command defaults**: running a command group without a subcommand invokes its most-useful read-only action: `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`. `--help` still works on every command.
+- **Parent-command defaults**: running a command group without a subcommand invokes its most-useful read-only action: `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`, `2nb metrics` → `metrics show`, `2nb instructions` → `instructions configured`. `--help` still works on every command.
 - **Similarity threshold** — hybrid search drops vector hits whose cosine similarity is below the active threshold so barely-related neighbors stop padding result lists. Resolution order: explicit vault config (`2nb config set ai.similarity_threshold 0.25`) > user calibration saved by `2nb models calibrate --save` > per-model recommendation from the builtin catalog > global default `0.20`. Builtin recommendations: Nova-2 `0.25` (measured; queries embed with Nova's asymmetric `GENERIC_RETRIEVAL` purpose, which collapses the cosine scale; see [docs/search-tuning.md](docs/search-tuning.md)), Nemotron `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`, all-minilm `0.35` (all estimated from each model's training objective — run `2nb models calibrate` to tune for your vault). Override per-query with `2nb search "foo" --threshold 0.35`. `2nb ai status` shows the active value and which tier supplied it.
 - **Calibration** — `2nb models calibrate` samples random chunk pairs from your vault, reports the noise-floor cosine distribution (p50/p90/p95/p99), and recommends a threshold. Add `--save` to persist it to the per-vault user catalog (or `--save --scope global` for all vaults).
 - **Score display** — `2nb search` now shows `(rrf=X.XXX, cos=Y.YYY)` on each result. The `rrf` is the Reciprocal Rank Fusion score used for ranking; `cos` is the raw cosine similarity from the vector channel, which is what you actually want to look at when judging whether a result is relevant. If legitimate matches are being cut, lower the threshold; if noise is slipping through, raise it.
@@ -511,7 +514,7 @@ The rest of the sidebar:
 - **Settings**: the same four Settings tabs hosted inline, so configuration is reachable without knowing Cmd+,
 - **Activity**: **Git** (recent commits, 1/3/7/30-day window; click for per-file diffs — Cmd+Shift+G) · **MCP Server** (live server processes and recent tool invocations — Cmd+Shift+M)
 
-Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Sync Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (AI Hub, MCP Server Configuration, MCP Server Status).
+Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Sync Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (Models… Cmd+Shift+Comma, Testing & Benchmarks… Cmd+Shift+T, MCP Server Configuration, MCP Server Status Cmd+Shift+M).
 
 Build and install from source:
 
