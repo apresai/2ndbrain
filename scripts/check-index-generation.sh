@@ -9,6 +9,7 @@
 # Escape hatch: a `Reindex-Not-Needed: <reason>` trailer in any commit since the
 # last tag (for a comment/refactor/no-op change to a watched file).
 set -euo pipefail
+cd "$(dirname "$0")/.."   # pathspecs below are repo-relative; anchor like check-docs-links.sh
 
 # Watched files, split by the generation class their changes demand. The
 # EMBED-class files (chunk boundaries, embedding production) require an
@@ -68,9 +69,12 @@ if grep -qiE '^Reindex-Not-Needed:' < <(git log "$base"..HEAD --format='%B'); th
   exit 0
 fi
 
+required="IndexGeneration or EmbedGeneration"
+[ -n "$touched_embed" ] && required="EmbedGeneration (embed-class files changed; an IndexGeneration bump alone cannot make stale vectors usable)"
+
 cat >&2 <<EOF
-ERROR: index/embed logic changed since $base but neither IndexGeneration nor
-EmbedGeneration was bumped in $GEN_FILE.
+ERROR: watched logic changed since $base without the required generation bump
+in $GEN_FILE. Required: $required.
 
 Changed logic files:
 $touched_logic
