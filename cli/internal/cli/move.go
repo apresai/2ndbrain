@@ -40,7 +40,10 @@ the target portion is rewritten, in the same shape the author used (a bare
 basename stays a basename, a path stays a path). A markdown link keeps its
 [label] text, any #anchor or ?query suffix, and its ".md" extension; markdown
 links to external URLs (http, mailto, and similar) and anchor-only targets are
-skipped.
+skipped. Percent-encoded markdown targets (the [x](My%20Note.md) form Obsidian
+generates for paths with spaces) are matched by their decoded form, and the
+rewritten destination is re-encoded whenever the authored link was encoded or
+the new path contains a space, %, #, ?, or parenthesis.
 
 The target file is moved LAST, after every referencing note is rewritten, so an
 interruption mid-run leaves links pointing at the still-present old name rather

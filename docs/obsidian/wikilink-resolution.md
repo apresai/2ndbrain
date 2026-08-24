@@ -20,6 +20,19 @@ When the parser encounters a link `[[Target]]`, it attempts to resolve the desti
 
 ---
 
+### Percent-encoded targets
+
+A target that resolves to nothing in its raw form is retried once in its
+percent-decoded form (`document.DecodeLinkTarget`), so an Obsidian-generated
+markdown link like `[x](My%20Note.md)` resolves to `My Note.md`. The raw form
+always wins first: a vault containing a literal `My%20Note.md` note keeps exact
+precedence, and no double-keyed index entries are created (so the retry can
+never manufacture an ambiguity). One caveat: the `links` table carries no
+syntax marker, so the retry also applies to wikilink-sourced rows; a deliberate
+`[[My%20Note]]` wikilink whose decoded form names a real note resolves in 2nb
+even though Obsidian would not decode it. This only affects targets that were
+unresolvable as written.
+
 ## Worked Collision Examples
 
 Consider a vault with the following structure:

@@ -21,6 +21,10 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	     in-fence `#` comments (typical of runbooks).
 //	IndexGeneration
 //	  1  baseline.
+//	  2  percent-encoding-aware link resolution: an Obsidian-encoded markdown
+//	     link ([x](My%20Note.md)) to a real note now resolves (target_id set),
+//	     so backlinks/lint/graph outcomes change for vaults holding encoded
+//	     links. Fix: 2nb index.
 //
 // If you change the watched files (see `make check-index-generation`) but a
 // reindex is genuinely NOT needed, add a `Reindex-Not-Needed: <reason>` trailer
@@ -28,7 +32,7 @@ import "github.com/apresai/2ndbrain/internal/store"
 const (
 	// IndexGeneration bumps for index-only logic changes (FTS content, link/tag
 	// extraction) that do NOT alter chunk boundaries or embeddings. Fix: 2nb index.
-	IndexGeneration = 1
+	IndexGeneration = 2
 
 	// EmbedGeneration bumps for chunking OR embedding-production logic changes
 	// (chunk boundaries, purpose, pooling, normalization) at the SAME model and

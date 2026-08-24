@@ -25,7 +25,7 @@ This document serves as the central compatibility matrix comparing Obsidian beha
 | **File Mutation** | Reads/writes markdown files | Automatically inserts UUID and timestamp properties | Guarantees non-mutating indexing operations | [vault-coexistence.md](vault-coexistence.md) |
 | **YAML Editing** | Preserves comments and key ordering | Reorders keys alphabetically; strips comments | Preserves exact file format, comments, and spacing | [vault-coexistence.md](vault-coexistence.md) |
 | **Wikilink Syntax** | Resolves `[[note]]`, `[[note\|alias]]`, `[[note#anchor]]` | Resolves `[[note]]` only | Resolves full wikilink anchors and aliases | [ofm-syntax.md](ofm-syntax.md) |
-| **Markdown Links** | Resolves standard links `[text](path.md)` | Ignored by indexer | Fully parsed and represented in link graph | [ofm-syntax.md](ofm-syntax.md) |
+| **Markdown Links** | Resolves standard links `[text](path.md)`; percent-encodes spaces when generating them (`My%20Note.md`) | Ignored by indexer | Fully parsed and represented in link graph; encoded targets resolve via a decode retry, and `move` re-encodes rewritten destinations | [ofm-syntax.md](ofm-syntax.md) |
 | **Embeds / Transclusions** | Renders and indexes content of `![[note]]` | Ignored by indexer | Parsed as document dependencies | [ofm-syntax.md](ofm-syntax.md) |
 | **Canvas** | Visual node graph mapping | Ignored by indexer | Read-only index representation of text cards | [canvas-and-bases.md](canvas-and-bases.md) |
 | **Bases** | Configuration profile management | Ignored by indexer | Read-only index of structured data blocks | [canvas-and-bases.md](canvas-and-bases.md) |
