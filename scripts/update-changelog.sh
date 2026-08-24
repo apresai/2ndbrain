@@ -125,15 +125,34 @@ parts = original.split(unreleased_marker, 1)
 before_unreleased = parts[0]
 after_unreleased = parts[1]
 
+# Hand-curated Unreleased content BECOMES part of the release entry (the
+# Keep-a-Changelog flow); it must never be silently discarded. Strip the
+# empty-placeholder line; anything else is real content.
+def unreleased_body(text):
+    lines = [l for l in text.strip().splitlines()
+             if l.strip() not in ('', '(empty - ready for next release)', '(ready for next release)')]
+    return '\n'.join(lines).strip()
+
 # Find the next version section (## [)
 next_section_idx = after_unreleased.find('\n## [')
 if next_section_idx == -1:
-    # No more versions, append at end
-    updated = before_unreleased + unreleased_marker + '\n\n(empty - ready for next release)\n' + new_entry + after_unreleased
+    curated = unreleased_body(after_unreleased)
+    if curated:
+        new_entry = new_entry.rstrip('\n') + '\n\n' + curated + '\n'
+    updated = before_unreleased + unreleased_marker + '\n\n(empty - ready for next release)\n' + new_entry
 else:
-    # Insert between Unreleased and next version
+    # Insert between Unreleased and next version, folding any hand-curated
+    # Unreleased content into the top of the new version entry.
     before_next = after_unreleased[:next_section_idx]
     after_next = after_unreleased[next_section_idx:]
+    curated = unreleased_body(before_next)
+    if curated:
+        marker = '## [$VERSION] - $DATE'
+        head, sep, tail = new_entry.partition(marker)
+        if sep:
+            new_entry = head + sep + '\n\n' + curated + tail
+        else:
+            new_entry = new_entry.rstrip('\n') + '\n\n' + curated + '\n'
     updated = before_unreleased + unreleased_marker + '\n\n(empty - ready for next release)\n' + new_entry + after_next
 
 # Write result

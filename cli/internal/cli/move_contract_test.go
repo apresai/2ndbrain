@@ -326,6 +326,71 @@ func TestContract_Move_RewritesMarkdownLinks(t *testing.T) {
 	}
 }
 
+// TestContract_Move_RewritesPercentEncodedMarkdownLinks guards the
+// percent-encoding contract end to end: Obsidian encodes spaces in generated
+// markdown links ([see](notes/My%20Note.md)), so move must DISCOVER a note
+// whose only reference is percent-encoded (the LinksByRawName decode retry),
+// MATCH it in the rewriter (decode after the anchor split), EMIT the new
+// destination re-encoded, and the emitted link must RESOLVE on move's own
+// final ResolveLinks pass (asserted via backlinks after the move). This is the
+// only test shape that exercises the discovery path; the unit table in
+// document/rewrite_test.go bypasses LinksByRawName entirely.
+func TestContract_Move_RewritesPercentEncodedMarkdownLinks(t *testing.T) {
+	_, root := newContractVault(t)
+
+	writeNote(t, root, "notes/My Note.md", "My Note", "I have spaces in my path.")
+	writeNote(t, root, "A.md", "A note", "A links to [see](notes/My%20Note.md#intro) here.")
+	writeNote(t, root, "B.md", "B note", "B links to [doc](My%20Note.md) here.")
+
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	// The destination also carries a space, so the emitted links must come out
+	// percent-encoded to stay valid CommonMark destinations.
+	out, err := runCLIArgs(t, root, "move", "notes/My Note.md", "notes/Renamed Note.md", "--json")
+	if err != nil {
+		t.Fatalf("move: %v (out=%s)", err, out)
+	}
+	var res moveResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode move result: %v (out=%s)", err, out)
+	}
+	if len(res.Rewritten) != 2 {
+		t.Errorf("rewritten = %d notes, want 2: %+v", len(res.Rewritten), res.Rewritten)
+	}
+
+	aBody := readBody(t, root, "A.md")
+	if !strings.Contains(aBody, "[see](notes/Renamed%20Note.md#intro)") {
+		t.Errorf("A md-link should be rewritten encoded with #intro preserved: %q", aBody)
+	}
+	bBody := readBody(t, root, "B.md")
+	if !strings.Contains(bBody, "[doc](Renamed%20Note.md)") {
+		t.Errorf("B md-link should be rewritten encoded, bare form preserved: %q", bBody)
+	}
+
+	// Closing the loop: the encoded links move just wrote must RESOLVE, so both
+	// referrers appear as backlinks of the moved note. Without the decode retry
+	// in ResolveLinks, move would manufacture links its own lint calls broken.
+	out, err = runCLIArgs(t, root, "backlinks", "notes/Renamed Note.md", "--json")
+	if err != nil {
+		t.Fatalf("backlinks: %v (out=%s)", err, out)
+	}
+	var refs []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(out, &refs); err != nil {
+		t.Fatalf("decode backlinks: %v (out=%s)", err, out)
+	}
+	got := map[string]bool{}
+	for _, r := range refs {
+		got[r.Path] = true
+	}
+	if !got["A.md"] || !got["B.md"] {
+		t.Errorf("encoded links written by move must resolve as backlinks; got %v", got)
+	}
+}
+
 func TestContract_Move_MissingSourceErrors(t *testing.T) {
 	_, root := newContractVault(t)
 	if _, err := runCLIArgs(t, root, "index"); err != nil {

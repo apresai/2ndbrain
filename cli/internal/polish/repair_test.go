@@ -63,6 +63,36 @@ func TestRepairBrokenLinks_RepairsCaseDriftLeavesRestAlone(t *testing.T) {
 	}
 }
 
+// TestRepairBrokenLinks_EncodedTargetUnrepairableIsReported pins the no_change
+// skip: a percent-encoded markdown link whose unique repair candidate spells
+// the same destination it already has (modulo encoding) cannot be fixed by
+// rewriting, and must be REPORTED as skipped rather than silently dropped, so
+// a UI's one-click repair row cannot survive every application invisibly.
+func TestRepairBrokenLinks_EncodedTargetUnrepairableIsReported(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	// The note's basename is kebab-case, so the encoded target cannot resolve
+	// (resolver is case/separator-sensitive), but the repair index folds the
+	// title "Guide To Models" to the same normalized name as the decoded
+	// target, producing exactly one candidate.
+	testutil.CreateAndIndex(t, v, "Guide To Models", "note", note("Guide To Models", "Models guide."))
+	src := testutil.CreateAndIndex(t, v, "Ref Doc", "note",
+		note("Ref Doc", "See [x](Guide%20To%20Models.md) for detail.\n"))
+
+	res, err := RepairBrokenLinks(v, src.Body)
+	if err != nil {
+		t.Fatalf("RepairBrokenLinks: %v", err)
+	}
+	if len(res.Repaired) != 0 {
+		t.Fatalf("nothing should be repaired (the rewrite would be a respell), got %+v", res.Repaired)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Raw != "Guide%20To%20Models.md" || res.Skipped[0].Reason != "no_change" {
+		t.Fatalf("expected one no_change skip for the encoded target, got %+v", res.Skipped)
+	}
+	if res.Body != src.Body {
+		t.Fatalf("body must be untouched")
+	}
+}
+
 func TestRepairBrokenLinks_PreservesHeadingAndAliasSuffix(t *testing.T) {
 	v := testutil.NewTestVault(t)
 	testutil.CreateAndIndex(t, v, "Auth Flow", "note", note("Auth Flow", "How auth works."))

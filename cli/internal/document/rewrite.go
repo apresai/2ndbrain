@@ -205,6 +205,13 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 		edits = append(edits, edit{start: m[2], end: m[2] + len(target), newText: replacement})
 	}
 
+	// Markdown replacements are loop-invariant: encode them once. Encoding is
+	// an identity on clean paths, so applying it unconditionally is safe; it
+	// keeps a rewritten destination a valid bare CommonMark destination when
+	// the new path contains a space, %, #, ?, or parenthesis.
+	mdNewPath := EncodeLinkTarget(newPath + ".md")
+	mdNewBase := EncodeLinkTarget(newBase + ".md")
+
 	for _, m := range mdLinkRe.FindAllStringSubmatchIndex(scan, -1) {
 		// Group 2 (m[4]:m[5]) is the (target) portion inside the parentheses.
 		rawTarget := scan[m[4]:m[5]]
@@ -227,7 +234,17 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 			continue
 		}
 
+		// Obsidian percent-encodes spaces when it generates markdown links, so
+		// match the raw form first (a literal-% filename wins exactly), then
+		// retry the decoded form on a miss. Decode happens AFTER the #? split
+		// above so a literal %23 in a filename can never be mis-split as an
+		// anchor.
 		form, ok := matchForm(pathPart, oldForms)
+		if !ok {
+			if decoded := DecodeLinkTarget(pathPart); decoded != pathPart {
+				form, ok = matchForm(decoded, oldForms)
+			}
+		}
 		if !ok {
 			continue
 		}
@@ -239,12 +256,18 @@ func rewriteWikiLinks(body, oldTarget, newTarget string, pathOnly bool) (string,
 		// unlike wikilinks which drop it. A bare basename match stays a bare
 		// basename; a path match becomes the new path. We never invent a folder
 		// prefix a bare authored link didn't have.
-		replacement := newPath + ".md"
+		replacement := mdNewPath
 		if form == formBasename {
-			replacement = newBase + ".md"
+			replacement = mdNewBase
 		}
-		if replacement == pathPart {
-			continue // no-op (path text already matches the replacement)
+		// No-op when the destination is unchanged modulo percent-encoding: a
+		// rewrite whose only effect would be respelling the same destination
+		// (raw spaces to %20 or back) must not count as a change, or a
+		// folder-only move would churn referencing notes, and repair-links
+		// would "repair" a link to its own spelling, burning the note's single
+		// polish --undo snapshot without fixing anything.
+		if replacement == pathPart || DecodeLinkTarget(replacement) == DecodeLinkTarget(pathPart) {
+			continue
 		}
 		// Edit only the path part inside the parentheses (m[4] through
 		// m[4]+len(pathPart)); the #anchor/?query suffix and the closing ")"
@@ -346,6 +369,9 @@ func targetForms(oldTarget string) map[string]matchKind {
 // normalizeTarget canonicalizes a wikilink target or a vault-relative path for
 // matching: backslashes to forward slashes, a stripped leading slash, and a
 // stripped ".md" extension. Mirrors the normalization in store.ResolveLinks.
+// Percent-decoding is deliberately NOT part of this normalization: markdown
+// comparison sites retry through DecodeLinkTarget (linkencode.go) on a raw
+// miss, so wikilink matching stays byte-exact.
 func normalizeTarget(s string) string {
 	s = strings.ReplaceAll(s, "\\", "/")
 	s = strings.TrimPrefix(s, "/")

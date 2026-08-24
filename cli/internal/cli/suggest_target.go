@@ -435,6 +435,11 @@ const dominantScoreRatio = 1.4
 // repair-links would rewrite to, and it may have matched via an alias the
 // title/basename word check cannot see).
 func assignConfidence(results []SuggestLinkResult, target string, uniqueDrift map[string]bool) {
+	// Decode once and strip a trailing .md (loop-invariant), mirroring
+	// polish.RepairIndex.Lookup: a percent-encoded markdown target like
+	// "My%20Note.md" grades on its words ("my note"), not on "%20"-glued or
+	// ".md"-glued tokens.
+	target = strings.TrimSuffix(document.DecodeLinkTarget(target), ".md")
 	for i := range results {
 		if uniqueDrift[results[i].Path] {
 			results[i].Confidence = "high"

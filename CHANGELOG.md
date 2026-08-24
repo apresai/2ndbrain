@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- Percent-encoded markdown links (`[x](My%20Note.md)`, the form Obsidian generates for paths with spaces) are now first-class everywhere: they resolve as real links (backlinks, graph, `unresolved`, lint, repair candidates all see them), and `move`/`rename` discovers, matches, and rewrites them, percent-encoding rewritten destinations as needed and never respelling an unchanged destination. Reindex recommended: `2nb index` (free, no re-embed) so previously-unresolved encoded links pick up their targets. (#237)
 
 ## [0.19.2] - 2026-08-23
 

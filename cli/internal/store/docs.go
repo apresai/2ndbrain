@@ -228,35 +228,14 @@ func (db *DB) ResolveLinks() error {
 		target := strings.ReplaceAll(l.targetRaw, "\\", "/")
 		target = strings.TrimPrefix(target, "/")
 
-		var resolvedID string
+		resolvedID := idx.resolveID(target)
 
-		// A. Exact full-path match (path is unique).
-		if id, ok := idx.exactPaths[target]; ok {
-			resolvedID = id
-		} else if id, ok := idx.exactPaths[target+".md"]; ok {
-			resolvedID = id
-		}
-
-		// B. Shortest-unique-name match (path suffix or basename).
+		// Obsidian percent-encodes spaces in generated markdown links; retry
+		// the decoded form so [x](My%20Note.md) resolves to "My Note.md". The
+		// raw form wins first, so a literal-% filename keeps exact precedence.
 		if resolvedID == "" {
-			if id, ok := idx.uniqueDocID(target); ok {
-				resolvedID = id
-			} else if id, ok := idx.uniqueDocID(target + ".md"); ok {
-				resolvedID = id
-			}
-		}
-
-		// C. Title match.
-		if resolvedID == "" {
-			if ids, ok := idx.titles[target]; ok && len(ids) == 1 {
-				resolvedID = ids[0]
-			}
-		}
-
-		// D. Alias match.
-		if resolvedID == "" {
-			if ids, ok := idx.aliases[target]; ok && len(ids) == 1 {
-				resolvedID = ids[0]
+			if decoded := document.DecodeLinkTarget(target); decoded != target {
+				resolvedID = idx.resolveID(decoded)
 			}
 		}
 

@@ -79,6 +79,43 @@ func TestLint_SkipsAssetsAndAnchors(t *testing.T) {
 	}
 }
 
+// TestLint_PercentEncodedMarkdownLinkResolves pins the vault-wide half of the
+// percent-encoding fix: an Obsidian-generated encoded markdown link to a real
+// note is NOT a broken link, an encoded asset link is still skipped as an
+// asset, and an encoded link to a genuinely missing note still warns.
+func TestLint_PercentEncodedMarkdownLinkResolves(t *testing.T) {
+	_, root := newContractVault(t)
+
+	writeNote(t, root, "My Note.md", "My Note", "Spaces in my path.")
+	writeNote(t, root, "ref.md", "Ref",
+		"Good encoded [x](My%20Note.md). Asset [y](img%20name.png). "+
+			"Broken encoded [z](Missing%20Note.md).")
+
+	out, err := runCLIArgs(t, root, "lint", "--json")
+	if err != nil {
+		t.Fatalf("lint: %v", err)
+	}
+	var report struct {
+		Issues []struct {
+			Message string `json:"message"`
+		} `json:"issues"`
+		Errors int `json:"errors"`
+		Warns  int `json:"warnings"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("decode lint report: %v\n%s", err, out)
+	}
+	if report.Errors != 0 {
+		t.Errorf("expected 0 errors, got %d: %+v", report.Errors, report.Issues)
+	}
+	if report.Warns != 1 {
+		t.Fatalf("expected exactly 1 warning (the missing encoded target), got %d: %+v", report.Warns, report.Issues)
+	}
+	if got := report.Issues[len(report.Issues)-1].Message; !containsSubstr(got, "Missing%20Note") {
+		t.Errorf("expected the warning to name Missing%%20Note, got %q", got)
+	}
+}
+
 func containsSubstr(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
