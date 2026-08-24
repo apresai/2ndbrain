@@ -51,6 +51,13 @@ jobs:
       - name: Verify index-generation flag is bumped when index/embed logic changed
         run: make check-index-generation
 
+      # CLAUDE.md is agent-loaded context with a hard 150k-char harness
+      # truncation limit; the 100k cap catches growth long before content
+      # silently stops loading. Fix by moving detail to docs/ (see the
+      # "Documentation discipline" section in CLAUDE.md).
+      - name: Verify CLAUDE.md stays under the size cap
+        run: make check-claude-md-size
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
