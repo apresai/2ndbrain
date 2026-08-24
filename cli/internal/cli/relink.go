@@ -77,15 +77,17 @@ func runRelink(cmd *cobra.Command, args []string) error {
 	// back to the verbatim single-target rewrite (and warns below), and a
 	// failed walk just skips the syntax-aware path.
 	toResolved := false
+	walkOK := false
 	var mdDest string
 	if docs, aliases, lerr := vault.CollectLiveDocs(v.Root); lerr == nil {
+		walkOK = true
 		resolver := store.NewResolver(docs, aliases)
 		if path, rerr := resolver.Resolve(relinkTo); rerr == nil {
 			toResolved = true
 			mdDest = polish.MarkdownDestinationFor(path, resolver)
 		}
 	} else {
-		slog.Debug("relink: live walk failed, skipping the --to resolution", "err", lerr)
+		slog.Debug("relink: live walk failed; rewriting --to verbatim and skipping the does-not-resolve check", "err", lerr)
 	}
 
 	var newBody string
@@ -107,13 +109,16 @@ func runRelink(cmd *cobra.Command, args []string) error {
 	if n > 0 {
 		result.LinksRepaired = []polish.LinkRepair{{Raw: relinkFrom, NewTarget: document.Basename(relinkTo)}}
 		// relink is meant to point at an EXISTING note (the "apply a Did-you-mean
-		// suggestion" action). Warn, but don't block, when --to resolved to no
-		// note above, so a typo isn't silently left as a still-broken link.
-		if !toResolved {
+		// suggestion" action). Warn, but don't block, when the walk SUCCEEDED
+		// and --to still resolved to no note, so a typo isn't silently left as
+		// a still-broken link. A failed walk proves nothing about --to, so it
+		// stays silent here (Debug-logged above), matching the old advisory
+		// behavior.
+		if walkOK && !toResolved {
 			warnings = append(warnings, fmt.Sprintf("--to %q does not resolve to an existing note; the link may remain broken", relinkTo))
 		}
 	} else {
-		warnings = append(warnings, fmt.Sprintf("no [[%s]] link found to repoint", relinkFrom))
+		warnings = append(warnings, fmt.Sprintf("no link with target %q found to repoint", relinkFrom))
 	}
 
 	if relinkWrite && n > 0 {

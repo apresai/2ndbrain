@@ -170,7 +170,7 @@ func TestRepairBrokenLinks_CandidateResolveFailureFallsBack(t *testing.T) {
 	writeUnindexedNote(t, v, "a/Notes.md", "Dup", "One.")
 	writeUnindexedNote(t, v, "b/Notes.md", "Dup", "Two.")
 	src := testutil.CreateAndIndex(t, v, "Ref Doc", "note",
-		note("Ref Doc", "See [[notes]] here.\n"))
+		note("Ref Doc", "See [[notes]] and [x](notes.md) here.\n"))
 
 	res, err := RepairBrokenLinks(v, src.Body)
 	if err != nil {
@@ -181,6 +181,12 @@ func TestRepairBrokenLinks_CandidateResolveFailureFallsBack(t *testing.T) {
 	}
 	if !strings.Contains(res.Body, "[[Notes]]") {
 		t.Fatalf("wikilink should get the candidate as today: %q", res.Body)
+	}
+	// The documented fallback residual: the markdown occurrence keeps the
+	// candidate-derived form of today's single-target rewrite (still broken;
+	// this corner is deliberately unchanged and Debug-logged).
+	if !strings.Contains(res.Body, "[x](Notes.md)") {
+		t.Fatalf("markdown occurrence should keep today's single-target derivation: %q", res.Body)
 	}
 }
 

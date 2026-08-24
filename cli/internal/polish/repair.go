@@ -2,6 +2,7 @@ package polish
 
 import (
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -126,8 +127,10 @@ func RepairBrokenLinksFiltered(v *vault.Vault, body string, only []string) (Repa
 				// its title collides with 2+ notes' basenames, an ambiguity
 				// Resolve stops on where wikilink resolution would fall
 				// through to the title tier). Keep today's single-target
-				// behavior in that corner; the markdown occurrence stays as
-				// broken as it was.
+				// behavior in that corner; a markdown occurrence stays as
+				// broken as it was, so leave a trace for diagnosability.
+				slog.Debug("repair: candidate does not resolve byte-exactly; markdown occurrences keep the authored form",
+					"target", target, "candidate", newTarget, "err", prerr)
 				rewritten, n = document.RewriteWikiLinks(body, target, newTarget)
 			}
 			if n > 0 {
