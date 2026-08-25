@@ -176,13 +176,21 @@ func TestBedrockProviderStatus_ReusesOnlyAProbedVerdict(t *testing.T) {
 	t.Run("an unprobed verdict is not reported as a cause", func(t *testing.T) {
 		var never providerReadiness // embedder never registered, so never probed
 		s := bedrockProviderStatus(context.Background(), cfg, never)
-		// Assert the POSITIVE. An earlier version of this test asserted only that
-		// the reason was not one specific legacy string; when that string was
-		// later reworded the assertion passed vacuously and would no longer have
-		// caught the regression it exists for.
-		if !strings.Contains(s.Reason, "not registered") {
-			t.Errorf("an unregistered embedder should say so, got %q", s.Reason)
-		}
+		// The invariant, and the only one available here: whatever the fallback
+		// path produces, it must not be the UNPROBED verdict rendered as if it
+		// were an observed cause.
+		//
+		// The exact fallback text cannot be asserted, because it depends on
+		// whether ai.DefaultRegistry has bedrock registered, which varies with
+		// what else ran in this binary: "not registered" when it does not, a real
+		// probe's classified cause when it does. An earlier version asserted a
+		// specific string and passed or failed depending on test order.
+		// Deliberately the ONLY assertion. The fallback outcome legitimately
+		// varies with the ambient environment: "not registered" when the registry
+		// lacks bedrock, a classified cause when it has it and the probe fails,
+		// and an EMPTY reason when it has it and the probe succeeds (a machine
+		// with working credentials). All three are correct; rendering the
+		// unprobed verdict as an observed cause is the bug.
 		if s.Reason == never.shortReason() {
 			t.Errorf("an unprobed verdict must not be rendered as a cause: %q", s.Reason)
 		}

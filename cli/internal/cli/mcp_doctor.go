@@ -348,7 +348,7 @@ func aiReadinessDetail(provider string, r providerReadiness) string {
 	case r.code == "":
 		return fmt.Sprintf("provider %q not ready, cause not reported; search uses BM25", provider)
 	default:
-		return fmt.Sprintf("provider %q not ready — %s; search uses BM25", provider, r.shortReason())
+		return fmt.Sprintf("provider %q not ready: %s; search uses BM25", provider, r.shortReason())
 	}
 }
 
