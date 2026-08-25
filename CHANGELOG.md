@@ -7,9 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.20.0] - 2026-08-24
+
 ### Fixed
 - `repair-links`, `polish --repair-links`, and `relink` now emit syntax-aware destinations: a broken markdown link is repaired to a path-based destination that actually resolves (bare basename when it resolves back to that note, else the full vault-relative path), instead of a title+`.md` form no resolver tier accepts, while wikilinks keep the pretty title. Also suppresses the phantom `no_change` skip when one repair fixed both the wikilink and markdown spellings of a name. (#238)
 - Percent-encoded markdown links (`[x](My%20Note.md)`, the form Obsidian generates for paths with spaces) are now first-class everywhere: they resolve as real links (backlinks, graph, `unresolved`, lint, repair candidates all see them), and `move`/`rename` discovers, matches, and rewrites them, percent-encoding rewritten destinations as needed and never respelling an unchanged destination. Reindex recommended: `2nb index` (free, no re-embed) so previously-unresolved encoded links pick up their targets. (#237)
+
+### Added
+- Percent-encoded markdown links (`[x](My%20Note.md)`, the form Obsidian generates for paths with spaces) are now first-class: they resolve as real links across backlinks, graph, `unresolved`, lint, and repair candidates, and `move`/`rename` discovers, matches, and rewrites them, re-encoding destinations as needed (#237)
+- `docs/` reference set expanded out of CLAUDE.md: full `cli-reference.md`, plus deeper `ai-providers.md`, `macos-app.md`, `search-tuning.md`, and `release-playbook.md` detail (#236)
+- Repo review instructions for Bugbot and Autofix (`.cursor/BUGBOT.md`), and a non-blocking README-currency CI annotation on user-facing PRs (#234, #235)
+
+### Changed
+- `IndexGeneration` 1 → 2: link-resolution outcomes are persisted index state, so a reindex is recommended (`2nb index`, free, no re-embed) for previously-unresolved encoded links to pick up their targets (#237)
+- The index-generation CI guard now watches the store resolution files, so a resolution-logic change requires a generation bump or an explicit `Reindex-Not-Needed` trailer (#237)
+- CLAUDE.md trimmed to rules, invariants, and pointers, with a 100k-character size gate enforced by `make test` and release CI (#236)
+
+### Fixed
+- `repair-links`, `polish --repair-links`, and `relink` emit syntax-aware destinations: a broken markdown link is repaired to a path-based destination that actually resolves (bare basename when it resolves back to that note, else the full vault-relative path) instead of a title+`.md` form no resolver tier accepts, while wikilinks keep the pretty title (#238)
+- `relink` resolves `--to` before rewriting, so relinking a markdown link to a note picked by title now produces a resolving destination; an unresolvable `--to` keeps the verbatim rewrite and its warning (#238)
+- Suppressed the phantom `no_change` skip when one repair fixed both the wikilink and markdown spellings of a name, and a unique candidate whose rewrite changes nothing is now reported as a visible `no_change` skip instead of dropped silently (#237, #238)
+- A rewrite whose only effect is respelling the same destination (raw spaces to `%20` or back) no longer counts as a change, so a folder-only move stops churning raw-authored referrers and `repair-links` cannot burn a note's `polish --undo` snapshot on a no-op (#237)
+
 
 ## [0.19.2] - 2026-08-23
 
