@@ -228,7 +228,11 @@ func buildDoctorChecks(ctx context.Context, vaultRoot string, cfg ai.AIConfig, e
 
 	// 5. Stored embeddings match the current selection (dimension / model).
 	//    Reuse derivePortability so doctor and `ai status` never disagree.
-	status, action := derivePortability(cfg, embedder, resolveReadiness(ctx, embedder),
+	status, action := derivePortability(cfg, embedder,
+		// Lazy on purpose: doctor's empty-vault and unindexed paths return
+		// before any verdict is needed, and an eager probe made an offline run
+		// wait out the probe timeout for an answer it discarded.
+		func() providerReadiness { return resolveReadiness(ctx, embedder) },
 		st.vaultDim, st.vaultModels, st.totalDocs, st.embeddedDocs, st.embeddableUnembedded, st.freshness)
 	switch status {
 	case "ok", "unindexed", "empty_vault", "stale", "no_provider",

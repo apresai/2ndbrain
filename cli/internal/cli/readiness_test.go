@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/vault"
 )
 
 // The point of the change: a readiness failure names its real cause. Blaming
@@ -130,4 +132,78 @@ func TestProviderReadiness_Rendering(t *testing.T) {
 			t.Errorf("expected the unchanged fallback reason: %q", r.shortReason())
 		}
 	})
+
+	// The zero value must be distinguishable from a real verdict. A caller that
+	// never probed (the active provider's embedder failed to register) would
+	// otherwise report a confident cause nobody observed.
+	t.Run("the zero value is not a verdict", func(t *testing.T) {
+		var never providerReadiness
+		if never.resolved {
+			t.Error("an unprobed readiness must not claim to be resolved")
+		}
+		if got := resolveReadiness(context.Background(), nil); !got.resolved {
+			t.Error("a probe that ran must be marked resolved, even when it found nothing")
+		}
+	})
+}
+
+// bedrockProviderStatus reuses the caller's verdict only when bedrock is active
+// AND that verdict was actually probed. The reuse shipped without this test and
+// a reviewer found the hole: when bedrock is active but its embedder failed to
+// register (a profile named in config that is absent from ~/.aws), the caller
+// holds no verdict, and the zero value would have reported "credentials missing
+// or region unreachable" while the same run's portability line correctly said
+// the provider was not registered. The macOS app renders that reason as its
+// headline readiness text, so the wrong cause is the first thing a user reads.
+func TestBedrockProviderStatus_ReusesOnlyAProbedVerdict(t *testing.T) {
+	cfg := ai.AIConfig{Provider: "bedrock"}
+	cfg.Bedrock.Region = "us-east-1"
+
+	t.Run("an unprobed verdict is not reported as a cause", func(t *testing.T) {
+		var never providerReadiness // embedder never registered, so never probed
+		s := bedrockProviderStatus(context.Background(), cfg, never)
+		if s.Reason == "credentials missing or region unreachable" {
+			t.Errorf("reported a cause that was never observed: %q", s.Reason)
+		}
+	})
+
+	t.Run("a probed verdict is reused verbatim", func(t *testing.T) {
+		probed := providerReadiness{ready: false, code: ai.TestErrTimeout, resolved: true}
+		s := bedrockProviderStatus(context.Background(), cfg, probed)
+		if s.Reachable {
+			t.Error("a failed verdict must not report reachable")
+		}
+		if s.Reason != probed.shortReason() {
+			t.Errorf("reason = %q, want the carried verdict %q", s.Reason, probed.shortReason())
+		}
+	})
+}
+
+// derivePortability consults a verdict in exactly one branch, and several
+// earlier returns never reach it. Resolving eagerly made an offline `config
+// doctor` wait out a live probe whose answer it then discarded.
+func TestDerivePortability_DoesNotProbeWhenItDoesNotNeedTo(t *testing.T) {
+	probes := 0
+	counting := func() providerReadiness {
+		probes++
+		return providerReadiness{ready: true, resolved: true}
+	}
+
+	// An empty vault is decided before any provider question arises.
+	if status, _ := derivePortability(ai.AIConfig{Provider: "bedrock"}, nil, counting,
+		0, nil, 0, 0, 0, vault.IndexFreshness{}); status != "empty_vault" {
+		t.Fatalf("status = %q, want empty_vault", status)
+	}
+	if probes != 0 {
+		t.Errorf("empty vault must not probe a provider, got %d probe(s)", probes)
+	}
+
+	// So is a vault with content but nothing embedded yet.
+	if status, _ := derivePortability(ai.AIConfig{Provider: "bedrock"}, nil, counting,
+		0, nil, 3, 0, 3, vault.IndexFreshness{}); status != "unindexed" {
+		t.Fatalf("status = %q, want unindexed", status)
+	}
+	if probes != 0 {
+		t.Errorf("an unindexed vault must not probe a provider, got %d probe(s)", probes)
+	}
 }

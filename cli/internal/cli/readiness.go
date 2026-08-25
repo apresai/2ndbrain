@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 )
@@ -20,6 +21,11 @@ import (
 type providerReadiness struct {
 	ready bool
 	code  ai.TestErrorCode
+	// resolved distinguishes "probed, and it is not ready" from "never probed".
+	// Without it the zero value is indistinguishable from a genuine failure, so
+	// a caller that never ran a probe would report a confident-sounding cause it
+	// never observed.
+	resolved bool
 }
 
 // resolveReadiness probes once. A nil provider is not ready and has nothing to
@@ -27,7 +33,44 @@ type providerReadiness struct {
 // message for "not registered" than anything a probe can produce).
 func resolveReadiness(ctx context.Context, p any) providerReadiness {
 	ready, code := ai.Availability(ctx, p)
-	return providerReadiness{ready: ready, code: code}
+	return providerReadiness{ready: ready, code: code, resolved: true}
+}
+
+// readinessResolver defers a probe to the point of use. derivePortability needs
+// a verdict only in one branch, and several of its early returns (empty vault,
+// nothing indexed, no provider configured) are reached without ever consulting
+// it. Passing the value eagerly made an offline `config doctor` pay a live
+// probe whose answer was then discarded.
+type readinessResolver func() providerReadiness
+
+// knownReadiness wraps a verdict the caller already resolved.
+func knownReadiness(r providerReadiness) readinessResolver {
+	return func() providerReadiness { return r }
+}
+
+// readinessProbe pairs a provider with where its verdict should land.
+type readinessProbe struct {
+	provider any
+	out      *providerReadiness
+}
+
+// resolveReadinessAll probes every non-nil target concurrently, because each
+// probe can block for seconds on a degraded network and a status command has no
+// reason to pay their sum. Nil targets are skipped, leaving the zero value,
+// which reports itself as unresolved rather than as a failure nobody observed.
+func resolveReadinessAll(ctx context.Context, probes ...readinessProbe) {
+	var wg sync.WaitGroup
+	for _, p := range probes {
+		if p.provider == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(p readinessProbe) {
+			defer wg.Done()
+			*p.out = resolveReadiness(ctx, p.provider)
+		}(p)
+	}
+	wg.Wait()
 }
 
 // hint renders the one-line "why not ready, and what to do" clause for a
@@ -131,7 +174,8 @@ func notReadySummary(code ai.TestErrorCode) string {
 	case ai.TestErrNotFound:
 		return "the model was not found"
 	case ai.TestErrIncompatible:
-		return "the model is not usable for embeddings"
+		// Role-agnostic on purpose: this renders for generators too.
+		return "2nb cannot call this model"
 	case ai.TestErrInvalidRequest:
 		return "the provider rejected the request"
 	default:

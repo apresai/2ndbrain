@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -162,11 +161,6 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		SimilarityThresholdSource: thresholdSource,
 	}
 
-	// Probe each role ONCE, and concurrently. Once because the verdict is
-	// carried to every place that reports it (see providerReadiness); a status
-	// command used to probe the embedder three times. Concurrently because each
-	// probe can block for seconds on a degraded network and there is no reason
-	// to pay their sum, which is the pattern `vault status` already uses.
 	status.RerankEnabled = cfg.RerankEnabled()
 	if status.RerankEnabled {
 		status.RerankModel = cfg.ResolveRerankModel()
@@ -179,21 +173,21 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		rr, rrErr = ai.DefaultRegistry.Reranker(cfg.Provider)
 	}
 
+	// Probe each role ONCE. The verdict is then carried to every place that
+	// reports it (see providerReadiness) rather than re-derived, which for a
+	// transient failure would miss the short cache TTL and probe again.
 	var embedReady, genReady, rerankReady providerReadiness
-	var probes sync.WaitGroup
+	probes := []readinessProbe{}
 	if embErr == nil {
-		probes.Add(1)
-		go func() { defer probes.Done(); embedReady = resolveReadiness(ctx, emb) }()
+		probes = append(probes, readinessProbe{emb, &embedReady})
 	}
 	if genErr == nil {
-		probes.Add(1)
-		go func() { defer probes.Done(); genReady = resolveReadiness(ctx, gen) }()
+		probes = append(probes, readinessProbe{gen, &genReady})
 	}
 	if status.RerankEnabled && rrErr == nil {
-		probes.Add(1)
-		go func() { defer probes.Done(); rerankReady = resolveReadiness(ctx, rr) }()
+		probes = append(probes, readinessProbe{rr, &rerankReady})
 	}
-	probes.Wait()
+	resolveReadinessAll(ctx, probes...)
 
 	status.EmbedAvailable = embedReady.ready
 	status.GenAvailable = genReady.ready
@@ -222,7 +216,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	status.VaultEmbeddingModels, _ = v.DB.DistinctEmbeddingModels()
 
 	status.PortabilityStatus, status.PortabilityAction = derivePortability(
-		cfg, emb, embedReady,
+		cfg, emb, knownReadiness(embedReady),
 		status.VaultEmbeddingDim, status.VaultEmbeddingModels, totalDocs, embeddedDocs, embeddableUnembedded,
 		vault.CheckIndexFreshness(v.DB),
 	)
@@ -342,7 +336,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 // returns a status label plus a one-line action hint. The labels are the
 // stable public contract — Swift and automation consumers switch on
 // these strings, so renames are a breaking change.
-func derivePortability(cfg ai.AIConfig, embedder ai.EmbeddingProvider, embed providerReadiness, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int, freshness vault.IndexFreshness) (status, action string) {
+func derivePortability(cfg ai.AIConfig, embedder ai.EmbeddingProvider, embed readinessResolver, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int, freshness vault.IndexFreshness) (status, action string) {
 	// Empty notes (no chunk) can never be embedded, so they're excluded from
 	// every decision here and from the counts callers display (the embeddable
 	// total = embeddedDocs+embeddableUnembedded). A vault whose only gap is
@@ -377,8 +371,8 @@ func derivePortability(cfg ai.AIConfig, embedder ai.EmbeddingProvider, embed pro
 	// VaultStatusView both switch on it); only the hint text changes, and it now
 	// names the classified cause instead of listing every provider's likeliest
 	// problem and leaving the user to guess which one applies.
-	if !embed.ready {
-		return "provider_unavailable", embed.hint(cfg.Provider)
+	if r := embed(); !r.ready {
+		return "provider_unavailable", r.hint(cfg.Provider)
 	}
 	providerDim := embedder.Dimensions()
 	if providerDim != vaultDim {
@@ -444,15 +438,16 @@ func runAIEmbed(cmd *cobra.Command, args []string) error {
 	return output.Write(os.Stdout, format, vecs[0])
 }
 
-// collectProviderStatus returns a per-provider readiness snapshot for
-// Bedrock, OpenRouter, and Ollama. Used by `ai status --json` and the
-// GUI's AI Hub. The reachability probe is cheap — credentials check
-// plus an endpoint ping for Ollama; no request is sent to the Bedrock
-// or OpenRouter APIs here.
-// collectProviderStatus reports every provider, not just the active one, so the
-// UI can show "Ollama is running" while Bedrock is active. active carries the
-// ACTIVE provider's already-resolved verdict; a provider that is not the active
-// one has not been probed yet and resolves its own.
+// collectProviderStatus returns a per-provider readiness snapshot for Bedrock,
+// OpenRouter, Ollama, and llama-local. Used by `ai status --json` and the GUI's
+// AI Hub. It reports every provider, not just the active one, so the UI can show
+// "Ollama is running" while Bedrock is active.
+//
+// The probes are cheap: OpenRouter is a credentials check with no request at
+// all, Ollama and llama-local are local endpoint pings, and Bedrock is one free
+// control-plane call. active carries the ACTIVE provider's already-resolved
+// verdict so that call is not repeated; a provider that is not the active one
+// was never probed and resolves its own.
 func collectProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness) []ProviderStatus {
 	out := []ProviderStatus{
 		bedrockProviderStatus(ctx, cfg, active),
@@ -521,7 +516,13 @@ func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig, active provider
 	// in one cheap control-plane call. When bedrock is the ACTIVE provider the
 	// caller already resolved exactly this verdict, so reuse it rather than
 	// probing the same embedder a second time in one command.
-	if cfg.Provider == "bedrock" {
+	// Reuse only a verdict that was actually PROBED. When bedrock is active but
+	// its embedder never registered, the caller has no verdict, and reporting the
+	// zero value would state a cause nobody observed ("credentials missing or
+	// region unreachable") while the same run's portability line correctly says
+	// the provider is not registered. Fall through to the registry lookup, which
+	// produces the honest message.
+	if cfg.Provider == "bedrock" && active.resolved {
 		s.Reachable = active.ready
 		s.Reason = active.shortReason()
 		return s

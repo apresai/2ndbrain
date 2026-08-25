@@ -17,7 +17,6 @@ import (
 // the SKILL.md error-recovery playbook both match on them.
 func TestDerivePortability(t *testing.T) {
 	embedder768 := &fakeEmbedder{name: "fake", dims: 768, available: true}
-	embedderUnavail := &fakeEmbedder{name: "fake", dims: 768, available: false}
 
 	tests := []struct {
 		name         string
@@ -66,7 +65,7 @@ func TestDerivePortability(t *testing.T) {
 			// A provider that cannot classify itself keeps the original wording.
 			name:         "provider_unreachable",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
-			embedder:     embedderUnavail,
+			embedder:     embedder768,
 			vaultDim:     768,
 			vaultModels:  []string{"nomic-embed-text"},
 			totalDocs:    2,
@@ -81,7 +80,7 @@ func TestDerivePortability(t *testing.T) {
 			// switch on it.
 			name:         "provider_unavailable_names_the_cause",
 			cfg:          ai.AIConfig{Provider: "bedrock", EmbeddingModel: "nomic-embed-text"},
-			embedder:     embedderUnavail,
+			embedder:     embedder768,
 			embedReady:   providerReadiness{ready: false, code: ai.TestErrTimeout},
 			vaultDim:     768,
 			vaultModels:  []string{"nomic-embed-text"},
@@ -275,7 +274,7 @@ func TestDerivePortability(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotStatus, gotAction := derivePortability(tt.cfg, tt.embedder, tt.embedReady, tt.vaultDim, tt.vaultModels, tt.totalDocs, tt.embeddedDocs, tt.embeddableUnembedded, tt.freshness)
+			gotStatus, gotAction := derivePortability(tt.cfg, tt.embedder, knownReadiness(tt.embedReady), tt.vaultDim, tt.vaultModels, tt.totalDocs, tt.embeddedDocs, tt.embeddableUnembedded, tt.freshness)
 			if gotStatus != tt.wantStatus {
 				t.Errorf("status = %q, want %q", gotStatus, tt.wantStatus)
 			}
