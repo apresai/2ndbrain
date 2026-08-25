@@ -85,3 +85,34 @@ func TestAvailabilityFromProbe_CachesOnlyDefinitive(t *testing.T) {
 		}
 	})
 }
+
+// The real caller asks TWICE: validateEmbeddingProvider calls Available() to
+// decide, then embedderNotReadyError calls AvailableDetail() to explain. The
+// second call is a cache HIT, so a cache that stored only the bool answered
+// "unavailable, no idea why" and the CLI fell back to the generic "(check
+// credentials)" for what might have been a timeout. That is the exact message
+// this change exists to remove, so pin the sequence rather than a single call.
+func TestAvailableCache_HitStillCarriesTheCode(t *testing.T) {
+	var c availableCache
+	if _, code := availabilityFromProbe(&c, false, errors.New("static credentials are empty")); code != TestErrBadCredentials {
+		t.Fatalf("first probe: got %q, want %q", code, TestErrBadCredentials)
+	}
+
+	v, code, hit := c.getWithCode()
+	if !hit {
+		t.Fatal("second call should hit the cache")
+	}
+	if v {
+		t.Error("cached value should be false")
+	}
+	if code != TestErrBadCredentials {
+		t.Errorf("a cache hit must still explain itself: got %q, want %q", code, TestErrBadCredentials)
+	}
+
+	// A cached success carries no code, which is what "" means here.
+	var ok availableCache
+	availabilityFromProbe(&ok, true, nil)
+	if v, code, hit := ok.getWithCode(); !hit || !v || code != "" {
+		t.Errorf("cached success = (%v, %q, hit=%v), want (true, \"\", true)", v, code, hit)
+	}
+}

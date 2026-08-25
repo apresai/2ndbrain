@@ -77,8 +77,8 @@ func (b *BedrockReranker) Available(ctx context.Context) bool {
 // ListFoundationModels call, so the timeout, the classification, and the
 // transient-caching rule cannot drift between the three Bedrock providers.
 func (b *BedrockReranker) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
-	if v, hit := b.avail.get(); hit {
-		return v, ""
+	if v, code, hit := b.avail.getWithCode(); hit {
+		return v, code
 	}
 	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
 	return availabilityFromProbe(&b.avail, ok, err)

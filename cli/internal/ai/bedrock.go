@@ -76,12 +76,15 @@ func cacheProbeFailure(code TestErrorCode) bool {
 // AvailabilityReporter contract returns, caching only what is worth caching.
 func availabilityFromProbe(avail *availableCache, ok bool, err error) (bool, TestErrorCode) {
 	if ok {
-		avail.set(true)
+		avail.setWithCode(true, "")
 		return true, ""
 	}
 	code := ClassifyProbeError("bedrock", err)
 	if cacheProbeFailure(code) {
-		avail.set(false)
+		// Cache the CODE alongside the false: a caller that first asks
+		// Available() and then asks why gets a cache hit, and without the code
+		// that second question could only be answered vaguely.
+		avail.setWithCode(false, code)
 	}
 	return false, code
 }
@@ -207,8 +210,8 @@ func (b *BedrockEmbedder) Available(ctx context.Context) bool {
 // AvailableDetail satisfies AvailabilityReporter: same probe as Available, but
 // it also reports WHY an unavailable provider is unavailable.
 func (b *BedrockEmbedder) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
-	if v, hit := b.avail.get(); hit {
-		return v, ""
+	if v, code, hit := b.avail.getWithCode(); hit {
+		return v, code
 	}
 	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
 	return availabilityFromProbe(&b.avail, ok, err)
@@ -750,8 +753,8 @@ func (b *BedrockGenerator) Available(ctx context.Context) bool {
 
 // AvailableDetail satisfies AvailabilityReporter (see BedrockEmbedder).
 func (b *BedrockGenerator) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
-	if v, hit := b.avail.get(); hit {
-		return v, ""
+	if v, code, hit := b.avail.getWithCode(); hit {
+		return v, code
 	}
 	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
 	return availabilityFromProbe(&b.avail, ok, err)

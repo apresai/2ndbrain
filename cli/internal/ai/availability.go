@@ -16,9 +16,15 @@ import (
 // really wanted to pay the cost only once), but it meant failures were
 // permanent and successes hid pricing from the user. With lightweight
 // probes there's no reason to cache forever.
+// The cached entry carries the failure's classification alongside the bool.
+// Without it, a caller that asks "is it available?" (warming the cache) and
+// then "why not?" gets a cache hit with no reason, and the second question
+// falls back to a generic answer, which is the vague message this whole
+// mechanism exists to replace.
 type availableCache struct {
 	mu    sync.Mutex
 	value bool
+	code  TestErrorCode
 	until time.Time
 }
 
@@ -31,17 +37,29 @@ const availableCacheTTL = 30 * time.Second
 // get returns (cachedValue, hit) — hit==false when the caller needs to run
 // a fresh probe.
 func (c *availableCache) get() (bool, bool) {
+	v, _, hit := c.getWithCode()
+	return v, hit
+}
+
+// getWithCode is get plus the classification of a cached failure ("" for a
+// cached success). Providers that can explain themselves use this so a cache
+// hit still answers "why not?".
+func (c *availableCache) getWithCode() (bool, TestErrorCode, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if time.Now().Before(c.until) {
-		return c.value, true
+		return c.value, c.code, true
 	}
-	return false, false
+	return false, "", false
 }
 
-func (c *availableCache) set(v bool) {
+func (c *availableCache) set(v bool) { c.setWithCode(v, "") }
+
+// setWithCode caches an outcome and the code that explains it.
+func (c *availableCache) setWithCode(v bool, code TestErrorCode) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.value = v
+	c.code = code
 	c.until = time.Now().Add(availableCacheTTL)
 }
