@@ -514,14 +514,33 @@ func TestE2E_ModelsTest(t *testing.T) {
 	// AWS_ACCESS_KEY_ID. Asking the narrow question here would send a
 	// Bedrock-only host past the gate and then straight at the OpenRouter model.
 	model := "google/gemma-4-31b-it:free"
-	if hasBedrockCredentialSource() {
+	if hasBedrockCredentialSource(true) {
 		model = "amazon.nova-micro-v1:0"
 	}
 
 	out, code := run("models", "test", model)
-	if strings.Contains(out, "429") || strings.Contains(out, "rate") {
-		t.Skipf("rate limited: %s", out)
+
+	// `models test` prints a classified `cause: <code>` line when it fails, and
+	// two causes mean "this host cannot exercise this model" rather than "the
+	// code is broken". Throttling says the model very likely works (the free
+	// OpenRouter tier throttles hard), and entitlement is PER MODEL on Bedrock,
+	// so the capability gate above proves the embedding model works and says
+	// nothing about this one.
+	//
+	// Keyed on the cause line rather than loose substrings: the previous check
+	// skipped on any output containing "rate", which the word "generate" in an
+	// unrelated error message satisfies, silently turning a real failure into a
+	// skip. Note this must run before the PASS assertion, not just the exit-code
+	// check: runModelsTest reports a failed probe on stdout and still exits 0.
+	for cause, why := range map[string]string{
+		"cause: throttled":     "throttled, so the model very likely works",
+		"cause: access_denied": "this account is not entitled to the model",
+	} {
+		if strings.Contains(out, cause) {
+			t.Skipf("skipping %s: %s\n%s", model, why, out)
+		}
 	}
+
 	if code != 0 {
 		t.Fatalf("models test exit %d: %s", code, out)
 	}

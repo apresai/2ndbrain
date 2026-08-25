@@ -102,16 +102,23 @@ func hasAnyProviderCredentialSource(hostHome bool) bool {
 	return hostHome && hasBedrockCredentialFile()
 }
 
-// hasBedrockCredentialEnv covers the environment variables that can carry a
-// Bedrock credential. AWS_BEARER_TOKEN_BEDROCK is the Bedrock API key, which is
-// how the macOS app and most of this project's own tooling authenticate, and it
-// sets none of the variables hasAWSCreds looks at.
+// hasBedrockCredentialEnv reports the environment variables this pre-filter
+// TREATS as a Bedrock credential, which is deliberately not every variable that
+// could be one: OIDC (AWS_ROLE_ARN), ECS task roles, and session tokens all
+// carry credentials and are not listed. Every miss costs a skip, never a
+// failure, so the list buys a cheap "definitely nothing here" and is not worth
+// maintaining exhaustively. AWS_BEARER_TOKEN_BEDROCK earns its place: it is the
+// Bedrock API key, how the macOS app and most of this project's own tooling
+// authenticate, and it sets none of the variables hasAWSCreds looks at.
 func hasBedrockCredentialEnv() bool {
 	return hasAWSCreds() || os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != ""
 }
 
-// hasBedrockCredentialFile covers the on-disk sources, visible only under the
-// real home: the shared AWS config and 2nb's own machine-local key file.
+// hasBedrockCredentialFile reports the on-disk sources this pre-filter checks,
+// visible only under the real home: the shared AWS config and 2nb's own
+// machine-local key file. Not exhaustive either (a Keychain-stored key and the
+// AWS_SHARED_CREDENTIALS_FILE redirect are both real and both unchecked), for
+// the same reason.
 func hasBedrockCredentialFile() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -129,13 +136,19 @@ func hasBedrockCredentialFile() bool {
 	return false
 }
 
-// hasBedrockCredentialSource answers "could this host reach Bedrock at all",
-// for tests that run under the real home and must choose a provider. It is
+// hasBedrockCredentialSource answers "could this host reach Bedrock", for a
+// test that has cleared the gate and must now choose a provider. It is
 // deliberately broader than hasAWSCreds, which sees only three env vars: a host
 // with a Bedrock API key or ~/.aws credentials passes the capability gate, and
 // picking a provider on the narrow question would then aim at the wrong one.
-func hasBedrockCredentialSource() bool {
-	return hasBedrockCredentialEnv() || hasBedrockCredentialFile()
+//
+// It takes hostHome for the same reason its sibling does, and callers must pass
+// the mode their subprocess actually runs in. Baking in the real-home answer
+// would make a future runWithHome caller see the developer's ~/.aws, choose
+// Bedrock, and hand it to a child that cannot read those files: a hard failure
+// where the whole point of this file is a skip.
+func hasBedrockCredentialSource(hostHome bool) bool {
+	return hasBedrockCredentialEnv() || (hostHome && hasBedrockCredentialFile())
 }
 
 // probeEmbedding runs one real embedding call in a throwaway vault and reports
