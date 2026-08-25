@@ -70,6 +70,16 @@ func TestClassifyProbeError(t *testing.T) {
 		{"imds no role", "bedrock", errors.New("no EC2 IMDS role found, operation error ec2imds"), TestErrBadCredentials},
 		{"retrieve credentials", "bedrock", errors.New("failed to retrieve credentials from provider chain"), TestErrBadCredentials},
 		{"empty static creds", "bedrock", errors.New("static credentials are empty"), TestErrBadCredentials},
+		// The shape the SDK actually produces when NO credentials are
+		// configured: it falls through to the EC2 instance metadata service,
+		// which is unreachable off EC2, so the credential error arrives
+		// WRAPPING context.DeadlineExceeded. Measured live: without this
+		// ordering it classified as timeout at 10s with a "retry, the model may
+		// be cold-starting" remediation; with it, bad_credentials in 3ms. The
+		// rows above use bare strings and never exercise this branch.
+		{"imds timeout is missing credentials, not a transient timeout", "bedrock",
+			fmt.Errorf("get credentials: failed to refresh cached credentials, no EC2 IMDS role found, operation error ec2imds: GetMetadata: %w", context.DeadlineExceeded),
+			TestErrBadCredentials},
 
 		// Network failures.
 		{"net op error", "ollama", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, TestErrProviderUnreachable},
