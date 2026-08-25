@@ -291,8 +291,8 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no generation provider: %v", err)), nil
 	}
-	if !generator.Available(ctx) {
-		return mcplib.NewToolResultError("generation provider not available"), nil
+	if ready, code := ai.Availability(ctx, generator); !ready {
+		return mcplib.NewToolResultError(ai.NotReadyMessage("generation", cfg.Provider, code)), nil
 	}
 
 	// Retrieve relevant context via the shared pipeline (the SAME path `2nb ask`
@@ -781,8 +781,8 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no generation provider: %v", err)), nil
 	}
-	if !generator.Available(ctx) {
-		return mcplib.NewToolResultError("generation provider not available"), nil
+	if ready, code := ai.Availability(ctx, generator); !ready {
+		return mcplib.NewToolResultError(ai.NotReadyMessage("generation", cfg.Provider, code)), nil
 	}
 
 	userMessage := parsed.Body
@@ -1160,8 +1160,8 @@ func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.Call
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no embedding provider: %v", err)), nil
 	}
-	if !embedder.Available(ctx) {
-		return mcplib.NewToolResultError("embedding provider not available"), nil
+	if ready, code := ai.Availability(ctx, embedder); !ready {
+		return mcplib.NewToolResultError(ai.NotReadyMessage("embedding", cfg.Provider, code)), nil
 	}
 
 	runes := []rune(parsed.Body)

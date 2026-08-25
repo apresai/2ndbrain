@@ -412,7 +412,8 @@ When semantic search falls back to BM25, the CLI prints a warning to stderr and 
 | Warning or state | What's wrong | Fix |
 |---|---|---|
 | `"semantic search disabled: vault was embedded with Nd vectors but current provider X produces Md"` | Dimension mismatch — you switched providers and existing embeddings are the wrong size | `2nb index --force-reembed` OR switch the provider back to the one that built this vault |
-| `"semantic search disabled: provider X unavailable — falling back to keyword search"` | The configured provider isn't reachable right now (creds missing, service down, network) | Check `2nb ai status`. BM25 still works — results still return, just without vector ranking. |
+| `"semantic search disabled: provider X not ready (CODE)"` | The configured provider failed its readiness probe; `CODE` is the same vocabulary `ai status --json` reports (`timeout`, `bad_credentials`, `access_denied`, `provider_unreachable`, `throttled`, …) | Branch on the code. BM25 still works — results still return, just without vector ranking. |
+| `"semantic search disabled: provider X unavailable — falling back to keyword search"` | The same state from a provider that cannot classify its own failure (ollama, openrouter, llama-local) | Check `2nb ai status`. BM25 still works. |
 | `"semantic search disabled: no AI provider configured"` | Nothing set up yet | `2nb ai setup` |
 | `"semantic search disabled: embedder X not registered"` | Config names a provider that isn't compiled in | `2nb config show` — check `ai.provider` |
 | Search returns `mode: keyword` with no warnings | Vault has no embeddings yet | `2nb index` — BM25 works immediately, embeddings backfill during the run |

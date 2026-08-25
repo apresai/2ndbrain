@@ -71,7 +71,8 @@ Derived from `VectorCompat` in `cli/internal/retrieve/compat.go` — that functi
 | Warning the agent sees | Underlying state | Fix |
 |---|---|---|
 | `"semantic search disabled: vault was embedded with Nd vectors but current provider X produces Md"` | Dimension mismatch (switched providers, existing embeddings unusable) | `2nb index --force-reembed` OR switch provider back |
-| `"semantic search disabled: provider X unavailable — falling back to keyword search"` | Configured provider not reachable right now | No immediate fix. BM25 still runs. Check `2nb ai status` for why (creds, service down, etc.). |
+| `"semantic search disabled: provider X not ready (CODE)"` | The configured provider failed its readiness probe. `CODE` is the same `TestErrorCode` vocabulary `ai status --json` reports (`timeout`, `bad_credentials`, `access_denied`, `provider_unreachable`, `throttled`, …), so you can branch on it | No immediate fix. BM25 still runs. `timeout`/`throttled` usually clear on their own; `bad_credentials` needs `2nb ai status`. |
+| `"semantic search disabled: provider X unavailable — falling back to keyword search"` | The same state from a provider that cannot classify its own failure (ollama, openrouter, llama-local today) | Check `2nb ai status`. BM25 still runs. |
 | `"semantic search disabled: no AI provider configured — run '2nb ai setup' to enable"` | Nothing configured | `2nb ai setup` |
 | `"semantic search disabled: embedder X not registered"` | Config names a provider that isn't compiled in | Re-check `ai.provider` in `2nb config show` |
 | Zero warnings, `mode: keyword` anyway | Vault has no embeddings yet | `2nb index` (BM25 works immediately; embeddings backfill) |
