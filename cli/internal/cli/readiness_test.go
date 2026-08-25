@@ -72,10 +72,18 @@ func TestProviderNotReadyError_NamesTheRealCause(t *testing.T) {
 		}
 	})
 
-	t.Run("a provider that cannot report keeps the legacy message", func(t *testing.T) {
+	// The premise this replaced was "keep the legacy message". That message said
+	// "(check credentials)", and the providers that reach this branch (ollama,
+	// openrouter, llama-local) have no credentials to check, so carrying it
+	// outward to MCP would have been a NEW false claim on a surface that never
+	// made one.
+	t.Run("a provider that cannot report never blames credentials", func(t *testing.T) {
 		msg := embedderNotReadyError("ollama", "").Error()
-		if !strings.Contains(msg, "(check credentials)") {
-			t.Errorf("expected the unchanged fallback wording: %q", msg)
+		if strings.Contains(msg, "credentials") {
+			t.Errorf("must not blame credentials for an unclassified failure: %q", msg)
+		}
+		if !strings.Contains(msg, "did not report a cause") {
+			t.Errorf("expected the honest no-cause wording: %q", msg)
 		}
 	})
 
@@ -121,15 +129,21 @@ func TestProviderReadiness_Rendering(t *testing.T) {
 		}
 	})
 
-	// A provider that cannot classify itself (openrouter, ollama, llama-local
-	// today) must not regress: it keeps exactly the text it had before.
-	t.Run("an unclassifiable failure keeps the old wording", func(t *testing.T) {
+	// Both render paths must stay honest on the unclassified branch. The old
+	// hint named two providers and let the reader guess which applied; the old
+	// reason asserted "credentials missing or region unreachable", a cause
+	// nobody observed, on the field the macOS app shows as its headline.
+	t.Run("an unclassifiable failure asserts no cause", func(t *testing.T) {
 		r := providerReadiness{ready: false}
-		if !strings.Contains(r.hint("ollama"), "If using Ollama, start the daemon") {
-			t.Errorf("expected the unchanged fallback hint: %q", r.hint("ollama"))
+		hint := r.hint("ollama")
+		if strings.Contains(hint, "credentials") || strings.Contains(hint, "If using Ollama") {
+			t.Errorf("hint must not guess a cause: %q", hint)
 		}
-		if r.shortReason() != "credentials missing or region unreachable" {
-			t.Errorf("expected the unchanged fallback reason: %q", r.shortReason())
+		if !strings.Contains(hint, "did not report a cause") {
+			t.Errorf("expected the honest no-cause hint: %q", hint)
+		}
+		if reason := r.shortReason(); strings.Contains(reason, "credentials") {
+			t.Errorf("reason must not guess a cause: %q", reason)
 		}
 	})
 
@@ -162,8 +176,15 @@ func TestBedrockProviderStatus_ReusesOnlyAProbedVerdict(t *testing.T) {
 	t.Run("an unprobed verdict is not reported as a cause", func(t *testing.T) {
 		var never providerReadiness // embedder never registered, so never probed
 		s := bedrockProviderStatus(context.Background(), cfg, never)
-		if s.Reason == "credentials missing or region unreachable" {
-			t.Errorf("reported a cause that was never observed: %q", s.Reason)
+		// Assert the POSITIVE. An earlier version of this test asserted only that
+		// the reason was not one specific legacy string; when that string was
+		// later reworded the assertion passed vacuously and would no longer have
+		// caught the regression it exists for.
+		if !strings.Contains(s.Reason, "not registered") {
+			t.Errorf("an unregistered embedder should say so, got %q", s.Reason)
+		}
+		if s.Reason == never.shortReason() {
+			t.Errorf("an unprobed verdict must not be rendered as a cause: %q", s.Reason)
 		}
 	})
 

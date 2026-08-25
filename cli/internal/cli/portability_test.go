@@ -62,7 +62,7 @@ func TestDerivePortability(t *testing.T) {
 			wantAction:           "2nb index",
 		},
 		{
-			// A provider that cannot classify itself keeps the original wording.
+			// A provider that cannot classify itself asserts no cause.
 			name:         "provider_unreachable",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:     embedder768,
@@ -71,7 +71,7 @@ func TestDerivePortability(t *testing.T) {
 			totalDocs:    2,
 			embeddedDocs: 2,
 			wantStatus:   "provider_unavailable",
-			wantAction:   "unreachable",
+			wantAction:   "did not report a cause",
 		},
 		{
 			// The point of the change: a classified cause reaches the hint, so a

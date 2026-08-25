@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -82,11 +83,13 @@ func (r providerReadiness) hint(provider string) string {
 		return ""
 	}
 	if r.code == "" {
-		// A provider that cannot classify itself. Keep the old wording rather
-		// than inventing a cause we do not have.
-		return fmt.Sprintf("Provider %q is unreachable. If using Ollama, start the daemon; if using Bedrock, check AWS credentials.", provider)
+		// A provider that cannot classify itself (ollama, openrouter,
+		// llama-local today). Say only what is known. The previous wording named
+		// two providers and let the reader pick, which is right by luck and
+		// blames credentials for a provider that has none.
+		return fmt.Sprintf("Provider %q is not ready, and it did not report a cause. Run `2nb doctor` for a full check.", provider)
 	}
-	return fmt.Sprintf("Provider %q is not ready (%s). %s", provider, r.code, readinessRemediation(r.code, provider))
+	return fmt.Sprintf("Provider %q is not ready (%s). %s", provider, r.code, ai.ReadinessRemediation(r.code, provider))
 }
 
 // shortReason is hint's compact form for the per-provider `reason` field, which
@@ -96,91 +99,26 @@ func (r providerReadiness) shortReason() string {
 		return ""
 	}
 	if r.code == "" {
-		return "credentials missing or region unreachable"
+		// Not "credentials missing or region unreachable": that asserted a cause
+		// nobody observed, on the field the macOS app renders as its headline
+		// readiness line.
+		return "not ready, cause not reported"
 	}
-	return fmt.Sprintf("%s (%s)", notReadySummary(r.code), r.code)
+	return fmt.Sprintf("%s (%s)", ai.NotReadySummary(r.code), r.code)
 }
 
-// providerNotReadyError builds the error shown when a provider is registered
-// but not ready. It names the ACTUAL cause, because the alternative is what
-// this replaced: one "(check credentials)" for every failure, which tells
-// someone whose network blipped for five seconds to go re-authenticate.
+// embedderNotReadyError and generatorNotReadyError name the role so a message
+// says whether embedding or generation failed; the two were interchangeable
+// before. The words come from ai.NotReadyMessage, which internal/mcp and
+// internal/retrieve also use, so a user meets one explanation of a given
+// failure wherever they meet it.
 //
-// It formats, it does not probe. The caller already asked ai.Availability and
-// holds the code; asking again here would mean a second live round trip on an
-// error path, and a second answer that can disagree with the first. An empty
-// code (a provider that cannot explain itself) keeps the original wording.
-//
-// kind is the role the provider was being used for, "embedding" or
-// "generation", so the message names the thing the user was trying to do.
-//
-// The prose is ai.RemediationFor, the same text `models test` and the macOS app
-// show for that code, so a user meets one explanation of a given failure
-// wherever they meet it. The code travels with it so a bug report can name the
-// failure exactly.
-func providerNotReadyError(kind, provider string, code ai.TestErrorCode) error {
-	if code == "" {
-		return fmt.Errorf("%s provider %q is not ready (check credentials). Run `2nb ai setup`", kind, provider)
-	}
-	return fmt.Errorf("%s provider %q is not ready (%s). %s",
-		kind, provider, code, readinessRemediation(code, provider))
-}
-
-// embedderNotReadyError is providerNotReadyError for the embedding role.
+// errors.New, not fmt.Errorf: the message is already formatted, and a provider
+// name containing a % would otherwise corrupt it.
 func embedderNotReadyError(provider string, code ai.TestErrorCode) error {
-	return providerNotReadyError("embedding", provider, code)
+	return errors.New(ai.NotReadyMessage("embedding", provider, code))
 }
 
-// generatorNotReadyError is providerNotReadyError for the generation role.
 func generatorNotReadyError(provider string, code ai.TestErrorCode) error {
-	return providerNotReadyError("generation", provider, code)
-}
-
-// readinessRemediation is ai.RemediationFor with two adjustments for this path.
-//
-// access_denied means something different here. The readiness probe is a
-// CONTROL-PLANE listing (ListFoundationModels), not a model invocation, so a
-// denial is the IAM principal lacking that API permission. ai.RemediationFor
-// answers for `models test`, which does invoke a model, and so reads
-// access_denied as model entitlement and sends the user to the Bedrock console's
-// "Model access" page. That page cannot grant an API permission: a dead end.
-//
-// An unclassifiable failure (TestErrUnknown) has no remediation text at all, and
-// an error ending in a bare code helps nobody.
-func readinessRemediation(code ai.TestErrorCode, provider string) string {
-	if code == ai.TestErrAccessDenied && provider == "bedrock" {
-		return "These credentials aren't allowed to query Bedrock in this region. Grant the `bedrock:ListFoundationModels` permission to the IAM principal (or use a Bedrock API key that has it), and check ai.bedrock.region. This is an API permission, not model access, so the console's Model access page won't change it."
-	}
-	if r := ai.RemediationFor(code, provider, ""); r != "" {
-		return r
-	}
-	return "The readiness probe failed without a recognizable cause. Run `2nb doctor` for a full check, and `2nb --verbose` to see the underlying error."
-}
-
-// notReadySummary is the short human clause used where the machine-readable
-// code alone would be terse, notably the per-provider `reason` field.
-func notReadySummary(code ai.TestErrorCode) string {
-	switch code {
-	case ai.TestErrTimeout:
-		return "the readiness probe timed out"
-	case ai.TestErrProviderUnreachable:
-		return "the provider is unreachable"
-	case ai.TestErrThrottled:
-		return "the provider is throttling requests"
-	case ai.TestErrBadCredentials:
-		return "credentials were rejected"
-	case ai.TestErrAccessDenied:
-		// Not "the model is gated": the probe never touched a model. See
-		// readinessRemediation.
-		return "these credentials may not query the provider"
-	case ai.TestErrNotFound:
-		return "the model was not found"
-	case ai.TestErrIncompatible:
-		// Role-agnostic on purpose: this renders for generators too.
-		return "2nb cannot call this model"
-	case ai.TestErrInvalidRequest:
-		return "the provider rejected the request"
-	default:
-		return "the readiness probe failed"
-	}
+	return errors.New(ai.NotReadyMessage("generation", provider, code))
 }
