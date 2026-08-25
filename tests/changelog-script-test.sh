@@ -70,7 +70,10 @@ run_script() {
   ( cd "$dir" && CLAUDE_STUB_LOG="$dir/stub.log" PATH="$dir/bin:$PATH" bash "$SCRIPT" "$@" >/dev/null )
 }
 
-CURATED='### Fixed
+CURATED='### Added
+- a curated addition (#122)
+
+### Fixed
 - a hand-written entry that must survive verbatim (#123)'
 
 # 2. Curated content present: it becomes the entry and the summarizer is SKIPPED.
@@ -93,6 +96,14 @@ entry=$(sed -n '/## \[0\.2\.0\]/,/## \[0\.1\.0\]/p' "$out")
 pass=$((pass+1))
 printf '%s\n' "$entry" | grep -q "generated bullet the summarizer invented" \
   && fail "summarizer content leaked into a curated entry"
+pass=$((pass+1))
+# Curated content keeps its own shape: both groups present, and the blank line
+# that separates them survives (squashing it jams '### Fixed' onto the bullet
+# above, which is how every future multi-section entry would have rendered).
+printf '%s\n' "$entry" | grep -q '^### Added' || fail "curated '### Added' group lost"
+pass=$((pass+1))
+printf '%s\n' "$entry" | grep -B1 '^### Fixed' | head -1 | grep -q '^[[:space:]]*$' \
+  || fail "blank line before a curated '### Fixed' was squashed"
 pass=$((pass+1))
 # The Unreleased section is reset for the next cycle.
 grep -q '(empty - ready for next release)' "$out" || fail "Unreleased was not reset"
@@ -129,8 +140,49 @@ run_script "$d" 0.2.0 "$d/changes.txt"
 [ -f "$d/stub.log" ] && fail "summarizer ran despite an explicit changes file"
 pass=$((pass+1))
 grep -q "from the explicit changes file" "$d/CHANGELOG.md" || fail "changes-file content missing"
+pass=$((pass+1))
 grep -q "a hand-written entry that must survive verbatim (#123)" "$d/CHANGELOG.md" \
   || fail "curated content dropped when a changes file was supplied"
+pass=$((pass+1))
+# A changes file is ADDITIVE to curated entries (both are human-authored), so
+# this path legitimately carries the changes file's headings plus the curated
+# ones; what it must never carry is summarizer text.
+grep -q "generated bullet the summarizer invented" "$d/CHANGELOG.md" \
+  && fail "summarizer content leaked into a changes-file entry"
+pass=$((pass+1))
+rm -rf "$d"
+
+# 5. [Unreleased] as the LAST section: the no-following-version branch, which
+#    this change rewrote. A first release has exactly this shape.
+d=$(mktemp -d); mkdir -p "$d/bin"
+cat > "$d/CHANGELOG.md" <<EOF
+# Changelog
+
+## [Unreleased]
+
+${CURATED}
+EOF
+cp /dev/null "$d/bin/claude"; chmod +x "$d/bin/claude"
+run_script "$d" 0.2.0
+grep -q '## \[0.2.0\]' "$d/CHANGELOG.md" || fail "entry missing when [Unreleased] is the last section"
+pass=$((pass+1))
+grep -q "a hand-written entry that must survive verbatim (#123)" "$d/CHANGELOG.md" \
+  || fail "curated content dropped when [Unreleased] is the last section"
+pass=$((pass+1))
+grep -q '(empty - ready for next release)' "$d/CHANGELOG.md" \
+  || fail "[Unreleased] not reset when it was the last section"
+pass=$((pass+1))
+rm -rf "$d"
+
+# 6. A changelog with no [Unreleased] section fails loudly and leaves no mess.
+d=$(mktemp -d); mkdir -p "$d/bin"
+printf '# Changelog\n\n## [0.1.0] - 2026-01-01\n\n### Added\n- first\n' > "$d/CHANGELOG.md"
+before=$(cat "$d/CHANGELOG.md")
+if run_script "$d" 0.2.0 2>/dev/null; then fail "expected a non-zero exit with no [Unreleased] section"; fi
+pass=$((pass+1))
+[ "$(cat "$d/CHANGELOG.md")" = "$before" ] || fail "changelog was modified despite the error"
+pass=$((pass+1))
+[ -f "$d/CHANGELOG.md.bak" ] && fail "left a CHANGELOG.md.bak behind on the error path"
 pass=$((pass+1))
 rm -rf "$d"
 

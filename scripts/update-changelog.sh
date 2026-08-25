@@ -28,13 +28,14 @@ if grep -q "## \[$VERSION\]" "$CHANGELOG"; then
     exit 0
 fi
 
-# Hand-curated [Unreleased] entries are AUTHORITATIVE: they were written by a
-# human for exactly this release and they BECOME the release entry. Extract them
-# once, here, so the content selection below and the insertion at the end share
-# one definition of "curated" (a second copy of the placeholder vocabulary would
+# Hand-curated [Unreleased] entries are AUTHORITATIVE: a human wrote them for
+# exactly this release, so they BECOME the release entry. Extract them once here
+# so the content selection below and the insertion at the end share one
+# definition of "curated" (a second copy of the placeholder vocabulary would
 # drift). Empty file == nothing curated.
 CURATED_FILE=$(mktemp)
-trap 'rm -f "$CURATED_FILE"' EXIT
+TEMP_ENTRY=$(mktemp)
+trap 'rm -f "$CURATED_FILE" "$TEMP_ENTRY" "$CHANGELOG.bak"' EXIT
 python3 - "$CHANGELOG" "$CURATED_FILE" <<'PYEOF'
 import sys
 
@@ -46,21 +47,32 @@ if marker in text:
     after = text.split(marker, 1)[1]
     idx = after.find('\n## [')
     section = after if idx == -1 else after[:idx]
-    # Drop blank lines and the "nothing here yet" placeholders; anything that
-    # survives is real, hand-written content.
-    lines = [l for l in section.strip().splitlines()
-             if l.strip() not in ('', '(empty - ready for next release)', '(ready for next release)')]
+    # Drop only the "nothing here yet" placeholders, then trim the edges.
+    # INTERNAL blank lines are content: they separate a curated entry's own
+    # "### Added" / "### Fixed" groups, and squashing them jams those headings
+    # against the preceding bullet.
+    lines = [l for l in section.splitlines()
+             if l.strip() not in ('(empty - ready for next release)', '(ready for next release)')]
     body = '\n'.join(lines).strip()
 open(out, 'w').write(body)
 PYEOF
 
-# Prepare the new version section content. Precedence, highest first:
-#   1. an explicit changes file (the caller stated exactly what to ship)
-#   2. curated [Unreleased] entries (folded in verbatim at the end)
-#   3. the commit summarizer, a LAST RESORT for when nothing human-authored exists
-# The summarizer must never run alongside curated entries: both describe the same
-# commits, so the entry ends up saying everything twice under duplicate headings
-# (that is what shipped in 0.20.0).
+# Fail before spending anything if the file is not the shape we can rewrite:
+# the summarizer below can cost a real model call, and the insertion step needs
+# this marker anyway.
+if ! grep -q '^## \[Unreleased\]' "$CHANGELOG"; then
+    echo "Error: Could not find [Unreleased] section in $CHANGELOG" >&2
+    exit 1
+fi
+
+# Choose the new entry's content. Human-authored content always wins over the
+# machine: the summarizer runs ONLY when neither an explicit changes file nor
+# curated [Unreleased] entries exist. It must never run alongside curated
+# entries, because both describe the same commits and the entry then says
+# everything twice under duplicate headings (that is what shipped in 0.20.0).
+# A changes file and curated entries are ADDITIVE — both are human-authored, so
+# both land: the file supplies the body here and the curated text is folded in
+# at the insertion step below.
 if [ -n "$CHANGES_FILE" ] && [ -f "$CHANGES_FILE" ]; then
     echo "Using changes from $CHANGES_FILE"
     CHANGES_CONTENT=$(cat "$CHANGES_FILE")
@@ -128,77 +140,68 @@ fi
 # Create backup
 cp "$CHANGELOG" "$CHANGELOG.bak"
 
-# Create the new version entry in a temp file
-TEMP_ENTRY=$(mktemp)
-cat > "$TEMP_ENTRY" <<EOF
+# The body of the new entry (may be empty on the curated-only path).
+printf '%s' "$CHANGES_CONTENT" > "$TEMP_ENTRY"
 
-## [$VERSION] - $DATE
-
-$CHANGES_CONTENT
-
-EOF
-
-# Use Python to insert the new version (more reliable than awk/sed for multiline)
-python3 <<PYEOF
-import re
+# Insert the new version with Python (more reliable than awk/sed for multiline).
+# Values arrive as argv, never interpolated into the program text: a quote in
+# VERSION would otherwise end a string literal and run as code.
+python3 - "$CHANGELOG" "$TEMP_ENTRY" "$CURATED_FILE" "$VERSION" "$DATE" <<'PYEOF'
 import sys
 
-# Read files
-with open('$CHANGELOG', 'r') as f:
+changelog, body_file, curated_file, version, date = sys.argv[1:6]
+
+with open(changelog) as f:
     original = f.read()
-
-with open('$TEMP_ENTRY', 'r') as f:
-    new_entry = f.read()
-
+with open(body_file) as f:
+    body = f.read().strip()
 # The curated [Unreleased] entries extracted before the content selection above.
-# They are folded into this release's entry verbatim; when they exist they ARE
-# the entry (the summarizer was skipped), so nothing here can duplicate them.
-with open('$CURATED_FILE', 'r') as f:
+# Folded in as written (internal blank lines intact). When they exist the
+# summarizer was skipped, so they cannot be duplicated by generated text; an
+# explicit changes file is additive to them, both being human-authored.
+with open(curated_file) as f:
     curated = f.read().strip()
 
-# Find the Unreleased section
 unreleased_marker = '## [Unreleased]'
 if unreleased_marker not in original:
-    print("Error: Could not find [Unreleased] section in CHANGELOG.md", file=sys.stderr)
+    print(f"Error: Could not find [Unreleased] section in {changelog}", file=sys.stderr)
     sys.exit(1)
 
-if curated:
-    marker = '## [$VERSION] - $DATE'
-    head, sep, tail = new_entry.partition(marker)
-    if sep:
-        new_entry = head + sep + '\n\n' + curated + tail
-    else:
-        new_entry = new_entry.rstrip('\n') + '\n\n' + curated + '\n'
+# Assemble: heading, then the body (if any), then the curated entries (if any).
+# Joining the present pieces beats emitting placeholders and collapsing blank
+# runs afterwards, which would also squash blank lines inside a fenced code
+# block in a changes file.
+sections = [s for s in (body, curated) if s]
+new_entry = f'\n## [{version}] - {date}\n\n' + '\n\n'.join(sections) + '\n'
 
-# An empty CHANGES_CONTENT (the curated-only path) leaves a run of blank lines
-# where the generated body would have gone; collapse them so the entry reads the
-# same however it was assembled.
-new_entry = re.sub(r'\n{3,}', '\n\n', new_entry)
 # End with exactly one newline: the following section (when there is one) starts
 # with its own '\n', so a second here would open a blank-line run at the seam.
 new_entry = new_entry.rstrip('\n') + '\n'
 
 # Split at the Unreleased marker and insert the entry after the reset placeholder
-parts = original.split(unreleased_marker, 1)
-before_unreleased = parts[0]
-after_unreleased = parts[1]
-
+before_unreleased, after_unreleased = original.split(unreleased_marker, 1)
 next_section_idx = after_unreleased.find('\n## [')
 after_next = '' if next_section_idx == -1 else after_unreleased[next_section_idx:]
-updated = before_unreleased + unreleased_marker + '\n\n(empty - ready for next release)\n' + new_entry + after_next
+updated = (before_unreleased + unreleased_marker
+           + '\n\n(empty - ready for next release)\n' + new_entry + after_next)
 
-# Write result
-with open('$CHANGELOG', 'w') as f:
+with open(changelog, 'w') as f:
     f.write(updated)
 
-print(f"✓ CHANGELOG.md updated with version $VERSION ($DATE)")
+print(f"✓ {changelog} updated with version {version} ({date})")
 PYEOF
 
-# Clean up
-rm "$CHANGELOG.bak" "$TEMP_ENTRY"
+# Clean up (the EXIT trap covers the same files if we die before here)
+rm -f "$CHANGELOG.bak" "$TEMP_ENTRY" "$CURATED_FILE"
 
+# Echo the entry AS WRITTEN, read back from the file. `make release` commits,
+# tags, and pushes moments after this, so this is the operator's only chance to
+# see what is shipping; printing $CHANGES_CONTENT instead would show an empty
+# body on the curated-only path, where the content came from the curated file.
 echo ""
 echo "New entry added:"
-echo "## [$VERSION] - $DATE"
-echo ""
-echo "$CHANGES_CONTENT"
+awk -v ver="## [$VERSION] - $DATE" '
+  index($0, ver) == 1 { show = 1 }
+  show && /^## \[/ && index($0, ver) != 1 { exit }
+  show { print }
+' "$CHANGELOG"

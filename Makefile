@@ -176,7 +176,7 @@ clean-dmg:
 	       $(ARTIFACT_DIR)/SecondBrain-*.dmg $(ARTIFACT_DIR)/SecondBrain-*.zip \
 	  && echo "Removed local SecondBrain-* installer artifacts (.dmg/.zip)"
 
-test: check-claude-md-size check-docs-links
+test: check-claude-md-size check-docs-links test-release-script
 	$(MAKE) -C cli test
 
 # Golden-path end-to-end battery: one curated scenario per critical flow
