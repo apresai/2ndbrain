@@ -47,10 +47,14 @@ outer:
 
 // runWithHome runs the binary with HOME overridden and 2NB_TEST explicitly
 // unset so the real side effects (writing recents, skills files) happen but
-// stay inside the temp HOME. Returns combined
-// stdout+stderr so t.Fatalf messages contain the full subprocess diagnostic
-// (including slog warnings and Cobra usage errors that would otherwise
-// disappear into the test-runner's shared stderr).
+// stay inside the temp HOME.
+//
+// Returns stdout, plus stderr appended as a diagnostic tail ON FAILURE ONLY, so
+// a JSON decoder on the success path still gets a clean envelope. Stderr is
+// never discarded: it always goes to t.Logf, which prints only for a failing or
+// -v run. Before that, a subprocess that succeeded while warning about, say, a
+// degraded provider left no trace anywhere, which is exactly the diagnostic you
+// want when a later assertion in the same test fails.
 func runWithHome(t *testing.T, home string, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command(binaryPath, args...)
@@ -68,12 +72,13 @@ func runWithHome(t *testing.T, home string, args ...string) (string, int) {
 		code = -1
 	}
 	// On success (code == 0) return stdout untouched so JSON decoders get
-	// a clean envelope. On failure append stderr as a diagnostic tail —
+	// a clean envelope. On failure append stderr as a diagnostic tail:
 	// every call site guards JSON parsing behind `code != 0`, so callers
 	// never try to json.Unmarshal the combined string.
 	out := stdout.String()
-	if code != 0 {
-		if es := stderr.String(); es != "" {
+	if es := stderr.String(); es != "" {
+		t.Logf("2nb %s: stderr:\n%s", strings.Join(args, " "), es)
+		if code != 0 {
 			out += "\n--- stderr ---\n" + es
 		}
 	}
@@ -283,30 +288,49 @@ func TestBattery_IndexRebuild(t *testing.T) {
 		t.Fatalf("baseline index: exit %d: %s", code, out)
 	}
 
-	// --force-reembed: flag must be accepted and index must complete.
-	// We assert the flag runs end-to-end without a provider by checking
-	// exit 0 and that the command emits a recognizable line. Embedding
-	// counts are checked in a credential-gated path below.
-	if out, code := runWithHome(t, home, "index", "--force-reembed"); code != 0 {
-		t.Fatalf("index --force-reembed: exit %d: %s", code, out)
-	}
-
-	// Reindex with a real provider (if credentials available) to exercise
-	// the actual re-embedding path. Matches the pattern in TestE2E_Ask.
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Log("no provider creds; skipping embedding-count assertion")
+	// --force-reembed WITHOUT a usable provider must FAIL, loudly, at the
+	// preflight. This is the honest contract: runIndex treats an unavailable
+	// embedder as fatal for --force-reembed (and only non-fatal for a plain
+	// index), because re-embedding with nothing to embed with is not a
+	// no-op, it is a request that cannot be satisfied.
+	//
+	// This assertion used to claim the opposite ("runs end-to-end without a
+	// provider ... exit 0"), which no code path could satisfy; it passed only
+	// when credentials happened to work, and failed the moment they blipped.
+	if ok, _ := embeddingCapable(t); !ok {
+		out, code := runWithHome(t, home, "index", "--force-reembed")
+		if code == 0 {
+			t.Fatalf("--force-reembed should fail without a usable provider, got exit 0: %s", out)
+		}
+		// Deliberately not asserting on "(check credentials)": the readiness
+		// error now names its real cause, which varies by failure.
+		if !strings.Contains(out, "force-reembed preflight:") || !strings.Contains(out, "is not ready") {
+			t.Errorf("expected a preflight not-ready error, got: %s", out)
+		}
 		return
 	}
-	out, code := runWithHome(t, home, "index", "--force-reembed")
+
+	// With a usable provider it must complete AND actually produce embeddings.
+	if out, code := runWithHome(t, home, "index", "--force-reembed"); code != 0 {
+		t.Fatalf("index --force-reembed (capable): exit %d: %s", code, out)
+	}
+	statusOut, code := runWithHome(t, home, "ai", "status", "--json")
 	if code != 0 {
-		t.Fatalf("index --force-reembed (creds): exit %d: %s", code, out)
+		t.Fatalf("ai status: exit %d: %s", code, statusOut)
+	}
+	var status struct {
+		EmbeddingCount int `json:"embedding_count"`
+	}
+	if err := json.Unmarshal([]byte(statusOut), &status); err != nil {
+		t.Fatalf("decode ai status: %v\n%s", err, statusOut)
+	}
+	if status.EmbeddingCount == 0 {
+		t.Error("--force-reembed reported success but produced no embeddings")
 	}
 }
 
 func TestBattery_SearchThreshold(t *testing.T) {
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("no provider credentials available")
-	}
+	requireEmbedding(t)
 	home := isolatedHome(t)
 	vaultDir := filepath.Join(home, "threshold-vault")
 	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
@@ -499,9 +523,7 @@ func TestBattery_SkillsRoundtrip(t *testing.T) {
 // cover the function directly; this asserts that a dimension mismatch
 // surfaces as a warning in the `search --json` envelope and forces mode=keyword.
 func TestBattery_HybridDegradation(t *testing.T) {
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("need real provider to populate then mismatch embeddings")
-	}
+	requireEmbedding(t)
 	home := isolatedHome(t)
 	vaultDir := filepath.Join(home, "degraded-vault")
 	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
@@ -516,16 +538,17 @@ func TestBattery_HybridDegradation(t *testing.T) {
 		t.Fatalf("index: exit %d: %s", code, out)
 	}
 
-	// Point the config at a provider whose dims differ from what's in the DB.
-	// We flip between Bedrock (default embedding dim varies by model) and
-	// OpenRouter — if only one is available, we can't flip, so skip.
-	if !hasAWSCreds() || !hasOpenRouterKey() {
-		t.Skip("need both providers to force dim mismatch")
-	}
-	// Switch provider at config level — subsequent search calls will see the
-	// dim mismatch via VectorCompat.
-	if out, code := runWithHome(t, home, "config", "set", "ai.provider", "openrouter"); code != 0 {
-		t.Fatalf("config set provider: exit %d: %s", code, out)
+	// Force a REAL dimension mismatch by narrowing the configured dimension:
+	// the DB holds 1024-wide vectors, the embedder now declares 256, and
+	// VectorCompat's providerDim != storedDim branch fires.
+	//
+	// This used to swap ai.provider to openrouter instead, which never
+	// produced a mismatch at all (the swapped provider inherits the same
+	// ai.dimensions, so both sides stayed 1024) and additionally required
+	// BOTH providers' credentials, which is why this test almost never ran.
+	// Nova-2 declares 256/384/1024/3072, so 256 passes config validation.
+	if out, code := runWithHome(t, home, "config", "set", "ai.dimensions", "256"); code != 0 {
+		t.Fatalf("config set ai.dimensions: exit %d: %s", code, out)
 	}
 
 	out, code := runWithHome(t, home, "search", "Seed", "--json")

@@ -5,11 +5,15 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/vault"
 )
 
 // The link-resolution commands (unlink/relink/suggest-target) are deterministic
-// and AI-free, so these tests run with NO skip (suggest-target's semantic tier
-// is simply absent without an embedder; the BM25 + drift tiers still drive).
+// and AI-free, so these tests run with no skip. The one exception is carved out
+// explicitly: suggest-target's semantic tier needs an embedder, so an assertion
+// that only that tier can satisfy lives in its own gated subtest rather than
+// riding along and failing whenever embeddings are unavailable.
 
 func TestUnlink_WriteAndUndoRoundTrip(t *testing.T) {
 	_, root := newContractVault(t)
@@ -210,9 +214,13 @@ func TestSuggestTarget_DriftKeywordAndEmpty(t *testing.T) {
 		t.Errorf("drift tier should suggest claude-code-skills.md, got %+v", drift)
 	}
 
-	// Keyword tier: word-reordered target ("models-apresai") still surfaces the
-	// note via BM25 token overlap (apresai/models), which drift-matching misses.
-	out, err = runCLIArgs(t, root, "suggest-target", "models-apresai", "--json", "--porcelain")
+	// Keyword tier: a word-reordered target still surfaces the note via BM25
+	// token overlap (apresai/models), which drift-matching misses. The words are
+	// SPACE-separated on purpose: ftsQuery keeps a target in one field and
+	// quoteForFTS quotes it, so a hyphenated "models-apresai" becomes a single
+	// order-sensitive FTS5 phrase that cannot match the note's "apresai models".
+	// That form is the semantic tier's job, asserted in the subtest below.
+	out, err = runCLIArgs(t, root, "suggest-target", "models apresai", "--json", "--porcelain")
 	if err != nil {
 		t.Fatalf("suggest-target keyword: %v\n%s", err, out)
 	}
@@ -223,6 +231,33 @@ func TestSuggestTarget_DriftKeywordAndEmpty(t *testing.T) {
 	if !containsPath(kw, "apresai-models.md") {
 		t.Errorf("keyword tier should suggest apresai-models.md, got %+v", kw)
 	}
+
+	// Semantic tier: the hyphenated form only crosses word order through
+	// embeddings. Gated on embeddings having actually LANDED rather than on
+	// credentials being present, so a configured-but-unusable provider skips
+	// instead of failing (same gate as eval_test.go). A subtest keeps the
+	// credential-free assertions above reported as run.
+	t.Run("semantic tier bridges word order", func(t *testing.T) {
+		rv, err := vault.Open(root)
+		if err != nil {
+			t.Fatalf("open vault: %v", err)
+		}
+		defer rv.Close()
+		if c, _ := rv.DB.EmbeddingCount(); c == 0 {
+			t.Skip("no embeddings after index; semantic tier unavailable")
+		}
+		out, err := runCLIArgs(t, root, "suggest-target", "models-apresai", "--json", "--porcelain")
+		if err != nil {
+			t.Fatalf("suggest-target semantic: %v\n%s", err, out)
+		}
+		var sem []SuggestLinkResult
+		if err := json.Unmarshal(out, &sem); err != nil {
+			t.Fatalf("unmarshal semantic: %v\n%s", err, out)
+		}
+		if !containsPath(sem, "apresai-models.md") {
+			t.Errorf("semantic tier should suggest apresai-models.md, got %+v", sem)
+		}
+	})
 }
 
 // An empty vault yields no candidates from any tier, proving the JSON is an

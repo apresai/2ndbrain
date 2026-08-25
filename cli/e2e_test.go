@@ -504,9 +504,7 @@ func hasOpenRouterKey() bool {
 }
 
 func TestE2E_ModelsTest(t *testing.T) {
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("no AI provider credentials available")
-	}
+	requireEmbedding(t)
 
 	// Prefer Bedrock (reliable) over free OpenRouter (rate limited).
 	model := ""
@@ -529,9 +527,7 @@ func TestE2E_ModelsTest(t *testing.T) {
 }
 
 func TestE2E_ModelsDiscover(t *testing.T) {
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("no AI provider credentials available")
-	}
+	requireEmbedding(t)
 
 	out, code := run("models", "list", "--discover", "--json")
 	if code != 0 {
@@ -544,9 +540,7 @@ func TestE2E_ModelsDiscover(t *testing.T) {
 }
 
 func TestE2E_Ask(t *testing.T) {
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("no AI provider credentials available")
-	}
+	requireEmbedding(t)
 
 	out, code := run("ask", "What authentication approach was chosen?")
 	if code != 0 {
@@ -565,9 +559,7 @@ func TestE2E_Ask(t *testing.T) {
 // context the model can reach it. Credential-gated; asserts loosely (the answer
 // is non-deterministic LLM output) on the distinctive strategy terms.
 func TestE2E_AskDeepSection(t *testing.T) {
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("no AI provider credentials available")
-	}
+	requireEmbedding(t)
 	out, code := run("ask", "What database migration strategy did the team choose?")
 	if code != 0 {
 		t.Fatalf("ask exit %d: %s", code, out)
