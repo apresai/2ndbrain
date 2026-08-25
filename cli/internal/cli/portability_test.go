@@ -33,8 +33,8 @@ func TestDerivePortability(t *testing.T) {
 		embeddableUnembedded int
 		freshness            vault.IndexFreshness
 		// embedReady is the resolved availability verdict derivePortability now
-		// receives instead of probing for itself, so a status command probes a
-		// provider once and every surface reports the same answer.
+		// receives instead of probing for itself, so every surface reports the
+		// same answer and none of them can pay a fresh probe for it.
 		embedReady providerReadiness
 		wantStatus string
 		wantAction string

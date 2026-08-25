@@ -12,12 +12,14 @@ import (
 // ready and, when it is not and the provider can say, the classified reason.
 //
 // It exists to be carried. A readiness answer used to be re-derived at each
-// place that reports it, so a single `2nb ai status` probed the same embedder
-// three times: once for the JSON field, once inside derivePortability, once
-// inside bedrockProviderStatus. Definitive failures are cached so the repeats
-// were free, but a TRANSIENT failure is deliberately short-lived in the cache,
-// which made the repeats real 5-second probes on exactly the degraded network
-// where a status command most needs to answer quickly.
+// place that reports it: `2nb ai status` asked once for the JSON field, again
+// inside derivePortability, and again inside bedrockProviderStatus. Those were
+// repeated CALLS, not repeated network round trips. A success or a definitive
+// failure holds in the cache for the full TTL, so the repeats cost nothing in
+// the common case, and the live-probe count is one per registered role either
+// way. Only a TRANSIENT verdict, which is deliberately short-lived, could lapse
+// between calls and make a repeat pay a fresh probe, on exactly the degraded
+// network where a status command most needs to answer quickly.
 type providerReadiness struct {
 	ready bool
 	code  ai.TestErrorCode

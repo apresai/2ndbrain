@@ -130,9 +130,10 @@ type AvailabilityReporter interface {
 
 // Availability asks a provider whether it is ready, and why not when it can
 // say. It is the one place the optional-interface fallback lives, so callers
-// ask ONCE and carry the answer, instead of testing Available() and then
-// re-probing to find out what went wrong. That second probe is a live network
-// round trip on an error path, and it can disagree with the first.
+// ask ONCE and carry the answer, instead of testing Available() and then asking
+// again to find out what went wrong. The second answer can disagree with the
+// first, and when the cached verdict has lapsed (which a transient failure does
+// quickly, by design) it costs another live round trip.
 //
 // The code is "" for a ready provider and for one that cannot explain itself.
 func Availability(ctx context.Context, p any) (bool, TestErrorCode) {
