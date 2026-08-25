@@ -186,4 +186,16 @@ pass=$((pass+1))
 pass=$((pass+1))
 rm -rf "$d"
 
+# 7. A changes file that does not exist is an error, not a silent fallback:
+#    falling through would ship an entry the caller never reviewed.
+d=$(mktemp -d); make_repo "$d" "$CURATED"
+before=$(cat "$d/CHANGELOG.md")
+if run_script "$d" 0.2.0 "$d/nope.txt" 2>/dev/null; then
+  fail "expected a non-zero exit for a missing changes file"
+fi
+pass=$((pass+1))
+[ "$(cat "$d/CHANGELOG.md")" = "$before" ] || fail "changelog modified despite the missing changes file"
+pass=$((pass+1))
+rm -rf "$d"
+
 echo "changelog-script-test: $pass checks passed"

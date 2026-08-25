@@ -73,7 +73,14 @@ fi
 # A changes file and curated entries are ADDITIVE — both are human-authored, so
 # both land: the file supplies the body here and the curated text is folded in
 # at the insertion step below.
-if [ -n "$CHANGES_FILE" ] && [ -f "$CHANGES_FILE" ]; then
+if [ -n "$CHANGES_FILE" ] && [ ! -f "$CHANGES_FILE" ]; then
+    # Asked for a changes file that is not there. Silently falling back would
+    # ship an entry the caller never reviewed, so say so and stop.
+    echo "Error: changes file not found: $CHANGES_FILE" >&2
+    exit 1
+fi
+
+if [ -n "$CHANGES_FILE" ]; then
     echo "Using changes from $CHANGES_FILE"
     CHANGES_CONTENT=$(cat "$CHANGES_FILE")
 elif [ -s "$CURATED_FILE" ]; then
