@@ -71,12 +71,11 @@ func runWithHome(t *testing.T, home string, args ...string) (string, int) {
 	} else if err != nil {
 		code = -1
 	}
-	// On success (code == 0) return stdout untouched so JSON decoders get
-	// a clean envelope. On failure append stderr as a diagnostic tail:
-	// every call site guards JSON parsing behind `code != 0`, so callers
-	// never try to json.Unmarshal the combined string.
+	// Every call site guards JSON parsing behind `code != 0`, so appending the
+	// stderr tail on failure can never reach a json.Unmarshal.
 	out := stdout.String()
-	if es := stderr.String(); es != "" {
+	if stderr.Len() > 0 {
+		es := stderr.String()
 		t.Logf("2nb %s: stderr:\n%s", strings.Join(args, " "), es)
 		if code != 0 {
 			out += "\n--- stderr ---\n" + es

@@ -120,9 +120,11 @@ func TestBedrockGenerateNovaMicro(t *testing.T) {
 	ctx := context.Background()
 	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
 
-	// Gate on the shared capability verdict: the constructor alone never
-	// fails without credentials (they resolve lazily), so this test would
-	// otherwise fail rather than skip on a credential-free run.
+	// Gate on the shared capability verdict: the constructor alone never fails
+	// without credentials (they resolve lazily), so this test would otherwise
+	// fail rather than skip on a credential-free run. The gate probes the
+	// control plane, so it covers "no usable credentials", NOT this specific
+	// model's entitlement.
 	requireBedrock(t)
 
 	gen, err := NewBedrockGenerator(ctx, cfg, "amazon.nova-micro-v1:0")
@@ -502,14 +504,16 @@ func TestBedrockEmbedTitanV2(t *testing.T) {
 	ctx := context.Background()
 	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
 
-	// Gate on the shared capability verdict before the constructor: it never
-	// fails without credentials (they resolve lazily), so this test would
-	// otherwise fail rather than skip on a credential-free run.
+	// Gate on the shared capability verdict: the constructor alone never fails
+	// without credentials (they resolve lazily), so this test would otherwise
+	// fail rather than skip on a credential-free run. The gate probes the
+	// control plane, so it covers "no usable credentials", NOT this specific
+	// model's entitlement.
 	requireBedrock(t)
 
 	embedder, err := NewBedrockEmbedder(ctx, cfg, "amazon.titan-embed-text-v2:0", 1024)
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock embedder unavailable: %v", err)
 	}
 
 	vecs, err := embedder.Embed(ctx, []string{
@@ -542,14 +546,16 @@ func TestBedrockEmbedCohereEnglish(t *testing.T) {
 	ctx := context.Background()
 	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
 
-	// Gate on the shared capability verdict before the constructor: it never
-	// fails without credentials (they resolve lazily), so this test would
-	// otherwise fail rather than skip on a credential-free run.
+	// Gate on the shared capability verdict: the constructor alone never fails
+	// without credentials (they resolve lazily), so this test would otherwise
+	// fail rather than skip on a credential-free run. The gate probes the
+	// control plane, so it covers "no usable credentials", NOT this specific
+	// model's entitlement.
 	requireBedrock(t)
 
 	embedder, err := NewBedrockEmbedder(ctx, cfg, "cohere.embed-english-v3", 1024)
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock embedder unavailable: %v", err)
 	}
 
 	// Test batching with more texts than a single call would handle.
@@ -577,7 +583,7 @@ func TestListBedrockVendorModelsInferenceProfiles(t *testing.T) {
 
 	models, err := ListBedrockVendorModels(ctx, cfg)
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock embedder unavailable: %v", err)
 	}
 	if len(models) == 0 {
 		t.Fatal("no models returned")

@@ -47,6 +47,23 @@ func newContractVault(t *testing.T) (*vault.Vault, string) {
 	return v, vaultRoot
 }
 
+// requireEmbeddings skips unless a prior `index` in vaultRoot actually produced
+// embeddings. It gates on the OUTCOME rather than on a credential variable
+// being set, so a configured-but-unusable provider skips instead of failing.
+// The vault is reopened because the index command committed through its own
+// handle.
+func requireEmbeddings(t *testing.T, vaultRoot string) {
+	t.Helper()
+	rv, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	defer rv.Close()
+	if c, _ := rv.DB.EmbeddingCount(); c == 0 {
+		t.Skip("no embeddings after index; the semantic path is unavailable")
+	}
+}
+
 // runCLIArgs invokes rootCmd with the given argv (not including the
 // `2nb` prefix). Returns captured stdout bytes and any cobra execution
 // error. Most handlers fmt.Print directly to os.Stdout (they don't use

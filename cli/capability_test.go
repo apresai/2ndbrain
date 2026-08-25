@@ -2,6 +2,8 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,30 +25,53 @@ import (
 // region, and config (including the stored-key-over-env precedence), and that
 // resolution is precisely what these tests depend on, so an in-process probe
 // could disagree with the thing under test.
+//
+// There are TWO verdicts because the tests run in two different environments,
+// and a single one is wrong for half of them. The battery drives the binary
+// under a throwaway HOME (runWithHome), where only environment credentials are
+// visible. TestE2E_* drives it under the caller's real HOME (run), where
+// ~/.aws, ~/.config/2nb/bedrock.json, and the Keychain are visible too.
+//
+// A temp-HOME verdict is strictly more pessimistic, so gating the real-HOME
+// tests on it can never make one fail: it makes them SKIP in exactly the setups
+// they used to exercise (credentials in ~/.aws with AWS_PROFILE set), and a
+// silent skip in the maintainer's own configuration is its own kind of lie.
 var (
-	embedCapOnce   sync.Once
-	embedCapOK     bool
-	embedCapReason string
+	embedCapTemp capVerdict // probed under a throwaway HOME
+	embedCapHost capVerdict // probed under the caller's real HOME
 )
 
-// embeddingCapable reports whether the configured embedding provider can
-// actually embed right now, plus a human reason when it cannot. Probes at most
-// once per test binary.
-func embeddingCapable(t *testing.T) (bool, string) {
-	t.Helper()
-	embedCapOnce.Do(func() {
-		// Cheap negative first: with no credentials at all there is nothing to
-		// probe, so spawn nothing. This is the CI path.
-		if !hasAWSCreds() && !hasOpenRouterKey() {
-			embedCapOK, embedCapReason = false, "no AI provider credentials configured"
-			return
-		}
-		embedCapOK, embedCapReason = probeEmbedding(t)
-	})
-	return embedCapOK, embedCapReason
+type capVerdict struct {
+	once   sync.Once
+	ok     bool
+	reason string
 }
 
-// requireEmbedding skips the test unless the provider can really embed.
+// resolve probes at most once per verdict per test binary.
+func (c *capVerdict) resolve(t *testing.T, hostHome bool) (bool, string) {
+	t.Helper()
+	c.once.Do(func() {
+		// Cheap negative first: with nothing that could carry a credential
+		// there is nothing to probe, so spawn nothing. This is the CI path.
+		if !hasAnyProviderCredentialSource(hostHome) {
+			c.ok, c.reason = false, "no AI provider credentials configured"
+			return
+		}
+		c.ok, c.reason = probeEmbedding(t, hostHome)
+	})
+	return c.ok, c.reason
+}
+
+// embeddingCapable reports whether the configured embedding provider can
+// actually embed right now under a throwaway HOME, plus a human reason when it
+// cannot.
+func embeddingCapable(t *testing.T) (bool, string) {
+	t.Helper()
+	return embedCapTemp.resolve(t, false)
+}
+
+// requireEmbedding skips the test unless the provider can really embed under a
+// throwaway HOME. Use it for tests that drive the binary via runWithHome.
 func requireEmbedding(t *testing.T) {
 	t.Helper()
 	if ok, reason := embeddingCapable(t); !ok {
@@ -54,19 +79,67 @@ func requireEmbedding(t *testing.T) {
 	}
 }
 
+// requireEmbeddingHostHome skips the test unless the provider can embed with
+// the caller's real HOME visible. Use it for tests that drive the binary via
+// run/runStdout, which inherit the environment wholesale.
+func requireEmbeddingHostHome(t *testing.T) {
+	t.Helper()
+	if ok, reason := embedCapHost.resolve(t, true); !ok {
+		t.Skipf("embedding provider not usable: %s", reason)
+	}
+}
+
+// hasAnyProviderCredentialSource is the cheap pre-filter: is there anything
+// here that could possibly carry a credential? Environment variables include
+// the Bedrock API key, which is how the macOS app and most of this project's
+// own tooling authenticate; omitting it would skip a fully working setup.
+// Under the real HOME, the file-based sources count too.
+func hasAnyProviderCredentialSource(hostHome bool) bool {
+	if hasAWSCreds() || hasOpenRouterKey() || os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" {
+		return true
+	}
+	if !hostHome {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	for _, p := range []string{
+		filepath.Join(home, ".aws", "credentials"),
+		filepath.Join(home, ".aws", "config"),
+		filepath.Join(home, ".config", "2nb", "bedrock.json"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // probeEmbedding runs one real embedding call in a throwaway vault and reports
 // the outcome. It uses `ai embed`, the shortest path to "can this actually
 // embed", rather than a readiness probe, because readiness and the runtime are
 // different API surfaces and only the runtime is what these tests exercise.
-func probeEmbedding(t *testing.T) (bool, string) {
+//
+// hostHome inherits the caller's HOME instead of a throwaway one, matching what
+// run() gives the tests it gates. 2NB_TEST is set on that path so the probe
+// cannot write recents or skill files into the developer's real home; the
+// throwaway path deliberately leaves it unset, exactly as runWithHome does.
+func probeEmbedding(t *testing.T, hostHome bool) (bool, string) {
 	t.Helper()
-	home := t.TempDir()
-	vault := filepath.Join(home, "cap-vault")
+	home := isolatedHome(t)
+	vault := filepath.Join(t.TempDir(), "cap-vault")
 
-	if out, code := runWithHome(t, home, "vault", "create", vault); code != 0 {
+	runner := func(args ...string) (string, int) { return runWithHome(t, home, args...) }
+	if hostHome {
+		runner = func(args ...string) (string, int) { return runHostHome(t, args...) }
+	}
+
+	if out, code := runner("vault", "create", vault); code != 0 {
 		return false, "vault create failed during the capability probe: " + firstLine(out)
 	}
-	out, code := runWithHome(t, home, "--vault", vault, "--unconfigured", "ai", "embed", "capability probe", "--json")
+	out, code := runner("--vault", vault, "--unconfigured", "ai", "embed", "capability probe", "--json")
 	if code != 0 {
 		return false, firstLine(out)
 	}
@@ -76,6 +149,31 @@ func probeEmbedding(t *testing.T) (bool, string) {
 		return false, "embedding probe returned no vector"
 	}
 	return true, ""
+}
+
+// runHostHome runs the binary with the environment inherited wholesale, which
+// is what run() does, plus 2NB_TEST=1 so a probe never writes into the real
+// home. Returns stdout, with stderr appended on failure so the skip reason is
+// the actual error.
+func runHostHome(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Env = append(os.Environ(), "2NB_TEST=1")
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	code := 0
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		code = exitErr.ExitCode()
+	} else if err != nil {
+		code = -1
+	}
+	out := stdout.String()
+	if code != 0 {
+		out += "\n" + stderr.String()
+	}
+	return out, code
 }
 
 func firstLine(s string) string {
@@ -91,8 +189,3 @@ func firstLine(s string) string {
 	}
 	return s
 }
-
-// hasAnyProviderEnv is the cheap pre-filter the guards used to use directly.
-// Kept because it is genuinely useful as a first cut, but never as the whole
-// answer: see embeddingCapable.
-func hasAnyProviderEnv() bool { return hasAWSCreds() || hasOpenRouterKey() }
