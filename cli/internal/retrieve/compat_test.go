@@ -78,6 +78,51 @@ func TestVectorCompat_Unavailable(t *testing.T) {
 	if !strings.Contains(msg, "ollama") {
 		t.Errorf("message should name the provider, got: %q", msg)
 	}
+	if !strings.HasPrefix(msg, degradedPrefix) {
+		t.Errorf("the prefix is the documented match point, got: %q", msg)
+	}
+}
+
+// degradedPrefix is what agents are told to match on (docs/agent-teaching.md and
+// the embedded skill both say to match the prefix and never the tail), so it is
+// a contract, not an implementation detail.
+const degradedPrefix = "semantic search disabled: "
+
+// A provider that CAN classify itself now names the cause in the banner. The
+// prefix has to survive that, which is the whole point of pinning it: the tail
+// is free to gain detail, the prefix is not free to change.
+func TestVectorCompat_ClassifiedCauseKeepsThePrefix(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	seedEmbedding(t, v, "doc1", 768)
+	v.Config.AI.Provider = "bedrock"
+
+	ready, msg := VectorCompat(context.Background(), v,
+		&classifyingEmbedder{fakeEmbedder: fakeEmbedder{name: "bedrock", dims: 768}, code: ai.TestErrTimeout})
+	if ready {
+		t.Fatal("expected not-ready")
+	}
+	if !strings.HasPrefix(msg, degradedPrefix) {
+		t.Errorf("prefix contract broken, got: %q", msg)
+	}
+	if !strings.Contains(msg, string(ai.TestErrTimeout)) {
+		t.Errorf("expected the classified code in the banner, got: %q", msg)
+	}
+	// The remediation must NOT be here: this line prints on every degraded
+	// search and is duplicated into warnings[] on every --json call.
+	if len(msg) > 200 {
+		t.Errorf("degradation banner is too long for a per-query warning (%d chars): %q", len(msg), msg)
+	}
+}
+
+// classifyingEmbedder implements ai.AvailabilityReporter, as the Bedrock
+// providers do, so VectorCompat receives a real code instead of "".
+type classifyingEmbedder struct {
+	fakeEmbedder
+	code ai.TestErrorCode
+}
+
+func (c *classifyingEmbedder) AvailableDetail(context.Context) (bool, ai.TestErrorCode) {
+	return false, c.code
 }
 
 func TestVectorCompat_DimensionBreak(t *testing.T) {

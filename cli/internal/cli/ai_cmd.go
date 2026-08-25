@@ -446,8 +446,10 @@ func runAIEmbed(cmd *cobra.Command, args []string) error {
 // The probes are cheap: OpenRouter is a credentials check with no request at
 // all, Ollama and llama-local are local endpoint pings, and Bedrock is one free
 // control-plane call. active carries the ACTIVE provider's already-resolved
-// verdict so that call is not repeated; a provider that is not the active one
-// was never probed and resolves its own.
+// verdict so it is not asked again (the cache would usually have served the
+// repeat for free; carrying it also guarantees both surfaces report the SAME
+// answer). A provider that is not the active one was never asked and resolves
+// its own.
 func collectProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness) []ProviderStatus {
 	out := []ProviderStatus{
 		bedrockProviderStatus(ctx, cfg, active),
@@ -515,7 +517,8 @@ func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig, active provider
 	// Reachability: the embedder probe covers "creds work + AWS API reachable"
 	// in one cheap control-plane call. When bedrock is the ACTIVE provider the
 	// caller already resolved exactly this verdict, so reuse it rather than
-	// probing the same embedder a second time in one command.
+	// asking the same embedder again within one command.
+	//
 	// Reuse only a verdict that was actually PROBED. When bedrock is active but
 	// its embedder never registered, the caller has no verdict, and reporting the
 	// zero value would state a cause nobody observed ("credentials missing or

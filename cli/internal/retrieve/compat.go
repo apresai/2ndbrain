@@ -43,8 +43,19 @@ func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProv
 		return false, fmt.Sprintf("semantic search disabled: embedder %q not registered", providerName)
 	}
 
-	if !embedder.Available(ctx) {
-		return false, fmt.Sprintf("semantic search disabled: provider %q unavailable — falling back to keyword search", providerName)
+	if ready, code := ai.Availability(ctx, embedder); !ready {
+		if code == "" {
+			// A provider that cannot classify itself. Unchanged wording: this is
+			// still the honest answer, and inventing a cause would be worse.
+			return false, fmt.Sprintf("semantic search disabled: provider %q unavailable — falling back to keyword search", providerName)
+		}
+		// The CODE, not the remediation. This line goes to stderr on every
+		// degraded search and into warnings[] on every --json call, which the
+		// Obsidian plugin renders per warning; the access_denied remediation
+		// alone would make it ~400 characters. The code is the same token
+		// `ai status --json` reports, so an agent can join on it and a human can
+		// look it up.
+		return false, fmt.Sprintf("semantic search disabled: provider %q not ready (%s) — falling back to keyword search", providerName, code)
 	}
 
 	// Mixed-DIMENSION vaults (e.g. a partial re-embed after a Matryoshka

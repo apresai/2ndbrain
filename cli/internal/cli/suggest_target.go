@@ -748,8 +748,8 @@ func llmRerankPicks(ctx context.Context, cfg ai.AIConfig, system, user string) (
 	if err != nil {
 		return nil, err
 	}
-	if !gen.Available(ctx) {
-		return nil, fmt.Errorf("generation provider %q unavailable", cfg.Provider)
+	if ready, code := ai.Availability(ctx, gen); !ready {
+		return nil, generatorNotReadyError(cfg.Provider, code)
 	}
 	out, err := gen.Generate(ctx, user, ai.GenOpts{
 		Temperature: ai.Ptr(0.0),

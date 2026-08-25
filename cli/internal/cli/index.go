@@ -277,10 +277,10 @@ func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.Embeddi
 		return nil, fmt.Errorf("no embedding provider %q configured — run `2nb ai setup`", cfg.Provider)
 	}
 
-	// One probe, and carry its answer. Asking Available() and then re-asking for
-	// the reason costs a second live round trip, and a TRANSIENT failure is
-	// deliberately not cached, so the second ask misses and probes again on
-	// exactly the path this reporting exists to explain.
+	// One ask, and carry its answer. Re-asking for the reason can disagree with
+	// the first answer, and for a TRANSIENT failure (held only briefly, see
+	// failureTTL) the entry can lapse in between, so the second ask pays a fresh
+	// probe on exactly the path this reporting exists to explain.
 	if ready, code := ai.Availability(ctx, embedder); !ready {
 		return nil, embedderNotReadyError(cfg.Provider, code)
 	}

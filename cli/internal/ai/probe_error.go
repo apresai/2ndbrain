@@ -266,6 +266,10 @@ func classifyHTTPStatus(status int) TestErrorCode {
 // NOT the Bedrock console's "Model access" page (mantle models are invisible to
 // that control plane), so it needs different text than classic Bedrock. Pass ""
 // when the strategy is unknown to get the generic per-provider text.
+// Readiness callers must use ReadinessRemediation (not_ready.go) instead: it
+// overrides access_denied, because a readiness probe is a control-plane listing
+// rather than a model invocation, so the console's Model access page cannot fix
+// it. The divergence is deliberate and tested.
 func RemediationFor(code TestErrorCode, provider, strategy string) string {
 	mantle := strategy == StrategyBedrockMantleResponses
 	switch code {

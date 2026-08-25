@@ -139,13 +139,16 @@ func buildMCPDoctorReport(ctx context.Context, v *vault.Vault) MCPDoctorReport {
 
 	// WARN: AI readiness (a lightweight probe; the GUI runs a real model test).
 	embedder, eerr := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
-	aiReady := eerr == nil && embedder != nil && embedder.Available(ctx)
+	var aiReady providerReadiness
+	if eerr == nil && embedder != nil {
+		aiReady = resolveReadiness(ctx, embedder)
+	}
 	add(DoctorCheck{
 		Name:   "ai readiness",
 		OK:     true,
-		Warn:   !aiReady,
+		Warn:   !aiReady.ready,
 		Detail: aiReadinessDetail(v.Config.AI.Provider, aiReady),
-		Fix:    "run `2nb ai status` (search falls back to BM25 meanwhile)",
+		Fix:    aiReadinessFix(aiReady),
 	})
 
 	// WARN: configured in ~/.claude.json.
@@ -331,11 +334,32 @@ func firstSearchMode(payload string) (string, bool) {
 	return rows[0].SearchMode, rows[0].SearchMode != ""
 }
 
-func aiReadinessDetail(provider string, ready bool) string {
-	if ready {
-		return fmt.Sprintf("provider %q embedder reachable", provider)
+// aiReadinessDetail renders the doctor's one-line AI verdict. It takes the
+// resolved verdict rather than a bool so it can tell "probed, and here is the
+// cause" from "never probed": a provider named in config but absent from the
+// registry is a different problem than a probe that failed, and the old message
+// collapsed both into one sentence that named neither.
+// aiReadinessFix pairs with aiReadinessDetail. An unregistered embedder is a
+// setup problem, and `ai status` would only repeat what the detail already
+// said, so that branch points at the command that can actually fix it.
+func aiReadinessFix(r providerReadiness) string {
+	if !r.resolved {
+		return "run `2nb ai setup`, or check ai.provider in `2nb config show` (search falls back to BM25 meanwhile)"
 	}
-	return fmt.Sprintf("provider %q not ready (search uses BM25)", provider)
+	return "run `2nb ai status` (search falls back to BM25 meanwhile)"
+}
+
+func aiReadinessDetail(provider string, r providerReadiness) string {
+	switch {
+	case r.ready:
+		return fmt.Sprintf("provider %q embedder reachable", provider)
+	case !r.resolved:
+		return fmt.Sprintf("provider %q embedder not registered; search uses BM25", provider)
+	case r.code == "":
+		return fmt.Sprintf("provider %q not ready, cause not reported; search uses BM25", provider)
+	default:
+		return fmt.Sprintf("provider %q not ready: %s; search uses BM25", provider, r.shortReason())
+	}
 }
 
 func configuredDetail(cs mcppkg.ConfiguredStatus) string {
