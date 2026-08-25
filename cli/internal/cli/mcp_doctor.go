@@ -148,7 +148,7 @@ func buildMCPDoctorReport(ctx context.Context, v *vault.Vault) MCPDoctorReport {
 		OK:     true,
 		Warn:   !aiReady.ready,
 		Detail: aiReadinessDetail(v.Config.AI.Provider, aiReady),
-		Fix:    "run `2nb ai status` (search falls back to BM25 meanwhile)",
+		Fix:    aiReadinessFix(aiReady),
 	})
 
 	// WARN: configured in ~/.claude.json.
@@ -339,6 +339,16 @@ func firstSearchMode(payload string) (string, bool) {
 // cause" from "never probed": a provider named in config but absent from the
 // registry is a different problem than a probe that failed, and the old message
 // collapsed both into one sentence that named neither.
+// aiReadinessFix pairs with aiReadinessDetail. An unregistered embedder is a
+// setup problem, and `ai status` would only repeat what the detail already
+// said, so that branch points at the command that can actually fix it.
+func aiReadinessFix(r providerReadiness) string {
+	if !r.resolved {
+		return "run `2nb ai setup`, or check ai.provider in `2nb config show` (search falls back to BM25 meanwhile)"
+	}
+	return "run `2nb ai status` (search falls back to BM25 meanwhile)"
+}
+
 func aiReadinessDetail(provider string, r providerReadiness) string {
 	switch {
 	case r.ready:

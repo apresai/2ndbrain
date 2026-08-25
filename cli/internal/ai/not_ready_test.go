@@ -44,9 +44,11 @@ func TestReadinessRemediation_DivergesOnAccessDenied(t *testing.T) {
 	}
 }
 
-// The empty-code path is what ollama, openrouter, and llama-local hit today,
-// none of which have credentials to check. Blaming credentials there would be a
-// new false claim on surfaces that never made one.
+// The empty-code path is what ollama, openrouter, and llama-local hit today.
+// The wording it replaced said "check credentials" for all of them, which is a
+// false claim for ollama and llama-local, which have none. openrouter is the
+// exception and is asserted separately below: its probe sends a bearer token,
+// so it keeps a credential hint.
 func TestNotReadyMessage_UnclassifiedNeverBlamesCredentials(t *testing.T) {
 	msg := NotReadyMessage("generation", "ollama", "")
 	if strings.Contains(msg, "credentials") {
@@ -54,6 +56,31 @@ func TestNotReadyMessage_UnclassifiedNeverBlamesCredentials(t *testing.T) {
 	}
 	if !strings.Contains(msg, "did not report a cause") {
 		t.Errorf("expected the honest no-cause wording: %q", msg)
+	}
+
+	// Honest is not the same as useless: the message still says where to look,
+	// per provider, phrased as a check rather than a diagnosis. Losing that was
+	// the first attempt's mistake, since this is derivePortability's ACTION line.
+	for provider, want := range map[string]string{
+		"ollama":      "ollama serve",
+		"openrouter":  "OPENROUTER_API_KEY",
+		"llama-local": "ai engine status",
+	} {
+		got := NotReadyMessage("generation", provider, "")
+		if !strings.Contains(got, want) {
+			t.Errorf("%s should be told where to look (%q): %q", provider, want, got)
+		}
+	}
+
+	// openrouter is the exception worth pinning: its probe DOES send a bearer
+	// token and can fail on a rejected key, so dropping the credential hint
+	// everywhere would have lost real guidance for it.
+	if got := NotReadyMessage("generation", "openrouter", ""); !strings.Contains(got, "OPENROUTER_API_KEY") {
+		t.Errorf("openrouter has a credential worth checking: %q", got)
+	}
+	// ollama does not, so it must not be sent looking for one.
+	if got := NotReadyMessage("generation", "ollama", ""); strings.Contains(got, "credential") {
+		t.Errorf("ollama has no credentials to check: %q", got)
 	}
 
 	// A classified failure still names its cause and carries its code.

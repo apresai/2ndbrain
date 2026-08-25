@@ -27,15 +27,35 @@ import "fmt"
 // failure exactly.
 func NotReadyMessage(kind, provider string, code TestErrorCode) string {
 	if code == "" {
-		// A provider that cannot classify itself: ollama, openrouter, and
-		// llama-local today. This deliberately does NOT say "check credentials",
-		// which is what the CLI paths used to say here. Ollama has no
-		// credentials, and inventing a cause on a surface that never claimed one
-		// is the exact failure this whole mechanism exists to remove.
-		return fmt.Sprintf("%s provider %q is not ready, and it did not report a cause. Run `2nb doctor` for a full check, and `2nb --verbose` to see the underlying error", kind, provider)
+		return fmt.Sprintf("%s provider %q is not ready and did not report a cause. %s",
+			kind, provider, UnclassifiedNextStep(provider))
 	}
 	return fmt.Sprintf("%s provider %q is not ready (%s). %s",
 		kind, provider, code, ReadinessRemediation(code, provider))
+}
+
+// UnclassifiedNextStep is where to look when a provider failed its probe but
+// cannot say why (ollama, openrouter, and llama-local answer a bare bool).
+//
+// It is phrased as a place to CHECK, never as a diagnosis, because no cause was
+// observed. That distinction is the whole point, and it is also why this is not
+// simply RemediationFor's text: that prose asserts a specific failure.
+//
+// The wording it replaced said "check credentials" for every provider. That was
+// wrong for ollama and llama-local, which have none. Note it was NOT wrong for
+// openrouter, whose probe sends a bearer token and can genuinely fail on a
+// rejected key, so dropping the credential hint entirely would have lost real
+// guidance for the one local-ish provider that has a credential.
+func UnclassifiedNextStep(provider string) string {
+	switch provider {
+	case "ollama":
+		return "Check that Ollama is running (`ollama serve`) and that ai.ollama.endpoint is correct."
+	case "openrouter":
+		return "Check OPENROUTER_API_KEY, then `2nb ai status`. Run `2nb --verbose` to see the underlying error."
+	case "llama-local":
+		return "Check the bundled engine with `2nb ai engine status`."
+	}
+	return "Run `2nb doctor` for a full check."
 }
 
 // ReadinessRemediation is RemediationFor with two adjustments for this path.

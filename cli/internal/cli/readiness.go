@@ -83,11 +83,12 @@ func (r providerReadiness) hint(provider string) string {
 		return ""
 	}
 	if r.code == "" {
-		// A provider that cannot classify itself (ollama, openrouter,
-		// llama-local today). Say only what is known. The previous wording named
-		// two providers and let the reader pick, which is right by luck and
-		// blames credentials for a provider that has none.
-		return fmt.Sprintf("Provider %q is not ready, and it did not report a cause. Run `2nb doctor` for a full check.", provider)
+		// A provider that cannot classify itself. This is derivePortability's
+		// ACTION line, whose job is to be actionable, so it still says where to
+		// look; it just no longer asserts a cause nobody observed, and no longer
+		// names two providers and leaves the reader to pick.
+		return fmt.Sprintf("Provider %q is not ready and did not report a cause. %s",
+			provider, ai.UnclassifiedNextStep(provider))
 	}
 	return fmt.Sprintf("Provider %q is not ready (%s). %s", provider, r.code, ai.ReadinessRemediation(r.code, provider))
 }
@@ -100,9 +101,10 @@ func (r providerReadiness) shortReason() string {
 	}
 	if r.code == "" {
 		// Not "credentials missing or region unreachable": that asserted a cause
-		// nobody observed, on the field the macOS app renders as its headline
-		// readiness line.
-		return "not ready, cause not reported"
+		// nobody observed. Phrased to read correctly after the macOS app's
+		// "Not ready: " prefix (HomeView), which is why it does not repeat
+		// "not ready" here.
+		return "cause not reported"
 	}
 	return fmt.Sprintf("%s (%s)", ai.NotReadySummary(r.code), r.code)
 }
