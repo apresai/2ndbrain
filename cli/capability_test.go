@@ -95,12 +95,24 @@ func requireEmbeddingHostHome(t *testing.T) {
 // own tooling authenticate; omitting it would skip a fully working setup.
 // Under the real HOME, the file-based sources count too.
 func hasAnyProviderCredentialSource(hostHome bool) bool {
-	if hasAWSCreds() || hasOpenRouterKey() || os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" {
+	if hasBedrockCredentialEnv() || hasOpenRouterKey() {
 		return true
 	}
-	if !hostHome {
-		return false
-	}
+	// File-based sources exist only where the real home is visible.
+	return hostHome && hasBedrockCredentialFile()
+}
+
+// hasBedrockCredentialEnv covers the environment variables that can carry a
+// Bedrock credential. AWS_BEARER_TOKEN_BEDROCK is the Bedrock API key, which is
+// how the macOS app and most of this project's own tooling authenticate, and it
+// sets none of the variables hasAWSCreds looks at.
+func hasBedrockCredentialEnv() bool {
+	return hasAWSCreds() || os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != ""
+}
+
+// hasBedrockCredentialFile covers the on-disk sources, visible only under the
+// real home: the shared AWS config and 2nb's own machine-local key file.
+func hasBedrockCredentialFile() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
@@ -115,6 +127,15 @@ func hasAnyProviderCredentialSource(hostHome bool) bool {
 		}
 	}
 	return false
+}
+
+// hasBedrockCredentialSource answers "could this host reach Bedrock at all",
+// for tests that run under the real home and must choose a provider. It is
+// deliberately broader than hasAWSCreds, which sees only three env vars: a host
+// with a Bedrock API key or ~/.aws credentials passes the capability gate, and
+// picking a provider on the narrow question would then aim at the wrong one.
+func hasBedrockCredentialSource() bool {
+	return hasBedrockCredentialEnv() || hasBedrockCredentialFile()
 }
 
 // probeEmbedding runs one real embedding call in a throwaway vault and reports

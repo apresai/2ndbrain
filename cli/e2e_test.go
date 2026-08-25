@@ -507,11 +507,15 @@ func TestE2E_ModelsTest(t *testing.T) {
 	requireEmbeddingHostHome(t)
 
 	// Prefer Bedrock (reliable) over free OpenRouter (rate limited).
-	model := ""
-	if hasAWSCreds() {
+	//
+	// The question is "can this host reach Bedrock", which is broader than
+	// hasAWSCreds: a Bedrock API key in AWS_BEARER_TOKEN_BEDROCK, or credentials
+	// in ~/.aws or ~/.config/2nb/bedrock.json, all work and none set
+	// AWS_ACCESS_KEY_ID. Asking the narrow question here would send a
+	// Bedrock-only host past the gate and then straight at the OpenRouter model.
+	model := "google/gemma-4-31b-it:free"
+	if hasBedrockCredentialSource() {
 		model = "amazon.nova-micro-v1:0"
-	} else {
-		model = "google/gemma-4-31b-it:free"
 	}
 
 	out, code := run("models", "test", model)
