@@ -319,6 +319,20 @@ func gatherSuggestions(ctx context.Context, v *vault.Vault, target, sourcePath s
 			}
 		}
 	}
+	// And once more with the target's separators split into spaces. ftsQuery
+	// splits a query on WHITESPACE and quotes each field, so a kebab-case target
+	// like "models-apresai" arrives as a single quoted FTS5 phrase, which is
+	// order-sensitive and can never match a note reading "apresai models". Since
+	// kebab-case is the normal shape of a link target, without this the keyword
+	// tier misses exactly the word-reorder case it exists to catch, and this
+	// command's --help promises it works offline.
+	if words := splitTargetWords(target); words != target && words != searchQuery {
+		if hits, serr := engine.Search(search.Options{Query: words, Limit: poolLimit, BM25Only: true}); serr == nil {
+			for _, h := range hits {
+				add(h.Path, h.Title, h.Score)
+			}
+		}
+	}
 
 	assignConfidence(results, target, uniqueDrift)
 
@@ -434,6 +448,21 @@ const dominantScoreRatio = 1.4
 // with the unique tier-1 drift match pinned to "high" (it is exactly what
 // repair-links would rewrite to, and it may have matched via an alias the
 // title/basename word check cannot see).
+// splitTargetWords replaces a link target's separators with spaces so BM25 sees
+// individual words instead of one phrase. Link targets are kebab-case,
+// snake_case, or path-shaped; FTS5 treats a hyphenated token as an
+// order-sensitive phrase, so "models-apresai" never matches "apresai models"
+// until it is split. Returns the target unchanged when it holds no separator.
+func splitTargetWords(target string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '-', '_', '/':
+			return ' '
+		}
+		return r
+	}, target)
+}
+
 func assignConfidence(results []SuggestLinkResult, target string, uniqueDrift map[string]bool) {
 	// Decode once and strip a trailing .md (loop-invariant), mirroring
 	// polish.RepairIndex.Lookup: a percent-encoded markdown target like

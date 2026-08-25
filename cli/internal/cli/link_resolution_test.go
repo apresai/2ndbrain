@@ -5,8 +5,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/apresai/2ndbrain/internal/vault"
 )
 
 // The link-resolution commands (unlink/relink/suggest-target) are deterministic
@@ -214,22 +212,27 @@ func TestSuggestTarget_DriftKeywordAndEmpty(t *testing.T) {
 		t.Errorf("drift tier should suggest claude-code-skills.md, got %+v", drift)
 	}
 
-	// Keyword tier: a word-reordered target still surfaces the note via BM25
-	// token overlap (apresai/models), which drift-matching misses. The words are
-	// SPACE-separated on purpose: ftsQuery keeps a target in one field and
-	// quoteForFTS quotes it, so a hyphenated "models-apresai" becomes a single
-	// order-sensitive FTS5 phrase that cannot match the note's "apresai models".
-	// That form is the semantic tier's job, asserted in the subtest below.
-	out, err = runCLIArgs(t, root, "suggest-target", "models apresai", "--json", "--porcelain")
-	if err != nil {
-		t.Fatalf("suggest-target keyword: %v\n%s", err, out)
-	}
-	var kw []SuggestLinkResult
-	if err := json.Unmarshal(out, &kw); err != nil {
-		t.Fatalf("unmarshal keyword: %v\n%s", err, out)
-	}
-	if !containsPath(kw, "apresai-models.md") {
-		t.Errorf("keyword tier should suggest apresai-models.md, got %+v", kw)
+	// Keyword tier, in the two shapes a real broken link takes. Both must work
+	// with NO embedder: this is the offline guarantee the command's --help makes.
+	//
+	// The kebab-case form is the one that matters and the one that used to fail:
+	// ftsQuery splits on whitespace and quotes each field, so "models-apresai"
+	// arrived as a single order-sensitive FTS5 phrase and could never match a
+	// note reading "apresai models". Since kebab-case is the normal shape of a
+	// link target, the keyword tier was missing exactly the word-reorder case it
+	// exists to catch. splitTargetWords is what closes that.
+	for _, target := range []string{"models apresai", "models-apresai"} {
+		out, err = runCLIArgs(t, root, "suggest-target", target, "--json", "--porcelain")
+		if err != nil {
+			t.Fatalf("suggest-target keyword %q: %v\n%s", target, err, out)
+		}
+		var kw []SuggestLinkResult
+		if err := json.Unmarshal(out, &kw); err != nil {
+			t.Fatalf("unmarshal keyword %q: %v\n%s", target, err, out)
+		}
+		if !containsPath(kw, "apresai-models.md") {
+			t.Errorf("keyword tier should suggest apresai-models.md for %q, got %+v", target, kw)
+		}
 	}
 
 	// Semantic tier: the hyphenated form only crosses word order through
@@ -238,14 +241,7 @@ func TestSuggestTarget_DriftKeywordAndEmpty(t *testing.T) {
 	// instead of failing (same gate as eval_test.go). A subtest keeps the
 	// credential-free assertions above reported as run.
 	t.Run("semantic tier bridges word order", func(t *testing.T) {
-		rv, err := vault.Open(root)
-		if err != nil {
-			t.Fatalf("open vault: %v", err)
-		}
-		defer rv.Close()
-		if c, _ := rv.DB.EmbeddingCount(); c == 0 {
-			t.Skip("no embeddings after index; semantic tier unavailable")
-		}
+		requireEmbeddings(t, root)
 		out, err := runCLIArgs(t, root, "suggest-target", "models-apresai", "--json", "--porcelain")
 		if err != nil {
 			t.Fatalf("suggest-target semantic: %v\n%s", err, out)
