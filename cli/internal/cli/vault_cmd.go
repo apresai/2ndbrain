@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -287,19 +286,13 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	// Provider reachability probes can each block 100-500ms (Bedrock
 	// STS, Ollama daemon ping). Run them concurrently so the default
 	// `2nb vault` action doesn't pay the sum of both latencies.
-	var embedAvail, genAvail bool
-	var wg sync.WaitGroup
-	if embedder != nil {
-		wg.Add(1)
-		go func() { defer wg.Done(); embedAvail = embedder.Available(ctx) }()
-	}
-	if generator != nil {
-		wg.Add(1)
-		go func() { defer wg.Done(); genAvail = generator.Available(ctx) }()
-	}
-	wg.Wait()
+	var embedReady, genReady providerReadiness
+	resolveReadinessAll(ctx,
+		readinessProbe{embedder, &embedReady},
+		readinessProbe{generator, &genReady},
+	)
 
-	portStatus, portAction := derivePortability(ctx, cfg, embedder, vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded, vault.CheckIndexFreshness(v.DB))
+	portStatus, portAction := derivePortability(cfg, embedder, knownReadiness(embedReady), vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded, vault.CheckIndexFreshness(v.DB))
 
 	status := VaultStatus{
 		Path:                v.Root,
@@ -313,8 +306,8 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 		AIProvider:          cfg.Provider,
 		EmbeddingModel:      cfg.EmbeddingModel,
 		GenerationModel:     cfg.GenerationModel,
-		EmbedAvailable:      embedAvail,
-		GenAvailable:        genAvail,
+		EmbedAvailable:      embedReady.ready,
+		GenAvailable:        genReady.ready,
 		PortabilityStatus:   portStatus,
 		PortabilityAction:   portAction,
 		VaultEmbeddingDim:   vaultDim,

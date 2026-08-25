@@ -122,8 +122,8 @@ func runEvalAnswers(cmd *cobra.Command, args []string) error {
 	if gerr != nil {
 		return fmt.Errorf("generation provider not available: %w", gerr)
 	}
-	if !generator.Available(ctx) {
-		return fmt.Errorf("generation provider %q is not available — check `2nb ai status`", cfg.Provider)
+	if ready, code := ai.Availability(ctx, generator); !ready {
+		return generatorNotReadyError(cfg.Provider, code)
 	}
 
 	// Assemble the jury: explicit --judges, or the active model self-judging.

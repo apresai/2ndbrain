@@ -156,8 +156,8 @@ func runAsk(cmd *cobra.Command, args []string) (err error) {
 	if err != nil {
 		return fmt.Errorf("no generation provider: %w\nRun `2nb ai status` to check provider configuration", err)
 	}
-	if !generator.Available(ctx) {
-		return fmt.Errorf("generation provider %q not available", cfg.Provider)
+	if ready, code := ai.Availability(ctx, generator); !ready {
+		return generatorNotReadyError(cfg.Provider, code)
 	}
 
 	resp, err = askOnce(ctx, v, generator, question, history)
