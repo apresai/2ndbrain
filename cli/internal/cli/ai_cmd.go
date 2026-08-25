@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -161,20 +162,42 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		SimilarityThresholdSource: thresholdSource,
 	}
 
-	// Check provider availability
-	if emb, err := ai.DefaultRegistry.Embedder(cfg.Provider); err == nil {
-		status.EmbedAvailable = emb.Available(ctx)
-	}
-	if gen, err := ai.DefaultRegistry.Generator(cfg.Provider); err == nil {
-		status.GenAvailable = gen.Available(ctx)
-	}
+	// Probe each role ONCE, and concurrently. Once because the verdict is
+	// carried to every place that reports it (see providerReadiness); a status
+	// command used to probe the embedder three times. Concurrently because each
+	// probe can block for seconds on a degraded network and there is no reason
+	// to pay their sum, which is the pattern `vault status` already uses.
 	status.RerankEnabled = cfg.RerankEnabled()
 	if status.RerankEnabled {
 		status.RerankModel = cfg.ResolveRerankModel()
-		if rr, err := ai.DefaultRegistry.Reranker(cfg.Provider); err == nil {
-			status.RerankAvailable = rr.Available(ctx)
-		}
 	}
+	emb, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	gen, genErr := ai.DefaultRegistry.Generator(cfg.Provider)
+	var rr ai.RerankProvider
+	var rrErr error
+	if status.RerankEnabled {
+		rr, rrErr = ai.DefaultRegistry.Reranker(cfg.Provider)
+	}
+
+	var embedReady, genReady, rerankReady providerReadiness
+	var probes sync.WaitGroup
+	if embErr == nil {
+		probes.Add(1)
+		go func() { defer probes.Done(); embedReady = resolveReadiness(ctx, emb) }()
+	}
+	if genErr == nil {
+		probes.Add(1)
+		go func() { defer probes.Done(); genReady = resolveReadiness(ctx, gen) }()
+	}
+	if status.RerankEnabled && rrErr == nil {
+		probes.Add(1)
+		go func() { defer probes.Done(); rerankReady = resolveReadiness(ctx, rr) }()
+	}
+	probes.Wait()
+
+	status.EmbedAvailable = embedReady.ready
+	status.GenAvailable = genReady.ready
+	status.RerankAvailable = rerankReady.ready
 
 	// Count embeddings and documents
 	status.EmbeddingCount, _ = v.DB.EmbeddingCount()
@@ -198,14 +221,13 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	status.VaultEmbeddingDim, _ = v.DB.SampleEmbeddingDim()
 	status.VaultEmbeddingModels, _ = v.DB.DistinctEmbeddingModels()
 
-	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
 	status.PortabilityStatus, status.PortabilityAction = derivePortability(
-		ctx, cfg, embedder,
+		cfg, emb, embedReady,
 		status.VaultEmbeddingDim, status.VaultEmbeddingModels, totalDocs, embeddedDocs, embeddableUnembedded,
 		vault.CheckIndexFreshness(v.DB),
 	)
 
-	status.Providers = collectProviderStatus(ctx, cfg)
+	status.Providers = collectProviderStatus(ctx, cfg, embedReady)
 	status.ModelAccess = summarizeModelAccess(v.Root, cfg.Provider)
 	status.ActiveProviderDisabled = cfg.ProviderDisabled(cfg.Provider)
 
@@ -320,7 +342,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 // returns a status label plus a one-line action hint. The labels are the
 // stable public contract — Swift and automation consumers switch on
 // these strings, so renames are a breaking change.
-func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.EmbeddingProvider, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int, freshness vault.IndexFreshness) (status, action string) {
+func derivePortability(cfg ai.AIConfig, embedder ai.EmbeddingProvider, embed providerReadiness, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int, freshness vault.IndexFreshness) (status, action string) {
 	// Empty notes (no chunk) can never be embedded, so they're excluded from
 	// every decision here and from the counts callers display (the embeddable
 	// total = embeddedDocs+embeddableUnembedded). A vault whose only gap is
@@ -351,8 +373,12 @@ func derivePortability(ctx context.Context, cfg ai.AIConfig, embedder ai.Embeddi
 	if embedder == nil {
 		return "no_provider", fmt.Sprintf("Provider %q is configured but not registered. Run `2nb ai setup` to repair.", cfg.Provider)
 	}
-	if !embedder.Available(ctx) {
-		return "provider_unavailable", fmt.Sprintf("Provider %q is unreachable. If using Ollama, start the daemon; if using Bedrock, check AWS credentials.", cfg.Provider)
+	// The LABEL is the stable contract (config_doctor and the macOS
+	// VaultStatusView both switch on it); only the hint text changes, and it now
+	// names the classified cause instead of listing every provider's likeliest
+	// problem and leaving the user to guess which one applies.
+	if !embed.ready {
+		return "provider_unavailable", embed.hint(cfg.Provider)
 	}
 	providerDim := embedder.Dimensions()
 	if providerDim != vaultDim {
@@ -423,9 +449,13 @@ func runAIEmbed(cmd *cobra.Command, args []string) error {
 // GUI's AI Hub. The reachability probe is cheap — credentials check
 // plus an endpoint ping for Ollama; no request is sent to the Bedrock
 // or OpenRouter APIs here.
-func collectProviderStatus(ctx context.Context, cfg ai.AIConfig) []ProviderStatus {
+// collectProviderStatus reports every provider, not just the active one, so the
+// UI can show "Ollama is running" while Bedrock is active. active carries the
+// ACTIVE provider's already-resolved verdict; a provider that is not the active
+// one has not been probed yet and resolves its own.
+func collectProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness) []ProviderStatus {
 	out := []ProviderStatus{
-		bedrockProviderStatus(ctx, cfg),
+		bedrockProviderStatus(ctx, cfg, active),
 		openrouterProviderStatus(cfg),
 		ollamaProviderStatus(ctx, cfg),
 		llamaProviderStatus(ctx, cfg),
@@ -465,7 +495,7 @@ func llamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 	return s
 }
 
-func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
+func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness) ProviderStatus {
 	resolved := ai.ResolveBedrockConfig(cfg.Bedrock)
 	_, src := ai.ResolveBedrockToken()
 	detail := resolved.Region
@@ -487,13 +517,19 @@ func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus 
 		s.Reason = "region not set (ai.bedrock.region)"
 		return s
 	}
-	// Reachability: the embedder probe covers "creds work + AWS API
-	// reachable" in one cheap call (HeadObject-equivalent under the hood).
+	// Reachability: the embedder probe covers "creds work + AWS API reachable"
+	// in one cheap control-plane call. When bedrock is the ACTIVE provider the
+	// caller already resolved exactly this verdict, so reuse it rather than
+	// probing the same embedder a second time in one command.
+	if cfg.Provider == "bedrock" {
+		s.Reachable = active.ready
+		s.Reason = active.shortReason()
+		return s
+	}
 	if emb, err := ai.DefaultRegistry.Embedder("bedrock"); err == nil {
-		s.Reachable = emb.Available(ctx)
-		if !s.Reachable {
-			s.Reason = "credentials missing or region unreachable"
-		}
+		r := resolveReadiness(ctx, emb)
+		s.Reachable = r.ready
+		s.Reason = r.shortReason()
 	} else {
 		s.Reason = "bedrock not registered (check ai.provider setup)"
 	}

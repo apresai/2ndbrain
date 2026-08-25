@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -34,8 +33,12 @@ func TestDerivePortability(t *testing.T) {
 		// are not mistaken for work the user can fix with `2nb index`.
 		embeddableUnembedded int
 		freshness            vault.IndexFreshness
-		wantStatus           string
-		wantAction           string
+		// embedReady is the resolved availability verdict derivePortability now
+		// receives instead of probing for itself, so a status command probes a
+		// provider once and every surface reports the same answer.
+		embedReady providerReadiness
+		wantStatus string
+		wantAction string
 	}{
 		{
 			name:       "empty_vault",
@@ -60,6 +63,7 @@ func TestDerivePortability(t *testing.T) {
 			wantAction:           "2nb index",
 		},
 		{
+			// A provider that cannot classify itself keeps the original wording.
 			name:         "provider_unreachable",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:     embedderUnavail,
@@ -71,9 +75,26 @@ func TestDerivePortability(t *testing.T) {
 			wantAction:   "unreachable",
 		},
 		{
+			// The point of the change: a classified cause reaches the hint, so a
+			// timeout stops being reported as a credentials problem. The LABEL is
+			// unchanged, because config_doctor and the macOS VaultStatusView both
+			// switch on it.
+			name:         "provider_unavailable_names_the_cause",
+			cfg:          ai.AIConfig{Provider: "bedrock", EmbeddingModel: "nomic-embed-text"},
+			embedder:     embedderUnavail,
+			embedReady:   providerReadiness{ready: false, code: ai.TestErrTimeout},
+			vaultDim:     768,
+			vaultModels:  []string{"nomic-embed-text"},
+			totalDocs:    2,
+			embeddedDocs: 2,
+			wantStatus:   "provider_unavailable",
+			wantAction:   "timed out",
+		},
+		{
 			name:         "dimension_break",
 			cfg:          ai.AIConfig{Provider: "openrouter", EmbeddingModel: "large-model"},
 			embedder:     embedder768,
+			embedReady:   providerReadiness{ready: true},
 			vaultDim:     1024,
 			vaultModels:  []string{"large-model"},
 			totalDocs:    2,
@@ -85,6 +106,7 @@ func TestDerivePortability(t *testing.T) {
 			name:         "mixed_models",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:     embedder768,
+			embedReady:   providerReadiness{ready: true},
 			vaultDim:     768,
 			vaultModels:  []string{"nomic-embed-text", "all-minilm"},
 			totalDocs:    2,
@@ -96,6 +118,7 @@ func TestDerivePortability(t *testing.T) {
 			name:         "model_mismatch_same_dim",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "bge-m3"},
 			embedder:     embedder768,
+			embedReady:   providerReadiness{ready: true},
 			vaultDim:     768,
 			vaultModels:  []string{"nomic-embed-text"},
 			totalDocs:    2,
@@ -107,6 +130,7 @@ func TestDerivePortability(t *testing.T) {
 			name:                 "stale_partial_embed",
 			cfg:                  ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:             embedder768,
+			embedReady:           providerReadiness{ready: true},
 			vaultDim:             768,
 			vaultModels:          []string{"nomic-embed-text"},
 			totalDocs:            5,
@@ -123,6 +147,7 @@ func TestDerivePortability(t *testing.T) {
 			name:                 "ok_with_skipped_empty_notes",
 			cfg:                  ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:             embedder768,
+			embedReady:           providerReadiness{ready: true},
 			vaultDim:             768,
 			vaultModels:          []string{"nomic-embed-text"},
 			totalDocs:            117,
@@ -137,6 +162,7 @@ func TestDerivePortability(t *testing.T) {
 			name:                 "stale_counts_only_embeddable",
 			cfg:                  ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:             embedder768,
+			embedReady:           providerReadiness{ready: true},
 			vaultDim:             768,
 			vaultModels:          []string{"nomic-embed-text"},
 			totalDocs:            10,
@@ -152,6 +178,7 @@ func TestDerivePortability(t *testing.T) {
 			name:                 "all_empty_notes",
 			cfg:                  ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:             embedder768,
+			embedReady:           providerReadiness{ready: true},
 			vaultDim:             768,
 			totalDocs:            2,
 			embeddedDocs:         0,
@@ -179,6 +206,7 @@ func TestDerivePortability(t *testing.T) {
 			name:         "ok_happy_path",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:     embedder768,
+			embedReady:   providerReadiness{ready: true},
 			vaultDim:     768,
 			vaultModels:  []string{"nomic-embed-text"},
 			totalDocs:    2,
@@ -192,6 +220,7 @@ func TestDerivePortability(t *testing.T) {
 			name:         "upgrade_reembed_recommended",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:     embedder768,
+			embedReady:   providerReadiness{ready: true},
 			vaultDim:     768,
 			vaultModels:  []string{"nomic-embed-text"},
 			totalDocs:    2,
@@ -206,6 +235,7 @@ func TestDerivePortability(t *testing.T) {
 			name:         "upgrade_reindex_recommended",
 			cfg:          ai.AIConfig{Provider: "ollama", EmbeddingModel: "nomic-embed-text"},
 			embedder:     embedder768,
+			embedReady:   providerReadiness{ready: true},
 			vaultDim:     768,
 			vaultModels:  []string{"nomic-embed-text"},
 			totalDocs:    2,
@@ -245,7 +275,7 @@ func TestDerivePortability(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotStatus, gotAction := derivePortability(context.Background(), tt.cfg, tt.embedder, tt.vaultDim, tt.vaultModels, tt.totalDocs, tt.embeddedDocs, tt.embeddableUnembedded, tt.freshness)
+			gotStatus, gotAction := derivePortability(tt.cfg, tt.embedder, tt.embedReady, tt.vaultDim, tt.vaultModels, tt.totalDocs, tt.embeddedDocs, tt.embeddableUnembedded, tt.freshness)
 			if gotStatus != tt.wantStatus {
 				t.Errorf("status = %q, want %q", gotStatus, tt.wantStatus)
 			}

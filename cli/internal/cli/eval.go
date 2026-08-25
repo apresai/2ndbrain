@@ -282,8 +282,8 @@ func ensureQASet(ctx context.Context, cmd *cobra.Command, v *vault.Vault) (ai.Em
 	if eerr != nil {
 		return nil, nil, false, fmt.Errorf("embedding provider not available: %w", eerr)
 	}
-	if !embedder.Available(ctx) {
-		return nil, nil, false, fmt.Errorf("embedding provider %q is not available — check `2nb ai status`", cfg.Provider)
+	if ready, code := ai.Availability(ctx, embedder); !ready {
+		return nil, nil, false, embedderNotReadyError(cfg.Provider, code)
 	}
 
 	if evalN < 1 {
@@ -315,8 +315,8 @@ func ensureQASet(ctx context.Context, cmd *cobra.Command, v *vault.Vault) (ai.Em
 		if gerr != nil {
 			return nil, nil, false, fmt.Errorf("a generation provider is required to build the QA set: %w", gerr)
 		}
-		if !generator.Available(ctx) {
-			return nil, nil, false, fmt.Errorf("generation provider %q is not available — check `2nb ai status`", cfg.Provider)
+		if ready, code := ai.Availability(ctx, generator); !ready {
+			return nil, nil, false, generatorNotReadyError(cfg.Provider, code)
 		}
 		// Cost preview + confirm (the cap aborts identically interactive or piped).
 		if err := evalConfirmCost(ctx, cmd, cfg, v.Root, evalN); err != nil {

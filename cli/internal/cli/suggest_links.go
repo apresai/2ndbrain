@@ -96,8 +96,8 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("no embedding provider: %w\nRun `2nb ai status` to check provider configuration", err)
 	}
-	if !embedder.Available(ctx) {
-		return fmt.Errorf("embedding provider %q not available", cfg.Provider)
+	if ready, code := ai.Availability(ctx, embedder); !ready {
+		return embedderNotReadyError(cfg.Provider, code)
 	}
 
 	// Truncate body to the same window used by `ask.go`

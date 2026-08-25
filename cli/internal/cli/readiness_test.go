@@ -13,7 +13,7 @@ import (
 //
 // These are pure formatting assertions over a TestErrorCode. No provider, real
 // or stubbed, is involved: the caller probes and this only renders the answer.
-func TestEmbedderNotReadyError_NamesTheRealCause(t *testing.T) {
+func TestProviderNotReadyError_NamesTheRealCause(t *testing.T) {
 	t.Run("timeout never says check credentials", func(t *testing.T) {
 		msg := embedderNotReadyError("bedrock", ai.TestErrTimeout).Error()
 		if strings.Contains(msg, "check credentials") {
@@ -74,6 +74,60 @@ func TestEmbedderNotReadyError_NamesTheRealCause(t *testing.T) {
 		msg := embedderNotReadyError("ollama", "").Error()
 		if !strings.Contains(msg, "(check credentials)") {
 			t.Errorf("expected the unchanged fallback wording: %q", msg)
+		}
+	})
+
+	// The role is named so the message says which thing the user was doing.
+	// `ask` failing to generate and `index` failing to embed are different
+	// problems and used to produce interchangeable text.
+	t.Run("the role is named", func(t *testing.T) {
+		emb := embedderNotReadyError("bedrock", ai.TestErrTimeout).Error()
+		gen := generatorNotReadyError("bedrock", ai.TestErrTimeout).Error()
+		if !strings.HasPrefix(emb, "embedding provider") {
+			t.Errorf("expected the embedding role named: %q", emb)
+		}
+		if !strings.HasPrefix(gen, "generation provider") {
+			t.Errorf("expected the generation role named: %q", gen)
+		}
+	})
+}
+
+// providerReadiness renders for two different surfaces: a full sentence with a
+// remedy for the portability hint, and a compact clause for the per-provider
+// `reason` field, which already sits next to the provider's name.
+func TestProviderReadiness_Rendering(t *testing.T) {
+	t.Run("a ready provider explains nothing", func(t *testing.T) {
+		r := providerReadiness{ready: true}
+		if r.hint("bedrock") != "" || r.shortReason() != "" {
+			t.Errorf("a ready provider must render empty, got hint=%q reason=%q", r.hint("bedrock"), r.shortReason())
+		}
+	})
+
+	t.Run("a classified failure names the cause on both surfaces", func(t *testing.T) {
+		r := providerReadiness{ready: false, code: ai.TestErrTimeout}
+		hint := r.hint("bedrock")
+		if !strings.Contains(hint, string(ai.TestErrTimeout)) || strings.Contains(hint, "If using Ollama") {
+			t.Errorf("hint should name the cause, not list every provider's likeliest problem: %q", hint)
+		}
+		reason := r.shortReason()
+		if !strings.Contains(reason, string(ai.TestErrTimeout)) {
+			t.Errorf("reason should carry the code: %q", reason)
+		}
+		// The compact form does not repeat the provider name; the UI shows it.
+		if strings.Contains(reason, "bedrock") {
+			t.Errorf("reason should not repeat the provider name: %q", reason)
+		}
+	})
+
+	// A provider that cannot classify itself (openrouter, ollama, llama-local
+	// today) must not regress: it keeps exactly the text it had before.
+	t.Run("an unclassifiable failure keeps the old wording", func(t *testing.T) {
+		r := providerReadiness{ready: false}
+		if !strings.Contains(r.hint("ollama"), "If using Ollama, start the daemon") {
+			t.Errorf("expected the unchanged fallback hint: %q", r.hint("ollama"))
+		}
+		if r.shortReason() != "credentials missing or region unreachable" {
+			t.Errorf("expected the unchanged fallback reason: %q", r.shortReason())
 		}
 	})
 }

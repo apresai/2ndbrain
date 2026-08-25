@@ -53,8 +53,8 @@ func runChat(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("no generation provider: %w\nRun `2nb ai status` to check provider configuration", err)
 	}
-	if !generator.Available(ctx) {
-		return fmt.Errorf("generation provider %q not available", cfg.Provider)
+	if ready, code := ai.Availability(ctx, generator); !ready {
+		return generatorNotReadyError(cfg.Provider, code)
 	}
 
 	fmt.Fprintf(os.Stderr, "2ndbrain chat: vault %q. Answers cite source notes. Type 'exit' or Ctrl-D to quit.\n", v.Config.Name)

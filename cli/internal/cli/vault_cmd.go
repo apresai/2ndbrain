@@ -287,19 +287,20 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	// Provider reachability probes can each block 100-500ms (Bedrock
 	// STS, Ollama daemon ping). Run them concurrently so the default
 	// `2nb vault` action doesn't pay the sum of both latencies.
-	var embedAvail, genAvail bool
+	var embedReady, genReady providerReadiness
 	var wg sync.WaitGroup
 	if embedder != nil {
 		wg.Add(1)
-		go func() { defer wg.Done(); embedAvail = embedder.Available(ctx) }()
+		go func() { defer wg.Done(); embedReady = resolveReadiness(ctx, embedder) }()
 	}
 	if generator != nil {
 		wg.Add(1)
-		go func() { defer wg.Done(); genAvail = generator.Available(ctx) }()
+		go func() { defer wg.Done(); genReady = resolveReadiness(ctx, generator) }()
 	}
 	wg.Wait()
+	embedAvail, genAvail := embedReady.ready, genReady.ready
 
-	portStatus, portAction := derivePortability(ctx, cfg, embedder, vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded, vault.CheckIndexFreshness(v.DB))
+	portStatus, portAction := derivePortability(cfg, embedder, embedReady, vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded, vault.CheckIndexFreshness(v.DB))
 
 	status := VaultStatus{
 		Path:                v.Root,
