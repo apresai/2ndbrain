@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Added
+- The Go test suite now runs on every pull request (`.github/workflows/ci.yml`, macOS, `go vet` + `make -C cli test`) with no credentials in the environment. It previously ran nowhere but a maintainer's laptop at release time, which is why a transient provider blip was indistinguishable from a product failure
+
+### Fixed
+- `2nb index --force-reembed` (and `ai embed-probe`) now report **why** an embedding provider is not ready instead of blaming credentials for everything. The old message was `is not ready (check credentials)` for every cause, so a five-second network blip sent users off to re-authenticate; a timeout now reads `is not ready: the readiness probe timed out (timeout).` followed by the same remediation `models test` and the macOS app show for that code
+- A transient Bedrock readiness failure (timeout, unreachable, throttled) is no longer cached, so one network blip stops pinning the provider at "unavailable" for the rest of the cache window; definitive failures (bad credentials, access denied) are still cached, and a cached failure now remembers its cause instead of degrading to the generic message on the second question
+- Missing AWS credentials are classified as `bad_credentials` rather than `timeout`. The SDK's fallback to EC2 instance metadata is unreachable off EC2 and fails with a wrapped deadline error, which the deadline check saw first
+- Tests that need an AI provider now skip on whether an embedding actually lands, not on whether an environment variable happens to be set. A configured-but-unusable provider made 11 tests fail where they should have skipped. Two of them also asserted contracts the code cannot satisfy: `--force-reembed` was documented as running without a provider (it refuses), and the hybrid-degradation test switched providers to force a dimension mismatch that never occurred (both are 1024 dims)
 
 ## [0.20.0] - 2026-08-24
 

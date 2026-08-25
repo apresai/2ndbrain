@@ -1,0 +1,71 @@
+# Go test signal on every PR.
+#
+# Until this existed, the Go suite ran nowhere but the maintainer's laptop at
+# release time, against live credentials and a live network. That is why a
+# transient provider blip was indistinguishable from a product failure: there
+# was no credential-free baseline to compare against.
+#
+# The job is deliberately credential-free: nothing below passes a repository
+# secret into the environment, so tests that need a provider SKIP rather than
+# fail, and any test that starts depending on ambient credentials fails here
+# first. Keep it that way; granting this job credentials would retire the only
+# baseline that separates a provider blip from a real regression.
+#
+# macos-latest, not ubuntu, for three reasons: standard macOS runners are free
+# and unlimited on public repos; it matches release.yml, so a green PR check
+# actually predicts a green release-time `make test`; and the battery's Obsidian
+# helpers write ~/Library/Application Support/obsidian/ while the CLI reads
+# ~/.config/obsidian/ on Linux, which would kill the suite at `vault create`.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-test:
+    name: go test (credential-free)
+    runs-on: macos-latest
+    timeout-minutes: 25
+
+    env:
+      # Without credentials the AWS SDK falls through to the EC2 instance
+      # metadata service, which is unreachable off EC2 and burns its full
+      # timeout on every probe. Disabling it turns a 10s hang into a 3ms
+      # bad_credentials, which is both the honest answer and the fast one.
+      AWS_EC2_METADATA_DISABLED: "true"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # Mirrors release.yml: read the version from cli/go.mod so this can't
+          # drift from what the module requires.
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: go vet
+        working-directory: cli
+        run: go vet ./...
+
+      # `make -C cli test` rather than the root `make test`: the root target
+      # also runs the doc gates, which the blocking docs-currency workflow
+      # already covers.
+      #
+      # 2NB_BEDROCK_SKIP_KEYCHAIN (the runner has no unlocked Keychain to read)
+      # is set with `env` rather than in the job's `env:` block because its name
+      # starts with a digit, which is not a valid shell identifier and so cannot
+      # be a `VAR=1 cmd` prefix. `env` takes the name verbatim.
+      - name: go test
+        run: env 2NB_BEDROCK_SKIP_KEYCHAIN=1 make -C cli test

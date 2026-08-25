@@ -580,6 +580,8 @@ make test-all       # Go + battery + Swift + GUI
 
 Requires Go 1.26+ (the CLI is pure-Go, no CGO); macOS 14+ for the Swift app.
 
+The Go suite runs on every pull request (`.github/workflows/ci.yml`) with **no credentials**: tests that need an AI provider skip themselves when one is not reachable, so a green run proves the code, not the maintainer's AWS account. Running `make test` locally with credentials configured simply runs more of it.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Releasing

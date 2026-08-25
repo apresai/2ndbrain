@@ -55,6 +55,24 @@ The remediation is **mantle-aware**: because mantle models are invisible to the 
 
 The client is `cli/internal/ai/bedrock_mantle.go` (`BedrockMantleGenerator`, strategy `bedrock_mantle_responses`); `NewBedrockGeneration` dispatches to it by strategy, and a smoke probe sends `reasoning.effort: none` so default-on reasoning does not starve the answer. The resolved endpoint host is constrained to `https` plus `*.api.aws` so a poisoned vault-scoped `models.yaml` cannot exfiltrate the bearer token. Generation-only for now (no mantle embeddings or rerank).
 
+## Provider readiness: what "not ready" reports, and what gets cached
+
+`Available(ctx) bool` answers only yes or no, and it is implemented on ~12 types across three interfaces, so it was never widened. Instead the three Bedrock providers (embedder, generator, reranker) implement the optional `ai.AvailabilityReporter`:
+
+```go
+type AvailabilityReporter interface {
+	AvailableDetail(ctx context.Context) (bool, TestErrorCode)
+}
+```
+
+`Available()` is a thin wrapper over it, so no call site changed. The shared `bedrockAvailableProbe` (a free control-plane `ListFoundationModels`, 5s) now returns its error instead of swallowing it at `slog.Debug`, and `ClassifyProbeError` turns that into the same `TestErrorCode` vocabulary `models test` and the macOS app already use.
+
+**Why it matters:** `2nb index --force-reembed` refuses to run against an unready provider, and the message it printed was `is not ready (check credentials)` for **every** cause. A five-second network blip therefore accused the user's credentials. `embedderNotReadyError` (`cli/internal/cli/embed_ready.go`) now names the cause and reuses `ai.RemediationFor`, so a timeout reads `is not ready: the readiness probe timed out (timeout). …` and only a genuine auth failure mentions credentials. A provider that does not implement the interface keeps the original wording.
+
+**Caching rule** (`cacheProbeFailure`): a *definitive* failure (`bad_credentials`, `access_denied`, `not_found`, `incompatible`, `invalid_request`, `unknown`) is cached for the 30s TTL, because it will still be false a second from now. A *transient* one (`timeout`, `provider_unreachable`, `throttled`) is not cached at all, because caching it turns one blip into a TTL-long outage for every caller. `unknown` is cached deliberately: it preserves the amortization the cache exists for, and a genuine transient landing there is a missing rule in `ClassifyProbeError`, which is where it should be fixed.
+
+Missing credentials is the case that ties the two together. With no credentials the AWS SDK falls through to the EC2 instance metadata service, which is unreachable off EC2 and returns an error *wrapping* `context.DeadlineExceeded`. `ClassifyProbeError` therefore checks for credential-resolution failures **before** the deadline branch; otherwise every credential-free caller would classify as `timeout`, refuse to cache it, and re-probe at the full 5s timeout on every single call. Setting `AWS_EC2_METADATA_DISABLED=true` (as CI does) turns that path into a 3ms `bad_credentials`.
+
 ## Opt-in providers: Ollama and OpenRouter
 
 **Ollama (local) and OpenRouter are opt-in**: both ship `disabled: true` in a fresh vault's `config.yaml`, so selection UIs show only Bedrock until the user enables them. `2nb ai setup` (a Bedrock-first wizard that detects AWS creds, confirms region, verifies models, and reminds you to enable Bedrock model access in the AWS console), the macOS AI Hub, or activating the provider with `2nb config set ai.provider <name>` clears the `disabled` flag. `Disabled` only hides a provider's models from dropdowns; an explicitly-chosen active provider still runs.
