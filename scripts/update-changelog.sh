@@ -70,8 +70,8 @@ fi
 # curated [Unreleased] entries exist. It must never run alongside curated
 # entries, because both describe the same commits and the entry then says
 # everything twice under duplicate headings (that is what shipped in 0.20.0).
-# A changes file and curated entries are ADDITIVE — both are human-authored, so
-# both land: the file supplies the body here and the curated text is folded in
+# A changes file and curated entries are ADDITIVE, both being human-authored,
+# so both land. The file supplies the body here; the curated text is folded in
 # at the insertion step below.
 if [ -n "$CHANGES_FILE" ] && [ ! -f "$CHANGES_FILE" ]; then
     # Asked for a changes file that is not there. Silently falling back would

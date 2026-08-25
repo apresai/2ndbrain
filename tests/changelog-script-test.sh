@@ -24,7 +24,7 @@ pass=$((pass+1))
 
 # make_repo <dir> <unreleased-body>
 # A throwaway repo with one commit, a v0.1.0 tag, and a CHANGELOG whose second
-# "## [" heading is [0.1.0] — the shape update-changelog.sh reads PREV_VERSION
+# "## [" heading is [0.1.0], the shape update-changelog.sh reads PREV_VERSION
 # from, so the summarizer branch is reachable unless the script chooses not to.
 make_repo() {
   local dir="$1" unreleased="$2"
@@ -88,7 +88,7 @@ pass=$((pass+1))
 [ "$(grep -c 'a hand-written entry that must survive' "$out")" -eq 1 ] \
   || fail "curated bullet appears more than once"
 pass=$((pass+1))
-# One release entry, one "### Fixed" heading inside it — the 0.20.0 defect was
+# One release entry, one "### Fixed" heading inside it. The 0.20.0 defect was
 # two heading sets in a single entry.
 entry=$(sed -n '/## \[0\.2\.0\]/,/## \[0\.1\.0\]/p' "$out")
 [ "$(printf '%s\n' "$entry" | grep -c '^### Fixed')" -eq 1 ] \
