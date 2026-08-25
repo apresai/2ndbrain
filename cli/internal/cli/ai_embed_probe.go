@@ -78,8 +78,8 @@ func runAIEmbedProbe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("no embedding provider: %w", err)
 	}
-	if !embedder.Available(ctx) {
-		return embedderNotReadyError(ctx, cfg.Provider, embedder)
+	if ready, code := ai.Availability(ctx, embedder); !ready {
+		return embedderNotReadyError(cfg.Provider, code)
 	}
 
 	levels, err := parseProbeLevels(probeLevelsFlag)

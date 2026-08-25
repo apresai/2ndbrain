@@ -25,20 +25,19 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
-// bedrockAvailableProbe runs the control-plane ListFoundationModels call.
-// This is free, doesn't consume embedding/generation tokens, and exercises
-// both credentials and Bedrock enablement in the configured region. Used
-// by BedrockEmbedder.Available and BedrockGenerator.Available.
-//
-// The probe verifies the provider is reachable and credentials are valid,
-// but NOT that the user's configured model is callable — a typo'd model ID
-// still lets Available() return true and fails at first real Embed/Generate.
-// For full per-model validation, use `2nb models test`.
 // bedrockAvailableProbe reports whether Bedrock is reachable with the resolved
-// credentials, returning the failure so callers can classify it. The error is
-// what lets a caller tell "your credentials are wrong" from "the network
-// blipped": both used to surface as a bare false, and the CLI then told the
-// user to check credentials for what was actually a five-second timeout.
+// credentials, via the control-plane ListFoundationModels call. It is free,
+// consumes no embedding or generation tokens, and exercises both credentials
+// and Bedrock enablement in the configured region.
+//
+// It does NOT prove the configured model is callable: a typo'd model ID still
+// leaves this true and fails at the first real Embed/Generate. For per-model
+// validation, use `2nb models test`.
+//
+// It returns the failure rather than swallowing it, which is what lets a caller
+// tell "your credentials are wrong" from "the network blipped". Both used to
+// surface as a bare false, and the CLI then told the user to check credentials
+// for what was actually a five-second timeout.
 func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) (bool, error) {
 	if ctrl == nil {
 		return false, errors.New("bedrock control-plane client not configured")
@@ -52,41 +51,16 @@ func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) (bool, err
 	return true, nil
 }
 
-// cacheProbeFailure reports whether a probe failure is worth remembering for
-// the cache TTL. A DEFINITIVE failure (bad credentials, access denied, a model
-// that does not exist) will still be false a second from now, so caching it
-// saves a pointless round trip. A TRANSIENT one (timeout, unreachable,
-// throttled) says nothing about the next call, and caching it turns one network
-// blip into a TTL-long outage for every caller.
-//
-// TestErrUnknown is treated as definitive on purpose: it preserves the
-// amortization the cache exists for, and a genuine transient landing there is a
-// missing rule in ClassifyProbeError, which is where it should be fixed (and
-// where probe_error_test.go already guards the surface).
-func cacheProbeFailure(code TestErrorCode) bool {
-	switch code {
-	case TestErrTimeout, TestErrProviderUnreachable, TestErrThrottled:
-		return false
-	default:
-		return true
+// bedrockAvailability is the whole AvailableDetail contract for a Bedrock
+// provider: consult the cache, probe on a miss, fold the result back in. The
+// three providers share it so the cache rule cannot drift between them; before,
+// only the probe was shared and each provider re-implemented the cache check.
+func bedrockAvailability(ctx context.Context, avail *availableCache, ctrl *bedrock.Client) (bool, TestErrorCode) {
+	if v, code, hit := avail.getWithCode(); hit {
+		return v, code
 	}
-}
-
-// availabilityFromProbe folds a probe result into the (ok, code) pair the
-// AvailabilityReporter contract returns, caching only what is worth caching.
-func availabilityFromProbe(avail *availableCache, ok bool, err error) (bool, TestErrorCode) {
-	if ok {
-		avail.setWithCode(true, "")
-		return true, ""
-	}
-	code := ClassifyProbeError("bedrock", err)
-	if cacheProbeFailure(code) {
-		// Cache the CODE alongside the false: a caller that first asks
-		// Available() and then asks why gets a cache hit, and without the code
-		// that second question could only be answered vaguely.
-		avail.setWithCode(false, code)
-	}
-	return false, code
+	ok, err := bedrockAvailableProbe(ctx, ctrl)
+	return availabilityFromProbe("bedrock", avail, ok, err)
 }
 
 // bedrockBearerTokenEnv is the environment variable the AWS SDK reads for the
@@ -210,11 +184,7 @@ func (b *BedrockEmbedder) Available(ctx context.Context) bool {
 // AvailableDetail satisfies AvailabilityReporter: same probe as Available, but
 // it also reports WHY an unavailable provider is unavailable.
 func (b *BedrockEmbedder) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
-	if v, code, hit := b.avail.getWithCode(); hit {
-		return v, code
-	}
-	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
-	return availabilityFromProbe(&b.avail, ok, err)
+	return bedrockAvailability(ctx, &b.avail, b.ctrl)
 }
 
 // ── Embedding request/response structs ────────────────────────────────────
@@ -753,11 +723,7 @@ func (b *BedrockGenerator) Available(ctx context.Context) bool {
 
 // AvailableDetail satisfies AvailabilityReporter (see BedrockEmbedder).
 func (b *BedrockGenerator) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
-	if v, code, hit := b.avail.getWithCode(); hit {
-		return v, code
-	}
-	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
-	return availabilityFromProbe(&b.avail, ok, err)
+	return bedrockAvailability(ctx, &b.avail, b.ctrl)
 }
 
 // Generate satisfies GenerationProvider; it delegates to GenerateWithUsage and

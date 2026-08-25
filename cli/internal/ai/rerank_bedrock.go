@@ -73,15 +73,11 @@ func (b *BedrockReranker) Available(ctx context.Context) bool {
 }
 
 // AvailableDetail satisfies AvailabilityReporter (see BedrockEmbedder). It goes
-// through the shared bedrockAvailableProbe rather than its own inlined
+// through shared bedrockAvailability rather than its own inlined
 // ListFoundationModels call, so the timeout, the classification, and the
-// transient-caching rule cannot drift between the three Bedrock providers.
+// caching rule cannot drift between the three Bedrock providers.
 func (b *BedrockReranker) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
-	if v, code, hit := b.avail.getWithCode(); hit {
-		return v, code
-	}
-	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
-	return availabilityFromProbe(&b.avail, ok, err)
+	return bedrockAvailability(ctx, &b.avail, b.ctrl)
 }
 
 // modelARN builds the region-scoped foundation-model ARN the Rerank API
