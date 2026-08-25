@@ -68,13 +68,16 @@ func (b *BedrockReranker) Name() string { return "bedrock" }
 // Available uses the same cached control-plane probe the embedder uses: it
 // confirms credentials + region reachability (not the specific model).
 func (b *BedrockReranker) Available(ctx context.Context) bool {
-	if v, hit := b.avail.get(); hit {
-		return v
-	}
-	_, err := b.ctrl.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{})
-	ok := err == nil
-	b.avail.set(ok)
+	ok, _ := b.AvailableDetail(ctx)
 	return ok
+}
+
+// AvailableDetail satisfies AvailabilityReporter (see BedrockEmbedder). It goes
+// through shared bedrockAvailability rather than its own inlined
+// ListFoundationModels call, so the timeout, the classification, and the
+// caching rule cannot drift between the three Bedrock providers.
+func (b *BedrockReranker) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
+	return bedrockAvailability(ctx, &b.avail, b.ctrl)
 }
 
 // modelARN builds the region-scoped foundation-model ARN the Rerank API

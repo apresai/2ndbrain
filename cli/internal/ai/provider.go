@@ -110,6 +110,43 @@ type UsageGenerator interface {
 	GenerateWithUsage(ctx context.Context, prompt string, opts GenOpts) (string, GenUsage, error)
 }
 
+// AvailabilityReporter is an OPTIONAL interface a provider may implement
+// alongside Available: it answers the same question and additionally reports
+// WHY an unavailable provider is unavailable, as a TestErrorCode.
+//
+// It exists as an optional interface rather than a wider Available signature
+// because Available appears in three provider interfaces with a dozen
+// implementations and roughly fifty call sites, nearly all of which only want
+// the bool. A caller that needs the reason type-asserts for this and falls back
+// to the plain bool when a provider does not implement it.
+//
+// The reason matters where 2nb reports a readiness failure to a user: a
+// timeout and a rejected credential are the same false, and telling someone to
+// "check credentials" when their network blipped sends them to fix the wrong
+// thing.
+type AvailabilityReporter interface {
+	AvailableDetail(ctx context.Context) (bool, TestErrorCode)
+}
+
+// Availability asks a provider whether it is ready, and why not when it can
+// say. It is the one place the optional-interface fallback lives, so callers
+// ask ONCE and carry the answer, instead of testing Available() and then
+// re-probing to find out what went wrong. That second probe is a live network
+// round trip on an error path, and it can disagree with the first.
+//
+// The code is "" for a ready provider and for one that cannot explain itself.
+func Availability(ctx context.Context, p any) (bool, TestErrorCode) {
+	if r, ok := p.(AvailabilityReporter); ok {
+		return r.AvailableDetail(ctx)
+	}
+	if a, ok := p.(interface {
+		Available(context.Context) bool
+	}); ok {
+		return a.Available(ctx), ""
+	}
+	return false, ""
+}
+
 // Ptr returns a pointer to v. Use for optional GenOpts fields like Temperature.
 func Ptr[T any](v T) *T { return &v }
 

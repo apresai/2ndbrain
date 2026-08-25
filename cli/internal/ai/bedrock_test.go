@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,22 @@ import (
 	"github.com/aws/smithy-go"
 )
 
+// bedrockUsable is the once-per-binary verdict on whether Bedrock can actually
+// be reached with the credentials this process resolved.
+var (
+	bedrockUsableOnce   sync.Once
+	bedrockUsable       bool
+	bedrockUsableReason string
+)
+
+// requireBedrock returns a live embedder and generator, skipping when Bedrock
+// is not actually usable.
+//
+// The constructors are NOT a usability check: awsconfig.LoadDefaultConfig
+// resolves credentials lazily, so NewBedrockEmbedder succeeds even with no
+// credentials at all and every test below then FAILS on the first real call.
+// That is why a credential-free run reported nine failures rather than nine
+// skips. Probe once, for real, and skip on the answer.
 func requireBedrock(t *testing.T) (*BedrockEmbedder, *BedrockGenerator) {
 	t.Helper()
 	ctx := context.Background()
@@ -20,12 +37,26 @@ func requireBedrock(t *testing.T) (*BedrockEmbedder, *BedrockGenerator) {
 
 	embedder, err := NewBedrockEmbedder(ctx, cfg, "amazon.nova-2-multimodal-embeddings-v1:0", 1024)
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock embedder unavailable: %v", err)
 	}
 
 	gen, err := NewBedrockGenerator(ctx, cfg, "us.anthropic.claude-haiku-4-5-20251001-v1:0")
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock generator unavailable: %v", err)
+	}
+
+	bedrockUsableOnce.Do(func() {
+		ok, code := embedder.AvailableDetail(ctx)
+		bedrockUsable = ok
+		if !ok {
+			bedrockUsableReason = string(code)
+			if bedrockUsableReason == "" {
+				bedrockUsableReason = "unavailable"
+			}
+		}
+	})
+	if !bedrockUsable {
+		t.Skipf("bedrock not usable: %s", bedrockUsableReason)
 	}
 
 	return embedder, gen
@@ -89,9 +120,16 @@ func TestBedrockGenerateNovaMicro(t *testing.T) {
 	ctx := context.Background()
 	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
 
+	// Gate on the shared capability verdict: the constructor alone never fails
+	// without credentials (they resolve lazily), so this test would otherwise
+	// fail rather than skip on a credential-free run. The gate probes the
+	// control plane, so it covers "no usable credentials", NOT this specific
+	// model's entitlement.
+	requireBedrock(t)
+
 	gen, err := NewBedrockGenerator(ctx, cfg, "amazon.nova-micro-v1:0")
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock generator unavailable: %v", err)
 	}
 
 	resp, err := gen.Generate(ctx, "What is 2+2? Reply with just the number.", GenOpts{
@@ -466,9 +504,16 @@ func TestBedrockEmbedTitanV2(t *testing.T) {
 	ctx := context.Background()
 	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
 
+	// Gate on the shared capability verdict: the constructor alone never fails
+	// without credentials (they resolve lazily), so this test would otherwise
+	// fail rather than skip on a credential-free run. The gate probes the
+	// control plane, so it covers "no usable credentials", NOT this specific
+	// model's entitlement.
+	requireBedrock(t)
+
 	embedder, err := NewBedrockEmbedder(ctx, cfg, "amazon.titan-embed-text-v2:0", 1024)
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock embedder unavailable: %v", err)
 	}
 
 	vecs, err := embedder.Embed(ctx, []string{
@@ -501,9 +546,16 @@ func TestBedrockEmbedCohereEnglish(t *testing.T) {
 	ctx := context.Background()
 	cfg := BedrockConfig{Profile: "default", Region: "us-east-1"}
 
+	// Gate on the shared capability verdict: the constructor alone never fails
+	// without credentials (they resolve lazily), so this test would otherwise
+	// fail rather than skip on a credential-free run. The gate probes the
+	// control plane, so it covers "no usable credentials", NOT this specific
+	// model's entitlement.
+	requireBedrock(t)
+
 	embedder, err := NewBedrockEmbedder(ctx, cfg, "cohere.embed-english-v3", 1024)
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock embedder unavailable: %v", err)
 	}
 
 	// Test batching with more texts than a single call would handle.
@@ -531,7 +583,7 @@ func TestListBedrockVendorModelsInferenceProfiles(t *testing.T) {
 
 	models, err := ListBedrockVendorModels(ctx, cfg)
 	if err != nil {
-		t.Skipf("AWS credentials not configured: %v", err)
+		t.Skipf("bedrock embedder unavailable: %v", err)
 	}
 	if len(models) == 0 {
 		t.Fatal("no models returned")

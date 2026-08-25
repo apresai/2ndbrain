@@ -25,26 +25,42 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
-// bedrockAvailableProbe runs the control-plane ListFoundationModels call.
-// This is free, doesn't consume embedding/generation tokens, and exercises
-// both credentials and Bedrock enablement in the configured region. Used
-// by BedrockEmbedder.Available and BedrockGenerator.Available.
+// bedrockAvailableProbe reports whether Bedrock is reachable with the resolved
+// credentials, via the control-plane ListFoundationModels call. It is free,
+// consumes no embedding or generation tokens, and exercises both credentials
+// and Bedrock enablement in the configured region.
 //
-// The probe verifies the provider is reachable and credentials are valid,
-// but NOT that the user's configured model is callable — a typo'd model ID
-// still lets Available() return true and fails at first real Embed/Generate.
-// For full per-model validation, use `2nb models test`.
-func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) bool {
+// It does NOT prove the configured model is callable: a typo'd model ID still
+// leaves this true and fails at the first real Embed/Generate. For per-model
+// validation, use `2nb models test`.
+//
+// It returns the failure rather than swallowing it, which is what lets a caller
+// tell "your credentials are wrong" from "the network blipped". Both used to
+// surface as a bare false, and the CLI then told the user to check credentials
+// for what was actually a five-second timeout.
+func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) (bool, error) {
 	if ctrl == nil {
-		return false
+		return false, errors.New("bedrock control-plane client not configured")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if _, err := ctrl.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{}); err != nil {
 		slog.Debug("bedrock probe failed", "err", err)
-		return false
+		return false, err
 	}
-	return true
+	return true, nil
+}
+
+// bedrockAvailability is the whole AvailableDetail contract for a Bedrock
+// provider: consult the cache, probe on a miss, fold the result back in. The
+// three providers share it so the cache rule cannot drift between them; before,
+// only the probe was shared and each provider re-implemented the cache check.
+func bedrockAvailability(ctx context.Context, avail *availableCache, ctrl *bedrock.Client) (bool, TestErrorCode) {
+	if v, code, hit := avail.getWithCode(); hit {
+		return v, code
+	}
+	ok, err := bedrockAvailableProbe(ctx, ctrl)
+	return availabilityFromProbe("bedrock", avail, ok, err)
 }
 
 // bedrockBearerTokenEnv is the environment variable the AWS SDK reads for the
@@ -161,12 +177,14 @@ func (b *BedrockEmbedder) Name() string    { return "bedrock" }
 func (b *BedrockEmbedder) Dimensions() int { return b.dims }
 
 func (b *BedrockEmbedder) Available(ctx context.Context) bool {
-	if v, hit := b.avail.get(); hit {
-		return v
-	}
-	ok := bedrockAvailableProbe(ctx, b.ctrl)
-	b.avail.set(ok)
+	ok, _ := b.AvailableDetail(ctx)
 	return ok
+}
+
+// AvailableDetail satisfies AvailabilityReporter: same probe as Available, but
+// it also reports WHY an unavailable provider is unavailable.
+func (b *BedrockEmbedder) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
+	return bedrockAvailability(ctx, &b.avail, b.ctrl)
 }
 
 // ── Embedding request/response structs ────────────────────────────────────
@@ -699,12 +717,13 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 func (b *BedrockGenerator) Name() string { return "bedrock" }
 
 func (b *BedrockGenerator) Available(ctx context.Context) bool {
-	if v, hit := b.avail.get(); hit {
-		return v
-	}
-	ok := bedrockAvailableProbe(ctx, b.ctrl)
-	b.avail.set(ok)
+	ok, _ := b.AvailableDetail(ctx)
 	return ok
+}
+
+// AvailableDetail satisfies AvailabilityReporter (see BedrockEmbedder).
+func (b *BedrockGenerator) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
+	return bedrockAvailability(ctx, &b.avail, b.ctrl)
 }
 
 // Generate satisfies GenerationProvider; it delegates to GenerateWithUsage and

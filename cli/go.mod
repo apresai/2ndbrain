@@ -5,10 +5,10 @@ go 1.26.0
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.38
-	github.com/aws/aws-sdk-go-v2/service/bedrock v1.66.7
+	github.com/aws/aws-sdk-go-v2/service/bedrock v1.67.0
 	github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime v1.58.1
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.57.4
-	github.com/aws/smithy-go v1.27.8
+	github.com/aws/smithy-go v1.27.10
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.58.0
 	github.com/spf13/cobra v1.10.2
@@ -41,7 +41,7 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	modernc.org/libc v1.75.3 // indirect
+	modernc.org/libc v1.75.5 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )

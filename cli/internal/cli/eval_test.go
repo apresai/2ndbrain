@@ -9,7 +9,6 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/eval"
-	"github.com/apresai/2ndbrain/internal/vault"
 )
 
 func TestEvalQACacheHas(t *testing.T) {
@@ -99,15 +98,7 @@ func TestEval_E2E_Bedrock(t *testing.T) {
 	if _, err := runCLIArgs(t, root, "index"); err != nil {
 		t.Fatalf("index: %v", err)
 	}
-	// Re-open to observe committed embeddings from the index command's own handle.
-	rv, err := vault.Open(root)
-	if err != nil {
-		t.Fatalf("open vault: %v", err)
-	}
-	defer rv.Close()
-	if c, _ := rv.DB.EmbeddingCount(); c == 0 {
-		t.Skip("no embeddings after index (no Bedrock credentials); skipping eval E2E")
-	}
+	requireEmbeddings(t, root)
 	_ = v
 
 	out, err := runCLIArgs(t, root, "eval", "--json", "--n", "3", "--yes")

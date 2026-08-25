@@ -274,9 +274,7 @@ func TestBattery_ObsidianNativeRAG(t *testing.T) {
 	}
 
 	// Grounded ask is provider-gated.
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("no AI provider configured; skipping grounded ask")
-	}
+	requireEmbedding(t)
 	out, code = runWithHome(t, home, "ask", "--json", "What does the overview describe?", "--vault", vaultDir)
 	if code != 0 {
 		t.Skipf("ask failed (transient/provider): exit %d: %s", code, out)

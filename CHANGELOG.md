@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Added
+- The Go test suite now runs on every pull request (`.github/workflows/ci.yml`, macOS, `go vet` + `make -C cli test`) with no credentials in the environment. It previously ran nowhere but a maintainer's laptop at release time, which is why a transient provider blip was indistinguishable from a product failure
+
+### Fixed
+- `2nb index --force-reembed` (and `ai embed-probe`) now report **why** an embedding provider is not ready instead of blaming credentials for everything. The old message was `is not ready (check credentials)` for every cause, so a five-second network blip sent users off to re-authenticate; a timeout now reads `is not ready: the readiness probe timed out (timeout).` followed by the same remediation `models test` and the macOS app show for that code
+- A transient Bedrock readiness failure (timeout, unreachable, throttled) is now held for 2 seconds instead of the full 30-second cache window, so one network blip stops pinning the provider at "unavailable" for the rest of it, without making a long-lived MCP session re-probe on every single tool call. Definitive failures (bad credentials, access denied) are still cached in full, and a cached failure now remembers its cause instead of degrading to the generic message when asked a second time
+- A readiness `access_denied` no longer sends users to the Bedrock console's "Model access" page. The readiness probe is a control-plane listing, so a denial means the credentials lack `bedrock:ListFoundationModels`, which that page cannot grant
+- `suggest-target`'s keyword tier now matches kebab-case targets. FTS5 treats `models-apresai` as one order-sensitive phrase, so it could never match a note reading "apresai models", which meant the word-reorder recovery the command documents as working offline did not work for the shape link targets actually take
+- Missing AWS credentials are classified as `bad_credentials` rather than `timeout`. The SDK's fallback to EC2 instance metadata is unreachable off EC2 and fails with a wrapped deadline error, which the deadline check saw first
+- Tests that need an AI provider now skip on whether an embedding actually lands, not on whether an environment variable happens to be set. A configured-but-unusable provider made 11 tests fail where they should have skipped. Two of them also asserted contracts the code cannot satisfy: `--force-reembed` was documented as running without a provider (it refuses), and the hybrid-degradation test switched providers to force a dimension mismatch that never occurred (both are 1024 dims)
 
 ## [0.20.0] - 2026-08-24
 

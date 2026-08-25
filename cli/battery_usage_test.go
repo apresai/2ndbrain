@@ -233,9 +233,7 @@ func TestUsageBattery_McpUpdateMetaTagsRoundTrip(t *testing.T) {
 
 // TestUsageBattery_AskRAG: grounded RAG over a seeded note. Provider-gated.
 func TestUsageBattery_AskRAG(t *testing.T) {
-	if !hasAWSCreds() && !hasOpenRouterKey() {
-		t.Skip("no AI provider configured; skipping grounded ask")
-	}
+	requireEmbedding(t)
 	home, vaultDir := newUsageVault(t)
 
 	if out, code := runWithHome(t, home, "create", "Release Facts", "--content",

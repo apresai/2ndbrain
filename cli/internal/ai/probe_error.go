@@ -93,6 +93,20 @@ func ClassifyProbeError(provider string, err error) TestErrorCode {
 		return TestErrIncompatible
 	}
 
+	// Credentials are checked BEFORE the deadline branch on purpose. When no
+	// AWS credentials are configured the SDK falls through to the EC2 instance
+	// metadata service, which is unreachable off EC2 and times out, and the
+	// resulting error wraps context.DeadlineExceeded. Classified by deadline
+	// first, the single most common real-world failure ("you have no
+	// credentials") reports as a transient timeout with a "retry, the model may
+	// be cold-starting" remediation, and callers that retry transients would
+	// retry it forever. "Your credentials are missing" beats "the probe timed
+	// out" whenever the text says so.
+	msg := strings.ToLower(err.Error())
+	if isCredentialResolutionFailure(msg) {
+		return TestErrBadCredentials
+	}
+
 	if errors.Is(err, context.DeadlineExceeded) {
 		return TestErrTimeout
 	}
@@ -108,23 +122,6 @@ func ClassifyProbeError(provider string, err error) TestErrorCode {
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		return classifySmithyError(apiErr)
-	}
-
-	// Credential-resolution failures happen before any API call and carry no
-	// smithy code: a missing OpenRouter key (GetAPIKey), an unresolvable AWS
-	// profile, an expired SSO session surfaced by the SDK's config loader, or
-	// a mantle model with no Bedrock API key (errNoMantleTokenText).
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "no api key"),
-		strings.Contains(msg, "api key not found"),
-		strings.Contains(msg, "need a bedrock api key"),
-		strings.Contains(msg, "failed to refresh cached credentials"),
-		strings.Contains(msg, "no ec2 imds role found"),
-		strings.Contains(msg, "failed to retrieve credentials"),
-		strings.Contains(msg, "sso session"),
-		strings.Contains(msg, "static credentials are empty"):
-		return TestErrBadCredentials
 	}
 
 	var netErr net.Error
@@ -151,6 +148,32 @@ func ClassifyProbeError(provider string, err error) TestErrorCode {
 	}
 
 	return TestErrUnknown
+}
+
+// isCredentialResolutionFailure reports whether an error's text is a
+// credential-resolution failure. These happen before any API call and carry no
+// smithy code: a missing OpenRouter key (GetAPIKey), an unresolvable AWS
+// profile, an expired SSO session surfaced by the SDK's config loader, or a
+// mantle model with no Bedrock API key (errNoMantleTokenText).
+//
+// It is matched on text because the SDK gives these no distinguishable type,
+// and it is consulted EARLY in ClassifyProbeError (see the comment there): the
+// no-credentials case reaches us wrapped in a context.DeadlineExceeded from the
+// EC2 IMDS lookup, so a deadline-first ordering would misreport it as transient.
+// msg must already be lower-cased.
+func isCredentialResolutionFailure(msg string) bool {
+	switch {
+	case strings.Contains(msg, "no api key"),
+		strings.Contains(msg, "api key not found"),
+		strings.Contains(msg, "need a bedrock api key"),
+		strings.Contains(msg, "failed to refresh cached credentials"),
+		strings.Contains(msg, "no ec2 imds role found"),
+		strings.Contains(msg, "failed to retrieve credentials"),
+		strings.Contains(msg, "sso session"),
+		strings.Contains(msg, "static credentials are empty"):
+		return true
+	}
+	return false
 }
 
 func classifySmithyError(apiErr smithy.APIError) TestErrorCode {
