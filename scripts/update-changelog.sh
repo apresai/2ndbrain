@@ -28,10 +28,45 @@ if grep -q "## \[$VERSION\]" "$CHANGELOG"; then
     exit 0
 fi
 
-# Prepare the new version section content
+# Hand-curated [Unreleased] entries are AUTHORITATIVE: they were written by a
+# human for exactly this release and they BECOME the release entry. Extract them
+# once, here, so the content selection below and the insertion at the end share
+# one definition of "curated" (a second copy of the placeholder vocabulary would
+# drift). Empty file == nothing curated.
+CURATED_FILE=$(mktemp)
+trap 'rm -f "$CURATED_FILE"' EXIT
+python3 - "$CHANGELOG" "$CURATED_FILE" <<'PYEOF'
+import sys
+
+changelog, out = sys.argv[1], sys.argv[2]
+text = open(changelog).read()
+marker = '## [Unreleased]'
+body = ''
+if marker in text:
+    after = text.split(marker, 1)[1]
+    idx = after.find('\n## [')
+    section = after if idx == -1 else after[:idx]
+    # Drop blank lines and the "nothing here yet" placeholders; anything that
+    # survives is real, hand-written content.
+    lines = [l for l in section.strip().splitlines()
+             if l.strip() not in ('', '(empty - ready for next release)', '(ready for next release)')]
+    body = '\n'.join(lines).strip()
+open(out, 'w').write(body)
+PYEOF
+
+# Prepare the new version section content. Precedence, highest first:
+#   1. an explicit changes file (the caller stated exactly what to ship)
+#   2. curated [Unreleased] entries (folded in verbatim at the end)
+#   3. the commit summarizer, a LAST RESORT for when nothing human-authored exists
+# The summarizer must never run alongside curated entries: both describe the same
+# commits, so the entry ends up saying everything twice under duplicate headings
+# (that is what shipped in 0.20.0).
 if [ -n "$CHANGES_FILE" ] && [ -f "$CHANGES_FILE" ]; then
     echo "Using changes from $CHANGES_FILE"
     CHANGES_CONTENT=$(cat "$CHANGES_FILE")
+elif [ -s "$CURATED_FILE" ]; then
+    echo "Using the hand-curated [Unreleased] entries (skipping the commit summarizer)"
+    CHANGES_CONTENT=""
 else
     # Try to auto-generate changelog using Claude Code
     echo "Generating changelog from git commits..."
@@ -105,6 +140,7 @@ EOF
 
 # Use Python to insert the new version (more reliable than awk/sed for multiline)
 python3 <<PYEOF
+import re
 import sys
 
 # Read files
@@ -114,46 +150,42 @@ with open('$CHANGELOG', 'r') as f:
 with open('$TEMP_ENTRY', 'r') as f:
     new_entry = f.read()
 
+# The curated [Unreleased] entries extracted before the content selection above.
+# They are folded into this release's entry verbatim; when they exist they ARE
+# the entry (the summarizer was skipped), so nothing here can duplicate them.
+with open('$CURATED_FILE', 'r') as f:
+    curated = f.read().strip()
+
 # Find the Unreleased section
 unreleased_marker = '## [Unreleased]'
 if unreleased_marker not in original:
     print("Error: Could not find [Unreleased] section in CHANGELOG.md", file=sys.stderr)
     sys.exit(1)
 
-# Split at the Unreleased marker
+if curated:
+    marker = '## [$VERSION] - $DATE'
+    head, sep, tail = new_entry.partition(marker)
+    if sep:
+        new_entry = head + sep + '\n\n' + curated + tail
+    else:
+        new_entry = new_entry.rstrip('\n') + '\n\n' + curated + '\n'
+
+# An empty CHANGES_CONTENT (the curated-only path) leaves a run of blank lines
+# where the generated body would have gone; collapse them so the entry reads the
+# same however it was assembled.
+new_entry = re.sub(r'\n{3,}', '\n\n', new_entry)
+# End with exactly one newline: the following section (when there is one) starts
+# with its own '\n', so a second here would open a blank-line run at the seam.
+new_entry = new_entry.rstrip('\n') + '\n'
+
+# Split at the Unreleased marker and insert the entry after the reset placeholder
 parts = original.split(unreleased_marker, 1)
 before_unreleased = parts[0]
 after_unreleased = parts[1]
 
-# Hand-curated Unreleased content BECOMES part of the release entry (the
-# Keep-a-Changelog flow); it must never be silently discarded. Strip the
-# empty-placeholder line; anything else is real content.
-def unreleased_body(text):
-    lines = [l for l in text.strip().splitlines()
-             if l.strip() not in ('', '(empty - ready for next release)', '(ready for next release)')]
-    return '\n'.join(lines).strip()
-
-# Find the next version section (## [)
 next_section_idx = after_unreleased.find('\n## [')
-if next_section_idx == -1:
-    curated = unreleased_body(after_unreleased)
-    if curated:
-        new_entry = new_entry.rstrip('\n') + '\n\n' + curated + '\n'
-    updated = before_unreleased + unreleased_marker + '\n\n(empty - ready for next release)\n' + new_entry
-else:
-    # Insert between Unreleased and next version, folding any hand-curated
-    # Unreleased content into the top of the new version entry.
-    before_next = after_unreleased[:next_section_idx]
-    after_next = after_unreleased[next_section_idx:]
-    curated = unreleased_body(before_next)
-    if curated:
-        marker = '## [$VERSION] - $DATE'
-        head, sep, tail = new_entry.partition(marker)
-        if sep:
-            new_entry = head + sep + '\n\n' + curated + tail
-        else:
-            new_entry = new_entry.rstrip('\n') + '\n\n' + curated + '\n'
-    updated = before_unreleased + unreleased_marker + '\n\n(empty - ready for next release)\n' + new_entry + after_next
+after_next = '' if next_section_idx == -1 else after_unreleased[next_section_idx:]
+updated = before_unreleased + unreleased_marker + '\n\n(empty - ready for next release)\n' + new_entry + after_next
 
 # Write result
 with open('$CHANGELOG', 'w') as f:

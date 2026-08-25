@@ -219,6 +219,7 @@ test-gui: install-app
 
 test-release-script:
 	@bash tests/release-script-test.sh
+	@bash tests/changelog-script-test.sh
 
 test-all: test test-battery test-usage test-swift test-gui test-release-script
 
