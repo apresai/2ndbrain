@@ -79,7 +79,7 @@ func runAIEmbedProbe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no embedding provider: %w", err)
 	}
 	if !embedder.Available(ctx) {
-		return fmt.Errorf("embedding provider %q is not ready (check credentials) — run `2nb ai setup`", cfg.Provider)
+		return embedderNotReadyError(ctx, cfg.Provider, embedder)
 	}
 
 	levels, err := parseProbeLevels(probeLevelsFlag)

@@ -34,17 +34,56 @@ import (
 // but NOT that the user's configured model is callable — a typo'd model ID
 // still lets Available() return true and fails at first real Embed/Generate.
 // For full per-model validation, use `2nb models test`.
-func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) bool {
+// bedrockAvailableProbe reports whether Bedrock is reachable with the resolved
+// credentials, returning the failure so callers can classify it. The error is
+// what lets a caller tell "your credentials are wrong" from "the network
+// blipped": both used to surface as a bare false, and the CLI then told the
+// user to check credentials for what was actually a five-second timeout.
+func bedrockAvailableProbe(ctx context.Context, ctrl *bedrock.Client) (bool, error) {
 	if ctrl == nil {
-		return false
+		return false, errors.New("bedrock control-plane client not configured")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if _, err := ctrl.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{}); err != nil {
 		slog.Debug("bedrock probe failed", "err", err)
-		return false
+		return false, err
 	}
-	return true
+	return true, nil
+}
+
+// cacheProbeFailure reports whether a probe failure is worth remembering for
+// the cache TTL. A DEFINITIVE failure (bad credentials, access denied, a model
+// that does not exist) will still be false a second from now, so caching it
+// saves a pointless round trip. A TRANSIENT one (timeout, unreachable,
+// throttled) says nothing about the next call, and caching it turns one network
+// blip into a TTL-long outage for every caller.
+//
+// TestErrUnknown is treated as definitive on purpose: it preserves the
+// amortization the cache exists for, and a genuine transient landing there is a
+// missing rule in ClassifyProbeError, which is where it should be fixed (and
+// where probe_error_test.go already guards the surface).
+func cacheProbeFailure(code TestErrorCode) bool {
+	switch code {
+	case TestErrTimeout, TestErrProviderUnreachable, TestErrThrottled:
+		return false
+	default:
+		return true
+	}
+}
+
+// availabilityFromProbe folds a probe result into the (ok, code) pair the
+// AvailabilityReporter contract returns, caching only what is worth caching.
+func availabilityFromProbe(avail *availableCache, ok bool, err error) (bool, TestErrorCode) {
+	if ok {
+		avail.set(true)
+		return true, ""
+	}
+	code := ClassifyProbeError("bedrock", err)
+	if cacheProbeFailure(code) {
+		avail.set(false)
+	}
+	return false, code
 }
 
 // bedrockBearerTokenEnv is the environment variable the AWS SDK reads for the
@@ -161,12 +200,18 @@ func (b *BedrockEmbedder) Name() string    { return "bedrock" }
 func (b *BedrockEmbedder) Dimensions() int { return b.dims }
 
 func (b *BedrockEmbedder) Available(ctx context.Context) bool {
-	if v, hit := b.avail.get(); hit {
-		return v
-	}
-	ok := bedrockAvailableProbe(ctx, b.ctrl)
-	b.avail.set(ok)
+	ok, _ := b.AvailableDetail(ctx)
 	return ok
+}
+
+// AvailableDetail satisfies AvailabilityReporter: same probe as Available, but
+// it also reports WHY an unavailable provider is unavailable.
+func (b *BedrockEmbedder) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
+	if v, hit := b.avail.get(); hit {
+		return v, ""
+	}
+	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
+	return availabilityFromProbe(&b.avail, ok, err)
 }
 
 // ── Embedding request/response structs ────────────────────────────────────
@@ -699,12 +744,17 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 func (b *BedrockGenerator) Name() string { return "bedrock" }
 
 func (b *BedrockGenerator) Available(ctx context.Context) bool {
-	if v, hit := b.avail.get(); hit {
-		return v
-	}
-	ok := bedrockAvailableProbe(ctx, b.ctrl)
-	b.avail.set(ok)
+	ok, _ := b.AvailableDetail(ctx)
 	return ok
+}
+
+// AvailableDetail satisfies AvailabilityReporter (see BedrockEmbedder).
+func (b *BedrockGenerator) AvailableDetail(ctx context.Context) (bool, TestErrorCode) {
+	if v, hit := b.avail.get(); hit {
+		return v, ""
+	}
+	ok, err := bedrockAvailableProbe(ctx, b.ctrl)
+	return availabilityFromProbe(&b.avail, ok, err)
 }
 
 // Generate satisfies GenerationProvider; it delegates to GenerateWithUsage and

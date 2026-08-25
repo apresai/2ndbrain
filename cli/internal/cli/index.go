@@ -278,7 +278,7 @@ func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.Embeddi
 	}
 
 	if !embedder.Available(ctx) {
-		return nil, fmt.Errorf("embedding provider %q is not ready (check credentials) — run `2nb ai setup`", cfg.Provider)
+		return nil, embedderNotReadyError(ctx, cfg.Provider, embedder)
 	}
 	return embedder, nil
 }
