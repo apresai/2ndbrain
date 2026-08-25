@@ -22,17 +22,17 @@ import (
 func embedderNotReadyError(ctx context.Context, provider string, embedder ai.EmbeddingProvider) error {
 	reporter, ok := embedder.(ai.AvailabilityReporter)
 	if !ok {
-		return fmt.Errorf("embedding provider %q is not ready (check credentials) — run `2nb ai setup`", provider)
+		return fmt.Errorf("embedding provider %q is not ready (check credentials). Run `2nb ai setup`", provider)
 	}
 	ready, code := reporter.AvailableDetail(ctx)
 	if ready {
 		// Raced back to healthy between the caller's check and this call.
 		// Report it as not-ready anyway (the caller decided), but without
 		// inventing a cause we no longer have.
-		return fmt.Errorf("embedding provider %q is not ready — run `2nb ai setup`", provider)
+		return fmt.Errorf("embedding provider %q is not ready. Run `2nb ai setup`", provider)
 	}
 	if code == "" {
-		return fmt.Errorf("embedding provider %q is not ready (check credentials) — run `2nb ai setup`", provider)
+		return fmt.Errorf("embedding provider %q is not ready (check credentials). Run `2nb ai setup`", provider)
 	}
 	return fmt.Errorf("embedding provider %q is not ready: %s (%s). %s",
 		provider, notReadySummary(code), code, ai.RemediationFor(code, provider, ""))
