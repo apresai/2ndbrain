@@ -210,14 +210,22 @@ func runModelsDiscover(cmd *cobra.Command, args []string) error {
 // persist, and a GUI that cleared its clicked row's badge while the CLI
 // added the other provider's row would desync for good (the diff is
 // one-shot).
+// discoverMatchAddID resolves an --add argument against the discovered pool.
+//
+// It accepts the full route form (`id@plane/region`, optionally
+// `provider|id@...`), not just `provider|id`. Once discovery emits one row per
+// (plane, region), a bare id for a model listed in three regions matched three
+// rows, and the refusal printed three IDENTICAL `'bedrock|xai.grok-4.6'`
+// forms: an unfollowable instruction, because the only thing distinguishing
+// the candidates was a route the message could not express.
 func discoverMatchAddID(list []ai.ModelInfo, id string) []*ai.ModelInfo {
-	provider, bare, qualified := "", id, false
-	if p, rest, ok := strings.Cut(id, "|"); ok {
-		provider, bare, qualified = p, rest, true
+	ref, err := ai.ParseRouteRef(id)
+	if err != nil {
+		return nil
 	}
 	var out []*ai.ModelInfo
 	for i := range list {
-		if list[i].ID == bare && (!qualified || list[i].Provider == provider) {
+		if ref.Matches(list[i]) {
 			out = append(out, &list[i])
 		}
 	}
@@ -234,13 +242,25 @@ func discoverAddModels(v *vault.Vault, scope ai.UserCatalogScope, pool, catalog 
 	for _, id := range ids {
 		found := matches(pool, id)
 		if len(found) > 1 {
-			// Single-quote each form: | is a shell pipe, and this message
-			// exists to be pasted.
+			// Print the ROUTE-qualified form of each candidate, which is what
+			// actually tells them apart. Unqualified, because this message
+			// exists to be pasted and the provider prefix uses '|', a shell
+			// pipe; a genuine cross-provider collision falls back to the
+			// single-quoted qualified form.
 			forms := make([]string, len(found))
+			crossProvider := false
 			for i, m := range found {
-				forms[i] = "'" + m.Provider + "|" + m.ID + "'"
+				if m.Provider != found[0].Provider {
+					crossProvider = true
+				}
+				forms[i] = m.Route().Unqualified()
 			}
-			return nil, exitWithError(ExitValidation, fmt.Sprintf("%s matches more than one provider's discovery; qualify it as one of: %s (nothing was added)", id, strings.Join(forms, ", ")))
+			if crossProvider {
+				for i, m := range found {
+					forms[i] = "'" + m.Route().String() + "'"
+				}
+			}
+			return nil, exitWithError(ExitValidation, fmt.Sprintf("%s matches %d discovered routes; qualify it as one of: %s (nothing was added)", id, len(found), strings.Join(forms, ", ")))
 		}
 		if len(found) == 0 {
 			// Hints quote the bare id: verify and the pool listing use it.

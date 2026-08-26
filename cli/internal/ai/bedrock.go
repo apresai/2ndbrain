@@ -1132,7 +1132,20 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	// distinct API (bedrockagentruntime.Rerank), so a disabled rerank config
 	// leaves the slot empty and retrieve keeps the RRF order.
 	if aiCfg.RerankEnabled() {
-		reranker, err := NewBedrockReranker(ctx, cfg, aiCfg.ResolveRerankModel())
+		// The rerank slot's route is honored like the other two. Without
+		// this, ai.rerank.plane and ai.rerank.region were a dead knob:
+		// settable, gettable, validated, documented, and read by nothing at
+		// invoke time, so a user who pinned a rerank region silently kept
+		// calling us-east-1.
+		rerankRoute, err := ResolveSlotRoute("rerank", aiCfg.RerankRoute(), rows)
+		if err != nil {
+			return err
+		}
+		rerankCfg := cfg
+		if rerankRoute.Route.Region != "" {
+			rerankCfg.RegionOverride = rerankRoute.Route.Region
+		}
+		reranker, err := NewBedrockReranker(ctx, rerankCfg, aiCfg.ResolveRerankModel())
 		if err != nil {
 			return fmt.Errorf("init bedrock reranker: %w", err)
 		}

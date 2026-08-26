@@ -57,6 +57,13 @@ func NewBedrockReranker(ctx context.Context, cfg BedrockConfig, model string) (*
 // call; the pin routes just the rerank client, leaving embeddings and
 // generation in the configured region.
 func rerankRegion(cfg BedrockConfig, model string) string {
+	// An explicit route wins. InitBedrock sets RegionOverride from the
+	// resolved rerank route, and ResolveBedrockConfig maps it onto Region, so
+	// honoring it here is what makes ai.rerank.region actually reach the
+	// client instead of being overridden by the catalog pin below.
+	if cfg.RegionOverride != "" {
+		return cfg.RegionOverride
+	}
 	if pinned := ResolveModelRegion("bedrock", model, ""); pinned != "" {
 		return pinned
 	}

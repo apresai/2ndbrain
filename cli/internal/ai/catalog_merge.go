@@ -136,6 +136,24 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// slot look ambiguous to the invoke path.
 	retireSupersededTemplates(&result.Verified, &result.Unverified)
 
+	// Re-mark Active AFTER retiring, and across BOTH halves.
+	//
+	// Marking ran once near the top, before discovery and before retire. Once
+	// discovery yields concrete per-region rows, the user's configured row is
+	// often the unpinned template that retire removes, so the flag vanished
+	// with it and NOTHING came back marked. That is not cosmetic: the GUI
+	// shows no current model, and `models verify` skips any model that is
+	// neither recommended nor active, so it silently stopped covering the
+	// user's own configured model. Discovered rows were never marked at all,
+	// so a model whose only surviving row came from discovery could not be
+	// active either.
+	for i := range result.Verified {
+		result.Verified[i].Active = isActiveModel(result.Verified[i], opts.Config)
+	}
+	for i := range result.Unverified {
+		result.Unverified[i].Active = isActiveModel(result.Unverified[i], opts.Config)
+	}
+
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
 	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)
 

@@ -16,7 +16,10 @@ type AIConfig struct {
 	// time: a bare model id that resolves to more than one route is refused
 	// at `config set`, not guessed at call time. Bedrock only; empty on
 	// every other provider, and empty on a config written before routes
-	// existed (see AIConfig.Validate and `2nb models discover`).
+	// existed. An empty pair is resolved by ResolveSlotRoute at construction
+	// (one route resolves, several refuse); AIConfig.Validate does NOT check
+	// these fields, and the write-time checks live in parsePlaneValue and
+	// validateRegionValue.
 	EmbeddingPlane   Plane  `yaml:"embedding_plane,omitempty" json:"embedding_plane,omitempty"`
 	EmbeddingRegion  string `yaml:"embedding_region,omitempty" json:"embedding_region,omitempty"`
 	GenerationPlane  Plane  `yaml:"generation_plane,omitempty" json:"generation_plane,omitempty"`

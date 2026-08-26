@@ -10,13 +10,15 @@ import (
 	"github.com/apresai/2ndbrain/internal/vault"
 )
 
-// modelSlotKeys maps each model config key to the plane/region keys that
-// travel with it. `config set ai.<slot>_model <route>` writes all three
-// together so a slot can never be left half-routed.
-var modelSlotKeys = map[string]struct{ plane, region string }{
-	"ai.generation_model": {"ai.generation_plane", "ai.generation_region"},
-	"ai.embedding_model":  {"ai.embedding_plane", "ai.embedding_region"},
-	"ai.rerank.model":     {"ai.rerank.plane", "ai.rerank.region"},
+// modelSlotKeys maps each model config key to its slot name, which is what
+// the plane validator and the error messages need. `config set
+// ai.<slot>_model <route>` writes the model, plane, and region together so a
+// slot can never be left half-routed; setModelSlot owns which fields those
+// are, so this map does not need to repeat their names.
+var modelSlotKeys = map[string]string{
+	"ai.generation_model": "generation",
+	"ai.embedding_model":  "embedding",
+	"ai.rerank.model":     "rerank",
 }
 
 // parsePlaneValue validates a plane against the closed set. An empty value
@@ -83,15 +85,24 @@ func validateRegionValue(value string) error {
 //     cleared, preserving today's doctrine that naming an unknown model is
 //     legitimate (a model can exist before 2nb's catalog knows it).
 func applyModelSlotRoute(v *vault.Vault, key, value string) (bool, error) {
-	slot, ok := modelSlotKeys[key]
+	slotName, ok := modelSlotKeys[key]
 	if !ok {
 		return false, nil
 	}
-	_ = slot
 
 	ref, err := ai.ParseRouteRef(value)
 	if err != nil {
 		return true, exitWithError(ExitValidation, "error: "+err.Error())
+	}
+	// Route-qualified values go through the SAME plane validator as
+	// `config set ai.<slot>_plane`. Without this, the two write paths
+	// disagreed: `config set ai.embedding_plane mantle` was refused as
+	// generation-only while `config set ai.embedding_model foo@mantle/us-east-2`
+	// wrote exactly that.
+	if ref.Plane != "" {
+		if _, err := parsePlaneValue(string(ref.Plane), slotName); err != nil {
+			return true, exitWithError(ExitValidation, "error: "+err.Error())
+		}
 	}
 	if ref.Provider == "" {
 		ref.Provider = v.Config.AI.Provider
