@@ -281,12 +281,20 @@ type ModelInfo struct {
 	// field existed.
 	InvokeStrategy string `json:"invoke_strategy,omitempty" yaml:"invoke_strategy,omitempty"`
 
-	// Region pins the AWS region for this model's invocations when it
-	// differs from the provider default (ai.bedrock.region). Some Bedrock
-	// models are region-locked: Cohere Rerank 3.5 is us-east-1 in-region
-	// only, and mantle-plane models are pinned per model (e.g.
-	// openai.gpt-5.5 in us-east-2, xai.grok-4.3 in us-west-2). Empty means
-	// "use the provider default".
+	// Plane names the Bedrock invocation plane this row rides: PlaneClassic
+	// or PlaneMantle. Together with Provider, ID, and Region it forms the
+	// row's IDENTITY (see RouteKey in route.go), not a preference: the same
+	// model id can be served on both planes with different entitlement and a
+	// different wire dialect. Empty on every non-Bedrock provider.
+	Plane Plane `json:"plane,omitempty" yaml:"plane,omitempty"`
+
+	// Region is the AWS region whose endpoint this route calls. Part of the
+	// row's IDENTITY: Bedrock entitlement and model availability are both
+	// per-region, so the same model in two regions is two routes that can
+	// independently succeed or fail. Empty on non-Bedrock rows, and on a
+	// legacy row that predates route identity (such a row means "whatever
+	// ai.bedrock.region resolves to" and is superseded by the concrete
+	// per-region rows the next discovery walk produces).
 	Region string `json:"region,omitempty" yaml:"region,omitempty"`
 
 	// Endpoint is a full endpoint URL override for forward-compat with
