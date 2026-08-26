@@ -152,8 +152,18 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	setupFileLogging(v)
 
 	key, value := args[0], args[1]
-	if err := setConfigValue(&v.Config.AI, key, value); err != nil {
+	// A model slot accepts a full route (id@plane/region) and writes its
+	// model, plane, and region as one unit, so a slot is never left naming a
+	// model without naming the endpoint it runs on. A bare id that matches
+	// several routes is refused here rather than resolved by guesswork.
+	handled, err := applyModelSlotRoute(v, key, value)
+	if err != nil {
 		return err
+	}
+	if !handled {
+		if err := setConfigValue(&v.Config.AI, key, value); err != nil {
+			return err
+		}
 	}
 
 	// Changing the embedding model must also resync ai.dimensions. The
@@ -253,7 +263,11 @@ func runConfigSetKey(cmd *cobra.Command, args []string) error {
 var settableConfigKeys = []string{
 	"ai.provider",
 	"ai.embedding_model",
+	"ai.embedding_plane",
+	"ai.embedding_region",
 	"ai.generation_model",
+	"ai.generation_plane",
+	"ai.generation_region",
 	"ai.dimensions",
 	"ai.similarity_threshold",
 	"ai.bm25_weight",
@@ -264,6 +278,8 @@ var settableConfigKeys = []string{
 	"ai.reasoning_effort",
 	"ai.rerank.enabled",
 	"ai.rerank.model",
+	"ai.rerank.plane",
+	"ai.rerank.region",
 	"ai.rerank.candidate_docs",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
@@ -289,8 +305,16 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return cfg.Provider, nil
 	case "ai.embedding_model":
 		return cfg.EmbeddingModel, nil
+	case "ai.embedding_plane":
+		return string(cfg.EmbeddingPlane), nil
+	case "ai.embedding_region":
+		return cfg.EmbeddingRegion, nil
 	case "ai.generation_model":
 		return cfg.GenerationModel, nil
+	case "ai.generation_plane":
+		return string(cfg.GenerationPlane), nil
+	case "ai.generation_region":
+		return cfg.GenerationRegion, nil
 	case "ai.dimensions":
 		return fmt.Sprintf("%d", cfg.Dimensions), nil
 	case "ai.similarity_threshold":
@@ -311,6 +335,10 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return strconv.FormatBool(cfg.Rerank.Enabled), nil
 	case "ai.rerank.model":
 		return cfg.Rerank.Model, nil
+	case "ai.rerank.plane":
+		return string(cfg.Rerank.Plane), nil
+	case "ai.rerank.region":
+		return cfg.Rerank.Region, nil
 	case "ai.rerank.candidate_docs":
 		return strconv.Itoa(cfg.Rerank.CandidateDocs), nil
 	case "ai.bedrock.profile":
@@ -373,8 +401,30 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		cfg.SetProviderDisabled(value, false)
 	case "ai.embedding_model":
 		cfg.EmbeddingModel = value
+	case "ai.embedding_plane":
+		p, err := parsePlaneValue(value, "embedding")
+		if err != nil {
+			return err
+		}
+		cfg.EmbeddingPlane = p
+	case "ai.embedding_region":
+		if err := validateRegionValue(value); err != nil {
+			return err
+		}
+		cfg.EmbeddingRegion = value
 	case "ai.generation_model":
 		cfg.GenerationModel = value
+	case "ai.generation_plane":
+		p, err := parsePlaneValue(value, "generation")
+		if err != nil {
+			return err
+		}
+		cfg.GenerationPlane = p
+	case "ai.generation_region":
+		if err := validateRegionValue(value); err != nil {
+			return err
+		}
+		cfg.GenerationRegion = value
 	case "ai.dimensions":
 		var d int
 		if _, err := fmt.Sscanf(value, "%d", &d); err != nil {
@@ -452,6 +502,17 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		cfg.Rerank.Enabled = b
 	case "ai.rerank.model":
 		cfg.Rerank.Model = value
+	case "ai.rerank.plane":
+		p, err := parsePlaneValue(value, "rerank")
+		if err != nil {
+			return err
+		}
+		cfg.Rerank.Plane = p
+	case "ai.rerank.region":
+		if err := validateRegionValue(value); err != nil {
+			return err
+		}
+		cfg.Rerank.Region = value
 	case "ai.rerank.candidate_docs":
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 0 || n > 100 {

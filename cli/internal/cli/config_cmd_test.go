@@ -243,6 +243,14 @@ func dummyConfigValue(key string) string {
 		return "true"
 	case "ai.rerank.candidate_docs":
 		return "40"
+	case "ai.generation_plane":
+		return "mantle"
+	case "ai.embedding_plane", "ai.rerank.plane":
+		// Not "mantle": that plane is generation-only in 2nb, and these
+		// slots reject it by design.
+		return "classic"
+	case "ai.generation_region", "ai.embedding_region", "ai.rerank.region":
+		return "us-west-2"
 	}
 	if strings.HasSuffix(key, ".disabled") {
 		return "true"

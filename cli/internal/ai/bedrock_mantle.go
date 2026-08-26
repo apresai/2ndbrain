@@ -153,6 +153,15 @@ func validateMantleHost(raw string) error {
 
 // isBareRegionLabel accepts only a plain AWS region token (letters, digits,
 // hyphens) so it cannot smuggle a host, path, or scheme into the derived URL.
+// IsBareRegionLabel reports whether region is a plain AWS region label.
+//
+// Exported so the config write path can enforce it too: the region is
+// interpolated into the mantle host and the bearer token is sent to whatever
+// that resolves to, so validating at write time keeps a bad value out of the
+// file a shared vault carries between machines, rather than catching it only
+// at invoke time.
+func IsBareRegionLabel(region string) bool { return isBareRegionLabel(region) }
+
 func isBareRegionLabel(region string) bool {
 	if region == "" {
 		return false
