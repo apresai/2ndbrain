@@ -489,7 +489,9 @@ Estimates USD cost across one or more models. `--probe test|bench_embed|bench_ge
 
 ### models discover
 
-Discovery as a verb: reports the vendor-discovered pool (both Bedrock planes plus the other providers' listings) with per-source cache ages and a NEW/GONE diff. Ages read the discovery cache files' mtime against the 24h TTL ("classic us-east-1: 3h ago", "mantle us-west-2: stale (26h)"); a mantle region with no token and no cached file is omitted, not reported as "missing". The default is the cached read-through; `--refresh` deletes the cache files first (`ai.InvalidateDiscoveryCache`), so the same read-through IS a live walk that re-warms them.
+Discovery as a verb: reports the vendor-discovered pool (both Bedrock planes plus the other providers' listings) with per-source cache ages and a NEW/GONE diff.
+
+**Rows are ROUTES, one per `(plane, region)`.** Both planes are walked across `us-east-1`, `us-east-2`, and `us-west-2`, so a model served in three regions is three rows and the ROUTE column names each one (`classic us-east-1`). Bedrock entitlement is per-region, so those endpoints succeed and fail independently; collapsing them by id (as this did before) silently discarded real routes. A failure in a region the user has not configured via `config bedrock --regions` is logged rather than warned, because the GONE shield keys off discovery warnings and a permanent warning would permanently disable GONE detection. The NEW/GONE diff stays keyed by MODEL, so a newly-listed model is announced once, not once per route. Ages read the discovery cache files' mtime against the 24h TTL ("classic us-east-1: 3h ago", "mantle us-west-2: stale (26h)"); a mantle region with no token and no cached file is omitted, not reported as "missing". The default is the cached read-through; `--refresh` deletes the cache files first (`ai.InvalidateDiscoveryCache`), so the same read-through IS a live walk that re-warms them.
 
 The diff baseline is a dedicated machine-local `discovery-seen-bedrock-<profile>.json` in the XDG discovery cache dir: deliberately NOT the vault (a synced sidecar would mis-badge models on another machine, the same rationale as the GUI's UserDefaults snapshot) and not the cache files (`--refresh` deletes those). The first run seeds silently: the pool is reported, nothing is badged NEW, and the baseline saves. The baseline updates only after a successful listing; a failed source's keys are carried forward (unknown, not gone), and a model adopted into the catalog is never badged GONE (it graduated, it did not vanish).
 
@@ -516,6 +518,15 @@ Samples the baseline cosine distribution and recommends a similarity threshold. 
 ### config show / get / set / set-key / bedrock / doctor
 
 Reads and writes config.
+
+**Model slots name a ROUTE.** Each of the three slots carries a plane and a region alongside its model: `ai.{generation,embedding}_{plane,region}` and `ai.rerank.{plane,region}`. `config set ai.<slot>_model` accepts either a bare id or a full route (`xai.grok-4.6@mantle/us-west-2`) and writes all three keys as one unit, so a slot is never left half-routed.
+
+- A bare id whose model has exactly one route resolves, and the file still ends up explicit.
+- A bare id with SEVERAL routes is **refused** with `ExitValidation`, printing each qualified form to paste; nothing is written. Silently picking one endpoint is how a mantle-only model ended up dispatched over classic Converse.
+- An unknown model is still settable: a model can exist before 2nb's catalog knows it.
+- Plane is validated against the closed set `{classic, mantle}`, and rejected outright for the embedding and rerank slots, where the mantle plane has no client. Region must be a bare label; that check is a security control, since the region is interpolated into the mantle host the bearer token is sent to.
+
+At invoke time nothing is inferred: a slot whose model has several routes and names none of them is refused with the `config set` commands to run, rather than falling through to classic Converse. See [ai-providers.md](ai-providers.md#model-routes-provider-id-plane-region).
 
 `config bedrock` shows and sets the machine-local `~/.config/2nb/bedrock.json` (no vault needed):
 

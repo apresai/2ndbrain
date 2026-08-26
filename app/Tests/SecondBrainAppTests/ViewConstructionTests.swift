@@ -28,6 +28,7 @@ func primaryViewsConstruct() {
         local: nil,
         tier: nil,
         invokeStrategy: nil,
+        plane: nil,
         region: nil,
         enabled: nil,
         active: nil,

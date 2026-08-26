@@ -506,18 +506,52 @@ func (p PinnedRoutes) supersedes(m ModelInfo) bool {
 // which endpoint it calls, which is the ambiguity routes exist to remove. So
 // concrete routes win and the template retires.
 //
-// An explicitly-disabled template is kept rather than dropped: "I disabled
-// this model" is intent about the model, not about one endpoint, and silently
-// resurrecting a model the user turned off by retiring the row that carried
-// the flag would be a nasty surprise. Its Enabled state reaches the concrete
-// siblings through the vendor-policy and enable paths, which are model-keyed.
+// A template's Enabled state is PROPAGATED onto concrete siblings that have
+// none before it retires, rather than the template being kept. "I disabled
+// this model" is intent about the model, not about one endpoint, so it has to
+// survive; but keeping the row to hold the flag would leave the model listed
+// twice forever, which is what it was doing for every vendor-policy-disabled
+// model (both rows disabled, so keeping one bought nothing and duplicated the
+// SwiftUI row identity).
+func retireSupersededTemplates(lists ...*[]ModelInfo) {
+	all := make([][]ModelInfo, 0, len(lists))
+	for _, l := range lists {
+		all = append(all, *l)
+	}
+	pinned := pinnedRoutePlanes(all...)
+	if len(pinned.byModel) == 0 {
+		return
+	}
+
+	// Carry model-level intent off the templates before they go.
+	intent := map[string]*bool{}
+	for _, rows := range all {
+		for _, m := range rows {
+			if pinned.supersedes(m) && m.Enabled != nil {
+				intent[catalogKey(m.Provider, m.ID)] = m.Enabled
+			}
+		}
+	}
+	for _, l := range lists {
+		for i := range *l {
+			if (*l)[i].Enabled != nil {
+				continue
+			}
+			if e, ok := intent[catalogKey((*l)[i].Provider, (*l)[i].ID)]; ok {
+				(*l)[i].Enabled = e
+			}
+		}
+		*l = dropSupersededUnpinned(*l, pinned)
+	}
+}
+
 func dropSupersededUnpinned(rows []ModelInfo, pinned PinnedRoutes) []ModelInfo {
 	if len(pinned.byModel) == 0 {
 		return rows
 	}
 	out := make([]ModelInfo, 0, len(rows))
 	for _, m := range rows {
-		if pinned.supersedes(m) && (m.Enabled == nil || *m.Enabled) {
+		if pinned.supersedes(m) {
 			continue
 		}
 		out = append(out, m)

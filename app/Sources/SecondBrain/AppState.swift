@@ -4106,7 +4106,14 @@ struct AIProbeResult: Codable {
 }
 
 struct CatalogModelInfo: Codable, Identifiable {
-    var id: String { provider + "|" + modelID }
+    /// Route-qualified, because a model can now appear on more than one
+    /// endpoint. Identity used to be `provider|modelID`, which produced
+    /// DUPLICATE Identifiable ids the moment a model had two routes (grok 4.6
+    /// on both planes, or one model in three regions), and duplicate ids
+    /// corrupt `List`/`ForEach` cell reuse rather than merely looking odd.
+    /// Plane and region are absent on non-Bedrock rows and on a pre-0.21 CLI,
+    /// where this collapses back to exactly the old value.
+    var id: String { provider + "|" + modelID + "|" + (plane ?? "") + "|" + (region ?? "") }
     let modelID: String
     let name: String
     let provider: String
@@ -4130,8 +4137,13 @@ struct CatalogModelInfo: Codable, Identifiable {
     let local: Bool?
     let tier: String?
     let invokeStrategy: String?
-    /// Bedrock region pin (mantle listings carry their listing region; a
-    /// verify pass can pin a non-primary region). Absent when unpinned.
+    /// Bedrock invocation plane: "classic" or "mantle". Part of the row's
+    /// route identity alongside `region`, not a display hint. Absent on
+    /// non-Bedrock rows and on a pre-0.21 CLI.
+    let plane: String?
+    /// The Bedrock region whose endpoint this route calls. Part of route
+    /// identity: the same model in two regions is two independently-entitled
+    /// endpoints. Absent when the row is an unpinned template.
     let region: String?
     let enabled: Bool?
     let active: Bool?
@@ -4180,6 +4192,7 @@ struct CatalogModelInfo: Codable, Identifiable {
         case local
         case tier
         case invokeStrategy = "invoke_strategy"
+        case plane
         case region
         case enabled
         case active

@@ -134,9 +134,7 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// the builtin's plane but keeps no region — so gating on discovery left
 	// that pair un-retired, listing the model twice and (worse) making its
 	// slot look ambiguous to the invoke path.
-	pinned := pinnedRoutePlanes(result.Verified, result.Unverified)
-	result.Verified = dropSupersededUnpinned(result.Verified, pinned)
-	result.Unverified = dropSupersededUnpinned(result.Unverified, pinned)
+	retireSupersededTemplates(&result.Verified, &result.Unverified)
 
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
 	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)

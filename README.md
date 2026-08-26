@@ -82,7 +82,16 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 
 ## AI Providers
 
-2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token). Grok 4.6 is dual-plane: its builtin entry rides the classic Converse profile `us.xai.grok-4.6` (SigV4 or bearer), with the mantle id also usable via a user-catalog entry.
+2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token).
+
+**Bedrock models are identified by their route**, `id@plane/region`, because the same model can be served on both planes and in several US regions with independent entitlement. Grok 4.6 is the clearest case: `us.xai.grok-4.6@classic/us-east-1` and `xai.grok-4.6@mantle/us-west-2` are different endpoints for the same model.
+
+```bash
+2nb models discover                 # walk both planes across us-east-1/us-east-2/us-west-2 (free, cached 24h)
+2nb config set ai.generation_model xai.grok-4.6@mantle/us-west-2
+```
+
+`2nb models discover` lists every route it found. A bare model id still works when the model has only one route; when it has several, 2nb refuses and prints the qualified forms rather than picking one for you, because picking wrong means your queries quietly go to an endpoint your account cannot serve.
 
 Bedrock token precedence: `AWS_BEARER_TOKEN_BEDROCK`, then `~/.config/2nb/bedrock.json` (Settings, Cmd+, or `2nb config bedrock --set`), then the macOS Keychain (`2nb config set-key bedrock`), then SigV4 from `~/.aws`. To make the SAVED key win over the env var for 2nb only — handy when `AWS_BEARER_TOKEN_BEDROCK` serves other tools in your shell — turn on `2nb config bedrock --set --prefer-stored-token` (or the matching Settings checkbox). File region, when set, overlays vault `ai.bedrock.region`. The token is never written into a vault.
 
