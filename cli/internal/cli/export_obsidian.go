@@ -119,8 +119,8 @@ func writeObsidianConfig(targetPath string) error {
 	}
 
 	files := map[string]string{
-		"app.json":           obsidianAppJSON,
-		"core-plugins.json":  obsidianCorePluginsJSON,
+		"app.json":          obsidianAppJSON,
+		"core-plugins.json": obsidianCorePluginsJSON,
 	}
 
 	for name, content := range files {

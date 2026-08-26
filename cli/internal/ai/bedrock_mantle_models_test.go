@@ -399,15 +399,19 @@ func TestLiveMantleDiscoveredProbe_CredGated(t *testing.T) {
 	t.Logf("hinted xai.grok-4.6 probe passed in %s: %s", gres.Latency, gres.Detail)
 }
 
-// TestStrippedRowSelfHealsOnVerifyDiscover_CredGated is the regression test
-// for the 2026-08-21 live incident: a vault-catalog row for xai.grok-4.6
-// whose invoke_strategy/region were stripped by a pre-0.19.0 save clobber
-// could not be healed by `verify --discover` — the hint-less row shadowed the
-// discovered row's hints, the probe base-matched onto classic Converse, and
-// the only recovery was `models remove` then re-verify. With the merge graft
-// (mergeDiscovered + AdoptRoutingHints) the stripped row adopts the hints at
-// discovery time, probes over the mantle plane, and persists its routing —
-// no manual removal.
+// TestStrippedRowSelfHealsOnVerifyDiscover_CredGated is the live regression
+// test for the 2026-08-21 incident: a vault-catalog row for xai.grok-4.6 whose
+// invoke_strategy/region were stripped by a pre-0.19.0 save clobber could not
+// be healed by `verify --discover`, because the hint-less row shadowed the
+// discovered row on (provider, id), the probe base-matched onto classic
+// Converse, and the only recovery was `models remove` then re-verify.
+//
+// Under route identity the cure is structural instead of a repair: the real
+// mantle endpoint is a different ROUTE from the region-less template, so it
+// arrives as its own fully-routed row that the template cannot shadow, and
+// the template retires once the concrete route exists. The assertion is
+// therefore "a correctly-routed mantle row is present and probes over the
+// mantle plane", not "the broken row was patched in place".
 func TestStrippedRowSelfHealsOnVerifyDiscover_CredGated(t *testing.T) {
 	setupHome(t) // isolate catalogs; the bearer token must come from the env
 	if os.Getenv(bedrockBearerTokenEnv) == "" {
@@ -428,24 +432,32 @@ func TestStrippedRowSelfHealsOnVerifyDiscover_CredGated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Look across BOTH halves: the concrete mantle route normally arrives as
+	// a discovered (Unverified) row, while the stale template sat in Verified.
 	var candidate *ModelInfo
-	for i := range list.Verified {
-		if list.Verified[i].Provider == "bedrock" && list.Verified[i].ID == "xai.grok-4.6" {
-			candidate = &list.Verified[i]
+	rows := append(append([]ModelInfo{}, list.Verified...), list.Unverified...)
+	for i := range rows {
+		if rows[i].Provider == "bedrock" && rows[i].ID == "xai.grok-4.6" &&
+			rows[i].Plane == PlaneMantle && rows[i].Region == "us-west-2" {
+			candidate = &rows[i]
 			break
 		}
 	}
 	if candidate == nil {
-		t.Fatalf("stripped row missing from merged list")
+		if len(list.Warnings) > 0 {
+			t.Skipf("mantle discovery unavailable (no route source): %v", list.Warnings)
+		}
+		t.Fatalf("no xai.grok-4.6@mantle/us-west-2 route in the merged list")
 	}
 	if candidate.InvokeStrategy != StrategyBedrockMantleResponses {
-		if len(list.Warnings) > 0 {
-			t.Skipf("mantle discovery unavailable (no graft source): %v", list.Warnings)
-		}
-		t.Fatalf("stripped row did not adopt the discovery hints: %+v", *candidate)
+		t.Errorf("mantle route carries strategy %q, want %q", candidate.InvokeStrategy, StrategyBedrockMantleResponses)
 	}
-	if candidate.Region != "us-west-2" {
-		t.Errorf("grafted region = %q, want the us-west-2 mantle listing region", candidate.Region)
+	// The region-less template must not survive next to its concrete route,
+	// or it could still be picked and still fall through to classic.
+	for _, m := range rows {
+		if m.Provider == "bedrock" && m.ID == "xai.grok-4.6" && m.Region == "" {
+			t.Errorf("the stripped template survived alongside its concrete route: %+v", m)
+		}
 	}
 
 	result, err := TestProbeModelInfo(ctx, AIConfig{}, *candidate, root)
@@ -468,7 +480,7 @@ func TestStrippedRowSelfHealsOnVerifyDiscover_CredGated(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeVault, root, saved); err != nil {
 		t.Fatal(err)
 	}
-	persisted, ok := UserCatalogEntry(ScopeVault, root, "bedrock", "xai.grok-4.6")
+	persisted, ok := UserCatalogEntry(ScopeVault, root, RouteKey{Provider: "bedrock", ID: "xai.grok-4.6", Plane: PlaneMantle, Region: "us-west-2"})
 	if !ok || persisted.InvokeStrategy != StrategyBedrockMantleResponses || persisted.Region != "us-west-2" {
 		t.Fatalf("routing did not persist (ok=%v): %+v", ok, persisted)
 	}

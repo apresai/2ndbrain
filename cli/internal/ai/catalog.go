@@ -391,6 +391,22 @@ func BuiltinCatalog() []ModelInfo {
 		case models[i].Provider == "openrouter" && strings.HasSuffix(models[i].ID, ":free"):
 			models[i].PriceSource = "builtin"
 		}
+
+		// Every Bedrock builtin declares its plane, because plane is part of
+		// route identity. Derived from the strategy each entry already
+		// declares rather than defaulted, so the two mantle builtins are not
+		// mislabelled classic. Doing it in one pass rather than at each of the
+		// six constructors means a builtin added later cannot forget.
+		//
+		// Region is deliberately left as authored: a builtin is a
+		// region-agnostic template ("Claude Sonnet 5 on classic") except
+		// where a model genuinely is region-locked (Cohere Rerank 3.5,
+		// us-east-1 only) or plane-pinned (the mantle pair). An unpinned
+		// builtin route is superseded by concrete per-region rows once
+		// discovery has run; see dropSupersededUnpinned.
+		if models[i].Provider == "bedrock" && models[i].Plane == "" {
+			models[i].Plane = planeForStrategy(models[i].InvokeStrategy)
+		}
 	}
 
 	return models

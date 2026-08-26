@@ -740,7 +740,7 @@ func runModelsRemove(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ai.RemoveUserCatalogEntry(scope, vaultRoot, removeProvider, modelID); err != nil {
+	if err := ai.RemoveUserCatalogEntry(scope, vaultRoot, ai.RouteKey{Provider: removeProvider, ID: modelID}); err != nil {
 		return fmt.Errorf("remove: %w", err)
 	}
 	slog.Info("models remove", "provider", removeProvider, "model", modelID, "scope", scope)
@@ -961,13 +961,23 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 // deliberately NOT preserved: persistProbedRegion owns it (a primary-region
 // pass must clear a stale pin, and preservation would resurrect it).
 func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
-	existing, ok := ai.UserCatalogEntry(scope, vaultRoot, entry.Provider, entry.ID)
+	// Resolve by route where the entry knows it, else by a UNIQUE row for the
+	// model. A probe result turned into a save often carries no plane yet, so
+	// an exact-route lookup would find nothing and the routing this function
+	// exists to rescue would be lost. Where several routes are stored the
+	// resolver deliberately returns nothing rather than grafting one
+	// endpoint's routing onto another.
+	existing, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, entry.Route())
 	if !ok {
-		slog.Debug("preserve routing fields: no existing scope entry, nothing to carry",
+		slog.Debug("preserve routing fields: no unique existing scope entry, nothing to carry",
 			"provider", entry.Provider, "model", entry.ID, "scope", scope)
 		return
 	}
 	var carried []string
+	if entry.Plane == "" && existing.Plane != "" {
+		entry.Plane = existing.Plane
+		carried = append(carried, "plane")
+	}
 	if entry.InvokeStrategy == "" && existing.InvokeStrategy != "" {
 		entry.InvokeStrategy = existing.InvokeStrategy
 		carried = append(carried, "invoke_strategy")

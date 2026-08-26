@@ -71,11 +71,11 @@ type wizardEvent struct {
 	LatencyMs int64             `json:"latency_ms,omitempty"`
 	Error     string            `json:"error,omitempty"`
 	// Code classifies a test_result failure (ai.TestErrorCode vocabulary).
-	Code string `json:"code,omitempty"`
-	Scope     string            `json:"scope,omitempty"`
-	Tested    int               `json:"tested,omitempty"`
-	Passed    int               `json:"passed,omitempty"`
-	Saved     int               `json:"saved,omitempty"`
+	Code   string `json:"code,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	Tested int    `json:"tested,omitempty"`
+	Passed int    `json:"passed,omitempty"`
+	Saved  int    `json:"saved,omitempty"`
 	// Keys names the config keys written by a set_active event (e.g.
 	// ["ai.provider", "ai.embedding_model", "ai.generation_model"]).
 	Keys []string `json:"keys,omitempty"`

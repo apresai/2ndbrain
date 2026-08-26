@@ -257,7 +257,7 @@ func discoverAddModels(v *vault.Vault, scope ai.UserCatalogScope, pool, catalog 
 	}
 	var added []ai.ModelInfo
 	for _, m := range resolved {
-		entry, exists := ai.UserCatalogEntry(scope, v.Root, m.Provider, m.ID)
+		entry, exists := ai.UserCatalogEntry(scope, v.Root, m.Route())
 		if !exists {
 			entry = ai.ModelInfo{
 				ID:       m.ID,

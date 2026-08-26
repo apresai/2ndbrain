@@ -66,25 +66,27 @@ func seedDiscoverCaches(t *testing.T, mantleUSEast1Models []ai.ModelInfo) string
 		}
 	}
 
+	// Rows carry their full ROUTE, matching what a live listing now produces.
 	write("bedrock-us-east-1-default.json", "us-east-1", []ai.ModelInfo{{
 		ID: "fake.classic-model-v1", Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
+		Plane: ai.PlaneClassic, Region: "us-east-1",
 	}})
 	write("bedrock-mantle-us-east-1-default.json", "us-east-1", mantleUSEast1Models)
-	write("bedrock-mantle-us-east-2-default.json", "us-east-2", []ai.ModelInfo{{
-		ID: "fake.mantle-east2-filler", Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
-		InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: "us-east-2",
-	}})
-	write("bedrock-mantle-us-west-2-default.json", "us-west-2", []ai.ModelInfo{{
-		ID: "fake.mantle-west2-filler", Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
-		InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: "us-west-2",
-	}})
+	write("bedrock-mantle-us-east-2-default.json", "us-east-2", []ai.ModelInfo{
+		fakeMantleRowIn("fake.mantle-east2-filler", "us-east-2"),
+	})
+	write("bedrock-mantle-us-west-2-default.json", "us-west-2", []ai.ModelInfo{
+		fakeMantleRowIn("fake.mantle-west2-filler", "us-west-2"),
+	})
 	return dir
 }
 
-func fakeMantleRow(id string) ai.ModelInfo {
+func fakeMantleRow(id string) ai.ModelInfo { return fakeMantleRowIn(id, "us-east-1") }
+
+func fakeMantleRowIn(id, region string) ai.ModelInfo {
 	return ai.ModelInfo{
 		ID: id, Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
-		InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: "us-east-1",
+		Plane: ai.PlaneMantle, InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: region,
 	}
 }
 
@@ -234,7 +236,7 @@ func TestContract_ModelsDiscoverSeededCache(t *testing.T) {
 	if len(added.Added) != 1 || added.Added[0] != "fake.mantle-model-v1" {
 		t.Fatalf("added = %v, want exactly fake.mantle-model-v1", added.Added)
 	}
-	entry, ok := ai.UserCatalogEntry(ai.ScopeVault, root, "bedrock", "fake.mantle-model-v1")
+	entry, ok := ai.UserCatalogEntry(ai.ScopeVault, root, ai.RouteKey{Provider: "bedrock", ID: "fake.mantle-model-v1", Plane: ai.PlaneMantle, Region: "us-east-1"})
 	if !ok {
 		t.Fatal("--add did not persist a vault catalog entry")
 	}
@@ -487,18 +489,36 @@ func TestContract_ModelsDiscoverHumanGoneWithEmptyPool(t *testing.T) {
 		t.Fatalf("expected a first run with a non-empty pool: %+v", first)
 	}
 
-	// Rewrite every cached listing to carry ONLY models the merged catalog
-	// already knows: mergeDiscovered grafts them onto their catalog rows, so
-	// the pool is empty while every bedrock source still answers from cache.
-	// (Empty cached listings would not work: readDiscoveryCache rejects
-	// zero-model entries, which would force a live walk.)
+	// Rewrite every cached listing to carry ONLY routes the merged catalog
+	// already knows, so the pool is empty while every bedrock source still
+	// answers from cache. (Empty cached listings would not work:
+	// readDiscoveryCache rejects zero-model entries, which would force a live
+	// walk.)
+	//
+	// "Already known" is now per-ROUTE, not per-id: a listing of gpt-5.5 in
+	// three regions is three routes, and only the one the builtin declares
+	// (us-east-2) is known. So each region is seeded with a route the catalog
+	// genuinely holds — the two mantle builtins for their own regions, and a
+	// vault row saved below for the third.
+	knownEast1 := ai.ModelInfo{
+		ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation", Tier: ai.TierUserVerified,
+		Plane: ai.PlaneMantle, InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: "us-east-1",
+	}
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, knownEast1); err != nil {
+		t.Fatalf("seed known us-east-1 route: %v", err)
+	}
 	writeDiscoverCacheListing(t, "bedrock-us-east-1-default.json", "us-east-1", []ai.ModelInfo{{
-		ID: "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
+		ID: "cohere.rerank-v3-5:0", Provider: "bedrock", Type: "rerank", Tier: ai.TierUnverified,
+		Plane: ai.PlaneClassic, Region: "us-east-1",
 	}})
-	for _, region := range []string{"us-east-1", "us-east-2", "us-west-2"} {
-		writeDiscoverCacheListing(t, "bedrock-mantle-"+region+"-default.json", region, []ai.ModelInfo{{
-			ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
-			InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: region,
+	for _, r := range []struct{ region, id string }{
+		{"us-east-1", "openai.gpt-5.5"},
+		{"us-east-2", "openai.gpt-5.5"},
+		{"us-west-2", "xai.grok-4.3"},
+	} {
+		writeDiscoverCacheListing(t, "bedrock-mantle-"+r.region+"-default.json", r.region, []ai.ModelInfo{{
+			ID: r.id, Provider: "bedrock", Type: "generation", Tier: ai.TierUnverified,
+			Plane: ai.PlaneMantle, InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: r.region,
 		}})
 	}
 

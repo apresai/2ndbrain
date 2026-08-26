@@ -66,9 +66,15 @@ func TestLive_ModelsDiscoverAndAddMantle_CredGated(t *testing.T) {
 	if len(added.Added) != 1 || added.Added[0] != pick {
 		t.Fatalf("added = %v, want exactly %s", added.Added, pick)
 	}
-	entry, ok := ai.UserCatalogEntry(ai.ScopeVault, root, "bedrock", pick)
+	// Look the row up by its full ROUTE. Before routes this was (provider,
+	// id), which could not distinguish the mantle row from a classic row of
+	// the same id — exactly the collision that let a classic save clobber a
+	// passing mantle entry.
+	entry, ok := ai.UserCatalogEntry(ai.ScopeVault, root, ai.RouteKey{
+		Provider: "bedrock", ID: pick, Plane: ai.PlaneMantle, Region: pickRegion,
+	})
 	if !ok {
-		t.Fatalf("--add did not persist a vault catalog entry for %s", pick)
+		t.Fatalf("--add did not persist a vault catalog entry for %s@mantle/%s", pick, pickRegion)
 	}
 	if entry.InvokeStrategy != ai.StrategyBedrockMantleResponses {
 		t.Fatalf("persisted invoke_strategy = %q, want the mantle strategy", entry.InvokeStrategy)

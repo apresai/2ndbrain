@@ -342,7 +342,7 @@ func TestRemoveUserCatalogEntry(t *testing.T) {
 	_ = SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{ID: "keep", Provider: "bedrock"})
 	_ = SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{ID: "drop", Provider: "bedrock"})
 
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", "bedrock", "drop"); err != nil {
+	if err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "drop"}); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	models := LoadUserCatalog("")
@@ -353,7 +353,7 @@ func TestRemoveUserCatalogEntry(t *testing.T) {
 
 func TestRemoveUserCatalogEntry_MissingFileIsNoOp(t *testing.T) {
 	setupHome(t)
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", "bedrock", "nope"); err != nil {
+	if err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "nope"}); err != nil {
 		t.Fatalf("expected no error for missing file, got: %v", err)
 	}
 }
@@ -368,7 +368,7 @@ func TestRemoveUserCatalogEntry_AbsentEntryPreservesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read before: %v", err)
 	}
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", "bedrock", "never-existed"); err != nil {
+	if err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "never-existed"}); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	after, err := os.ReadFile(globalCatalogPath())

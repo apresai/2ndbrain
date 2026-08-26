@@ -49,6 +49,14 @@ func LoadUserCatalog(vaultRoot string) []ModelInfo {
 	global := readCatalog(globalCatalogPath(), true).Models
 	perVault := readCatalog(vaultCatalogPath(vaultRoot), true).Models
 
+	// Fill in the plane of rows written before routes existed, so they still
+	// overlay onto the builtin they describe. Both scopes are canonicalized
+	// BEFORE they are merged with each other, or a legacy global row and a
+	// routed vault row for the same endpoint would fail to combine.
+	builtin := BuiltinCatalog()
+	canonicalizeUserRoutes(global, builtin)
+	canonicalizeUserRoutes(perVault, builtin)
+
 	merged := make([]ModelInfo, 0, len(global)+len(perVault))
 	merged = append(merged, global...)
 	merged = overlay(merged, perVault)
@@ -74,9 +82,13 @@ func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelI
 		return err
 	}
 
+	// Replace the row for this exact ROUTE. Matching on (provider, id) would
+	// let a probe of one endpoint overwrite another endpoint's verdict, which
+	// is how a passing mantle row used to be clobbered by a classic save.
 	replaced := false
+	want := routeKey(entry.Route())
 	for i := range cat.Models {
-		if cat.Models[i].Provider == entry.Provider && cat.Models[i].ID == entry.ID {
+		if routeKey(cat.Models[i].Route()) == want {
 			cat.Models[i] = entry
 			replaced = true
 			break
@@ -89,11 +101,11 @@ func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelI
 	return writeCatalog(path, cat)
 }
 
-// UserCatalogEntry returns the raw stored entry for (provider, id) from the
-// single catalog file at scope — no builtin merge, no overlay — so a caller
-// about to REPLACE an entry (SaveUserCatalogEntry is wholesale) can see
-// exactly what it would erase. ok is false when the file has no such entry.
-func UserCatalogEntry(scope UserCatalogScope, vaultRoot, provider, id string) (ModelInfo, bool) {
+// UserCatalogEntry returns the raw stored entry for one ROUTE from the single
+// catalog file at scope — no builtin merge, no overlay — so a caller about to
+// REPLACE an entry (SaveUserCatalogEntry is wholesale) can see exactly what it
+// would erase. ok is false when the file has no such entry.
+func UserCatalogEntry(scope UserCatalogScope, vaultRoot string, route RouteKey) (ModelInfo, bool) {
 	userCatalogMu.Lock()
 	defer userCatalogMu.Unlock()
 
@@ -105,18 +117,76 @@ func UserCatalogEntry(scope UserCatalogScope, vaultRoot, provider, id string) (M
 	if err != nil {
 		return ModelInfo{}, false
 	}
+	want := routeKey(route)
 	for _, m := range cat.Models {
-		if m.Provider == provider && m.ID == id {
+		if routeKey(m.Route()) == want {
 			return m, true
 		}
 	}
 	return ModelInfo{}, false
 }
 
-// RemoveUserCatalogEntry removes the matching (provider, id) from the catalog
-// at `scope`. Returns nil if the entry was not present — no empty catalog file
-// is written in that case.
-func RemoveUserCatalogEntry(scope UserCatalogScope, vaultRoot, provider, id string) error {
+// UserCatalogRouteToPreserve finds the stored row whose routing a save should
+// carry forward, for an entry that may not know its own route yet.
+//
+// It looks for an exact route match first. Failing that — the common case when
+// a probe result is turned into a save and carries no plane — it falls back to
+// the stored rows for that (provider, id), and returns one ONLY when there is
+// exactly one. With several routes stored, picking any of them would graft one
+// endpoint's routing onto another, which is the class of mistake route
+// identity exists to prevent, so it returns nothing and the caller keeps
+// whatever the probe actually established.
+func UserCatalogRouteToPreserve(scope UserCatalogScope, vaultRoot string, route RouteKey) (ModelInfo, bool) {
+	if m, ok := UserCatalogEntry(scope, vaultRoot, route); ok {
+		return m, true
+	}
+	if route.Plane != "" && route.Region != "" {
+		return ModelInfo{}, false
+	}
+
+	userCatalogMu.Lock()
+	defer userCatalogMu.Unlock()
+
+	path, err := catalogPathForScope(scope, vaultRoot)
+	if err != nil {
+		return ModelInfo{}, false
+	}
+	cat, err := readCatalogForWrite(path)
+	if err != nil {
+		return ModelInfo{}, false
+	}
+	var found ModelInfo
+	n := 0
+	for _, m := range cat.Models {
+		if m.Provider != route.Provider || m.ID != route.ID {
+			continue
+		}
+		// Honor any constraint the caller DID supply.
+		if route.Plane != "" && m.Plane != route.Plane {
+			continue
+		}
+		if route.Region != "" && m.Region != route.Region {
+			continue
+		}
+		found = m
+		n++
+	}
+	if n != 1 {
+		return ModelInfo{}, false
+	}
+	return found, true
+}
+
+// RemoveUserCatalogEntry removes rows from the catalog at `scope`.
+//
+// A route with a plane removes exactly that route. A route with an EMPTY plane
+// removes every route of that (provider, id): `models remove <id>` means "stop
+// tracking this model", and leaving three of its four endpoints behind would
+// be a surprising partial delete. Callers that mean one endpoint pass a
+// qualified route.
+//
+// Returns nil if nothing matched — no empty catalog file is written then.
+func RemoveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, route RouteKey) error {
 	userCatalogMu.Lock()
 	defer userCatalogMu.Unlock()
 
@@ -129,10 +199,16 @@ func RemoveUserCatalogEntry(scope UserCatalogScope, vaultRoot, provider, id stri
 		return err
 	}
 
+	allRoutes := route.Plane == "" && route.Region == ""
+	want := routeKey(route)
 	kept := cat.Models[:0]
 	removed := false
 	for _, m := range cat.Models {
-		if m.Provider == provider && m.ID == id {
+		match := routeKey(m.Route()) == want
+		if allRoutes {
+			match = m.Provider == route.Provider && m.ID == route.ID
+		}
+		if match {
 			removed = true
 			continue
 		}
@@ -273,14 +349,18 @@ func overlay(base, top []ModelInfo) []ModelInfo {
 	if len(top) == 0 {
 		return base
 	}
+	// Keyed by ROUTE, not (provider, id): two rows for the same model on
+	// different planes or in different regions are different endpoints with
+	// independent entitlement, so overlaying one onto the other would merge
+	// two unrelated verdicts into a single row.
 	index := map[string]int{}
 	for i, m := range base {
-		index[catalogKey(m.Provider, m.ID)] = i
+		index[routeKey(m.Route())] = i
 	}
 	out := make([]ModelInfo, len(base))
 	copy(out, base)
 	for _, m := range top {
-		key := catalogKey(m.Provider, m.ID)
+		key := routeKey(m.Route())
 		if i, ok := index[key]; ok {
 			out[i] = mergeFields(out[i], m)
 		} else {

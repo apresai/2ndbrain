@@ -373,6 +373,142 @@ func routeDemoted(m ModelInfo) bool {
 	return regionRetryable(code) || code == TestErrIncompatible
 }
 
+// planeForStrategy derives a Bedrock row's plane from the invoke strategy it
+// already declares. This is derivation from recorded fact, not a guess: the
+// mantle strategy names the mantle plane by definition, and every other
+// Bedrock dialect is a classic-plane one.
+func planeForStrategy(strategy string) Plane {
+	if strategy == StrategyBedrockMantleResponses {
+		return PlaneMantle
+	}
+	return PlaneClassic
+}
+
+// canonicalizeUserRoutes fills in the plane of user-catalog rows written
+// before routes existed, so they still overlay onto the builtin they describe.
+//
+// This is NOT the "guess the route" behavior routes exist to remove. It uses
+// only two sources, both recorded fact:
+//
+//  1. the row's own invoke_strategy, if it has one
+//  2. the plane of the builtin catalog entry with the SAME id, if one exists
+//
+// Anything else is left with an empty plane on purpose. Such a row is an
+// unpinned template that names no endpoint, and the invoke path refuses it
+// and asks the user to pick rather than falling through to classic Converse,
+// which is precisely the failure that motivated this work. The route it should
+// have is discovered by a walk, not deduced here.
+//
+// Without this, every pre-existing row would stop matching its builtin the
+// moment builtins gained a plane, silently dropping user price overrides,
+// tiers, and enable flags.
+func canonicalizeUserRoutes(rows []ModelInfo, builtin []ModelInfo) {
+	planeByID := make(map[string]Plane, len(builtin))
+	for _, b := range builtin {
+		if b.Provider == "bedrock" && b.Plane != "" {
+			planeByID[b.ID] = b.Plane
+		}
+	}
+	for i := range rows {
+		if rows[i].Provider != "bedrock" || rows[i].Plane != "" {
+			continue
+		}
+		if rows[i].InvokeStrategy != "" {
+			rows[i].Plane = planeForStrategy(rows[i].InvokeStrategy)
+			continue
+		}
+		if p, ok := planeByID[rows[i].ID]; ok {
+			rows[i].Plane = p
+		}
+	}
+}
+
+// RouteIsPinned reports whether a row names a concrete region. An unpinned
+// Bedrock row is a region-agnostic template ("Claude Sonnet 5 on classic")
+// rather than a callable endpoint: it resolves against whatever
+// ai.bedrock.region says at the time.
+func RouteIsPinned(m ModelInfo) bool { return m.Provider != "bedrock" || m.Region != "" }
+
+// routePlane identifies a model on one plane, across every region it is
+// served in. It is the grain at which an unpinned template is superseded.
+type routePlane struct {
+	provider, id string
+	plane        Plane
+}
+
+// PinnedRoutes records which models and planes have at least one CONCRETE
+// per-region row, at the two grains an unpinned template can be superseded at.
+type PinnedRoutes struct {
+	byPlane map[routePlane]bool
+	byModel map[string]bool
+}
+
+// pinnedRoutePlanes collects, across every list given, which (provider, id,
+// plane) triples and which (provider, id) pairs have a concrete per-region row.
+//
+// Both grains are needed because templates come in two shapes. A builtin
+// carries its plane but no region ("Claude Sonnet 5 on classic"), so it is
+// superseded only by concrete rows ON THAT PLANE — a mantle listing must not
+// retire a classic template. A legacy user row carries neither plane nor
+// region, so it names no endpoint at all and any concrete route of the same
+// model supersedes it.
+//
+// Callers pass all halves of the catalog at once, because concrete rows
+// normally arrive from discovery while the template sits among the builtins,
+// and deciding per-half would retire nothing.
+func pinnedRoutePlanes(lists ...[]ModelInfo) PinnedRoutes {
+	p := PinnedRoutes{byPlane: map[routePlane]bool{}, byModel: map[string]bool{}}
+	for _, rows := range lists {
+		for _, m := range rows {
+			if RouteIsPinned(m) {
+				p.byPlane[routePlane{m.Provider, m.ID, m.Plane}] = true
+				p.byModel[catalogKey(m.Provider, m.ID)] = true
+			}
+		}
+	}
+	return p
+}
+
+// supersedes reports whether concrete routes cover the template row m.
+func (p PinnedRoutes) supersedes(m ModelInfo) bool {
+	if RouteIsPinned(m) {
+		return false
+	}
+	if m.Plane == "" {
+		return p.byModel[catalogKey(m.Provider, m.ID)]
+	}
+	return p.byPlane[routePlane{m.Provider, m.ID, m.Plane}]
+}
+
+// dropSupersededUnpinned removes unpinned Bedrock rows whose (provider, id,
+// plane) already has concrete per-region routes.
+//
+// Builtins are authored without a region on purpose, so the catalog works
+// before any discovery walk has happened. But once discovery has produced real
+// per-region routes, keeping the unpinned row would list the model twice, and
+// the extra row is the strictly worse one: it is the only row that cannot say
+// which endpoint it calls, which is the ambiguity routes exist to remove. So
+// concrete routes win and the template retires.
+//
+// An explicitly-disabled template is kept rather than dropped: "I disabled
+// this model" is intent about the model, not about one endpoint, and silently
+// resurrecting a model the user turned off by retiring the row that carried
+// the flag would be a nasty surprise. Its Enabled state reaches the concrete
+// siblings through the vendor-policy and enable paths, which are model-keyed.
+func dropSupersededUnpinned(rows []ModelInfo, pinned PinnedRoutes) []ModelInfo {
+	if len(pinned.byModel) == 0 {
+		return rows
+	}
+	out := make([]ModelInfo, 0, len(rows))
+	for _, m := range rows {
+		if pinned.supersedes(m) && (m.Enabled == nil || *m.Enabled) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // inheritModelFacts fills MODEL facts (the properties shared by every route of
 // a given model) onto rows that lack them, sourcing from any row of the same
 // (provider, id). Fill-only-empty: an authored value is never overwritten,

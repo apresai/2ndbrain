@@ -524,4 +524,3 @@ func createVaultAt(cmd *cobra.Command, path string) error {
 	}
 	return nil
 }
-

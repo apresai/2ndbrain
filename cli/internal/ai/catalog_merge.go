@@ -118,6 +118,22 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 		}
 	}
 
+	// Retire unpinned route templates that concrete per-region rows now cover.
+	// Builtins are authored without a region so the catalog works before any
+	// discovery walk; once real routes exist, keeping the template would list
+	// the model twice and the extra row is the one that cannot say which
+	// endpoint it calls.
+	//
+	// The pinned set is computed across BOTH halves before either is filtered,
+	// because the concrete rows normally arrive as discovered (Unverified)
+	// while the template sits in Verified. Each half is then filtered
+	// independently, so no row changes halves.
+	if len(result.Unverified) > 0 {
+		pinned := pinnedRoutePlanes(result.Verified, result.Unverified)
+		result.Verified = dropSupersededUnpinned(result.Verified, pinned)
+		result.Unverified = dropSupersededUnpinned(result.Unverified, pinned)
+	}
+
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
 	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)
 
@@ -130,18 +146,38 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	return result, nil
 }
 
-// isActiveModel returns true if the model matches the current config.
+// isActiveModel returns true if the row is the ROUTE the config names for its
+// slot.
+//
+// Matching on the route rather than the bare id matters once a model has
+// several endpoints: with three grok-4.6 rows, an id-only comparison would
+// mark all three "active" and the GUI would show the model as current in
+// regions the user never selected. A config that predates routes has an empty
+// plane and region, so it still matches on id alone and behaves as before
+// until the route is picked.
 func isActiveModel(m ModelInfo, cfg AIConfig) bool {
 	if m.Provider != cfg.Provider {
 		return false
 	}
+	var want RouteKey
 	switch m.Type {
 	case "embedding":
-		return m.ID == cfg.EmbeddingModel
+		want = cfg.EmbeddingRoute()
 	case "generation":
-		return m.ID == cfg.GenerationModel
+		want = cfg.GenerationRoute()
+	default:
+		return false
 	}
-	return false
+	if want.ID == "" || m.ID != want.ID {
+		return false
+	}
+	if want.Plane != "" && m.Plane != want.Plane {
+		return false
+	}
+	if want.Region != "" && m.Region != want.Region {
+		return false
+	}
+	return true
 }
 
 // applyStatusChecks probes credentials and reachability for each provider
@@ -405,6 +441,13 @@ func dedupeDiscoveredRoutes(models []ModelInfo) []ModelInfo {
 	seen := make(map[string]bool, len(models))
 	out := make([]ModelInfo, 0, len(models))
 	for _, m := range models {
+		// Normalize before keying. Live listings stamp the plane themselves,
+		// but a row rehydrated from a disk cache written by another build may
+		// carry only the strategy, and an unplaned row would key as a distinct
+		// route from its own live twin.
+		if m.Provider == "bedrock" && m.Plane == "" && m.InvokeStrategy != "" {
+			m.Plane = planeForStrategy(m.InvokeStrategy)
+		}
 		k := routeKey(m.Route())
 		if seen[k] {
 			continue
@@ -533,6 +576,13 @@ func catalogCompatibility(m ModelInfo) (bool, string) {
 // its own cure — live incident 2026-08-21, xai.grok-4.6), and the CLI probe
 // save path (adoptCandidateRouting).
 func AdoptRoutingHints(entry *ModelInfo, from ModelInfo) {
+	// Plane is adopted first and on the same fill-only-empty rule. It is part
+	// of the row's identity, so a save path that carried the strategy but not
+	// the plane would persist the row under a DIFFERENT route key than the one
+	// it was probed as, and the verdict would land where nothing looks for it.
+	if entry.Plane == "" && from.Plane != "" {
+		entry.Plane = from.Plane
+	}
 	if entry.InvokeStrategy == "" && from.InvokeStrategy != "" {
 		entry.InvokeStrategy = from.InvokeStrategy
 	}
@@ -558,17 +608,24 @@ func AdoptRoutingHints(entry *ModelInfo, from ModelInfo) {
 // the row was manually removed. Mutates catalog rows in place (in-memory
 // only; nothing is persisted until a probe save).
 func mergeDiscovered(catalog []ModelInfo, discovered []ModelInfo) []ModelInfo {
+	// Keyed by ROUTE: a discovered row folds into the catalog row for the same
+	// endpoint, and a newly-discovered endpoint of an already-known model is a
+	// genuinely new row rather than something to graft onto a sibling.
 	idx := make(map[string]int, len(catalog))
 	for i, c := range catalog {
-		idx[catalogKey(c.Provider, c.ID)] = i
+		idx[routeKey(c.Route())] = i
 	}
 	var unverified []ModelInfo
 	for _, m := range discovered {
-		if i, ok := idx[catalogKey(m.Provider, m.ID)]; ok {
+		if i, ok := idx[routeKey(m.Route())]; ok {
 			AdoptRoutingHints(&catalog[i], m)
 			continue
 		}
 		unverified = append(unverified, m)
 	}
+	// A per-region row for a model whose only catalog entry is an unpinned
+	// builtin would otherwise render nameless and unpriced, because builtins
+	// declare those facts exactly once and no longer share the row's key.
+	inheritModelFacts(unverified, catalog)
 	return unverified
 }
