@@ -100,9 +100,15 @@ func ResolveSlotRoute(slot string, want RouteKey, rows []ModelInfo) (SlotRoute, 
 		out.Strategy, out.Endpoint = m.InvokeStrategy, m.Endpoint
 		return out, nil
 	default:
-		// Collapse rows that are the same endpoint before calling it
-		// ambiguous, so a duplicate row cannot manufacture a refusal.
+		// Collapse rows that are the same endpoint, then retire any unpinned
+		// template that concrete routes already cover, BEFORE calling it
+		// ambiguous. Neither is a real alternative endpoint, and counting
+		// them would manufacture a refusal out of one route: a legacy catalog
+		// row canonicalizes onto its builtin's plane while keeping no region,
+		// so almost every upgraded vault would otherwise see its working
+		// generation model reported as ambiguous with itself.
 		uniq := dedupeDiscoveredRoutes(matches)
+		uniq = dropSupersededUnpinned(uniq, pinnedRoutePlanes(uniq))
 		if len(uniq) == 1 {
 			out.Route = uniq[0].Route()
 			out.Strategy, out.Endpoint = uniq[0].InvokeStrategy, uniq[0].Endpoint

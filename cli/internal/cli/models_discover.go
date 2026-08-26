@@ -450,20 +450,29 @@ func printDiscoverListing(report discoverReport, baselineSaved bool) {
 	}
 }
 
-// discoverRouteLabel names the plane a discovered row would invoke over:
-// "mantle <region>" for hint-carrying mantle listings, "classic" for
-// control-plane Bedrock rows, the provider's own path otherwise.
+// discoverRouteLabel names the endpoint a discovered row would invoke:
+// "<plane> <region>" for Bedrock, the provider's own path otherwise.
+//
+// The region is not decoration. Now that discovery keeps one row per
+// (plane, region), omitting it renders three genuinely different endpoints as
+// three identical-looking "classic" lines, which reads as a duplicate bug and
+// hides the very distinction the listing exists to show.
 func discoverRouteLabel(m ai.ModelInfo) string {
-	if m.InvokeStrategy == ai.StrategyBedrockMantleResponses {
-		if m.Region != "" {
-			return "mantle " + m.Region
+	if m.Provider != "bedrock" {
+		return m.Provider
+	}
+	plane := string(m.Plane)
+	if plane == "" {
+		if m.InvokeStrategy == ai.StrategyBedrockMantleResponses {
+			plane = string(ai.PlaneMantle)
+		} else {
+			plane = string(ai.PlaneClassic)
 		}
-		return "mantle"
 	}
-	if m.Provider == "bedrock" {
-		return "classic"
+	if m.Region != "" {
+		return plane + " " + m.Region
 	}
-	return m.Provider
+	return plane
 }
 
 // formatSourceAge renders one source's freshness: "just now", "3h ago",

@@ -67,7 +67,11 @@ func (a DiscoverySourceAge) Age() time.Duration {
 // read as a defect.
 func DiscoveryCacheAges(cfg BedrockConfig) []DiscoverySourceAge {
 	var out []DiscoverySourceAge
-	for _, region := range ResolveBedrockRegions(cfg) {
+	// Report every region the classic walk actually covers, not just the
+	// configured ones. Reporting a narrower set than discoverVendorModels
+	// walks makes the freshness view lie: it would show one classic source
+	// while three were fetched, so a stale or failing region stays invisible.
+	for _, region := range BedrockDiscoveryRegions(cfg) {
 		path, err := classicDiscoveryCachePathForRegion(cfg, region)
 		out = append(out, discoverySourceAge("classic", region, path, err))
 	}

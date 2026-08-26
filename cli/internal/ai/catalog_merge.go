@@ -128,11 +128,15 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// because the concrete rows normally arrive as discovered (Unverified)
 	// while the template sits in Verified. Each half is then filtered
 	// independently, so no row changes halves.
-	if len(result.Unverified) > 0 {
-		pinned := pinnedRoutePlanes(result.Verified, result.Unverified)
-		result.Verified = dropSupersededUnpinned(result.Verified, pinned)
-		result.Unverified = dropSupersededUnpinned(result.Unverified, pinned)
-	}
+	//
+	// This runs whether or not discovery was requested. A legacy user row and
+	// the builtin it describes are BOTH in Verified — the row canonicalizes to
+	// the builtin's plane but keeps no region — so gating on discovery left
+	// that pair un-retired, listing the model twice and (worse) making its
+	// slot look ambiguous to the invoke path.
+	pinned := pinnedRoutePlanes(result.Verified, result.Unverified)
+	result.Verified = dropSupersededUnpinned(result.Verified, pinned)
+	result.Unverified = dropSupersededUnpinned(result.Unverified, pinned)
 
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
 	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)
