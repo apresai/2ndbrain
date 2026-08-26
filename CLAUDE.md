@@ -52,6 +52,8 @@ Format `major.minor.build`; the single source of truth is the `VERSION` file at 
 
 Both products ship via Homebrew (`brew install apresai/tap/2nb`; `brew install --cask apresai/tap/secondbrain`). The machine-readable release contract is [`.release.yaml`](.release.yaml) (read by the `oss-release` skill); keep it in sync with the Makefile.
 
+**A curated `## [Unreleased]` block IS the release notes.** `scripts/update-changelog.sh` treats hand-written entries as authoritative and promotes them verbatim under the new version heading (the commit summarizer runs only when nothing human-authored exists). So write that block as user-facing copy, not as engineering notes, and read it once before the front door: an overclaim there ships. Mechanics: [docs/release-playbook.md](docs/release-playbook.md).
+
 **`make release-all` is the front door** (canonical clone only; needs gitignored `scripts/sign.env`): test gate, bump (`BUMP=build|minor|major|none`), tag, wait for CI, then sign/notarize/publish the app + cask, verifying every product shipped at one version. The two-step model underneath: (1) GitHub Actions on tag push ships the CLI via GoReleaser to `apresai/homebrew-tap` (pure Go, both architectures from one runner) and uploads the Obsidian plugin assets to the GitHub release (**CI never builds the macOS app or cask**); (2) `make release-app` locally builds, Developer ID-signs, notarizes, staples, and publishes the DMG + cask (signing keys never enter CI). `release-app` is checkpointed and resumable (`build/release-state-<VERSION>.json`); `make release-app-status` reports without changing anything; `RELEASE_NOWAIT=1` submits and exits; `make release-local` is a CLI-only local release. The app bundles a version-matched `2nb` at `Contents/Resources/2nb` and strips its quarantine at launch (`CLIPath.prepareBundledCLI()`); the cask still depends on the `twonb` formula so the terminal and plugin have a PATH `2nb`. Signing order, notarization self-heal, DMG sweep rules, and every failure mode: [docs/release-playbook.md](docs/release-playbook.md).
 
 ## Build
@@ -60,7 +62,7 @@ Both products ship via Homebrew (`brew install apresai/tap/2nb`; `brew install -
 make build              # Both CLI and app (regenerates Version.swift)
 make build-cli          # cli/bin/2nb only
 make build-app          # macOS app
-make test               # CLAUDE.md size gate + all Go tests
+make test               # Doc + release-script gates, then all Go tests
 cd cli && make install  # Install to /usr/local/bin/2nb
 ```
 
@@ -73,7 +75,7 @@ open app/.build/arm64-apple-macosx/debug/SecondBrain.app
 ## Testing
 
 ```bash
-make test               # CLAUDE.md size gate + Go unit tests
+make test               # Doc + release-script gates, then Go unit tests
 make test-battery       # Golden-path E2E battery (cli/battery_test.go)
 make test-usage         # MCP write->query index round-trips + real-binary E2E battery; catches index-consistency regressions (AI steps skip without creds)
 make test-swift         # Swift unit tests
@@ -88,9 +90,11 @@ Go tests use `t.TempDir()` for isolated vaults; run with `cd cli && make test` (
 
 **All tests MUST use real API endpoints, local or paid. Mocks (`httptest.NewServer`, fake responses, stub implementations) are NOT allowed.** Tests needing a provider call the real API and skip if credentials/services are unavailable. This applies to AI provider tests (Bedrock, OpenRouter, Ollama), MCP tests, and any future integration tests.
 
-- Bedrock: real AWS credentials; skip if not configured
-- OpenRouter: real `OPENROUTER_API_KEY`; skip if not set
-- Ollama: real server at localhost:11434; skip if not running or model not pulled
+- Bedrock: real AWS credentials
+- OpenRouter: real `OPENROUTER_API_KEY`
+- Ollama: real server at localhost:11434
+
+**Skip on capability, not configuration.** A test that needs a provider probes once per test binary and skips when the provider cannot actually serve a request. Gating on "is the env var set" makes a configured-but-unusable provider FAIL the test instead of skipping it, which is how transient noise once read as a product regression. Helpers: `requireEmbedding` / `requireEmbeddingHostHome` (`cli/capability_test.go`), `requireEmbeddings` (in-package). CI runs the suite credential-free on every PR, so this is enforced.
 - Pure logic tests (string classification, price parsing) that don't call any API are fine
 
 ### GUI Test Automation

@@ -33,6 +33,21 @@ func TestClassifyProbeError(t *testing.T) {
 		{"access denied", "bedrock", smithyErr("AccessDeniedException"), TestErrAccessDenied},
 		{"access denied wrapped", "bedrock", fmt.Errorf("invoke m: %w", smithyErr("AccessDeniedException")), TestErrAccessDenied},
 		{"access denied bare", "bedrock", smithyErr("AccessDenied"), TestErrAccessDenied},
+		// Bedrock answers a MALFORMED API key with AccessDenied, not with an
+		// auth-shaped code. Taken at face value the user is sent to fix IAM
+		// permissions for what is actually a bad key, and the readiness
+		// remediation explicitly rules the credential explanation out. Message
+		// text observed live from a bogus AWS_BEARER_TOKEN_BEDROCK.
+		{"access denied from a malformed api key is a credential problem", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Invalid API Key format: Must start with pre-defined prefix"},
+			TestErrBadCredentials},
+		{"access denied from an invalid security token is a credential problem", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "The security token included in the request is invalid"},
+			TestErrBadCredentials},
+		// A genuine entitlement gap must NOT be diverted to credentials.
+		{"access denied for a gated model stays access_denied", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "You don't have access to the model with the specified model ID."},
+			TestErrAccessDenied},
 		{"not found", "bedrock", smithyErr("ResourceNotFoundException"), TestErrNotFound},
 		{"throttled", "bedrock", smithyErr("ThrottlingException"), TestErrThrottled},
 		{"too many requests", "bedrock", smithyErr("TooManyRequestsException"), TestErrThrottled},

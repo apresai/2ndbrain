@@ -176,11 +176,38 @@ func isCredentialResolutionFailure(msg string) bool {
 	return false
 }
 
+// isMalformedKeyMessage reports whether an access-denied body is really about
+// the credential itself rather than about what the principal may do. Kept
+// deliberately narrow: a false positive here would tell someone with a genuine
+// IAM gap to go looking at their key.
+func isMalformedKeyMessage(msg string) bool {
+	msg = strings.ToLower(msg)
+	switch {
+	case strings.Contains(msg, "invalid api key"),
+		strings.Contains(msg, "api key format"),
+		strings.Contains(msg, "pre-defined prefix"),
+		strings.Contains(msg, "the security token included in the request is invalid"):
+		return true
+	}
+	return false
+}
+
 func classifySmithyError(apiErr smithy.APIError) TestErrorCode {
 	code := apiErr.ErrorCode()
 	switch {
 	case strings.EqualFold(code, "AccessDeniedException"),
 		strings.EqualFold(code, "AccessDenied"):
+		// Bedrock answers a MALFORMED or expired API key with AccessDenied too,
+		// not with an auth-shaped code. Taking that at face value sends the user
+		// to fix IAM permissions for what is actually a bad key, and the
+		// readiness remediation goes further and explicitly rules the credential
+		// explanation out. The message body is the only thing that separates
+		// them. Verified live: a bogus AWS_BEARER_TOKEN_BEDROCK returns
+		// "AccessDeniedException: Invalid API Key format: Must start with
+		// pre-defined prefix".
+		if isMalformedKeyMessage(apiErr.ErrorMessage()) {
+			return TestErrBadCredentials
+		}
 		return TestErrAccessDenied
 	case strings.EqualFold(code, "ResourceNotFoundException"):
 		return TestErrNotFound
