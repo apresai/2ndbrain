@@ -41,12 +41,21 @@ func TestClassifyProbeError(t *testing.T) {
 		{"access denied from a malformed api key is a credential problem", "bedrock",
 			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Invalid API Key format: Must start with pre-defined prefix"},
 			TestErrBadCredentials},
-		{"access denied from an invalid security token is a credential problem", "bedrock",
-			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "The security token included in the request is invalid"},
+		// The everyday case: a WELL-FORMED key that was revoked, rotated, or
+		// expired. Missing this was the whole point of the fix, since a malformed
+		// key is a one-time copy-paste error and a dead key is not.
+		{"access denied from a revoked or expired key is a credential problem", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Authentication failed: Please make sure your API Key is valid."},
+			TestErrBadCredentials},
+		{"access denied from a malformed key delimiter is a credential problem", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Invalid API Key format: Delimiter ':' not found"},
 			TestErrBadCredentials},
 		// A genuine entitlement gap must NOT be diverted to credentials.
 		{"access denied for a gated model stays access_denied", "bedrock",
 			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "You don't have access to the model with the specified model ID."},
+			TestErrAccessDenied},
+		{"access denied for a missing IAM permission stays access_denied", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "User: arn:aws:iam::1:user/x is not authorized to perform: bedrock:ListFoundationModels"},
 			TestErrAccessDenied},
 		{"not found", "bedrock", smithyErr("ResourceNotFoundException"), TestErrNotFound},
 		{"throttled", "bedrock", smithyErr("ThrottlingException"), TestErrThrottled},

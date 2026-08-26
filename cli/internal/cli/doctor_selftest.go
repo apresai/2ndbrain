@@ -210,13 +210,15 @@ func modelCheck(label, modelID string, res *ai.TestProbeResult) DoctorCheck {
 // It must weigh ALL probes before deciding, because the two Bedrock planes
 // report a bad key differently and a single result is not enough to judge:
 // the mantle plane returns 401 with error.code=invalid_api_key (classified
-// bad_credentials), while the classic runtime plane answers a bogus bearer
-// token with a plain 403 that classifies as access_denied. So access_denied
-// on its own does NOT prove the request authenticated — measured live against
-// a deliberately invalid token, where the embedding probe 403'd and only the
-// mantle generation probe revealed the key was junk. Reporting "key accepted"
-// off that 403 would send a user with a dead key looking for an entitlement
-// problem they do not have.
+// bad_credentials), while the classic plane answers a bad bearer token with a
+// 403 AccessDenied. ClassifyProbeError now reads that 403's message body and
+// classifies the known bad-key phrasings as bad_credentials, so the common case
+// resolves on the classic plane alone. The rule below still stands for the rest:
+// a 403 whose body does NOT name the key is genuinely ambiguous between "not
+// entitled" and "key the service will not explain", so access_denied on its own
+// does NOT prove the request authenticated. Reporting "key accepted" off such a
+// 403 would send a user with a dead key looking for an entitlement problem they
+// do not have.
 //
 // Precedence, strongest evidence first:
 //

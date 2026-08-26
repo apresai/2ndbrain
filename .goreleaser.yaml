@@ -9,9 +9,20 @@ version: 2
 project_name: 2nb
 
 before:
+  # GoReleaser runs a hook WITHOUT a shell: it splits the string and execs the
+  # first word. `cd cli && go test ./...` therefore ran /usr/bin/cd with the
+  # rest as arguments, which exits 0 on macOS, so this gate silently passed
+  # without ever compiling or testing anything. Measured on the v0.20.0 release
+  # run: both hooks "completed" in under 20ms on a cold module cache. `dir` is
+  # the native way to say what the `cd` was reaching for.
+  #
+  # This is only safe to actually enable now: the release runner has no
+  # credentials, and until the capability gating landed these tests FAILED
+  # rather than skipped in that environment, which is why a dead gate was never
+  # noticed.
   hooks:
-    - cd cli && go mod tidy
-    - cd cli && go test -short ./...
+    - go -C cli mod tidy
+    - go -C cli test -short ./...
 
 builds:
   - id: 2nb
