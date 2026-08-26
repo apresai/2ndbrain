@@ -1041,15 +1041,39 @@ func CheckBedrockCredentials(ctx context.Context, cfg BedrockConfig) bool {
 // vaultRoot scopes user-catalog invoke-strategy lookups (a vault-scoped mantle
 // entry must dispatch to the mantle client); pass "" when no vault is open.
 func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AIConfig, vaultRoot string) error {
+	// Resolve each slot to ONE endpoint before constructing anything. A model
+	// with several routes and a config that names none of them is refused
+	// here, with the pick commands to run. Previously such a slot fell
+	// through to classic Converse, which is how a mantle-only id reached a
+	// plane that cannot serve it.
+	rows := LoadUserCatalog(vaultRoot)
+	rows = append(rows, BuiltinCatalog()...)
+
+	embedRoute, err := ResolveSlotRoute("embedding", aiCfg.EmbeddingRoute(), rows)
+	if err != nil {
+		return err
+	}
 	embedCfg := cfg
-	carryVaultRegionPin(&embedCfg, aiCfg.EmbeddingModel, vaultRoot)
+	if embedRoute.Route.Region != "" {
+		embedCfg.RegionOverride = embedRoute.Route.Region
+	} else {
+		carryVaultRegionPin(&embedCfg, aiCfg.EmbeddingModel, vaultRoot)
+	}
 	embedder, err := NewBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions)
 	if err != nil {
 		return fmt.Errorf("init bedrock embedder: %w", err)
 	}
 	reg.RegisterEmbedder("bedrock", embedder)
 
-	generator, err := NewBedrockGeneration(ctx, cfg, aiCfg.GenerationModel, vaultRoot)
+	genRoute, err := ResolveSlotRoute("generation", aiCfg.GenerationRoute(), rows)
+	if err != nil {
+		return err
+	}
+	genCfg := cfg
+	if genRoute.Route.Region != "" {
+		genCfg.RegionOverride = genRoute.Route.Region
+	}
+	generator, err := NewBedrockGenerationRouted(ctx, genCfg, aiCfg.GenerationModel, vaultRoot, genRoute.Strategy)
 	if err != nil {
 		return fmt.Errorf("init bedrock generator: %w", err)
 	}

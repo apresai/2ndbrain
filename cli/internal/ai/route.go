@@ -94,6 +94,19 @@ func (k RouteKey) String() string {
 	return b.String()
 }
 
+// Unqualified renders the route WITHOUT the provider prefix: id@plane/region.
+//
+// This is the form to print in a suggested shell command. The provider prefix
+// uses '|', which a shell reads as a pipe, so a suggestion carrying it would
+// not survive being pasted. Anywhere the provider is already implied — a
+// config slot, a --provider flag — this is the right rendering; String() stays
+// for keys and logs where full qualification matters more than pasteability.
+func (k RouteKey) Unqualified() string {
+	bare := k
+	bare.Provider = ""
+	return bare.String()
+}
+
 // RouteRef is a possibly-partial, user-supplied reference to a route. An empty
 // field means "unconstrained" and is filled by matching against the catalog; a
 // match count other than exactly one is an error, never a first-match-wins pick.
@@ -205,7 +218,10 @@ func (e *AmbiguousRouteError) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s matches %d routes; qualify it as one of:", e.Ref.String(), len(e.Candidates))
 	for _, c := range e.Candidates {
-		fmt.Fprintf(&b, "\n  %-42s %s", c.Route().String(), routeVerdict(c))
+		// Unqualified, because these lines are meant to be pasted back as an
+		// argument and the provider prefix uses '|', which the shell would
+		// read as a pipe.
+		fmt.Fprintf(&b, "\n  %-42s %s", c.Route().Unqualified(), routeVerdict(c))
 	}
 	return b.String()
 }
