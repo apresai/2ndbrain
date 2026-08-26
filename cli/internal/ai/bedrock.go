@@ -679,6 +679,34 @@ func NewBedrockGeneration(ctx context.Context, cfg BedrockConfig, model, vaultRo
 // us.xai.grok-4.6 builtin must not drag the mantle-listed bare xai.grok-4.6
 // onto Converse — observed live 2026-08-20 as a ValidationException before
 // this constructor adopted the shared precedence).
+// NewBedrockGenerationForRoute constructs the generation client for an
+// ALREADY-RESOLVED route, and is the only correct entry point once a slot's
+// route is known.
+//
+// It exists because the strategy-hint path below cannot express "I have
+// decided". effectiveInvokeStrategy consults two plane-blind exact-id catalog
+// lookups BEFORE it reads the hint, so a configured route lost to whatever the
+// catalog said first: with `ai.generation_plane: classic` on openai.gpt-5.5
+// (whose builtin is a mantle row), the pin resolved classic and the client
+// dispatched MANTLE. That is the same class of silent misroute this whole
+// change exists to remove, reintroduced one layer down.
+//
+// With an explicit plane, the plane IS the answer and no catalog lookup runs.
+// An empty plane means the route is genuinely unknown (a model no catalog has
+// seen), and only then does the legacy hint precedence apply.
+func NewBedrockGenerationForRoute(ctx context.Context, cfg BedrockConfig, route SlotRoute, vaultRoot string) (GenerationProvider, error) {
+	model := route.Route.ID
+	switch route.Route.Plane {
+	case PlaneMantle:
+		slog.Debug("bedrock generation: mantle plane, from the resolved route", "model", model, "region", route.Route.Region)
+		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
+	case PlaneClassic:
+		slog.Debug("bedrock generation: classic plane, from the resolved route", "model", model, "region", route.Route.Region)
+		return newBedrockGeneratorForClassicRoute(ctx, cfg, model)
+	}
+	return NewBedrockGenerationRouted(ctx, cfg, model, vaultRoot, route.Strategy)
+}
+
 func NewBedrockGenerationRouted(ctx context.Context, cfg BedrockConfig, model, vaultRoot, strategyHint string) (GenerationProvider, error) {
 	strategy := effectiveInvokeStrategy("bedrock", ModelInfo{ID: model, Provider: "bedrock", InvokeStrategy: strategyHint}, vaultRoot)
 	if strategy == StrategyBedrockMantleResponses {
@@ -701,6 +729,27 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 	}
 	cfg = ResolveBedrockConfig(cfg)
 	cfg.Region = EffectiveBedrockRegion(cfg, model, "")
+	return newBedrockGeneratorIn(ctx, cfg, model)
+}
+
+// newBedrockGeneratorForClassicRoute builds the Converse client for a route
+// whose plane is EXPLICITLY classic.
+//
+// It skips the mantle backstop in NewBedrockGenerator on purpose. That guard
+// asks the catalog "is this id mantle?", which is exactly the plane-blind
+// question route identity replaces: a dual-plane id would answer yes and
+// refuse to build the classic client the user explicitly asked for. The route
+// already carries the answer, so the guard has nothing left to protect and
+// would only veto a correct decision.
+//
+// The region still comes from cfg (the caller sets RegionOverride from the
+// route), so ResolveBedrockConfig's precedence applies unchanged.
+func newBedrockGeneratorForClassicRoute(ctx context.Context, cfg BedrockConfig, model string) (*BedrockGenerator, error) {
+	cfg = ResolveBedrockConfig(cfg)
+	return newBedrockGeneratorIn(ctx, cfg, model)
+}
+
+func newBedrockGeneratorIn(ctx context.Context, cfg BedrockConfig, model string) (*BedrockGenerator, error) {
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -1073,7 +1122,7 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	if genRoute.Route.Region != "" {
 		genCfg.RegionOverride = genRoute.Route.Region
 	}
-	generator, err := NewBedrockGenerationRouted(ctx, genCfg, aiCfg.GenerationModel, vaultRoot, genRoute.Strategy)
+	generator, err := NewBedrockGenerationForRoute(ctx, genCfg, genRoute, vaultRoot)
 	if err != nil {
 		return fmt.Errorf("init bedrock generator: %w", err)
 	}

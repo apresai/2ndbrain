@@ -545,11 +545,21 @@ func TestContract_ModelsVerifyMultiRegion_CredGated(t *testing.T) {
 		t.Fatalf("result region = %q, want the primary us-east-1", result.Result.Region)
 	}
 
-	// A primary-region pass must persist WITHOUT a region pin.
+	// A pass persists the row WITH the region it actually probed.
+	//
+	// This assertion used to be the opposite: a primary-region pass had to
+	// leave Region empty, because blanking the pin was the self-heal that
+	// returned a model to the default route. Under route identity that is
+	// backwards. Region is part of the key, so saving it cleared writes a
+	// SECOND row rather than replacing the pinned one, and the stale pinned
+	// row then wins (dropSupersededUnpinned retires the unpinned one as a
+	// template) — leaving a user permanently stuck on a fallback region.
+	// The self-heal now happens by recording a verdict on the primary route's
+	// own row, which PreferRoutes ranks above its siblings.
 	for _, m := range ai.LoadUserCatalog(root) {
 		if m.ID == model && m.Provider == "bedrock" {
-			if m.Region != "" {
-				t.Fatalf("primary pass persisted a region pin: %q", m.Region)
+			if m.Region != "us-east-1" {
+				t.Fatalf("pass did not record the probed region: %q, want us-east-1", m.Region)
 			}
 			return
 		}
@@ -766,14 +776,18 @@ func TestAdoptCandidateRouting(t *testing.T) {
 		t.Errorf("existing routing overwritten: %+v", kept)
 	}
 
-	// A classic candidate (empty strategy) must never plant a Region:
-	// persistProbedRegion owns classic pins, and a primary-region pass
-	// clears them on purpose.
-	classicCandidate := ai.ModelInfo{ID: "us.acme.model-1", Provider: "bedrock", Type: "generation", Region: "us-west-2"}
+	// A classic candidate's region IS adopted now. This assertion used to be
+	// its exact opposite ("classic region must stay under
+	// persistProbedRegion's control"), which was right while region was a
+	// mutable pin with two owners. Under route identity region is part of the
+	// key, and refusing to adopt it meant a classic per-region route could
+	// never be persisted: the row printed as `us.acme.model-1@classic/us-west-2`
+	// and stored as `us.acme.model-1@classic`.
+	classicCandidate := ai.ModelInfo{ID: "us.acme.model-1", Provider: "bedrock", Type: "generation", Plane: ai.PlaneClassic, Region: "us-west-2"}
 	classicEntry := ai.ModelInfo{ID: "us.acme.model-1", Provider: "bedrock", Type: "generation"}
 	adoptCandidateRouting(&classicEntry, classicCandidate)
-	if classicEntry.Region != "" {
-		t.Errorf("classic region must stay under persistProbedRegion's control, got %q", classicEntry.Region)
+	if classicEntry.Region != "us-west-2" || classicEntry.Plane != ai.PlaneClassic {
+		t.Errorf("classic route not adopted, so it could not be persisted: %+v", classicEntry)
 	}
 }
 

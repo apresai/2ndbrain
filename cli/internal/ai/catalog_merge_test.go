@@ -431,12 +431,19 @@ func TestAdoptRoutingHints(t *testing.T) {
 		}
 	})
 
-	t.Run("region is adopted only under the mantle strategy", func(t *testing.T) {
+	// This subtest used to assert the OPPOSITE: that a classic region was
+	// never adopted, because region was a mutable pin owned by
+	// persistProbedRegion. Under route identity region is part of the key, and
+	// that rule meant a classic per-region route could not be persisted at
+	// all — `discover --add` printed `x@classic/us-east-2` and stored
+	// `x@classic`, so the three-region classic sweep produced rows the user
+	// catalog could never hold.
+	t.Run("a classic region is adopted, because region is identity", func(t *testing.T) {
 		entry := ModelInfo{ID: "x", Provider: "bedrock"}
-		classic := ModelInfo{ID: "x", Provider: "bedrock", Region: "us-east-2"}
+		classic := ModelInfo{ID: "x", Provider: "bedrock", Plane: PlaneClassic, Region: "us-east-2"}
 		AdoptRoutingHints(&entry, classic)
-		if entry.Region != "" {
-			t.Fatalf("classic region adopted; persistProbedRegion owns classic pins: %+v", entry)
+		if entry.Region != "us-east-2" || entry.Plane != PlaneClassic {
+			t.Fatalf("classic route not adopted, so it could never be persisted: %+v", entry)
 		}
 	})
 

@@ -1017,25 +1017,32 @@ func adoptCandidateRouting(entry *ai.ModelInfo, candidate ai.ModelInfo) {
 	ai.AdoptRoutingHints(entry, candidate)
 }
 
-// persistProbedRegion records where a classic-Bedrock model actually passed so
-// future generation/embedding invokes route there (EffectiveBedrockRegion
-// honors the pin). A pass in the PRIMARY region clears any stale pin — every
-// verify re-checks primary first, so a model that regains primary access
-// self-heals back to the default route. Failures leave the pin untouched, and
-// mantle models are excluded (their builtin endpoint pins must never be
-// clobbered by a probe that never used them).
+// persistProbedRegion stamps the row with the region the probe actually used,
+// so the verdict is recorded against the endpoint that produced it.
+//
+// It no longer clears the region on a primary-region pass. That clearing was
+// the old self-heal: region was a mutable pin, so blanking it returned the
+// model to the default route. Under route identity it does the opposite of
+// what it says. Region is part of the key, so a save with the region cleared
+// writes a SECOND row rather than replacing the pinned one, and the stale
+// pinned row then WINS, because dropSupersededUnpinned retires the unpinned
+// one as a template. A user regaining primary-region access would have been
+// permanently stuck on the fallback region with no command to clear it.
+//
+// The self-heal still happens, one level up: every verify re-probes the
+// primary region first (regionAttempts), and a pass there now records a
+// verdict on the primary route's own row, which PreferRoutes ranks above its
+// siblings. Recording the truth about each endpoint replaces mutating one
+// shared field.
+//
+// Mantle rows keep their endpoint region, which the probe reports unchanged.
 func persistProbedRegion(entry *ai.ModelInfo, result *ai.TestProbeResult, primaryRegion string) {
-	if !result.OK || result.Provider != "bedrock" || result.Region == "" {
+	if result.Provider != "bedrock" || result.Region == "" {
 		return
 	}
-	if result.Strategy == ai.StrategyBedrockMantleResponses {
-		return
+	if entry.Region == "" {
+		entry.Region = result.Region
 	}
-	if result.Region == primaryRegion {
-		entry.Region = ""
-		return
-	}
-	entry.Region = result.Region
 }
 
 func findModelInfo(ctx context.Context, cfg ai.AIConfig, vaultRoot, provider, id string) (ai.ModelInfo, bool) {

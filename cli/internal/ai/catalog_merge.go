@@ -594,8 +594,17 @@ func AdoptRoutingHints(entry *ModelInfo, from ModelInfo) {
 	if entry.ContextLen == 0 && from.ContextLen != 0 {
 		entry.ContextLen = from.ContextLen
 	}
-	if entry.Region == "" && from.Region != "" &&
-		entry.InvokeStrategy == StrategyBedrockMantleResponses {
+	// Region is adopted for EVERY plane, not just mantle.
+	//
+	// The mantle-only guard was correct before routes: region was a mutable
+	// pin with two owners, and persistProbedRegion owned the classic side.
+	// Now region is part of the row's identity, and that guard meant a classic
+	// per-region row could never be persisted at all: `discover --add` printed
+	// `some.model@classic/us-west-2` and stored `some.model@classic`. The
+	// three-region classic sweep produced rows the user catalog could not
+	// hold, so the invoke path (which reads only the catalog and builtins)
+	// never saw them.
+	if entry.Region == "" && from.Region != "" {
 		entry.Region = from.Region
 	}
 }
