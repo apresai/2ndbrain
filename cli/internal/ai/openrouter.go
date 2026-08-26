@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	openrouterBaseURL          = "https://openrouter.ai/api/v1"
+	openrouterBaseURL           = "https://openrouter.ai/api/v1"
 	openrouterDefaultEmbedModel = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
 )
 

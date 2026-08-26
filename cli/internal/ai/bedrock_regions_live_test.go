@@ -121,28 +121,37 @@ func TestLiveStalePinSelfHeals(t *testing.T) {
 }
 
 // TestLiveDiscoveryUnionTwoRegions: with an included second region, the
-// bedrock discovery listing must be a superset of the single-region listing
-// with no duplicate IDs. Control-plane calls only (free).
+// bedrock discovery listing must be a superset of the single-region listing,
+// with every row a distinct ROUTE. Control-plane calls only (free).
+//
+// This test used to assert no duplicate IDs. That invariant is exactly what
+// routes removed: a model served in three regions is now three rows, because
+// Bedrock entitlement is per-region and those routes succeed and fail
+// independently. Route-uniqueness is the invariant that replaced it, and it
+// is the stronger one: it still catches a genuine double-append, while
+// allowing the per-region rows the whole change exists to preserve.
 func TestLiveDiscoveryUnionTwoRegions(t *testing.T) {
 	requireBedrockLiveIsolatedFile(t)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	ctx := context.Background()
 	cfg := AIConfig{Provider: "bedrock", Bedrock: BedrockConfig{Profile: "default", Region: "us-east-1"}}
 
-	countBedrock := func(models []ModelInfo) (int, map[string]int) {
-		ids := map[string]int{}
+	countBedrock := func(models []ModelInfo) (int, map[string]int, map[string]bool) {
+		routes := map[string]int{}
+		ids := map[string]bool{}
 		n := 0
 		for _, m := range models {
 			if m.Provider == "bedrock" {
 				n++
-				ids[m.ID]++
+				routes[routeKey(m.Route())]++
+				ids[m.ID] = true
 			}
 		}
-		return n, ids
+		return n, routes, ids
 	}
 
 	single, _ := discoverVendorModels(ctx, cfg, true)
-	n1, _ := countBedrock(single)
+	n1, _, ids1 := countBedrock(single)
 	if n1 == 0 {
 		t.Skip("bedrock discovery returned nothing (control plane unreachable?)")
 	}
@@ -151,14 +160,31 @@ func TestLiveDiscoveryUnionTwoRegions(t *testing.T) {
 		t.Fatal(err)
 	}
 	union, _ := discoverVendorModels(ctx, cfg, true)
-	n2, ids := countBedrock(union)
+	n2, routes, ids2 := countBedrock(union)
 	if n2 < n1 {
-		t.Fatalf("union (%d) lost models vs single-region (%d)", n2, n1)
+		t.Fatalf("union (%d) lost rows vs single-region (%d)", n2, n1)
 	}
-	for id, c := range ids {
-		if c > 1 {
-			t.Fatalf("duplicate ID %q in union listing", id)
+	// Every distinct model still present: widening regions adds routes, it
+	// must never drop a model.
+	for id := range ids1 {
+		if !ids2[id] {
+			t.Errorf("model %q disappeared from the union listing", id)
 		}
 	}
-	t.Logf("bedrock discovery: %d single-region, %d union", n1, n2)
+	for k, c := range routes {
+		if c > 1 {
+			t.Fatalf("duplicate ROUTE %q in union listing (%d copies)", k, c)
+		}
+	}
+	// Every bedrock row must carry its route, or the invoke path is back to
+	// guessing which region it belongs to.
+	for _, m := range union {
+		if m.Provider != "bedrock" {
+			continue
+		}
+		if m.Plane == "" || m.Region == "" {
+			t.Fatalf("discovered bedrock row %q has no route (plane=%q region=%q)", m.ID, m.Plane, m.Region)
+		}
+	}
+	t.Logf("bedrock discovery: %d single-region rows, %d union rows, %d distinct models", n1, n2, len(ids2))
 }

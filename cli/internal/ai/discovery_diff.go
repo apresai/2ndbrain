@@ -300,6 +300,16 @@ func DiffAgainstSeen(current []ModelInfo, catalog []ModelInfo, seen *DiscoverySe
 	currentSet := make(map[string]bool, len(current))
 	for _, m := range current {
 		key := DiscoverySeenKey(m)
+		// Report each newly-seen MODEL once, not once per route. Since
+		// discovery began emitting one row per (plane, region), a single new
+		// model can arrive as several rows — grok-4.6 alone lists on two
+		// planes across three regions — and appending per row would announce
+		// "6 new models" for one. The seen baseline is deliberately keyed by
+		// model, not route (re-keying it would re-badge every user's whole
+		// catalog as NEW), so deduping here keeps the diff aligned with it.
+		if currentSet[key] {
+			continue
+		}
 		currentSet[key] = true
 		if !seenSet[key] {
 			d.New = append(d.New, m)

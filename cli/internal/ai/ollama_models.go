@@ -30,13 +30,13 @@ type OllamaModelDetail struct {
 
 // knownEmbeddingDims maps known embedding model prefixes to their dimensions.
 var knownEmbeddingDims = map[string]int{
-	"embeddinggemma":     768,
-	"nomic-embed-text":   768,
-	"mxbai-embed-large":  1024,
-	"snowflake-arctic":   1024,
-	"all-minilm":         384,
-	"bge-large":          1024,
-	"bge-m3":             1024,
+	"embeddinggemma":    768,
+	"nomic-embed-text":  768,
+	"mxbai-embed-large": 1024,
+	"snowflake-arctic":  1024,
+	"all-minilm":        384,
+	"bge-large":         1024,
+	"bge-m3":            1024,
 }
 
 // ListOllamaModelEntries fetches installed models from Ollama, preserving full metadata.
@@ -101,13 +101,13 @@ func ListOllamaModels(ctx context.Context, client *http.Client, endpoint string)
 	var models []ModelInfo
 	for _, m := range tagsResp.Models {
 		mi := ModelInfo{
-			ID:       m.Name,
-			Name:     m.Name,
-			Provider: "ollama",
-			Type:     classifyOllamaModel(m.Name),
-			Local:    true,
-			PriceIn:  0,
-			PriceOut: 0,
+			ID:          m.Name,
+			Name:        m.Name,
+			Provider:    "ollama",
+			Type:        classifyOllamaModel(m.Name),
+			Local:       true,
+			PriceIn:     0,
+			PriceOut:    0,
 			PriceSource: "vendor",
 		}
 		if mi.Type == "embedding" {

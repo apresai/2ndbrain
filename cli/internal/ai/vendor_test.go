@@ -4,10 +4,10 @@ import "testing"
 
 func TestVendorOf_Bedrock(t *testing.T) {
 	cases := []struct {
-		id            string
-		wantVendor    string
-		wantDisplay   string
-		wantFamily    string
+		id          string
+		wantVendor  string
+		wantDisplay string
+		wantFamily  string
 	}{
 		// anthropic + geo prefix
 		{"us.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic", "Anthropic", "Claude"},

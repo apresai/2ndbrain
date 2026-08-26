@@ -29,28 +29,43 @@ import (
 	"time"
 )
 
-// bedrockMantleRegions is the documented mantle-plane region set, verified
-// live 2026-08-20 (/v1/models answered with 55/50/48 models in
-// us-east-1/us-east-2/us-west-2). MAINTENANCE POINT: no API enumerates
-// mantle regions, so a region AWS adds later is invisible to discovery
-// until this list grows.
-var bedrockMantleRegions = []string{"us-east-1", "us-east-2", "us-west-2"}
+// bedrockDiscoveryRegions is the documented US region set discovery walks, on
+// BOTH planes. Verified live 2026-08-20 against the mantle plane (/v1/models
+// answered with 55/50/48 models in us-east-1/us-east-2/us-west-2).
+//
+// MAINTENANCE POINT: no API enumerates mantle regions, so a region AWS adds
+// later is invisible to discovery until this list grows. It is one list rather
+// than a per-plane pair on purpose: two lists that must agree are a drift
+// hazard, and a region worth listing on one plane is worth listing on both.
+var bedrockDiscoveryRegions = []string{"us-east-1", "us-east-2", "us-west-2"}
 
-// mantleDiscoveryRegions orders the documented mantle region set
-// primary-first when the resolved primary region is itself a mantle region.
-// The discovery merge keeps the FIRST listing of each id and pins the row's
-// Region to it, so primary-first means a model served in the user's primary
-// region is pinned there rather than to whichever region happened to list
-// it first.
+// mantleDiscoveryRegions returns the regions the mantle plane is listed in,
+// primary-first when the primary region is itself a mantle region.
+//
+// This is deliberately NOT BedrockDiscoveryRegions. The mantle plane only
+// exists in the documented regions: its host is derived as
+// bedrock-mantle.<region>.api.aws, so walking a region AWS does not serve
+// (a eu-west-1 primary, say) resolves a host that does not exist, and the
+// resulting failure would raise a spurious "partial listing" warning that the
+// discover diff's GONE shield then acts on. The classic plane has the opposite
+// need — a eu-west-1 user's classic models really are in eu-west-1 — which is
+// why only that side includes the primary unconditionally.
+//
+// Ordering used to be load-bearing: the merge kept the FIRST listing of each
+// id and pinned that row's Region to it, so primary-first was how a model
+// served in the user's primary region avoided being pinned to whichever region
+// happened to list it first. Routes removed that pressure (every region's
+// listing is its own row now and nothing is discarded), so ordering is only
+// deterministic output order plus route preference, which PreferRoutes owns.
 func mantleDiscoveryRegions(cfg BedrockConfig) []string {
 	primary := ResolveBedrockConfig(cfg).Region
-	out := make([]string, 0, len(bedrockMantleRegions))
-	for _, r := range bedrockMantleRegions {
+	out := make([]string, 0, len(bedrockDiscoveryRegions))
+	for _, r := range bedrockDiscoveryRegions {
 		if r == primary {
 			out = append(out, r)
 		}
 	}
-	for _, r := range bedrockMantleRegions {
+	for _, r := range bedrockDiscoveryRegions {
 		if r != primary {
 			out = append(out, r)
 		}
@@ -98,6 +113,7 @@ func mantleModelInfo(id, region string) ModelInfo {
 		Provider:       "bedrock",
 		Type:           "generation", // the mantle plane is generation-only in 2nb
 		Tier:           TierUnverified,
+		Plane:          PlaneMantle,
 		InvokeStrategy: StrategyBedrockMantleResponses,
 		Region:         region,
 		Notes:          "listed on the bedrock mantle plane (" + region + "); listing proves existence, not entitlement — verify with 2nb models verify --discover",

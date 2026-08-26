@@ -41,7 +41,7 @@ func NewOllamaEmbedder(endpoint, model string, dims int) *OllamaEmbedder {
 	}
 }
 
-func (o *OllamaEmbedder) Name() string   { return "ollama" }
+func (o *OllamaEmbedder) Name() string    { return "ollama" }
 func (o *OllamaEmbedder) Dimensions() int { return o.dims }
 
 func (o *OllamaEmbedder) Available(ctx context.Context) bool {
@@ -138,11 +138,11 @@ func (o *OllamaGenerator) Available(ctx context.Context) bool {
 }
 
 type ollamaGenerateRequest struct {
-	Model   string              `json:"model"`
-	Prompt  string              `json:"prompt"`
-	System  string              `json:"system,omitempty"`
-	Stream  bool                `json:"stream"`
-	Options *ollamaGenOptions   `json:"options,omitempty"`
+	Model   string            `json:"model"`
+	Prompt  string            `json:"prompt"`
+	System  string            `json:"system,omitempty"`
+	Stream  bool              `json:"stream"`
+	Options *ollamaGenOptions `json:"options,omitempty"`
 }
 
 type ollamaGenOptions struct {

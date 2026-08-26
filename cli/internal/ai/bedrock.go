@@ -961,7 +961,16 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 				ContextLen: bedrockContextLenHint(id),
 				Local:      false,
 				Tier:       TierUnverified,
-				Notes:      "use 2nb models test to verify",
+				// The listing region IS this row's identity: Bedrock
+				// entitlement is per-region, so the same profile listed in
+				// another region is a different route that can independently
+				// succeed or fail. Before routes, cfg.Region was read at the
+				// top of this function and then thrown away, so every classic
+				// row arrived region-less and fell back to whatever
+				// ai.bedrock.region happened to say.
+				Plane:  PlaneClassic,
+				Region: cfg.Region,
+				Notes:  "use 2nb models test to verify",
 			})
 			coveredBaseIDs[baseID] = true
 		}
@@ -1001,6 +1010,8 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 			ContextLen: bedrockContextLenHint(id),
 			Local:      false,
 			Tier:       TierUnverified,
+			Plane:      PlaneClassic,
+			Region:     cfg.Region,
 			Notes:      "use 2nb models test to verify",
 		})
 	}

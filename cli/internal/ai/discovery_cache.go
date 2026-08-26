@@ -40,15 +40,21 @@ type cachedDiscovery struct {
 	Models  []ModelInfo `json:"models"`
 }
 
-// DiscoveryCacheVersion is 2: the classic-plane generation compatibility gate
-// (bedrockModelSupported) widened from a per-vendor allowlist to a
-// default-allow, so a v1 cache written before this change would keep serving
-// the narrow, pre-widening catalog for up to 24h. Bumping the version
-// invalidates every existing entry (including the mantle-plane caches PR2
-// adds under a separate namespace) so the next discovery call re-fetches
-// live and reflects the new gate. Exported so tests that seed synthetic
-// cache entries stamp the version this binary actually accepts.
-const DiscoveryCacheVersion = 2
+// DiscoveryCacheVersion is 3: discovered rows now carry their ROUTE (Plane and
+// Region). A v2 entry was written before classic rows stamped either field, so
+// serving one would hand the resolver exactly the region-less row that made a
+// mantle-only id fall through to classic Converse — the bug routes exist to
+// fix — and it would do so for up to 24h after the upgrade. Bumping
+// invalidates every existing entry on both planes so the next discovery call
+// re-fetches live and every row arrives routed.
+//
+// (v2 was the classic-plane compatibility gate widening from a per-vendor
+// allowlist to default-allow, for the same reason: a stale cache would keep
+// serving the pre-widening catalog.)
+//
+// Exported so tests that seed synthetic cache entries stamp the version this
+// binary actually accepts.
+const DiscoveryCacheVersion = 3
 
 // ListBedrockVendorModelsCached is ListBedrockVendorModels with a 24h disk
 // cache. A fresh entry short-circuits the AWS calls entirely; on a live

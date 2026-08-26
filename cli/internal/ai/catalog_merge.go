@@ -213,9 +213,11 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 	}
 
 	// Bedrock vendor discovery. ListFoundationModels is a regional API, so
-	// with additional included regions configured the listing is the union
-	// across them (sequential — extra regions are 24h-cached after the first
-	// walk), deduped by ID with the primary region's row winning.
+	// the listing is the union across every walked region and EVERY region's
+	// row is kept: a model listed in three regions is three routes, which can
+	// independently succeed or fail because Bedrock entitlement is per-region.
+	// This used to dedupe by bare ID with the primary region's row winning,
+	// which silently discarded the other regions' routes.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -224,28 +226,39 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 			list = ListBedrockVendorModelsCached
 		}
 		var models []ModelInfo
-		seen := map[string]bool{}
 		var firstErr error
 		var failedRegions []string
 		succeeded := false
-		for _, region := range ResolveBedrockRegions(cfg.Bedrock) {
+		// Regions the user actually asked for (primary + machine-file extras).
+		// A failure in one of these is a real warning. The remaining regions in
+		// BedrockDiscoveryRegions are a BONUS sweep 2nb adds so a model served
+		// only in another US region is still discoverable, and a failure there
+		// must stay silent: most accounts are not entitled in every region, so
+		// warning would fire permanently, and because the discover diff's GONE
+		// shield keys off "<source> discovery failed", a permanent warning
+		// would permanently disable GONE detection for bedrock.
+		required := map[string]bool{}
+		for _, r := range ResolveBedrockRegions(cfg.Bedrock) {
+			required[r] = true
+		}
+		for _, region := range BedrockDiscoveryRegions(cfg.Bedrock) {
 			regionCfg := cfg.Bedrock
 			regionCfg.RegionOverride = region
 			regionModels, err := list(ctx, regionCfg)
 			if err != nil {
-				if firstErr == nil {
-					firstErr = err
+				if required[region] {
+					if firstErr == nil {
+						firstErr = err
+					}
+					failedRegions = append(failedRegions, region)
+				} else {
+					slog.Debug("bedrock bonus-region discovery failed (not warned: region not configured)",
+						"region", region, "err", err)
 				}
-				failedRegions = append(failedRegions, region)
 				continue
 			}
 			succeeded = true
-			for _, m := range regionModels {
-				if !seen[m.ID] {
-					seen[m.ID] = true
-					models = append(models, m)
-				}
-			}
+			models = append(models, regionModels...)
 		}
 		if !succeeded {
 			addWarning("bedrock", firstErr)
@@ -311,7 +324,6 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 			mlist = ListBedrockMantleModelsCached
 		}
 		var models []ModelInfo
-		seen := map[string]bool{}
 		var firstErr error
 		var failedRegions []string
 		succeeded := false
@@ -325,12 +337,11 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 				continue
 			}
 			succeeded = true
-			for _, m := range regionModels {
-				if !seen[m.ID] {
-					seen[m.ID] = true
-					models = append(models, m)
-				}
-			}
+			// Every region's listing is its own route. Per-region mantle
+			// catalogs genuinely differ (grok-4.6 lists only in us-west-2),
+			// so the old first-listing-wins dedupe by bare ID discarded real,
+			// separately-entitled routes.
+			models = append(models, regionModels...)
 		}
 		if !succeeded {
 			addWarning("bedrock-mantle", firstErr)
@@ -371,32 +382,34 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 	}()
 
 	wg.Wait()
-	return dedupeDiscoveredBedrock(all), warnings
+	return dedupeDiscoveredRoutes(all), warnings
 }
 
-// dedupeDiscoveredBedrock collapses exact-id collisions between the two
-// Bedrock discovery planes: a model listed by BOTH the classic control plane
-// and a mantle /v1/models listing keeps its classic (empty-strategy) row,
-// because the classic listing carries richer metadata and the classic route
-// needs no bearer token. Order-independent — the goroutines append in
-// nondeterministic order, so "classic wins" is decided by InvokeStrategy,
-// not arrival. Non-bedrock rows and distinct ids pass through untouched;
-// dated variants (openai.gpt-5.5-2026-04-23) are distinct ids and survive.
-func dedupeDiscoveredBedrock(models []ModelInfo) []ModelInfo {
-	firstAt := make(map[string]int)
+// dedupeDiscoveredRoutes collapses rows that are the SAME ROUTE, keeping the
+// first. Since the key is (provider, id, plane, region), a model listed on
+// both planes, or in several regions, keeps every one of those rows: they are
+// distinct routes with independent entitlement, pricing, and wire dialect.
+//
+// This replaces dedupeDiscoveredBedrock, which deduped on bare id and resolved
+// a cross-plane collision by KEEPING THE CLASSIC ROW AND DISCARDING THE MANTLE
+// ONE. Measured against the live discovery caches on 2026-08-26, that silently
+// destroyed a route for 26 of 120 discovered ids (deepseek.v3.2, the
+// google.gemma-3 family, minimax.m2*, the mistral ministral/devstral/magistral
+// family). Its "classic is nicer" instinct is not lost, only demoted: it is
+// now a tiebreak inside PreferRoutes, which orders routes without deleting
+// any.
+//
+// The function still earns its place as idempotent protection when a cached
+// and a live path both emit the same route in one walk.
+func dedupeDiscoveredRoutes(models []ModelInfo) []ModelInfo {
+	seen := make(map[string]bool, len(models))
 	out := make([]ModelInfo, 0, len(models))
 	for _, m := range models {
-		if m.Provider != "bedrock" {
-			out = append(out, m)
+		k := routeKey(m.Route())
+		if seen[k] {
 			continue
 		}
-		if i, ok := firstAt[m.ID]; ok {
-			if out[i].InvokeStrategy == StrategyBedrockMantleResponses && m.InvokeStrategy == "" {
-				out[i] = m
-			}
-			continue
-		}
-		firstAt[m.ID] = len(out)
+		seen[k] = true
 		out = append(out, m)
 	}
 	return out

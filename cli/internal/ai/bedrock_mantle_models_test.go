@@ -181,42 +181,60 @@ func TestVendorDisplayCoversMantleListing(t *testing.T) {
 	}
 }
 
-func TestDedupeDiscoveredBedrock(t *testing.T) {
-	classic := ModelInfo{ID: "openai.gpt-oss-120b", Provider: "bedrock", Type: "generation"}
+// TestDedupeDiscoveredRoutesKeepsBothPlanes replaces the old
+// TestDedupeDiscoveredBedrock, which asserted the opposite: that a model
+// listed on both planes kept its classic row and DISCARDED the mantle one.
+// That is the bug. Measured against the live discovery caches on 2026-08-26,
+// it destroyed a route for 26 of 120 discovered ids.
+func TestDedupeDiscoveredRoutesKeepsBothPlanes(t *testing.T) {
+	classic := ModelInfo{ID: "openai.gpt-oss-120b", Provider: "bedrock", Type: "generation", Plane: PlaneClassic, Region: "us-east-1"}
 	mantle := mantleModelInfo("openai.gpt-oss-120b", "us-east-1")
-	other := ModelInfo{ID: "deepseek.v3.2", Provider: "bedrock", Type: "generation", InvokeStrategy: StrategyBedrockMantleResponses}
+	other := ModelInfo{ID: "deepseek.v3.2", Provider: "bedrock", Type: "generation", Plane: PlaneMantle, Region: "us-east-1", InvokeStrategy: StrategyBedrockMantleResponses}
 	openrouter := ModelInfo{ID: "openai.gpt-oss-120b", Provider: "openrouter", Type: "generation"}
 
-	assertClassicWins := func(t *testing.T, out []ModelInfo) {
+	assertBothSurvive := func(t *testing.T, out []ModelInfo) {
 		t.Helper()
-		if len(out) != 3 {
-			t.Fatalf("got %d rows, want 3: %+v", len(out), out)
+		if len(out) != 4 {
+			t.Fatalf("got %d rows, want 4 (both planes kept): %+v", len(out), out)
 		}
-		found := 0
+		planes := map[Plane]bool{}
 		for _, m := range out {
 			if m.Provider == "bedrock" && m.ID == "openai.gpt-oss-120b" {
-				found++
-				if m.InvokeStrategy != "" {
-					t.Errorf("cross-plane collision kept strategy %q, want classic (empty)", m.InvokeStrategy)
-				}
+				planes[m.Plane] = true
 			}
 		}
-		if found != 1 {
-			t.Errorf("bedrock rows for the colliding id = %d, want exactly 1", found)
+		if !planes[PlaneClassic] || !planes[PlaneMantle] {
+			t.Errorf("both planes must survive for a dual-plane id, got %v", planes)
 		}
 	}
 
-	// The goroutines append in nondeterministic order: classic-wins must
-	// hold in BOTH arrival orders.
+	// The goroutines append in nondeterministic order, so the outcome must
+	// not depend on arrival order.
 	t.Run("classic first", func(t *testing.T) {
-		assertClassicWins(t, dedupeDiscoveredBedrock([]ModelInfo{classic, other, mantle, openrouter}))
+		assertBothSurvive(t, dedupeDiscoveredRoutes([]ModelInfo{classic, other, mantle, openrouter}))
 	})
 	t.Run("mantle first", func(t *testing.T) {
-		assertClassicWins(t, dedupeDiscoveredBedrock([]ModelInfo{mantle, other, openrouter, classic}))
+		assertBothSurvive(t, dedupeDiscoveredRoutes([]ModelInfo{mantle, other, openrouter, classic}))
 	})
 
+	// Same region twice on the same plane IS the same route: still deduped,
+	// which is what protects a walk where a cached and a live path both emit
+	// the row.
+	dup := dedupeDiscoveredRoutes([]ModelInfo{mantle, mantle})
+	if len(dup) != 1 {
+		t.Errorf("identical routes must dedupe, got %d rows", len(dup))
+	}
+
+	// The same model on the same plane in a DIFFERENT region is a different
+	// route: separately entitled, so it must survive.
+	west := mantleModelInfo("openai.gpt-oss-120b", "us-west-2")
+	both := dedupeDiscoveredRoutes([]ModelInfo{mantle, west})
+	if len(both) != 2 {
+		t.Errorf("per-region routes must survive, got %+v", both)
+	}
+
 	// Distinct ids and non-bedrock providers pass through untouched.
-	out := dedupeDiscoveredBedrock([]ModelInfo{other, openrouter})
+	out := dedupeDiscoveredRoutes([]ModelInfo{other, openrouter})
 	if len(out) != 2 {
 		t.Errorf("distinct rows must survive, got %+v", out)
 	}

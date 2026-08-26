@@ -29,7 +29,7 @@ type orPricing struct {
 }
 
 type orArch struct {
-	Modality     string `json:"modality"`      // e.g. "text->text"
+	Modality       string `json:"modality"` // e.g. "text->text"
 	InputModality  string `json:"input_modality"`
 	OutputModality string `json:"output_modality"`
 }
