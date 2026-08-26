@@ -73,6 +73,15 @@ last known good, then primary region, then classic before mantle, then
 configured region order). It is shared by verify, the list view, and the
 ambiguity messages so the notion cannot drift.
 
+**Still present, now redundant:** the pre-route resolvers
+(`resolveCatalogString` / `findCatalogString`'s profile-stripped base match,
+`effectiveInvokeStrategy` and its cross-plane vetoes, `ResolveModelRegion`,
+`EffectiveBedrockRegion`, `carryVaultRegionPin`, `persistProbedRegion`) have
+NOT been deleted. `ResolveSlotRoute` decides the route before they run, so
+they only confirm a decision already made, but they are a second answer to the
+same question and a follow-up should remove them. Treat the route as
+authoritative when the two disagree.
+
 ## Bedrock mantle plane (partner-hosted frontier models)
 
 Two builtin, non-curated generation entries, `openai.gpt-5.5` (region us-east-2) and `xai.grok-4.3` (region us-west-2), run on AWS's newer **mantle** plane. (Grok **4.6**, unlike 4.3, is dual-plane: its builtin entry is the CLASSIC `us.xai.grok-4.6` Converse profile in the builtin catalog below, and the mantle id `xai.grok-4.6` remains reachable via a user-catalog entry with the mantle strategy.) The mantle plane is an OpenAI-Responses REST API at `https://bedrock-mantle.<region>.api.aws` rather than the classic Converse API. Mantle models are **bearer-token only** (SigV4 does not work; set a key via Settings or `2nb config bedrock --set`), region-pinned per model (`ModelInfo.Region`), invisible to `ListFoundationModels`, and per-account entitlement varies.

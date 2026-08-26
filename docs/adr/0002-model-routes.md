@@ -102,9 +102,18 @@ vetoes are deleted rather than tuned.
 - The four collapse sites are gone; `dedupeDiscoveredBedrock` becomes a pure
   route-key dedupe, its "classic wins" instinct demoted to a `PreferRoutes`
   tiebreak that orders without deleting.
-- The profile-stripped base-match resolver and its three vetoes can be deleted.
-  `inferenceProfileBaseID` survives for its legitimate job (discovery-time
-  dedupe of a base model already covered by a profile).
+- The profile-stripped base-match resolver and its three vetoes become
+  **redundant, but are NOT yet deleted**. `resolveCatalogString`,
+  `findCatalogString`, `effectiveInvokeStrategy`, `ResolveModelRegion`,
+  `EffectiveBedrockRegion`, `carryVaultRegionPin`, and `persistProbedRegion`
+  all still exist and still run: `ResolveSlotRoute` decides the route ahead of
+  them, so they now only ever confirm a decision already made, but they remain
+  a second way to answer the same question and should be removed in a
+  follow-up. Until then, "identity is a route" holds for catalog operations
+  (save, overlay, merge, active-marking, slot resolution) while those legacy
+  helpers still key on `(provider, id)`.
+  `inferenceProfileBaseID` survives regardless, for its legitimate job
+  (discovery-time dedupe of a base model already covered by a profile).
 - `ModelInfo.Region` had two owners that "must never fight over the field";
   once region is part of the key, nothing writes it and the conflict dissolves.
 - Unpinned rows (region-agnostic builtins, and rows predating routes) are
