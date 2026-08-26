@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.20.1] - 2026-08-26
+
 ### Added
 - The Go test suite now runs on every pull request (`.github/workflows/ci.yml`, macOS, `go vet` + `make -C cli test`) with no credentials in the environment. It previously ran nowhere but a maintainer's laptop at release time, which is why a transient provider blip was indistinguishable from a product failure
 
