@@ -33,6 +33,30 @@ func TestClassifyProbeError(t *testing.T) {
 		{"access denied", "bedrock", smithyErr("AccessDeniedException"), TestErrAccessDenied},
 		{"access denied wrapped", "bedrock", fmt.Errorf("invoke m: %w", smithyErr("AccessDeniedException")), TestErrAccessDenied},
 		{"access denied bare", "bedrock", smithyErr("AccessDenied"), TestErrAccessDenied},
+		// Bedrock answers a MALFORMED API key with AccessDenied, not with an
+		// auth-shaped code. Taken at face value the user is sent to fix IAM
+		// permissions for what is actually a bad key, and the readiness
+		// remediation explicitly rules the credential explanation out. Message
+		// text observed live from a bogus AWS_BEARER_TOKEN_BEDROCK.
+		{"access denied from a malformed api key is a credential problem", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Invalid API Key format: Must start with pre-defined prefix"},
+			TestErrBadCredentials},
+		// The everyday case: a WELL-FORMED key that was revoked, rotated, or
+		// expired. Missing this was the whole point of the fix, since a malformed
+		// key is a one-time copy-paste error and a dead key is not.
+		{"access denied from a revoked or expired key is a credential problem", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Authentication failed: Please make sure your API Key is valid."},
+			TestErrBadCredentials},
+		{"access denied from a malformed key delimiter is a credential problem", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Invalid API Key format: Delimiter ':' not found"},
+			TestErrBadCredentials},
+		// A genuine entitlement gap must NOT be diverted to credentials.
+		{"access denied for a gated model stays access_denied", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "You don't have access to the model with the specified model ID."},
+			TestErrAccessDenied},
+		{"access denied for a missing IAM permission stays access_denied", "bedrock",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "User: arn:aws:iam::1:user/x is not authorized to perform: bedrock:ListFoundationModels"},
+			TestErrAccessDenied},
 		{"not found", "bedrock", smithyErr("ResourceNotFoundException"), TestErrNotFound},
 		{"throttled", "bedrock", smithyErr("ThrottlingException"), TestErrThrottled},
 		{"too many requests", "bedrock", smithyErr("TooManyRequestsException"), TestErrThrottled},

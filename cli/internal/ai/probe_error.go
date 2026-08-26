@@ -176,11 +176,51 @@ func isCredentialResolutionFailure(msg string) bool {
 	return false
 }
 
+// isBadKeyMessage reports whether an access-denied body is really about the
+// credential itself rather than about what the principal may do. Kept
+// deliberately narrow, and matched on phrasings observed live against real
+// Bedrock: a false positive here would tell someone with a genuine IAM gap to
+// go looking at their key.
+func isBadKeyMessage(msg string) bool {
+	msg = strings.ToLower(msg)
+	switch {
+	// "Invalid API Key format: Must start with pre-defined prefix" and its
+	// siblings ("Delimiter ':' not found", "Base64 decoding failed"): the key
+	// never had the right shape.
+	case strings.Contains(msg, "invalid api key"),
+		strings.Contains(msg, "api key format"):
+		return true
+	// "Authentication failed: Please make sure your API Key is valid." A
+	// WELL-FORMED key that the service rejects, i.e. revoked, rotated, or
+	// expired. This is the everyday case; the malformed shapes above are
+	// copy-paste errors caught once at entry. Bedrock uses this phrasing only
+	// for authentication: an entitlement denial reads "You don't have access to
+	// the model..." or "...is not authorized to perform: bedrock:...".
+	case strings.Contains(msg, "authentication failed"):
+		return true
+	}
+	return false
+}
+
 func classifySmithyError(apiErr smithy.APIError) TestErrorCode {
 	code := apiErr.ErrorCode()
 	switch {
 	case strings.EqualFold(code, "AccessDeniedException"),
 		strings.EqualFold(code, "AccessDenied"):
+		// Bedrock answers a BAD API KEY with AccessDenied too, not with an
+		// auth-shaped code. Taking that at face value sends the user to fix IAM
+		// permissions for what is actually a bad key, and the readiness
+		// remediation goes further and explicitly rules the credential
+		// explanation out. The message body is the only thing that separates
+		// them. Measured live against real Bedrock: a malformed key returns
+		// "Invalid API Key format: …" and a revoked one returns "Authentication
+		// failed: Please make sure your API Key is valid."
+		//
+		// An empty message falls through to access_denied, which is the
+		// pre-existing behavior.
+		if isBadKeyMessage(apiErr.ErrorMessage()) {
+			return TestErrBadCredentials
+		}
 		return TestErrAccessDenied
 	case strings.EqualFold(code, "ResourceNotFoundException"):
 		return TestErrNotFound

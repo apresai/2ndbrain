@@ -55,9 +55,11 @@ make test-all
 
 All tests must use real API endpoints. No `httptest.NewServer` or fake implementations.
 
-- **Bedrock tests**: use real AWS credentials, skip if not configured
-- **OpenRouter tests**: use real `OPENROUTER_API_KEY`, skip if not set
-- **Ollama tests**: use real Ollama server, skip if not running
+- **Bedrock tests**: use real AWS credentials
+- **OpenRouter tests**: use real `OPENROUTER_API_KEY`
+- **Ollama tests**: use a real Ollama server
+
+Tests skip on **capability, not configuration**: they run one real probe per test binary and skip when the provider cannot actually serve a request, rather than when a credential variable happens to be unset. An env var can be present while the provider is unusable (an expired token, a wrong region), and a configuration check would make those tests FAIL instead of skip. Use `requireEmbedding` / `requireEmbeddingHostHome` (`cli/capability_test.go`) or the in-package `requireEmbeddings`.
 
 Pure logic tests (string parsing, classification heuristics) that don't call any API are fine.
 
@@ -65,7 +67,7 @@ Pure logic tests (string parsing, classification heuristics) that don't call any
 
 1. Create a feature branch from `main`
 2. Write tests for new functionality
-3. Run `make test` and ensure all tests pass
+3. Run `make test` and ensure all tests pass. CI runs `go vet` plus `make -C cli test` on macOS with **no credentials** (`.github/workflows/ci.yml`), so any test needing a provider must skip there rather than fail
 4. Keep commits focused — one logical change per commit
 5. Open a PR with a clear description of what and why
 
