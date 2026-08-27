@@ -729,7 +729,7 @@ struct SimpleModelsView: View {
 
     private func setActive(_ model: CatalogModelInfo) async {
         do {
-            try await appState.setActiveModel(type: model.modelType, modelID: model.modelID, provider: model.provider)
+            try await appState.setActiveModel(type: model.modelType, modelID: model.routeQualifiedID, provider: model.provider)
             await reload(discover: true)
         } catch {
             errorMessage = error.localizedDescription

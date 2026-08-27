@@ -45,6 +45,69 @@ func (e *UnroutedSlotError) Error() string {
 	return b.String()
 }
 
+// ResolveMeasurementRoute picks the route to use for a model named in a
+// MEASUREMENT context: benchmarks, the eval answer jury, and anything else
+// that probes a model the user named rather than serving a user's query.
+//
+// It differs from ResolveSlotRoute on purpose. A slot refuses when several
+// endpoints are possible, because a wrong guess there sends a real query to
+// the wrong place. Measurement is the case the ADR carves out for preference:
+// a wrong guess costs one probe and reports a result, so refusing to measure
+// anything with more than one route would be worse than picking the best one.
+//
+// The configured route still wins when the named model IS the configured
+// model, so `models bench` measures the endpoint `ask` actually uses instead
+// of whichever row happened to sort first. That was the real defect: bench
+// recorded a number under (provider, model_id) that could describe a
+// different endpoint than the one serving queries.
+//
+// An unknown model yields an empty route and the provider defaults apply,
+// exactly as before routes existed.
+func ResolveMeasurementRoute(cfg AIConfig, modelID, vaultRoot string) SlotRoute {
+	out := SlotRoute{Route: RouteKey{Provider: cfg.Provider, ID: modelID}}
+	if modelID == "" {
+		return out
+	}
+	for _, k := range []RouteKey{cfg.GenerationRoute(), cfg.EmbeddingRoute(), cfg.RerankRoute()} {
+		if k.ID == modelID && k.Plane != "" {
+			out.Route = k
+			break
+		}
+	}
+
+	rows := LoadUserCatalog(vaultRoot)
+	rows = append(rows, BuiltinCatalog()...)
+	var matches []ModelInfo
+	for _, m := range rows {
+		if m.Provider == out.Route.Provider && m.ID == modelID {
+			if out.Route.Plane != "" && m.Plane != out.Route.Plane {
+				continue
+			}
+			if out.Route.Region != "" && m.Region != out.Route.Region {
+				continue
+			}
+			matches = append(matches, m)
+		}
+	}
+	if len(matches) == 0 {
+		return out
+	}
+	best := PreferRoutes(dedupeDiscoveredRoutes(matches), cfg)[0]
+	out.Route = best.Route()
+	out.Strategy, out.Endpoint = best.InvokeStrategy, best.Endpoint
+	return out
+}
+
+// ApplyRouteRegion points cfg at the route's region when it names one. The
+// caller keeps its own config otherwise, so a route with no region behaves
+// exactly as it did before routes.
+func ApplyRouteRegion(cfg BedrockConfig, route SlotRoute) BedrockConfig {
+	if route.Route.Region != "" {
+		cfg.RegionOverride = route.Route.Region
+	}
+	return cfg
+}
+
 // ResolveSlotRoute resolves the endpoint a configured slot invokes.
 //
 // Behavior, in order:

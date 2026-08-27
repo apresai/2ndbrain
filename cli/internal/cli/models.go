@@ -408,9 +408,9 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 
 func printModelHeader(w *tabwriter.Writer, showStatus bool) {
 	if showStatus {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE\tSTATUS")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tROUTE\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE\tSTATUS")
 	} else {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tROUTE\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE")
 	}
 }
 
@@ -430,12 +430,30 @@ func printModelRow(w *tabwriter.Writer, m ai.ModelInfo, showStatus bool) {
 
 	if showStatus {
 		status := statusLabel(m)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold, benchLabel(m), stateLabel(m), status)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, routeLabel(m), price, ctxLen, threshold, benchLabel(m), stateLabel(m), status)
 	} else {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold, benchLabel(m), stateLabel(m))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, routeLabel(m), price, ctxLen, threshold, benchLabel(m), stateLabel(m))
 	}
+}
+
+// routeLabel renders the endpoint a row invokes: "<plane> <region>", or the
+// plane alone for an unpinned template, or "-" for a provider with no routes.
+//
+// Without this column, a model served in three regions printed three
+// byte-identical lines, which reads as a duplicate bug and hides the only
+// thing that distinguishes them. `models discover` already names the route
+// for the same reason; leaving `models list` without it made the two commands
+// contradict each other.
+func routeLabel(m ai.ModelInfo) string {
+	if m.Provider != "bedrock" || m.Plane == "" {
+		return "-"
+	}
+	if m.Region == "" {
+		return string(m.Plane)
+	}
+	return string(m.Plane) + " " + m.Region
 }
 
 // benchLabel renders the latest benchmark summary compactly: retrieval

@@ -100,10 +100,32 @@ func TestRouteRoundTrip(t *testing.T) {
 // the old provider+NUL+id form plus two empty components, so an ollama or
 // openrouter row keeps its pre-route identity exactly.
 func TestRouteKeyNonBedrockUnchanged(t *testing.T) {
-	m := ModelInfo{Provider: "ollama", ID: "nomic-embed-text"}
-	want := catalogKey("ollama", "nomic-embed-text") + "\x00\x00"
-	if got := routeKey(m.Route()); got != want {
-		t.Errorf("routeKey = %q, want %q", got, want)
+	// Assert the PROPERTY, not the construction. Comparing routeKey against
+	// `catalogKey(...) + "\x00\x00"` just transcribed routeKey's body and
+	// would pass however the key were built.
+	//
+	// What must hold: for providers with no plane or region, route identity
+	// draws exactly the same distinctions the old flat key did. Same model,
+	// same key; different model or provider, different key.
+	rows := []ModelInfo{
+		{Provider: "ollama", ID: "nomic-embed-text"},
+		{Provider: "ollama", ID: "llama3.1:8b"},
+		{Provider: "openrouter", ID: "nomic-embed-text"},
+		{Provider: "llama-local", ID: "gemma4-e2b"},
+	}
+	for i, a := range rows {
+		for j, b := range rows {
+			sameOld := catalogKey(a.Provider, a.ID) == catalogKey(b.Provider, b.ID)
+			sameNew := routeKey(a.Route()) == routeKey(b.Route())
+			if sameOld != sameNew {
+				t.Errorf("rows %d/%d: old key says same=%v, route key says same=%v; non-Bedrock identity must be unchanged",
+					i, j, sameOld, sameNew)
+			}
+		}
+	}
+	// And a duplicate of the same row is still the same route.
+	if routeKey(rows[0].Route()) != routeKey(rows[0].Route()) {
+		t.Error("route key must be stable for an identical row")
 	}
 }
 

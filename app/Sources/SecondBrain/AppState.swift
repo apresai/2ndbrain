@@ -4114,6 +4114,24 @@ struct CatalogModelInfo: Codable, Identifiable {
     /// Plane and region are absent on non-Bedrock rows and on a pre-0.21 CLI,
     /// where this collapses back to exactly the old value.
     var id: String { provider + "|" + modelID + "|" + (plane ?? "") + "|" + (region ?? "") }
+
+    /// The model id in the CLI's canonical route form, `id@plane/region`.
+    ///
+    /// This is what `2nb config set ai.<slot>_model` should be given. Passing
+    /// the bare id makes the CLI refuse whenever the model has more than one
+    /// route, and the app has no way to answer that refusal, so it surfaced
+    /// as an opaque nonzero exit with the useful part (the qualified forms)
+    /// stuck in stderr. Sending the route the user actually clicked removes
+    /// the ambiguity at the source.
+    ///
+    /// Falls back to the bare id for non-Bedrock rows, for an unpinned
+    /// template, and for a pre-0.21 CLI that reports no plane — all cases
+    /// where the bare id is already unambiguous.
+    var routeQualifiedID: String {
+        guard let plane, !plane.isEmpty else { return modelID }
+        guard let region, !region.isEmpty else { return modelID + "@" + plane }
+        return modelID + "@" + plane + "/" + region
+    }
     let modelID: String
     let name: String
     let provider: String

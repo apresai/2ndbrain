@@ -137,10 +137,20 @@ func TestResolveSlotRouteDuplicateRowsAreNotAmbiguous(t *testing.T) {
 	}
 }
 
-// TestResolveSlotRouteEmptySlot: an unset slot resolves to nothing rather than
-// erroring, so a vault with no rerank model configured still starts.
+// TestResolveSlotRouteEmptySlot: an unset slot resolves to NOTHING, and in
+// particular must not adopt some other model's route.
+//
+// The earlier version only asserted "does not error", which the early return
+// on an empty ID makes unfailable. The assertion that matters is that the
+// returned route stays empty: a slot with no model must not come back pointed
+// at a catalog row, or an unconfigured rerank slot could silently start
+// invoking whatever sorted first.
 func TestResolveSlotRouteEmptySlot(t *testing.T) {
-	if _, err := ResolveSlotRoute("rerank", RouteKey{Provider: "bedrock"}, grokRoutes()); err != nil {
-		t.Errorf("an unset slot must not error: %v", err)
+	got, err := ResolveSlotRoute("rerank", RouteKey{Provider: "bedrock"}, grokRoutes())
+	if err != nil {
+		t.Fatalf("an unset slot must not error: %v", err)
+	}
+	if got.Route.ID != "" || got.Route.Plane != "" || got.Route.Region != "" || got.Strategy != "" {
+		t.Errorf("an unset slot resolved to a real endpoint: %+v", got)
 	}
 }

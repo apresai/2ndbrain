@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A newly-listed model is announced as NEW once rather than once per route
 
 ### Changed
+- `models list` gained a ROUTE column, and `models verify` probes one best route per model by default (`--all-routes` for the full matrix), so a model with several endpoints does not silently multiply the number of billed probes
 - The discovery cache version is bumped, so the first walk after upgrading re-fetches every plane and region. Cached entries written before this change hold rows with no route
 
 ## [0.20.1] - 2026-08-26
