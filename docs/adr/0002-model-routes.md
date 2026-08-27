@@ -92,10 +92,11 @@ legacy row matching its builtin so price overrides and enable flags survive; a
 row that reaches the end stays an unpinned template and the invoke path refuses
 it. The route it should have is DISCOVERED, not deduced.
 
-**Keeping the base-match resolver with narrower vetoes.** Rejected: three
-vetoes had already accreted, each after an incident. With plane in the key a
-classic lookup cannot reach a mantle row at all, so the whole mechanism and its
-vetoes are deleted rather than tuned.
+**Keeping the base-match resolver with narrower vetoes.** Rejected as the
+long-term answer: three vetoes had already accreted, each after an incident,
+and with plane in the key a classic lookup cannot reach a mantle row at all, so
+the mechanism has nothing left to arbitrate. It is superseded rather than tuned
+— but see Consequences: it is not yet deleted.
 
 ## Consequences
 
@@ -114,8 +115,13 @@ vetoes are deleted rather than tuned.
   helpers still key on `(provider, id)`.
   `inferenceProfileBaseID` survives regardless, for its legitimate job
   (discovery-time dedupe of a base model already covered by a profile).
-- `ModelInfo.Region` had two owners that "must never fight over the field";
-  once region is part of the key, nothing writes it and the conflict dissolves.
+- `ModelInfo.Region` had two owners that "must never fight over the field".
+  The conflict dissolves because region is now part of the key rather than a
+  shared mutable pin, but note that it IS still written in two places:
+  `persistProbedRegion` stamps the region a probe actually used, and
+  `AdoptRoutingHints` fills an empty one from a discovered row. Both are
+  fill-only-empty and both write the row's OWN route, so they record identity
+  rather than compete to redefine it.
 - Unpinned rows (region-agnostic builtins, and rows predating routes) are
   retired once concrete routes cover them, so a model is never listed both
   ways. Their Enabled state propagates first, so retiring a template cannot

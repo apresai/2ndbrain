@@ -30,6 +30,16 @@ type TestProbeResult struct {
 	// only). Bedrock model entitlement is per-region, so a verdict without
 	// its region is ambiguous the moment more than one region is in play.
 	Region string `json:"region,omitempty"`
+	// Plane is the invocation plane this probe actually used. With Region it
+	// completes the ROUTE the verdict belongs to, which is what the save path
+	// keys on: without it, a probe of one endpoint could write its result
+	// onto a different endpoint's row.
+	Plane Plane `json:"plane,omitempty"`
+}
+
+// Route returns the endpoint this probe actually called.
+func (r TestProbeResult) Route() RouteKey {
+	return RouteKey{Provider: r.Provider, ID: r.ModelID, Plane: r.Plane, Region: r.Region}
 }
 
 // TestProbeModel creates a temporary provider for the given model and runs
@@ -131,6 +141,15 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 	}
 	if provider == "bedrock" {
 		result.Region = EffectiveBedrockRegion(cfg.Bedrock, m.ID, vaultRoot)
+		// Record the plane too, so the verdict names the full ROUTE it
+		// belongs to. The candidate's own plane is authoritative when it has
+		// one (it is the row being probed); otherwise derive it from the
+		// strategy actually dispatched.
+		if m.Plane != "" {
+			result.Plane = m.Plane
+		} else {
+			result.Plane = planeForStrategy(strategy)
+		}
 	}
 
 	start := time.Now()
@@ -369,8 +388,25 @@ func TestProbeModelInfoInRegions(ctx context.Context, cfg AIConfig, m ModelInfo,
 	if len(regions) == 0 {
 		regions = []string{ResolveBedrockConfig(cfg.Bedrock).Region}
 	}
-	attempts := regionAttempts(regions, ResolveModelRegion("bedrock", m.ID, vaultRoot))
+	// The candidate's OWN region is the pin when it has one.
+	//
+	// This used to ask ResolveModelRegion, an exact-id, plane-blind,
+	// first-match lookup. Once verify started selecting a specific route to
+	// probe (bestRoutePerModel), that discarded the selection: the caller
+	// resolved us-west-2 and the probe went wherever the catalog's first row
+	// happened to say. Falling back to the catalog keeps a route-less
+	// candidate behaving as before.
+	pinned := m.Region
+	if pinned == "" {
+		pinned = ResolveModelRegion("bedrock", m.ID, vaultRoot)
+	}
+	attempts := regionAttempts(regions, pinned)
 	if attempts == nil {
+		// No fan-out, but a candidate that named its own region must still be
+		// probed THERE rather than in the configured default.
+		if m.Region != "" {
+			cfg.Bedrock.RegionOverride = m.Region
+		}
 		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
 

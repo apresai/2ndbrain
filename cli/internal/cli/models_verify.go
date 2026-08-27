@@ -380,24 +380,43 @@ func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, ar
 	if len(args) > 0 {
 		var out []ai.ModelInfo
 		for _, id := range args {
-			found := false
+			// Accept the canonical route form, so ONE endpoint of a
+			// multi-route model can be verified. Without this, a route string
+			// fell through to the synthesized-candidate branch below, where
+			// InferProvider reads the '/' in `id@plane/region` as an
+			// OpenRouter id and probes a model that does not exist. The
+			// `discover --add` duplicate hint emits exactly that string.
+			ref, err := ai.ParseRouteRef(id)
+			if err != nil {
+				return nil, err
+			}
+			if verifyProvider != "" {
+				ref.Provider = verifyProvider
+			}
+			var matched []ai.ModelInfo
 			for _, m := range catalog {
-				if m.ID == id && (verifyProvider == "" || m.Provider == verifyProvider) {
-					out = append(out, m)
-					found = true
-					break
+				if ref.Matches(m) {
+					matched = append(matched, m)
 				}
 			}
-			if !found {
-				provider := verifyProvider
-				if provider == "" {
-					provider = ai.InferProvider(id)
-				}
-				if provider == "" {
-					return nil, fmt.Errorf("cannot infer provider for %q — pass --provider", id)
-				}
-				out = append(out, ai.ModelInfo{ID: id, Provider: provider, Type: ai.InferModelType(id), Compatible: true})
+			if len(matched) > 0 {
+				// Several routes of one model: probe the best unless the
+				// caller asked for all of them. An explicit route argument
+				// narrows to one by construction.
+				out = append(out, bestRoutePerModel(matched, cfg)...)
+				continue
 			}
+			provider := ref.Provider
+			if provider == "" {
+				provider = ai.InferProvider(ref.ID)
+			}
+			if provider == "" {
+				return nil, fmt.Errorf("cannot infer provider for %q — pass --provider", id)
+			}
+			out = append(out, ai.ModelInfo{
+				ID: ref.ID, Provider: provider, Type: ai.InferModelType(ref.ID),
+				Plane: ref.Plane, Region: ref.Region, Compatible: true,
+			})
 		}
 		return skipUnprobeable(out), nil
 	}

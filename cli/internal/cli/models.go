@@ -930,8 +930,26 @@ func enabledStateLabel(enabled bool) string {
 }
 
 func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot string, result *ai.TestProbeResult) ai.ModelInfo {
+	// The base row must be the one for the ROUTE that was probed.
+	//
+	// findModelInfo matches (provider, id) and returns the FIRST row, which
+	// among a model's routes is arbitrary (sortModels sorts by provider,
+	// type, id with a non-stable sort). A wrong base carries a non-empty
+	// Region, and since persistProbedRegion and AdoptRoutingHints are both
+	// fill-only-empty, neither corrects it — so the verdict was written under
+	// a route key that was never probed, destroying that endpoint's good
+	// result and leaving the endpoint that actually failed still reading as
+	// last-known-good, which PreferRoutes then ranks first.
+	//
+	// Harmless before routes (one row per model); destructive after.
+	probed := ai.RouteKey{
+		Provider: result.Provider,
+		ID:       result.ModelID,
+		Plane:    result.Plane,
+		Region:   result.Region,
+	}
 	var base *ai.ModelInfo
-	if current, ok := findModelInfo(ctx, cfg, vaultRoot, result.Provider, result.ModelID); ok {
+	if current, ok := findModelInfoForRoute(ctx, cfg, vaultRoot, probed); ok {
 		base = &current
 	} else {
 		base = findBuiltinModel(result.Provider, result.ModelID)
@@ -1054,30 +1072,60 @@ func adoptCandidateRouting(entry *ai.ModelInfo, candidate ai.ModelInfo) {
 // shared field.
 //
 // Mantle rows keep their endpoint region, which the probe reports unchanged.
+//
+// The PLANE is stamped alongside the region, because the two together are the
+// route key the verdict is saved under. Stamping only the region would leave a
+// row whose key differs from the endpoint that was actually probed.
 func persistProbedRegion(entry *ai.ModelInfo, result *ai.TestProbeResult, primaryRegion string) {
-	if result.Provider != "bedrock" || result.Region == "" {
+	if result.Provider != "bedrock" {
 		return
 	}
-	if entry.Region == "" {
+	if entry.Region == "" && result.Region != "" {
 		entry.Region = result.Region
+	}
+	if entry.Plane == "" && result.Plane != "" {
+		entry.Plane = result.Plane
 	}
 }
 
 func findModelInfo(ctx context.Context, cfg ai.AIConfig, vaultRoot, provider, id string) (ai.ModelInfo, bool) {
+	return findModelInfoForRoute(ctx, cfg, vaultRoot, ai.RouteKey{Provider: provider, ID: id})
+}
+
+// findModelInfoForRoute returns the catalog row for a specific ROUTE, falling
+// back to any row of that model when the route names no plane or region.
+//
+// The exact-route pass has to come first and has to be exact. Matching on
+// (provider, id) and taking the first hit is arbitrary among a model's routes
+// (sortModels uses a non-stable sort keyed on provider/type/id), so a caller
+// saving a probe verdict could pick up a sibling endpoint's row and write the
+// result under a route that was never probed.
+func findModelInfoForRoute(ctx context.Context, cfg ai.AIConfig, vaultRoot string, route ai.RouteKey) (ai.ModelInfo, bool) {
 	list, err := ai.BuildModelList(ctx, ai.MergedListOptions{
 		Config:    cfg,
 		VaultRoot: vaultRoot,
 	})
+	var pools [][]ai.ModelInfo
 	if err == nil {
-		for _, m := range list.Verified {
-			if m.Provider == provider && m.ID == id {
-				return m, true
+		pools = append(pools, list.Verified, list.Unverified)
+	}
+	pools = append(pools, ai.LoadUserCatalog(vaultRoot))
+
+	if route.Plane != "" || route.Region != "" {
+		want := route
+		for _, pool := range pools {
+			for _, m := range pool {
+				if m.Route() == want {
+					return m, true
+				}
 			}
 		}
 	}
-	for _, m := range ai.LoadUserCatalog(vaultRoot) {
-		if m.Provider == provider && m.ID == id {
-			return m, true
+	for _, pool := range pools {
+		for _, m := range pool {
+			if m.Provider == route.Provider && m.ID == route.ID {
+				return m, true
+			}
 		}
 	}
 	return ai.ModelInfo{}, false

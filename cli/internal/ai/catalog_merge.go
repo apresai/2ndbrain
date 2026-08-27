@@ -147,12 +147,7 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// user's own configured model. Discovered rows were never marked at all,
 	// so a model whose only surviving row came from discovery could not be
 	// active either.
-	for i := range result.Verified {
-		result.Verified[i].Active = isActiveModel(result.Verified[i], opts.Config)
-	}
-	for i := range result.Unverified {
-		result.Unverified[i].Active = isActiveModel(result.Unverified[i], opts.Config)
-	}
+	markActiveRoutes(opts.Config, &result.Verified, &result.Unverified)
 
 	result.Verified = EnrichModelPricing(ctx, opts.Config, result.Verified)
 	result.Unverified = EnrichModelPricing(ctx, opts.Config, result.Unverified)

@@ -120,6 +120,14 @@ func applyModelSlotRoute(v *vault.Vault, key, value string) (bool, error) {
 	row, err := ai.ResolveRouteRef(rows, ref, v.Config.AI)
 	switch {
 	case err == nil:
+		// Validate the RESOLVED plane too, not just an explicitly typed one.
+		// A bare id resolving to a mantle row wrote mantle straight into an
+		// embedding or rerank slot, while `config set ai.embedding_plane
+		// mantle` was refused — two write paths, one validator.
+		if _, err := parsePlaneValue(string(row.Plane), slotName); err != nil {
+			return true, exitWithError(ExitValidation, "error: "+err.Error()+
+				"\n"+row.Route().Unqualified()+" is served on that plane; pick a different model or route for this slot.")
+		}
 		setModelSlot(&v.Config.AI, key, row.ID, row.Plane, row.Region)
 		return true, nil
 	case isNoSuchRoute(err):

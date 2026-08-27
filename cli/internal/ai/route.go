@@ -439,6 +439,55 @@ func canonicalizeUserRoutes(rows []ModelInfo, builtin []ModelInfo) {
 	}
 }
 
+// markActiveRoutes flags EXACTLY ONE row per configured slot as Active.
+//
+// isActiveModel falls back to id-only matching when the config names no plane
+// or region, which is every vault upgrading from before routes. That is
+// deliberate (the model must still read as current), but applied row by row it
+// marks every route of the model, so the picker shows one model three times
+// and the GUI implies three endpoints are in use at once.
+//
+// Where several rows match, PreferRoutes picks the one the invoke path would
+// actually resolve to, so what is shown as active is what is actually running.
+func markActiveRoutes(cfg AIConfig, lists ...*[]ModelInfo) {
+	type slot struct{ id, typ string }
+	wanted := map[slot]bool{}
+	if cfg.EmbeddingModel != "" {
+		wanted[slot{cfg.EmbeddingModel, "embedding"}] = true
+	}
+	if cfg.GenerationModel != "" {
+		wanted[slot{cfg.GenerationModel, "generation"}] = true
+	}
+
+	// Clear first, then elect one winner per slot across BOTH halves.
+	candidates := map[slot][]ModelInfo{}
+	for _, l := range lists {
+		for i := range *l {
+			(*l)[i].Active = false
+			m := (*l)[i]
+			if m.Provider != cfg.Provider {
+				continue
+			}
+			k := slot{m.ID, m.Type}
+			if wanted[k] && isActiveModel(m, cfg) {
+				candidates[k] = append(candidates[k], m)
+			}
+		}
+	}
+	winners := map[string]bool{}
+	for k, group := range candidates {
+		_ = k
+		winners[routeKey(PreferRoutes(group, cfg)[0].Route())] = true
+	}
+	for _, l := range lists {
+		for i := range *l {
+			if winners[routeKey((*l)[i].Route())] {
+				(*l)[i].Active = true
+			}
+		}
+	}
+}
+
 // RouteIsPinned reports whether a row names a concrete region. An unpinned
 // Bedrock row is a region-agnostic template ("Claude Sonnet 5 on classic")
 // rather than a callable endpoint: it resolves against whatever

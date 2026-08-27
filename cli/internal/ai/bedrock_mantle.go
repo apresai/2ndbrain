@@ -121,7 +121,23 @@ func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) (string, error) {
 		}
 		return u, nil
 	}
-	region := ResolveModelRegion("bedrock", model, vaultRoot)
+	// An EXPLICIT region wins over the catalog.
+	//
+	// This order used to be reversed, and that made the mantle plane the one
+	// place a resolved route was still overridden at invoke time. InitBedrock
+	// sets RegionOverride from the route and ResolveBedrockConfig maps it onto
+	// cfg.Region, but consulting ResolveModelRegion first meant ANY catalog
+	// row for that id supplied the region instead — and since discovery now
+	// emits one row per region, and that lookup is exact-id, plane-blind, and
+	// first-match-wins, "any row" was routinely the wrong one. A config pinned
+	// to @mantle/us-west-2 built a client against us-east-2.
+	//
+	// The catalog pin still applies when nothing explicit was resolved, which
+	// is what keeps a bare mantle builtin working.
+	region := cfg.RegionOverride
+	if region == "" {
+		region = ResolveModelRegion("bedrock", model, vaultRoot)
+	}
 	if region == "" {
 		region = cfg.Region
 	}
