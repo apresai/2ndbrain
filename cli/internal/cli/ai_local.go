@@ -50,8 +50,8 @@ func runAILocal(cmd *cobra.Command, args []string) error {
 
 	// Override models to local defaults if provider isn't ollama
 	if cfg.Provider != "ollama" {
-		cfg.EmbeddingModel = ai.DefaultLocalEmbedModel
-		cfg.GenerationModel = ai.DefaultLocalGenModel
+		cfg.SetEmbeddingModel(ai.DefaultLocalEmbedModel)
+		cfg.SetGenerationModel(ai.DefaultLocalGenModel)
 		cfg.Dimensions = 768
 	}
 

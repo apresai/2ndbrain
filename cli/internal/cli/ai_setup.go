@@ -159,8 +159,8 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	cfg.EmbeddingModel = embedID
-	cfg.GenerationModel = genID
+	cfg.SetEmbeddingModel(embedID)
+	cfg.SetGenerationModel(genID)
 	if dims > 0 {
 		// Warn if dimensions are changing with existing embeddings.
 		if cfg.Dimensions > 0 && cfg.Dimensions != dims {
@@ -190,7 +190,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	// away: it shows up in `2nb models list` afterward.
 	fmt.Printf("\nTesting embedding model %s...\n", embedID)
 	embedProbe := probeWithRetry(ctx, scanner, &cfg, v.Root, verifiedModels, provider, "embedding", &embedID, &dims)
-	cfg.EmbeddingModel = embedID
+	cfg.SetEmbeddingModel(embedID)
 	if dims > 0 {
 		cfg.Dimensions = dims
 	}
@@ -198,7 +198,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Testing generation model %s...\n", genID)
 	genProbe := probeWithRetry(ctx, scanner, &cfg, v.Root, verifiedModels, provider, "generation", &genID, &dims)
-	cfg.GenerationModel = genID
+	cfg.SetGenerationModel(genID)
 	persistProbe(v.Root, genProbe)
 
 	// Step 5: Save config.

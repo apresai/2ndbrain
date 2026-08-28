@@ -406,8 +406,7 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		// model's plane and region behind pins the NEW model to the OLD
 		// endpoint, which is the misroute this whole change removes.
 		// A cleared slot re-resolves (or refuses) on the next invoke.
-		cfg.EmbeddingModel = value
-		cfg.EmbeddingPlane, cfg.EmbeddingRegion = "", ""
+		cfg.SetEmbeddingModel(value)
 	case "ai.embedding_plane":
 		p, err := parsePlaneValue(value, "embedding")
 		if err != nil {
@@ -426,8 +425,7 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		// model's plane and region behind pins the NEW model to the OLD
 		// endpoint, which is the misroute this whole change removes.
 		// A cleared slot re-resolves (or refuses) on the next invoke.
-		cfg.GenerationModel = value
-		cfg.GenerationPlane, cfg.GenerationRegion = "", ""
+		cfg.SetGenerationModel(value)
 	case "ai.generation_plane":
 		p, err := parsePlaneValue(value, "generation")
 		if err != nil {
@@ -515,8 +513,7 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		}
 		cfg.Rerank.Enabled = b
 	case "ai.rerank.model":
-		cfg.Rerank.Model = value
-		cfg.Rerank.Plane, cfg.Rerank.Region = "", ""
+		cfg.SetRerankModel(value)
 	case "ai.rerank.plane":
 		p, err := parsePlaneValue(value, "rerank")
 		if err != nil {

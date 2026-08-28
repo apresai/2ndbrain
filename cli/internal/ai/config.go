@@ -79,6 +79,33 @@ type RerankConfig struct {
 	CandidateDocs int `yaml:"candidate_docs,omitempty" json:"candidate_docs,omitempty"`
 }
 
+// SetGenerationModel, SetEmbeddingModel, and SetRerankModel change a slot's
+// model AND clear its route.
+//
+// Use these instead of assigning the model field directly. A slot's plane and
+// region describe the endpoint the PREVIOUS model was served from; carrying
+// them onto a new model pins it to an endpoint that may not serve it at all,
+// which is the misroute route identity exists to remove. Clearing means the
+// next resolve either finds the new model's single route or refuses with the
+// pick commands — both correct, neither silent.
+//
+// The route is re-established by `config set ai.<slot>_model <route>`, the
+// wizard, or the app picker, all of which write all three fields together.
+func (c *AIConfig) SetGenerationModel(id string) {
+	c.GenerationModel = id
+	c.GenerationPlane, c.GenerationRegion = "", ""
+}
+
+func (c *AIConfig) SetEmbeddingModel(id string) {
+	c.EmbeddingModel = id
+	c.EmbeddingPlane, c.EmbeddingRegion = "", ""
+}
+
+func (c *AIConfig) SetRerankModel(id string) {
+	c.Rerank.Model = id
+	c.Rerank.Plane, c.Rerank.Region = "", ""
+}
+
 // GenerationRoute, EmbeddingRoute, and RerankRoute return the route each slot
 // invokes. The plane and region come from config verbatim: they are what the
 // user picked, and nothing here infers a missing one. A slot whose plane or
