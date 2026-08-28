@@ -312,6 +312,14 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 			entry := promotedEntry(&m, result)
 			preserveRoutingFields(scope, v.Root, &entry)
 			adoptCandidateRouting(&entry, m)
+			// Stamp the probed route LAST, so the save lands on the endpoint
+			// that was actually called. promotedEntry copies no route, and
+			// preserveRoutingFields' unique-row fallback would otherwise
+			// supply a SIBLING's: a classic promote of a dual-plane id saved
+			// under the stored mantle route, overwriting that row's real
+			// verdict with a false positive that even carried the mantle
+			// strategy. adoptCandidateRouting cannot correct it (fill-only-empty).
+			persistProbedRegion(&entry, result, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
 				passed++
 				fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",

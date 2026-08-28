@@ -54,11 +54,12 @@ did **not** configure is logged, never warned, because the discover diff's GONE
 shield keys off `"<source> discovery failed"` and a permanent warning would
 permanently disable GONE detection.
 
-**Config names the route explicitly.** `ai.<slot>_model` is accompanied by
-`ai.<slot>_plane` and `ai.<slot>_region`, and `config set ai.<slot>_model`
-writes all three as one unit so a slot is never half-routed. A bare id resolves
-when the model has exactly one route; with several it is **refused**, printing
-each qualified form. Nothing is inferred at invoke time.
+**Config names the route explicitly.** Each model key is accompanied by a
+plane and a region: `ai.generation_{plane,region}`, `ai.embedding_{plane,region}`,
+and the nested `ai.rerank.{plane,region}` (rerank does NOT use the underscore
+form). Setting the model key writes all three as one unit so a slot is never
+half-routed. A bare id resolves when the model has exactly one route; with
+several it is **refused**, printing each qualified form.
 
 **Invocation refuses rather than guesses.** `ResolveSlotRoute` deliberately
 does not fall back to `PreferRoutes`: preference is right for choosing what to
@@ -73,14 +74,26 @@ last known good, then primary region, then classic before mantle, then
 configured region order). It is shared by verify, the list view, and the
 ambiguity messages so the notion cannot drift.
 
-**Still present, now redundant:** the pre-route resolvers
+**Still present, now subordinate:** the pre-route resolvers
 (`resolveCatalogString` / `findCatalogString`'s profile-stripped base match,
 `effectiveInvokeStrategy` and its cross-plane vetoes, `ResolveModelRegion`,
-`EffectiveBedrockRegion`, `carryVaultRegionPin`, `persistProbedRegion`) have
-NOT been deleted. `ResolveSlotRoute` decides the route before they run, so
-they only confirm a decision already made, but they are a second answer to the
-same question and a follow-up should remove them. Treat the route as
-authoritative when the two disagree.
+`EffectiveBedrockRegion`, `carryVaultRegionPin`) have NOT been deleted. Every
+serving path now decides the route first and dispatches on it, so these only
+answer when nothing was resolved — a model no catalog has seen. They remain a
+second way to answer the same question and a follow-up should remove them;
+treat the route as authoritative when the two disagree.
+
+Each of the three rounds of review on this change found a place where one of
+these still won: `effectiveInvokeStrategy` overruling a configured plane at
+construction, `mantleBaseURL` reading the catalog pin before the resolved
+region, and the probe re-deriving a plane-blind strategy from a hint. The
+pattern is always the same — **a hint loses to a lookup** — so a resolved route
+must be passed as a decision (dispatch on it) rather than as a parameter some
+resolver may reconsider.
+
+`persistProbedRegion` is NOT in that list: it is not a resolver but the save
+path's record of which endpoint a probe actually called, and it is deliberately
+authoritative over whatever route the base row carried.
 
 ## Bedrock mantle plane (partner-hosted frontier models)
 

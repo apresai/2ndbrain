@@ -13,15 +13,15 @@ type SchemaSet struct {
 }
 
 type DocTypeSchema struct {
-	Name        string                   `yaml:"name" json:"name"`
-	Description string                   `yaml:"description" json:"description"`
-	Fields      map[string]FieldDef      `yaml:"fields" json:"fields"`
-	Required    []string                 `yaml:"required" json:"required"`
-	Status      *StatusMachine           `yaml:"status,omitempty" json:"status,omitempty"`
+	Name        string              `yaml:"name" json:"name"`
+	Description string              `yaml:"description" json:"description"`
+	Fields      map[string]FieldDef `yaml:"fields" json:"fields"`
+	Required    []string            `yaml:"required" json:"required"`
+	Status      *StatusMachine      `yaml:"status,omitempty" json:"status,omitempty"`
 }
 
 type FieldDef struct {
-	Type    string   `yaml:"type" json:"type"`       // text, number, date, datetime, boolean, list, tags
+	Type    string   `yaml:"type" json:"type"` // text, number, date, datetime, boolean, list, tags
 	Enum    []string `yaml:"enum,omitempty" json:"enum,omitempty"`
 	Default any      `yaml:"default,omitempty" json:"default,omitempty"`
 }
@@ -112,10 +112,10 @@ func DefaultSchemas() *SchemaSet {
 				Name:        "Postmortem",
 				Description: "Incident postmortem analysis",
 				Fields: map[string]FieldDef{
-					"status":       {Type: "text", Enum: []string{"draft", "reviewed", "published"}},
+					"status":        {Type: "text", Enum: []string{"draft", "reviewed", "published"}},
 					"incident-date": {Type: "date"},
-					"severity":     {Type: "text", Enum: []string{"low", "medium", "high", "critical"}},
-					"services":     {Type: "list"},
+					"severity":      {Type: "text", Enum: []string{"low", "medium", "high", "critical"}},
+					"services":      {Type: "list"},
 				},
 				Required: []string{"title", "status", "incident-date"},
 			},

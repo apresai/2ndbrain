@@ -10,9 +10,9 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/ragctx"
 	"github.com/apresai/2ndbrain/internal/retrieve"
+	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
 
@@ -68,7 +68,7 @@ func TestRerankRetrievalAB(t *testing.T) {
 	t.Logf("QA set: %d questions", len(qa))
 
 	const k = 10
-	base := retrieve.New(v).WithReranker(nil)  // force baseline off, ignore vault config
+	base := retrieve.New(v).WithReranker(nil) // force baseline off, ignore vault config
 	rr := retrieve.New(v).WithReranker(reranker)
 
 	var baseR1, rrR1 int

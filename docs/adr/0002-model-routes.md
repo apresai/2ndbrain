@@ -58,8 +58,9 @@ broke grok 4.6. It was not an edge case, it was the default state.
   empty, so their key is byte-identical to the old form.
 - Discovery emits one row per `(plane, region)` and walks both planes across
   the documented US regions. Nothing is collapsed.
-- The config names the route explicitly (`ai.<slot>_plane`,
-  `ai.<slot>_region`), written as one unit with the model.
+- The config names the route explicitly (`ai.generation_plane` /
+  `ai.generation_region`, the embedding pair, and the nested
+  `ai.rerank.plane` / `ai.rerank.region`), written as one unit with the model.
 - **Invocation refuses rather than guesses.** A slot whose model has several
   routes and names none of them is an error with the pick commands, not a
   fallback.
@@ -118,10 +119,12 @@ the mechanism has nothing left to arbitrate. It is superseded rather than tuned
 - `ModelInfo.Region` had two owners that "must never fight over the field".
   The conflict dissolves because region is now part of the key rather than a
   shared mutable pin, but note that it IS still written in two places:
-  `persistProbedRegion` stamps the region a probe actually used, and
-  `AdoptRoutingHints` fills an empty one from a discovered row. Both are
-  fill-only-empty and both write the row's OWN route, so they record identity
-  rather than compete to redefine it.
+  `persistProbedRegion` stamps the plane and region a probe actually used, and
+  `AdoptRoutingHints` fills an empty one from a discovered row. The first is
+  AUTHORITATIVE (the probe result is by definition the truth about which
+  endpoint was called, and fill-only-empty there let a stale route block its
+  own correction); the second stays fill-only-empty. Both write the row's OWN
+  route, so they record identity rather than compete to redefine it.
 - Unpinned rows (region-agnostic builtins, and rows predating routes) are
   retired once concrete routes cover them, so a model is never listed both
   ways. Their Enabled state propagates first, so retiring a template cannot

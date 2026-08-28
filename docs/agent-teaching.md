@@ -142,7 +142,7 @@ Pick one:
 AI is unavailable until this is set; search falls back to keyword-only.
 ```
 
-The consequence for an agent: `ask` fails outright and `search` returns `mode: "keyword"`. Run one of the printed commands verbatim to recover; `2nb models discover` first if an expected route is missing. Note that `doctor` probes models directly rather than through provider init, so it can report healthy while `ask` is refusing.
+The consequence for an agent depends on WHICH slot is unrouted, because the embedding slot is resolved first: an embedding-slot refusal registers no provider at all, so `ask` fails and `search` returns `mode: "keyword"`; a generation-slot refusal leaves the embedder registered, so semantic `search` still works and only `ask` fails. Run one of the printed commands verbatim to recover; `2nb models discover` first if an expected route is missing. Note that `doctor` probes models directly rather than through provider init, so it can report healthy while `ask` is refusing.
 
 Agents should be taught to check `warnings[]` and `mode` before assuming hybrid search ran. Match on the stable prefix `"semantic search disabled:"` — the tail of the message includes provider/dim details that change. A second, structurally distinct class also lands in `warnings[]` when the optional rerank stage is enabled and its Bedrock call fails: `"rerank disabled: <error>"` (search still returns, just in the un-reranked hybrid order). Match that stable prefix too if you care whether reranking ran.
 

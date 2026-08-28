@@ -387,7 +387,13 @@ func resolveBenchSummaryScope(vaultRoot, scope string) (ai.UserCatalogScope, str
 }
 
 func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCatalogScope, vaultRoot, provider, modelID, modelType string, summary *ai.BenchmarkSummary) error {
-	entry, ok := findModelInfo(ctx, cfg, vaultRoot, provider, modelID)
+	// Record the summary against the route that was BENCHMARKED. The probe
+	// picks its endpoint with ResolveMeasurementRoute, so looking the base row
+	// up route-blind filed the number on a sibling: measured
+	// @classic/us-west-2, recorded on @classic/us-east-1. models list --sort
+	// best is bench-informed, so the wrong row then ranks.
+	route := ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot).Route
+	entry, ok := findModelInfoForRoute(ctx, cfg, vaultRoot, route)
 	if !ok {
 		entry = ai.ModelInfo{
 			ID:       modelID,
@@ -399,6 +405,8 @@ func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCat
 	entry.ID = modelID
 	entry.Provider = provider
 	entry.Type = modelType
+	entry.Plane = route.Plane
+	entry.Region = route.Region
 	entry.Benchmark = summary
 	entry.Enabled = preserveScopeEnabled(scope, vaultRoot, provider, modelID)
 	if entry.Tier == "" {

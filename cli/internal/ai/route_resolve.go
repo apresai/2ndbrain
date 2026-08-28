@@ -33,13 +33,27 @@ type UnroutedSlotError struct {
 	Candidates []ModelInfo
 }
 
+// slotModelConfigKey maps a slot name to the config key that sets its model.
+//
+// Rerank does NOT follow the `ai.<slot>_model` pattern the other two use: its
+// keys are nested (`ai.rerank.model`). Formatting the pattern blindly emitted
+// `ai.rerank_model`, which `config set` rejects as an unknown key — and this
+// message is the sole recovery path from an unrouted slot, with the docs
+// telling agents to run it verbatim.
+func slotModelConfigKey(slot string) string {
+	if slot == "rerank" {
+		return "ai.rerank.model"
+	}
+	return "ai." + slot + "_model"
+}
+
 func (e *UnroutedSlotError) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s model %q has %d possible routes and the config names none of them.\n",
 		e.Slot, e.Model, len(e.Candidates))
 	b.WriteString("Pick one:\n")
 	for _, c := range e.Candidates {
-		fmt.Fprintf(&b, "  2nb config set ai.%s_model %s\n", e.Slot, c.Route().Unqualified())
+		fmt.Fprintf(&b, "  2nb config set %s %s\n", slotModelConfigKey(e.Slot), c.Route().Unqualified())
 	}
 	b.WriteString("(run `2nb models discover` first if a route you expect is missing)")
 	return b.String()

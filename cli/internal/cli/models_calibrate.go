@@ -172,7 +172,7 @@ func runModelsCalibrate(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := saveCalibration(scope, vaultRoot, cfg.Provider, cfg.EmbeddingModel, recommended); err != nil {
+		if err := saveCalibration(scope, vaultRoot, cfg.Provider, cfg.EmbeddingModel, recommended, cfg); err != nil {
 			return fmt.Errorf("save calibration: %w", err)
 		}
 		path, _ := ai.CatalogPathForScope(scope, vaultRoot)
@@ -247,12 +247,23 @@ func percentile(sorted []float64, q float64) float64 {
 // saveCalibration upserts a user-catalog entry for the calibrated model that
 // carries only the recommended threshold. Existing fields on a matching entry
 // are preserved via overlay semantics in LoadUserCatalog.
-func saveCalibration(scope ai.UserCatalogScope, vaultRoot, provider, modelID string, threshold float64) error {
+func saveCalibration(scope ai.UserCatalogScope, vaultRoot, provider, modelID string, threshold float64, cfg ai.AIConfig) error {
+	// Carry the embedding slot's ROUTE, or the save appends a second,
+	// route-less row instead of updating the real one: SaveUserCatalogEntry is
+	// route-keyed, and dropSupersededUnpinned then hides the duplicate from
+	// `models list` while it still breaks preserveRoutingFields' unique-row
+	// fallback for every later save of that model.
+	route := cfg.EmbeddingRoute()
+	if route.ID != modelID {
+		route = ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot).Route
+	}
 	entry := ai.ModelInfo{
 		ID:                             modelID,
 		Provider:                       provider,
 		Type:                           "embedding",
 		Tier:                           ai.TierUserVerified,
+		Plane:                          route.Plane,
+		Region:                         route.Region,
 		RecommendedSimilarityThreshold: threshold,
 	}
 	return ai.SaveUserCatalogEntry(scope, vaultRoot, entry)

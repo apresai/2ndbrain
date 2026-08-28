@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A newly-listed model is announced as NEW once rather than once per route
 
 ### Changed
+- A verify pass now records its verdict against the endpoint it actually probed, instead of clearing a region pin to signal "back to the default". That old self-heal cannot work when the region is part of a row's identity: clearing it wrote a second row rather than replacing one, and the stale pinned row won. Regaining access in your primary region now shows up as a fresh pass on that region's own row, which ranks above its siblings
 - `models list` gained a ROUTE column, and `models verify` probes one best route per model by default (`--all-routes` for the full matrix), so a model with several endpoints does not silently multiply the number of billed probes
 - The discovery cache version is bumped, so the first walk after upgrading re-fetches every plane and region. Cached entries written before this change hold rows with no route
 
