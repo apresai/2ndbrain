@@ -145,15 +145,18 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 	ctx, cancel := context.WithTimeout(ctx, ProbeDeadline(provider, strategy, modelType))
 	defer cancel()
 
-	// A hinted mantle candidate routes to its listing region on the existing
-	// RegionOverride carrier: ResolveBedrockConfig maps the override onto
-	// Region before mantleBaseURL's config-region fallback reads it, so no
-	// client change is needed. Only when nothing else already routes the
-	// call — an in-memory override (multi-region verify) or a catalog Region
-	// pin (a persisted verify pass, a builtin) always wins.
-	if provider == "bedrock" && strategy == StrategyBedrockMantleResponses &&
-		m.Region != "" && cfg.Bedrock.RegionOverride == "" &&
-		ResolveModelRegion("bedrock", m.ID, vaultRoot) == "" {
+	// A candidate that NAMES its region is probed there, on either plane.
+	//
+	// This used to apply only to mantle candidates, and only when the catalog
+	// declared no pin of its own — so a CLASSIC candidate naming us-east-1 was
+	// probed in whatever region an exact-id, plane-blind ResolveModelRegion
+	// lookup returned, and the verdict was recorded against that region. Once
+	// verify selects a specific route to probe, deferring to the catalog
+	// discards the selection.
+	//
+	// An explicit in-memory override still wins: that is the multi-region
+	// fan-out naming the region it is currently attempting.
+	if provider == "bedrock" && m.Region != "" && cfg.Bedrock.RegionOverride == "" {
 		cfg.Bedrock.RegionOverride = m.Region
 	}
 

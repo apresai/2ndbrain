@@ -900,29 +900,33 @@ func setModelEnabledPointer(cmd *cobra.Command, modelID, provider, scopeStr stri
 		return err
 	}
 
-	// Load user catalog and find an existing entry; fall back to a minimal one
-	// so enable/disable work against purely-builtin models too.
+	// Enable/disable is intent about the MODEL, so it applies to every route
+	// of that model, matching `models remove`.
+	//
+	// Taking the first (provider, id) match set the flag on 1 of N rows, and
+	// filterEnabled is per-row, so a disabled model stayed in dropdowns via its
+	// other routes — a silently ineffective command, reachable from the GUI.
 	user := ai.LoadUserCatalog(vaultRoot)
-	var entry ai.ModelInfo
-	found := false
+	var targets []ai.ModelInfo
 	for _, m := range user {
 		if m.Provider == provider && m.ID == modelID {
-			entry = m
-			found = true
-			break
+			targets = append(targets, m)
 		}
 	}
-	if !found {
-		entry = ai.ModelInfo{
+	if len(targets) == 0 {
+		// Purely-builtin model: a minimal row carries the flag.
+		targets = []ai.ModelInfo{{
 			ID:       modelID,
 			Provider: provider,
 			Tier:     ai.TierUserVerified,
-		}
+		}}
 	}
 
-	entry.Enabled = enabled
-	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
-		return fmt.Errorf("save: %w", err)
+	for _, entry := range targets {
+		entry.Enabled = enabled
+		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+			return fmt.Errorf("save: %w", err)
+		}
 	}
 
 	slog.Info("models enable-state", "provider", provider, "model", modelID, "state", label, "scope", scope)
@@ -1108,6 +1112,17 @@ func persistProbedRegion(entry *ai.ModelInfo, result *ai.TestProbeResult, primar
 	}
 	if result.Plane != "" {
 		entry.Plane = result.Plane
+	}
+	// The envelope too. preserveRoutingFields can graft a SIBLING's
+	// invoke_strategy onto the row (it is fill-only-empty, and the sibling is
+	// the only match when the exact route is absent), which left classic rows
+	// carrying bedrock_mantle_responses. Harmless for dispatch today, since
+	// NewBedrockGenerationForRoute switches on plane and ignores Strategy, but
+	// it is a lie in the catalog that never self-heals.
+	if result.Strategy != "" {
+		entry.InvokeStrategy = result.Strategy
+	} else if result.Plane == ai.PlaneClassic && entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
+		entry.InvokeStrategy = ""
 	}
 }
 

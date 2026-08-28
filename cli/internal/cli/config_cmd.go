@@ -400,7 +400,14 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		// vault. Mirrors `ai setup`, which enables the chosen provider.
 		cfg.SetProviderDisabled(value, false)
 	case "ai.embedding_model":
+		// Clearing the route is REQUIRED, not tidiness. This raw path is
+		// still reached by `ai setup`, `ai local`, and `models wizard
+		// --set-active`, which write only the id; leaving the previous
+		// model's plane and region behind pins the NEW model to the OLD
+		// endpoint, which is the misroute this whole change removes.
+		// A cleared slot re-resolves (or refuses) on the next invoke.
 		cfg.EmbeddingModel = value
+		cfg.EmbeddingPlane, cfg.EmbeddingRegion = "", ""
 	case "ai.embedding_plane":
 		p, err := parsePlaneValue(value, "embedding")
 		if err != nil {
@@ -413,7 +420,14 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		}
 		cfg.EmbeddingRegion = value
 	case "ai.generation_model":
+		// Clearing the route is REQUIRED, not tidiness. This raw path is
+		// still reached by `ai setup`, `ai local`, and `models wizard
+		// --set-active`, which write only the id; leaving the previous
+		// model's plane and region behind pins the NEW model to the OLD
+		// endpoint, which is the misroute this whole change removes.
+		// A cleared slot re-resolves (or refuses) on the next invoke.
 		cfg.GenerationModel = value
+		cfg.GenerationPlane, cfg.GenerationRegion = "", ""
 	case "ai.generation_plane":
 		p, err := parsePlaneValue(value, "generation")
 		if err != nil {
@@ -502,6 +516,7 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		cfg.Rerank.Enabled = b
 	case "ai.rerank.model":
 		cfg.Rerank.Model = value
+		cfg.Rerank.Plane, cfg.Rerank.Region = "", ""
 	case "ai.rerank.plane":
 		p, err := parsePlaneValue(value, "rerank")
 		if err != nil {

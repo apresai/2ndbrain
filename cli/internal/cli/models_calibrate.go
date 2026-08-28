@@ -253,10 +253,11 @@ func saveCalibration(scope ai.UserCatalogScope, vaultRoot, provider, modelID str
 	// route-keyed, and dropSupersededUnpinned then hides the duplicate from
 	// `models list` while it still breaks preserveRoutingFields' unique-row
 	// fallback for every later save of that model.
-	route := cfg.EmbeddingRoute()
-	if route.ID != modelID {
-		route = ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot).Route
-	}
+	// Resolve unconditionally. Guarding on `route.ID != modelID` never fired,
+	// because the only call site passes cfg.EmbeddingModel: a config with no
+	// plane therefore produced an EMPTY route and the route-keyed save appended
+	// a second, route-less row instead of updating the real one.
+	route := ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot).Route
 	entry := ai.ModelInfo{
 		ID:                             modelID,
 		Provider:                       provider,

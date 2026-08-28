@@ -470,6 +470,13 @@ func persistProbe(vaultRoot string, result *ai.TestProbeResult) {
 	base := findBuiltinModel(result.Provider, result.ModelID)
 	entry := promotedEntry(base, result)
 	entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, vaultRoot)
+	// Stamp the probed route. promotedEntry copies none, so without this the
+	// save lands on a route that was never probed: it appends a second,
+	// route-less row for the model, which then permanently kills
+	// UserCatalogRouteToPreserve's unique-row fallback (the fallback that fixed
+	// the 2026-08-20 invoke_strategy-stripping regression), and
+	// dropSupersededUnpinned retires the very row this just reported as saved.
+	persistProbedRegion(&entry, result, "")
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, vaultRoot, entry); err != nil {
 		// Keep the stderr warning (the interactive user needs to see it) and add a
 		// durable slog line so the failure is recoverable from cli.log later.

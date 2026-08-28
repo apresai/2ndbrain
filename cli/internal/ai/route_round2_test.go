@@ -159,3 +159,68 @@ func TestProbeResultCarriesRouteFromProbe(t *testing.T) {
 		})
 	}
 }
+
+// TestProbeClassicCandidateDispatchesClassic covers the CLASSIC direction of
+// the plane override, which the mantle-only test left uncovered: deleting the
+// `case PlaneClassic` branch — the actual round-4 blocker fix — kept the suite
+// green.
+//
+// The defect: effectiveInvokeStrategy is exact-id and plane-blind, so for a
+// dual-plane id whose catalog row is mantle, a CLASSIC candidate was billed
+// against the mantle endpoint and its verdict filed under a route that does
+// not exist.
+func TestProbeClassicCandidateDispatchesClassic(t *testing.T) {
+	setupHome(t)
+	// A catalog row says mantle for this id...
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: "zz.dualplane", Provider: "bedrock", Type: "generation",
+		Plane: PlaneMantle, InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// ...but the candidate names CLASSIC.
+	cfg := AIConfig{Provider: "bedrock", Bedrock: BedrockConfig{Region: "us-east-1"}}
+	res, err := TestProbeModelInfo(t.Context(), cfg, ModelInfo{
+		ID: "zz.dualplane", Provider: "bedrock", Type: "generation",
+		Plane: PlaneClassic, Region: "us-east-1",
+	}, "")
+	if err != nil {
+		t.Fatalf("probe returned a hard error: %v", err)
+	}
+	if res.Plane != PlaneClassic {
+		t.Errorf("recorded plane = %q, want classic (the plane the candidate named)", res.Plane)
+	}
+	if res.Strategy == StrategyBedrockMantleResponses {
+		t.Error("a classic candidate dispatched the MANTLE strategy")
+	}
+	if res.Region != "us-east-1" {
+		t.Errorf("recorded region = %q, want us-east-1", res.Region)
+	}
+}
+
+// TestProbeMantleCandidateHonorsItsRegion covers the mantle side of the region
+// override, which had to move above the mantle early return. Without it,
+// `verify <id>@mantle/<region>` went wherever the plane-blind catalog pin said
+// — on the plane where per-region entitlement differs most.
+func TestProbeMantleCandidateHonorsItsRegion(t *testing.T) {
+	setupHome(t)
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSK-route-region-test")
+	t.Setenv("2NB_BEDROCK_SKIP_KEYCHAIN", "1")
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: "zz.mantlepin", Provider: "bedrock", Type: "generation",
+		Plane: PlaneMantle, InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := AIConfig{Provider: "bedrock", Bedrock: BedrockConfig{Region: "us-east-1"}}
+	res, err := TestProbeModelInfoInRegions(t.Context(), cfg, ModelInfo{
+		ID: "zz.mantlepin", Provider: "bedrock", Type: "generation",
+		Plane: PlaneMantle, Region: "us-east-2",
+	}, "", []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("probe returned a hard error: %v", err)
+	}
+	if res.Region != "us-east-2" {
+		t.Errorf("probed region = %q, want the candidate's own us-east-2 (not the catalog pin us-west-2)", res.Region)
+	}
+}

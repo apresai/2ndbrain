@@ -224,6 +224,10 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, v.Root)
 		entry.TestLatencyMs = latencyMs(r.Latency)
 		preserveRoutingFields(scope, v.Root, &entry)
+		// Stamp the probed route last, for the same reason --promote does:
+		// promotedEntry carries none, and preserveRoutingFields' unique-row
+		// fallback would otherwise supply a SIBLING route's.
+		persistProbedRegion(&entry, r, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			events.emit(wizardEvent{
 				Step:    "save_error",
