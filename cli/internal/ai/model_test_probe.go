@@ -365,9 +365,12 @@ func regionRetryable(code TestErrorCode) bool {
 // the included regions (primary first), with the model's catalog Region pin
 // appended when it is not already present. Including the pin keeps a
 // pinned-but-working model reachable, and putting primary FIRST is the
-// self-heal: a pinned model always re-checks primary, even when the included
-// set has collapsed back to a single region, so a stale pin cannot outlive
-// the entitlement gap that created it. A nil result means "no fan-out".
+// a pinned model re-checks primary first so a stale pin cannot outlive
+// the entitlement gap that created it. NOTE: persistProbedRegion no longer
+// CLEARS a pin on a primary pass (region is identity now, so clearing it
+// wrote a second row); the self-heal is that the primary route records its own
+// fresh verdict, which PreferRoutes ranks above its siblings.
+// A nil result means "no fan-out".
 func regionAttempts(regions []string, pinned string) []string {
 	if pinned != "" {
 		found := false
@@ -398,7 +401,8 @@ func TestProbeModelInRegions(ctx context.Context, cfg AIConfig, modelID, provide
 // set, stopping at the first pass. Region 0 (the primary) always goes first,
 // and a model carrying a catalog Region pin gets the pin appended to the
 // attempt list — so a pinned model re-checks primary on EVERY probe
-// (self-heal: a primary pass clears the pin via persistProbedRegion) while
+// (a primary pass records its own fresh verdict, which PreferRoutes ranks
+// above the pinned sibling; it no longer CLEARS the pin) while
 // remaining reachable in its pinned region. Only classic-plane Bedrock models
 // fan out: non-bedrock providers have no AWS region, mantle models are
 // endpoint-pinned per model, and an unpinned single-region probe keeps the

@@ -154,3 +154,39 @@ func TestResolveSlotRouteEmptySlot(t *testing.T) {
 		t.Errorf("an unset slot resolved to a real endpoint: %+v", got)
 	}
 }
+
+// TestResolveSlotRouteTemplateDoesNotCauseRefusal covers the
+// dropSupersededUnpinned call inside ResolveSlotRoute, which was load-bearing
+// and completely uncovered: deleting that one line kept the whole suite green
+// while changing behavior for every upgraded vault.
+//
+// The concrete-plus-template pair is the state of any vault after `ai setup`,
+// which probes and persists a region-stamped row alongside the region-less
+// builtin. Counting the template as a second endpoint would refuse the user's
+// working model as ambiguous with itself.
+func TestResolveSlotRouteTemplateDoesNotCauseRefusal(t *testing.T) {
+	rows := []ModelInfo{
+		{Provider: "bedrock", ID: "zz.c", Type: "generation", Plane: PlaneClassic, Region: "us-east-1"},
+		{Provider: "bedrock", ID: "zz.c", Type: "generation", Plane: PlaneClassic}, // the template
+	}
+	got, err := ResolveSlotRoute("generation", RouteKey{Provider: "bedrock", ID: "zz.c"}, rows)
+	if err != nil {
+		t.Fatalf("a concrete route plus its own template must resolve, got: %v", err)
+	}
+	if got.Route.Region != "us-east-1" {
+		t.Errorf("route = %s, want the concrete endpoint", got.Route.String())
+	}
+}
+
+// TestResolveSlotRouteTwoConcreteRoutesStillRefuse guards the test above:
+// retiring templates must not weaken the refusal that genuinely matters, where
+// two REAL endpoints exist and the config names neither.
+func TestResolveSlotRouteTwoConcreteRoutesStillRefuse(t *testing.T) {
+	rows := []ModelInfo{
+		{Provider: "bedrock", ID: "zz.c", Type: "generation", Plane: PlaneClassic, Region: "us-east-1"},
+		{Provider: "bedrock", ID: "zz.c", Type: "generation", Plane: PlaneClassic, Region: "us-west-2"},
+	}
+	if _, err := ResolveSlotRoute("generation", RouteKey{Provider: "bedrock", ID: "zz.c"}, rows); err == nil {
+		t.Fatal("two concrete endpoints with no config pin must still refuse")
+	}
+}

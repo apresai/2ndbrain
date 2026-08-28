@@ -574,22 +574,52 @@ func retireSupersededTemplates(lists ...*[]ModelInfo) {
 		return
 	}
 
-	// Carry model-level intent off the templates before they go.
+	// Carry EVERYTHING model-level off the templates before they go.
+	//
+	// Enabled alone was not enough. A template is where model-level authored
+	// input lands — `models add --price-in 42` writes a route-less row — so
+	// dropping it without redistributing its facts silently discarded a price
+	// override, notes, name, and context length the user had just set, with
+	// `models add` still reporting success. The values remain on disk; they
+	// simply stopped reaching the merged view once any probe created a
+	// concrete sibling.
+	var templates []ModelInfo
 	intent := map[string]*bool{}
 	for _, rows := range all {
 		for _, m := range rows {
-			if pinned.supersedes(m) && m.Enabled != nil {
+			if !pinned.supersedes(m) {
+				continue
+			}
+			templates = append(templates, m)
+			if m.Enabled != nil {
 				intent[catalogKey(m.Provider, m.ID)] = m.Enabled
 			}
 		}
 	}
+	// A user PRICE OVERRIDE has to overwrite, not fill: the concrete sibling
+	// usually carries a builtin or vendor price already, so fill-only-empty
+	// would leave the override invisible. Same rule the catalog overlay
+	// applies (hasUserPriceOverride).
+	overrides := map[string]ModelInfo{}
+	for _, t := range templates {
+		if hasUserPriceOverride(t) {
+			overrides[catalogKey(t.Provider, t.ID)] = t
+		}
+	}
 	for _, l := range lists {
+		// Fill-only-empty, so a concrete route's own authored value always
+		// beats the template's.
+		inheritModelFacts(*l, templates)
 		for i := range *l {
-			if (*l)[i].Enabled != nil {
-				continue
+			k := catalogKey((*l)[i].Provider, (*l)[i].ID)
+			if (*l)[i].Enabled == nil {
+				if e, ok := intent[k]; ok {
+					(*l)[i].Enabled = e
+				}
 			}
-			if e, ok := intent[catalogKey((*l)[i].Provider, (*l)[i].ID)]; ok {
-				(*l)[i].Enabled = e
+			if t, ok := overrides[k]; ok {
+				(*l)[i].PriceIn, (*l)[i].PriceOut, (*l)[i].PriceRequest = t.PriceIn, t.PriceOut, t.PriceRequest
+				(*l)[i].PriceSource, (*l)[i].PriceOverride = t.PriceSource, t.PriceOverride
 			}
 		}
 		*l = dropSupersededUnpinned(*l, pinned)

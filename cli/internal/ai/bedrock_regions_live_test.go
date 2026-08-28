@@ -87,10 +87,13 @@ func TestLiveProbeModelInRegionsStopsAtFirstPass(t *testing.T) {
 }
 
 // TestLiveStalePinSelfHeals: a model carrying a stale non-primary catalog
-// Region pin must still re-check PRIMARY on a single-region probe — the
-// self-heal that lets persistProbedRegion clear the pin the moment primary
-// access works. Before the fix, a single-region probe honored the pin and
-// primary was never re-checked.
+// Region pin must still re-check PRIMARY on a single-region probe, so primary
+// access that comes back is noticed. persistProbedRegion no longer CLEARS the
+// pin (region is part of the row's identity now, so clearing it would write a
+// second row rather than replace one); the recovery is that the primary route
+// records its own fresh verdict, which PreferRoutes then ranks above the
+// pinned sibling. Before the fix, a single-region probe honored the pin and
+// primary was never re-checked at all.
 func TestLiveStalePinSelfHeals(t *testing.T) {
 	requireBedrockLiveIsolatedFile(t)
 	vaultRoot := t.TempDir()

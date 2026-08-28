@@ -730,6 +730,14 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 	out.ID = patch.ID
 	out.Provider = patch.Provider
 	out.Type = patch.Type
+	// `models add` describes a MODEL, not one of its endpoints: it takes no
+	// route argument and its fields (name, prices, dimensions, context length,
+	// notes) are all model-level. Writing it route-less makes it a template,
+	// whose facts retireSupersededTemplates distributes to every concrete
+	// route. Inheriting `existing`'s route instead landed the edit on whichever
+	// row sorted first, so a price override applied to one region and not its
+	// siblings.
+	out.Plane, out.Region = "", ""
 	if patch.Name != "" {
 		out.Name = patch.Name
 	} else if out.Name == "" {
@@ -839,28 +847,35 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 		return fmt.Errorf("no models found for vendor=%s provider=%s (tip: pass model IDs as positional args to cover discovered-only entries)", vendor, provider)
 	}
 
-	// Preload the user catalog so we merge rather than fetching per
-	// model. Entries keyed by (provider, id).
-	userByKey := make(map[string]ai.ModelInfo)
+	// Preload the user catalog so we merge rather than fetching per model.
+	// Grouped by (provider, id) but keeping EVERY route: a map keyed by
+	// (provider, id) would retain only the last row per model, so the batch
+	// would flag one of N routes. filterEnabled is per-row, so a model
+	// "disabled" that way stays in dropdowns via its other routes — the same
+	// silently-ineffective command setModelEnabledPointer was fixed for, and
+	// this is the path the macOS app's vendor toggles call.
+	userByModel := make(map[string][]ai.ModelInfo)
 	for _, m := range ai.LoadUserCatalog(vaultRoot) {
-		userByKey[m.Provider+"|"+m.ID] = m
+		k := m.Provider + "|" + m.ID
+		userByModel[k] = append(userByModel[k], m)
 	}
 
 	count := 0
 	for _, id := range modelIDs {
-		key := provider + "|" + id
-		entry, found := userByKey[key]
-		if !found {
-			entry = ai.ModelInfo{
+		targets := userByModel[provider+"|"+id]
+		if len(targets) == 0 {
+			targets = []ai.ModelInfo{{
 				ID:       id,
 				Provider: provider,
 				Tier:     ai.TierUserVerified,
-			}
+			}}
 		}
-		entry.Enabled = ai.Ptr(enabled)
-		preserveRoutingFields(scope, vaultRoot, &entry)
-		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
-			return fmt.Errorf("save %s: %w", id, err)
+		for _, entry := range targets {
+			entry.Enabled = ai.Ptr(enabled)
+			preserveRoutingFields(scope, vaultRoot, &entry)
+			if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+				return fmt.Errorf("save %s: %w", id, err)
+			}
 		}
 		count++
 	}
