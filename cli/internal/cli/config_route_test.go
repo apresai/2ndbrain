@@ -144,6 +144,63 @@ func TestConfigSetGenerationModelUniqueRouteIsExplicit(t *testing.T) {
 	}
 }
 
+// TestConfigSetEmbeddingModelRefusesResolvedMantlePlane covers the second of
+// the two write paths into a slot's plane.
+//
+// parsePlaneValue refuses mantle for embedding and rerank (2nb has no client
+// for it there), and the explicit path ran it — but a BARE id resolving to a
+// mantle row wrote that plane straight through, so `config set
+// ai.embedding_plane mantle` errored while `config set ai.embedding_model
+// <mantle-only-model>` quietly produced the same state. Two write paths, one
+// validator. This fix had no shipped test until now.
+func TestConfigSetEmbeddingModelRefusesResolvedMantlePlane(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
+		ID: "fake.mantle-only-embed", Provider: "bedrock", Type: "embedding", Tier: ai.TierUserVerified,
+		Plane: ai.PlaneMantle, InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", "fake.mantle-only-embed")
+	if err == nil {
+		t.Fatalf("a bare id resolving to a mantle row must be refused for the embedding slot: %s", string(out))
+	}
+	if !strings.Contains(string(out), "generation-only") {
+		t.Errorf("refusal should say why the plane is invalid here:\n%s", string(out))
+	}
+	// Nothing written.
+	got, err := runCLIArgs(t, root, "config", "get", "ai.embedding_plane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "mantle") {
+		t.Errorf("the refused plane was written anyway: %s", string(got))
+	}
+}
+
+// TestConfigSetEmbeddingModelClassicRouteStillWorks is the other half: the
+// guard must not block a legitimate classic embedding route.
+func TestConfigSetEmbeddingModelClassicRouteStillWorks(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
+		ID: "fake.classic-embed", Provider: "bedrock", Type: "embedding", Tier: ai.TierUserVerified,
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", "fake.classic-embed"); err != nil {
+		t.Fatalf("a classic embedding route must still be settable: %v", err)
+	}
+	got, err := runCLIArgs(t, root, "config", "get", "ai.embedding_region")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "us-east-1") {
+		t.Errorf("embedding region = %q, want the resolved route's region", strings.TrimSpace(string(got)))
+	}
+}
+
 // TestConfigSetGenerationModelUnknownModelStillAllowed preserves the existing
 // doctrine that naming a model 2nb's catalog does not know is legitimate: a
 // model can exist before the catalog learns about it.

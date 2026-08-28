@@ -1,6 +1,9 @@
 package ai
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestMantleBaseURLHonorsResolvedRegion is the regression test for the one
 // place a resolved route was still overridden at invoke time.
@@ -89,32 +92,70 @@ func TestMarkActiveRoutesElectsExactlyOne(t *testing.T) {
 	}
 }
 
-// TestProbeUsesCandidateRegion pins that a probe goes to the endpoint its
-// candidate names. verify selects a specific route (bestRoutePerModel), and
-// the fan-out used to ask the catalog for the pin instead, discarding that
-// selection.
-func TestProbeUsesCandidateRegion(t *testing.T) {
-	// regionAttempts is the seam: a candidate carrying us-west-2 must put it
-	// in the attempt list even when the configured set does not contain it.
-	got := regionAttempts([]string{"us-east-1"}, "us-west-2")
-	found := false
-	for _, r := range got {
-		if r == "us-west-2" {
-			found = true
-		}
+// TestProbeUsesCandidateRegionAndDoesNotFanOut drives the REAL probe entry
+// point, not the regionAttempts helper.
+//
+// The first version of this test only exercised regionAttempts, which the fix
+// never touched: reverting the fix left it green. What must actually hold is
+// that a candidate naming its own region is probed THERE and nowhere else.
+// Fanning out would bill for endpoints the caller did not ask about and, worse,
+// return the PRIMARY region's verdict on exhaustion — so `models verify
+// <id>@classic/us-west-2` would probe us-east-1 first and persist its failure
+// onto the us-west-2 row.
+//
+// No credentials are needed: the probe fails fast, and the result still
+// reports the region and plane the client was built for, which is the property
+// under test.
+func TestProbeUsesCandidateRegionAndDoesNotFanOut(t *testing.T) {
+	setupHome(t)
+	cfg := AIConfig{Provider: "bedrock", Bedrock: BedrockConfig{Region: "us-east-1"}}
+	candidate := ModelInfo{
+		ID: "zz.route-probe", Provider: "bedrock", Type: "generation",
+		Plane: PlaneClassic, Region: "us-west-2",
 	}
-	if !found {
-		t.Errorf("attempts = %v, want the candidate's own region included", got)
+
+	res, err := TestProbeModelInfoInRegions(t.Context(), cfg, candidate, "", []string{"us-east-1", "us-east-2"})
+	if err != nil {
+		t.Fatalf("probe returned a hard error: %v", err)
+	}
+	if res.Region != "us-west-2" {
+		t.Errorf("probed region = %q, want the candidate's own us-west-2", res.Region)
+	}
+	// Fan-out annotates Detail with the other regions it tried; a named route
+	// must not have tried any.
+	if strings.Contains(res.Detail, "also failed in") {
+		t.Errorf("a named route must not fan out, got: %s", res.Detail)
 	}
 }
 
-// TestProbeResultCarriesRoute pins that a verdict names the full endpoint it
-// came from. Without the plane, a save keyed on the probed route could not
-// distinguish two planes of the same model.
-func TestProbeResultCarriesRoute(t *testing.T) {
-	r := TestProbeResult{Provider: "bedrock", ModelID: "m", Plane: PlaneMantle, Region: "us-west-2"}
-	want := RouteKey{Provider: "bedrock", ID: "m", Plane: PlaneMantle, Region: "us-west-2"}
-	if r.Route() != want {
-		t.Errorf("probe route = %+v, want %+v", r.Route(), want)
+// TestProbeResultCarriesRouteFromProbe pins that TestProbeModelInfo STAMPS the
+// plane onto its result, which is what the save path keys on.
+//
+// The first version asserted on a hand-built struct literal, so deleting the
+// assignment in the probe left it green. This drives the probe.
+func TestProbeResultCarriesRouteFromProbe(t *testing.T) {
+	setupHome(t)
+	cfg := AIConfig{Provider: "bedrock", Bedrock: BedrockConfig{Region: "us-east-1"}}
+
+	for _, tc := range []struct {
+		name  string
+		in    ModelInfo
+		plane Plane
+	}{
+		{"candidate plane wins", ModelInfo{ID: "zz.a", Provider: "bedrock", Type: "generation", Plane: PlaneMantle, Region: "us-west-2"}, PlaneMantle},
+		{"derived from strategy", ModelInfo{ID: "zz.b", Provider: "bedrock", Type: "generation"}, PlaneClassic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := TestProbeModelInfo(t.Context(), cfg, tc.in, "")
+			if err != nil {
+				t.Fatalf("probe returned a hard error: %v", err)
+			}
+			if res.Plane != tc.plane {
+				t.Errorf("result plane = %q, want %q", res.Plane, tc.plane)
+			}
+			if res.Route().ID != tc.in.ID {
+				t.Errorf("result route = %s, want it to name the probed model", res.Route().String())
+			}
+		})
 	}
 }

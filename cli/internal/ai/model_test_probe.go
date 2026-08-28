@@ -388,25 +388,24 @@ func TestProbeModelInfoInRegions(ctx context.Context, cfg AIConfig, m ModelInfo,
 	if len(regions) == 0 {
 		regions = []string{ResolveBedrockConfig(cfg.Bedrock).Region}
 	}
-	// The candidate's OWN region is the pin when it has one.
+	// A candidate that NAMES its region is probed there and nowhere else.
 	//
-	// This used to ask ResolveModelRegion, an exact-id, plane-blind,
-	// first-match lookup. Once verify started selecting a specific route to
-	// probe (bestRoutePerModel), that discarded the selection: the caller
-	// resolved us-west-2 and the probe went wherever the catalog's first row
-	// happened to say. Falling back to the catalog keeps a route-less
-	// candidate behaving as before.
-	pinned := m.Region
-	if pinned == "" {
-		pinned = ResolveModelRegion("bedrock", m.ID, vaultRoot)
+	// Region fan-out predates routes: it existed to discover which region
+	// serves a model when the row could not say. A row that carries its own
+	// region already answers that, and each region is now its own candidate,
+	// so fanning out would probe endpoints the caller did not ask about,
+	// bill for them, and — because the fan-out returns the PRIMARY region's
+	// verdict on exhaustion — report a result for a different endpoint than
+	// the one named. `models verify <id>@classic/us-west-2` would have probed
+	// us-east-1 first and persisted its failure onto the us-west-2 row.
+	//
+	// A route-less candidate keeps the old behavior exactly.
+	if m.Region != "" {
+		cfg.Bedrock.RegionOverride = m.Region
+		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
-	attempts := regionAttempts(regions, pinned)
+	attempts := regionAttempts(regions, ResolveModelRegion("bedrock", m.ID, vaultRoot))
 	if attempts == nil {
-		// No fan-out, but a candidate that named its own region must still be
-		// probed THERE rather than in the configured default.
-		if m.Region != "" {
-			cfg.Bedrock.RegionOverride = m.Region
-		}
 		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
 

@@ -993,9 +993,10 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 // and the merged row a save is built from can lose these fields — observed
 // live 2026-08-20 when `models test --save` stripped a hand-added mantle
 // entry's invoke_strategy, leaving a row that had just PASSED its probe
-// classified statically incompatible. Region for CLASSIC entries is
-// deliberately NOT preserved: persistProbedRegion owns it (a primary-region
-// pass must clear a stale pin, and preservation would resurrect it).
+// classified statically incompatible. Region and Plane are preserved like the
+// rest now: they are the row's IDENTITY rather than a mutable pin, and
+// persistProbedRegion overwrites them from the probe result anyway, which is
+// the authoritative statement of which endpoint was actually called.
 func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
 	// Resolve by route where the entry knows it, else by a UNIQUE row for the
 	// model. A probe result turned into a save often carries no plane yet, so
@@ -1080,10 +1081,24 @@ func persistProbedRegion(entry *ai.ModelInfo, result *ai.TestProbeResult, primar
 	if result.Provider != "bedrock" {
 		return
 	}
-	if entry.Region == "" && result.Region != "" {
+	// AUTHORITATIVE, not fill-only-empty. The probe result is by definition
+	// the truth about which endpoint was called, so it must overwrite whatever
+	// route the base row carried.
+	//
+	// Fill-only-empty was wrong here in a way that destroyed state. The base
+	// row comes from a lookup that falls back to (provider, id) first-match
+	// when the exact route is absent, and on a FAILED probe
+	// catalogEntryFromTestResult copies that row wholesale (`entry = *base`),
+	// route fields included. A non-empty stale Region then blocked its own
+	// correction, so a failed probe of us-east-1 was saved onto the
+	// us-east-2 row: the good endpoint's pass was overwritten with a failure
+	// it never had, no row was created for the endpoint that actually failed,
+	// and since access_denied is region-retryable, routeDemoted then sorted
+	// the previously-working route last.
+	if result.Region != "" {
 		entry.Region = result.Region
 	}
-	if entry.Plane == "" && result.Plane != "" {
+	if result.Plane != "" {
 		entry.Plane = result.Plane
 	}
 }

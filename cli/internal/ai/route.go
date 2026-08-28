@@ -474,14 +474,16 @@ func markActiveRoutes(cfg AIConfig, lists ...*[]ModelInfo) {
 			}
 		}
 	}
+	// Keyed by route AND type. routeKey carries no Type, so a model id
+	// configured in both slots with a different best route per slot would
+	// otherwise let one slot's winner mark the other slot's row too.
 	winners := map[string]bool{}
 	for k, group := range candidates {
-		_ = k
-		winners[routeKey(PreferRoutes(group, cfg)[0].Route())] = true
+		winners[routeKey(PreferRoutes(group, cfg)[0].Route())+"\x00"+k.typ] = true
 	}
 	for _, l := range lists {
 		for i := range *l {
-			if winners[routeKey((*l)[i].Route())] {
+			if winners[routeKey((*l)[i].Route())+"\x00"+(*l)[i].Type] {
 				(*l)[i].Active = true
 			}
 		}

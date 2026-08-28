@@ -131,6 +131,19 @@ $ 2nb search "authentication" --json
 }
 ```
 
+**A third, louder case: an unrouted model slot.** When the configured model has several routes (a model can be served on both Bedrock planes and in several regions) and the config names none of them, 2nb REFUSES to pick one rather than invoking the wrong endpoint. This is a configuration error, not a degradation, so the message goes to stderr even under `--porcelain`, and NO provider registers:
+
+```
+error: generation model "xai.grok-4.6" has 2 possible routes and the config names none of them.
+Pick one:
+  2nb config set ai.generation_model xai.grok-4.6@mantle/us-west-2
+  2nb config set ai.generation_model xai.grok-4.6@classic/us-east-1
+
+AI is unavailable until this is set; search falls back to keyword-only.
+```
+
+The consequence for an agent: `ask` fails outright and `search` returns `mode: "keyword"`. Run one of the printed commands verbatim to recover; `2nb models discover` first if an expected route is missing. Note that `doctor` probes models directly rather than through provider init, so it can report healthy while `ask` is refusing.
+
 Agents should be taught to check `warnings[]` and `mode` before assuming hybrid search ran. Match on the stable prefix `"semantic search disabled:"` — the tail of the message includes provider/dim details that change. A second, structurally distinct class also lands in `warnings[]` when the optional rerank stage is enabled and its Bedrock call fails: `"rerank disabled: <error>"` (search still returns, just in the un-reranked hybrid order). Match that stable prefix too if you care whether reranking ran.
 
 ## Test battery design (Phase B)
