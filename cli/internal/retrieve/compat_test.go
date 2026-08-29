@@ -2,6 +2,7 @@ package retrieve
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ var _ ai.EmbeddingProvider = (*fakeEmbedder)(nil)
 func TestVectorCompat_NoEmbeddings(t *testing.T) {
 	v := testutil.NewTestVault(t)
 	// Provider is set in DefaultAIConfig, but no docs have embeddings yet.
-	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "fake", dims: 768, available: true})
+	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "fake", dims: 768, available: true}, nil)
 	if ready {
 		t.Error("expected not-ready for zero-embedding vault")
 	}
@@ -54,7 +55,7 @@ func TestVectorCompat_NilEmbedderNoProvider(t *testing.T) {
 	seedEmbedding(t, v, "doc1", 768)
 	v.Config.AI.Provider = ""
 
-	ready, msg := VectorCompat(context.Background(), v, nil)
+	ready, msg := VectorCompat(context.Background(), v, nil, nil)
 	if ready {
 		t.Error("expected not-ready")
 	}
@@ -68,7 +69,7 @@ func TestVectorCompat_Unavailable(t *testing.T) {
 	seedEmbedding(t, v, "doc1", 768)
 	v.Config.AI.Provider = "ollama"
 
-	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "ollama", dims: 768, available: false})
+	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "ollama", dims: 768, available: false}, nil)
 	if ready {
 		t.Error("expected not-ready when provider unavailable")
 	}
@@ -97,7 +98,7 @@ func TestVectorCompat_ClassifiedCauseKeepsThePrefix(t *testing.T) {
 	v.Config.AI.Provider = "bedrock"
 
 	ready, msg := VectorCompat(context.Background(), v,
-		&classifyingEmbedder{fakeEmbedder: fakeEmbedder{name: "bedrock", dims: 768}, code: ai.TestErrTimeout})
+		&classifyingEmbedder{fakeEmbedder: fakeEmbedder{name: "bedrock", dims: 768}, code: ai.TestErrTimeout}, nil)
 	if ready {
 		t.Fatal("expected not-ready")
 	}
@@ -130,7 +131,7 @@ func TestVectorCompat_DimensionBreak(t *testing.T) {
 	seedEmbedding(t, v, "doc1", 768)
 	v.Config.AI.Provider = "bedrock"
 
-	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "bedrock", dims: 1024, available: true})
+	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "bedrock", dims: 1024, available: true}, nil)
 	if ready {
 		t.Error("expected not-ready on dim mismatch")
 	}
@@ -147,7 +148,7 @@ func TestVectorCompat_OK(t *testing.T) {
 	seedEmbedding(t, v, "doc1", 768)
 	v.Config.AI.Provider = "ollama"
 
-	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "ollama", dims: 768, available: true})
+	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "ollama", dims: 768, available: true}, nil)
 	if !ready {
 		t.Errorf("expected ready, got not-ready with msg: %q", msg)
 	}
@@ -166,7 +167,7 @@ func TestVectorCompat_MixedDimensions(t *testing.T) {
 	// runs before the single-sample provider comparison, so the accurate
 	// diagnosis fires regardless of which row SampleEmbeddingDim picks or what
 	// the provider produces.
-	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "bedrock", dims: 768, available: true})
+	ready, msg := VectorCompat(context.Background(), v, &fakeEmbedder{name: "bedrock", dims: 768, available: true}, nil)
 	if ready {
 		t.Error("expected not-ready for mixed-dimension vault")
 	}
@@ -175,6 +176,35 @@ func TestVectorCompat_MixedDimensions(t *testing.T) {
 	}
 	if !strings.Contains(msg, "--force-reembed") {
 		t.Errorf("message should suggest --force-reembed, got: %q", msg)
+	}
+}
+
+func TestVectorCompat_UnroutedCause(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	seedEmbedding(t, v, "doc1", 768)
+	v.Config.AI.Provider = "bedrock"
+	cause := &ai.UnroutedSlotError{
+		Slot:  "embedding",
+		Model: "fake.dual-embed",
+		Candidates: []ai.ModelInfo{
+			{ID: "fake.dual-embed", Provider: "bedrock", Plane: ai.PlaneClassic, Region: "us-east-1"},
+			{ID: "fake.dual-embed", Provider: "bedrock", Plane: ai.PlaneClassic, Region: "us-west-2"},
+		},
+	}
+	lookupErr := fmt.Errorf("embedding provider %q not registered: %w", "bedrock", cause)
+	ready, msg := VectorCompat(context.Background(), v, nil, lookupErr)
+	if ready {
+		t.Fatal("expected not-ready")
+	}
+	if !strings.HasPrefix(msg, degradedPrefix) {
+		t.Errorf("prefix contract broken, got: %q", msg)
+	}
+	if !strings.Contains(msg, "2nb config set") {
+		t.Errorf("wanted the pick command in the warning, got: %q", msg)
+	}
+	generic := `semantic search disabled: embedder "bedrock" not registered`
+	if msg == generic {
+		t.Error("generic not-registered won over the unrouted cause")
 	}
 }
 

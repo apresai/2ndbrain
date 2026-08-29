@@ -2,7 +2,10 @@ package ai
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -77,6 +80,98 @@ func TestRegistryListModels(t *testing.T) {
 	}
 	if !hasEmbed || !hasGen {
 		t.Errorf("missing model types: embed=%v gen=%v", hasEmbed, hasGen)
+	}
+}
+
+// stubEmbedder is a registry map occupant. It is not a provider mock: no
+// method here pretends to call Bedrock or return embeddings.
+type stubEmbedder struct{}
+
+func (stubEmbedder) Name() string                   { return "bedrock" }
+func (stubEmbedder) Dimensions() int                { return 0 }
+func (stubEmbedder) Available(context.Context) bool { return false }
+func (stubEmbedder) Embed(context.Context, []string, ...EmbedOption) ([][]float32, error) {
+	return nil, fmt.Errorf("stub")
+}
+func (stubEmbedder) ListModels(context.Context) ([]ModelInfo, error) { return nil, nil }
+
+func TestRegistryUnavailableCauseWrapsAndClears(t *testing.T) {
+	r := NewRegistry()
+	cause := &UnroutedSlotError{
+		Slot:  "embedding",
+		Model: "fake.dual-embed",
+		Candidates: []ModelInfo{
+			{ID: "fake.dual-embed", Provider: "bedrock", Plane: PlaneClassic, Region: "us-east-1"},
+			{ID: "fake.dual-embed", Provider: "bedrock", Plane: PlaneClassic, Region: "us-west-2"},
+		},
+	}
+	r.NoteUnavailable("bedrock", cause)
+
+	_, err := r.Embedder("bedrock")
+	if err == nil {
+		t.Fatal("expected embedder lookup to fail")
+	}
+	if !strings.Contains(err.Error(), "2nb config set") {
+		t.Errorf("embedder error lost the pick command: %v", err)
+	}
+	_, err = r.Generator("bedrock")
+	if err == nil {
+		t.Fatal("expected generator lookup to fail")
+	}
+	if !strings.Contains(err.Error(), "2nb config set") {
+		t.Errorf("generator error lost the pick command: %v", err)
+	}
+
+	r.RegisterEmbedder("bedrock", stubEmbedder{})
+	if _, err := r.Embedder("bedrock"); err != nil {
+		t.Fatalf("register should have cleared the note: %v", err)
+	}
+	if _, err := r.Generator("bedrock"); err == nil {
+		t.Fatal("generator is still unregistered")
+	} else if strings.Contains(err.Error(), "2nb config set") {
+		t.Errorf("stale unrouted cause survived RegisterEmbedder: %v", err)
+	}
+}
+
+func TestInitBedrockNotesUnroutedSlot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	root := t.TempDir()
+	modelID := "fake.dual-embed"
+	for _, region := range []string{"us-east-1", "us-west-2"} {
+		if err := SaveUserCatalogEntry(ScopeVault, root, ModelInfo{
+			ID: modelID, Provider: "bedrock", Type: "embedding",
+			Tier: TierUserVerified, Plane: PlaneClassic, Region: region,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := DefaultAIConfig()
+	cfg.Provider = "bedrock"
+	cfg.EmbeddingModel = modelID
+	cfg.EmbeddingPlane = ""
+	cfg.EmbeddingRegion = ""
+
+	reg := NewRegistry()
+	err := InitBedrock(context.Background(), reg, cfg.Bedrock, cfg, root)
+	if err == nil {
+		t.Fatal("expected unrouted slot")
+	}
+	var unrouted *UnroutedSlotError
+	if !errors.As(err, &unrouted) {
+		t.Fatalf("InitBedrock error = %v, want UnroutedSlotError", err)
+	}
+
+	_, lookup := reg.Embedder("bedrock")
+	if lookup == nil {
+		t.Fatal("expected embedder lookup to fail")
+	}
+	if !strings.Contains(lookup.Error(), "2nb config set") {
+		t.Errorf("registry dropped the pick command: %v", lookup)
+	}
+	if !strings.Contains(lookup.Error(), "not registered") {
+		t.Errorf("expected the not-registered wrapper, got: %v", lookup)
 	}
 }
 

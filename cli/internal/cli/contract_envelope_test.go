@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/ai"
 )
 
 // TestContract_SearchEnvelopeShape pins the JSON shape of `2nb search --json`
@@ -119,5 +122,77 @@ func TestMeta_RefusesCanvasAndBase(t *testing.T) {
 				t.Errorf("%s modified despite refusal:\nbefore=%q\nafter=%q", tc.name, before, after)
 			}
 		})
+	}
+}
+
+// TestSearchJSONCarriesUnroutedCause pins that an unrouted slot's pick
+// commands survive into search --json warnings[] and ask's error, instead of
+// collapsing to a cause-free "not registered".
+func TestSearchJSONCarriesUnroutedCause(t *testing.T) {
+	orig := ai.DefaultRegistry
+	ai.DefaultRegistry = ai.NewRegistry()
+	t.Cleanup(func() { ai.DefaultRegistry = orig })
+
+	v, root := newContractVault(t)
+	modelID := "fake.dual-embed"
+	for _, region := range []string{"us-east-1", "us-west-2"} {
+		if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
+			ID: modelID, Provider: "bedrock", Type: "embedding",
+			Tier: ai.TierUserVerified, Plane: ai.PlaneClassic, Region: region,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v.Config.AI.Provider = "bedrock"
+	v.Config.AI.EmbeddingModel = modelID
+	v.Config.AI.EmbeddingPlane = ""
+	v.Config.AI.EmbeddingRegion = ""
+	if err := v.Config.Save(v.DotDir); err != nil {
+		t.Fatal(err)
+	}
+
+	md := "---\nid: d1\ntitle: Dual Route\ntype: note\nstatus: draft\n---\nDistinctiveword for retrieval.\n"
+	if err := os.WriteFile(filepath.Join(root, "dual.md"), []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	// VectorCompat silent-falls-back when the vault has zero embeddings, so
+	// seed one synthetic vector. The unrouted slot is the point, not the
+	// embedder.
+	var docID string
+	if err := v.DB.Conn().QueryRow(`SELECT id FROM documents LIMIT 1`).Scan(&docID); err != nil {
+		t.Fatalf("no indexed document: %v", err)
+	}
+	if err := v.DB.SetEmbedding(docID, make([]float32, 1024), "synthetic", "h"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIArgs(t, root, "search", "--json", "Distinctiveword")
+	if err != nil {
+		t.Fatalf("search: %v\n%s", err, out)
+	}
+	var env struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	joined := strings.Join(env.Warnings, "\n")
+	if !strings.Contains(joined, "2nb config set") {
+		t.Errorf("warnings missing pick command: %v\nraw: %s", env.Warnings, out)
+	}
+	if len(env.Warnings) == 1 && strings.Contains(env.Warnings[0], `embedder "bedrock" not registered`) &&
+		!strings.Contains(env.Warnings[0], "possible routes") {
+		t.Errorf("generic not-registered won: %v", env.Warnings)
+	}
+
+	_, askErr := runCLIArgs(t, root, "ask", "what is this")
+	if askErr == nil {
+		t.Fatal("ask should fail while the slot is unrouted")
+	}
+	if !strings.Contains(askErr.Error(), "2nb config set") {
+		t.Errorf("ask lost the pick command: %v", askErr)
 	}
 }

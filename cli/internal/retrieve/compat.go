@@ -19,7 +19,11 @@ import (
 // polish link-suggestion path). Check order matters: fail fast on the
 // highest-signal problem first so the user sees one actionable line, not a
 // chain of warnings.
-func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProvider) (ready bool, message string) {
+//
+// embedderErr is the error from the registry lookup that produced embedder
+// (possibly nil). When embedder is nil, a recorded cause (an unrouted slot,
+// for example) is rendered instead of the generic "not registered" line.
+func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProvider, embedderErr error) (ready bool, message string) {
 	dim, err := v.DB.SampleEmbeddingDim()
 	if err != nil {
 		slog.Debug("SampleEmbeddingDim failed", "err", err)
@@ -39,6 +43,9 @@ func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProv
 	if embedder == nil {
 		if providerName == "" {
 			return false, "semantic search disabled: no AI provider configured — run '2nb ai setup' to enable"
+		}
+		if embedderErr != nil {
+			return false, fmt.Sprintf("semantic search disabled: %v", embedderErr)
 		}
 		return false, fmt.Sprintf("semantic search disabled: embedder %q not registered", providerName)
 	}

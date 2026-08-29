@@ -1100,7 +1100,7 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 
 	embedRoute, err := ResolveSlotRoute("embedding", aiCfg.EmbeddingRoute(), rows)
 	if err != nil {
-		return err
+		return noteBedrockUnrouted(reg, err)
 	}
 	embedCfg := cfg
 	if embedRoute.Route.Region != "" {
@@ -1116,7 +1116,7 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 
 	genRoute, err := ResolveSlotRoute("generation", aiCfg.GenerationRoute(), rows)
 	if err != nil {
-		return err
+		return noteBedrockUnrouted(reg, err)
 	}
 	genCfg := cfg
 	if genRoute.Route.Region != "" {
@@ -1139,7 +1139,7 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 		// calling us-east-1.
 		rerankRoute, err := ResolveSlotRoute("rerank", aiCfg.RerankRoute(), rows)
 		if err != nil {
-			return err
+			return noteBedrockUnrouted(reg, err)
 		}
 		rerankCfg := cfg
 		if rerankRoute.Route.Region != "" {
@@ -1153,6 +1153,17 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	}
 
 	return nil
+}
+
+// noteBedrockUnrouted records an *UnroutedSlotError against the bedrock
+// provider so later registry lookups wrap the pick-command cause instead of
+// returning a bare "not registered". Other init errors pass through unchanged.
+func noteBedrockUnrouted(reg *Registry, err error) error {
+	var unrouted *UnroutedSlotError
+	if errors.As(err, &unrouted) {
+		reg.NoteUnavailable("bedrock", err)
+	}
+	return err
 }
 
 // ── Inference profile helpers ──────────────────────────────────────────────
