@@ -705,7 +705,7 @@ func NewBedrockGenerationForRoute(ctx context.Context, cfg BedrockConfig, route 
 	switch route.Route.Plane {
 	case PlaneMantle:
 		slog.Debug("bedrock generation: mantle plane, from the resolved route", "model", model, "region", route.Route.Region)
-		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
+		return newBedrockMantleGenerator(cfg, model, vaultRoot, route.Endpoint)
 	case PlaneClassic:
 		slog.Debug("bedrock generation: classic plane, from the resolved route", "model", model, "region", route.Route.Region)
 		return newBedrockGeneratorForClassicRoute(ctx, cfg, model)

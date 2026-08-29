@@ -154,7 +154,7 @@ func TestMantleDiscoveryRegionsOrdering(t *testing.T) {
 func TestMantleBaseURL_RegionOverridePin(t *testing.T) {
 	setupHome(t)
 	cfg := ResolveBedrockConfig(BedrockConfig{Region: "us-east-1", RegionOverride: "us-west-2"})
-	got, err := mantleBaseURL(cfg, "deepseek.v3.2", "")
+	got, err := mantleBaseURL(cfg, "deepseek.v3.2", "", "")
 	if err != nil {
 		t.Fatalf("mantleBaseURL: %v", err)
 	}

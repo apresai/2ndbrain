@@ -222,14 +222,12 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultR
 		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding", vaultRoot); err != nil {
 			return err
 		}
-		e, err := NewBedrockEmbedder(ctx, cfg.Bedrock, modelID, cfg.Dimensions)
+		e, err := newBedrockEmbedder(ctx, cfg.Bedrock, modelID, cfg.Dimensions, strategy)
 		if err != nil {
 			return err
 		}
-		// NewBedrockEmbedder re-resolves strategy from the catalogs by exact
-		// id. A discovered-only model carrying its own InvokeStrategy would
-		// then probe with the wrong format. The resolved strategy is the
-		// decision; assign it so resolvedEmbedFormat dispatches on it.
+		// Belt: if the constructor ignored the strategy argument, overwrite
+		// the catalog lookup. The test mutates assignResolvedEmbedStrategy.
 		assignResolvedEmbedStrategy(e, strategy)
 		vecs, err := e.Embed(ctx, []string{"test embedding probe"})
 		if err != nil {

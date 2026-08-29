@@ -75,12 +75,16 @@ var (
 // vault is open (builtin entries still resolve). It errors when no bearer
 // token resolves, since the plane has no SigV4 fallback.
 func NewBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot string) (*BedrockMantleGenerator, error) {
+	return newBedrockMantleGenerator(cfg, model, vaultRoot, "")
+}
+
+func newBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot, endpoint string) (*BedrockMantleGenerator, error) {
 	cfg = ResolveBedrockConfig(cfg)
 	token := resolveMantleBearerToken()
 	if token == "" {
 		return nil, errors.New(errNoMantleTokenText)
 	}
-	baseURL, err := mantleBaseURL(cfg, model, vaultRoot)
+	baseURL, err := mantleBaseURL(cfg, model, vaultRoot, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -113,11 +117,18 @@ func resolveMantleBearerToken() string {
 // token to an attacker. The host must be https and end in ".api.aws"; a
 // region that is not a bare label (contains a slash, dot, or scheme) is
 // likewise rejected rather than interpolated into the host.
-func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) (string, error) {
-	if ep := resolveModelEndpoint("bedrock", model, vaultRoot); ep != "" {
-		u := strings.TrimRight(ep, "/")
+func mantleBaseURL(cfg BedrockConfig, model, vaultRoot, endpoint string) (string, error) {
+	// A resolved route's endpoint is a decision. The catalog lookup is
+	// exact-id, plane-blind, and first-match-wins, so it must not run when
+	// the caller already named a region or an endpoint: a leftover template
+	// row for the same id would send the token to the wrong host.
+	if endpoint == "" && cfg.RegionOverride == "" {
+		endpoint = resolveModelEndpoint("bedrock", model, vaultRoot)
+	}
+	if endpoint != "" {
+		u := strings.TrimRight(endpoint, "/")
 		if err := validateMantleHost(u); err != nil {
-			return "", fmt.Errorf("model %s has an invalid mantle endpoint %q: %w", model, ep, err)
+			return "", fmt.Errorf("model %s has an invalid mantle endpoint %q: %w", model, endpoint, err)
 		}
 		return u, nil
 	}

@@ -29,13 +29,38 @@ func TestMantleBaseURLHonorsResolvedRegion(t *testing.T) {
 	}
 
 	cfg := ResolveBedrockConfig(BedrockConfig{Region: "us-east-1", RegionOverride: "us-west-2"})
-	got, err := mantleBaseURL(cfg, "zz.dual-model", "")
+	got, err := mantleBaseURL(cfg, "zz.dual-model", "", "")
 	if err != nil {
 		t.Fatalf("mantleBaseURL: %v", err)
 	}
 	want := "https://bedrock-mantle.us-west-2.api.aws"
 	if got != want {
 		t.Errorf("base URL = %q, want %q (the resolved route's region, not the catalog's)", got, want)
+	}
+}
+
+// TestMantleBaseURLResolvedRegionBeatsCatalogEndpoint pins that a catalog
+// Endpoint on a sibling/first-match row cannot override a resolved region.
+// resolveModelEndpoint is exact-id and plane-blind: any row for that id
+// with Endpoint set would previously win even when RegionOverride named a
+// different host.
+func TestMantleBaseURLResolvedRegionBeatsCatalogEndpoint(t *testing.T) {
+	setupHome(t)
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: "zz.dual-model", Provider: "bedrock", Type: "generation",
+		Plane: PlaneMantle, InvokeStrategy: StrategyBedrockMantleResponses,
+		Region: "us-east-2", Endpoint: "https://bedrock-mantle.us-east-2.api.aws",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ResolveBedrockConfig(BedrockConfig{Region: "us-east-1", RegionOverride: "us-west-2"})
+	got, err := mantleBaseURL(cfg, "zz.dual-model", "", "")
+	if err != nil {
+		t.Fatalf("mantleBaseURL: %v", err)
+	}
+	want := "https://bedrock-mantle.us-west-2.api.aws"
+	if got != want {
+		t.Errorf("base URL = %q, want %q (resolved region, not the catalog Endpoint)", got, want)
 	}
 }
 
@@ -51,7 +76,7 @@ func TestMantleBaseURLFallsBackToCatalogPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := ResolveBedrockConfig(BedrockConfig{Region: "us-east-1"})
-	got, err := mantleBaseURL(cfg, "zz.pinned-model", "")
+	got, err := mantleBaseURL(cfg, "zz.pinned-model", "", "")
 	if err != nil {
 		t.Fatalf("mantleBaseURL: %v", err)
 	}
