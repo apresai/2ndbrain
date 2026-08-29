@@ -96,26 +96,19 @@ it. The route it should have is DISCOVERED, not deduced.
 **Keeping the base-match resolver with narrower vetoes.** Rejected as the
 long-term answer: three vetoes had already accreted, each after an incident,
 and with plane in the key a classic lookup cannot reach a mantle row at all, so
-the mechanism has nothing left to arbitrate. It is superseded rather than tuned
-— but see Consequences: it is not yet deleted.
+the mechanism has nothing left to arbitrate. It is superseded and confined to
+the route-less fallback (a bare id no catalog has seen).
 
 ## Consequences
 
 - The four collapse sites are gone; `dedupeDiscoveredBedrock` becomes a pure
   route-key dedupe, its "classic wins" instinct demoted to a `PreferRoutes`
   tiebreak that orders without deleting.
-- The profile-stripped base-match resolver and its three vetoes become
-  **redundant, but are NOT yet deleted**. `resolveCatalogString`,
-  `findCatalogString`, `effectiveInvokeStrategy`, `ResolveModelRegion`,
-  `EffectiveBedrockRegion`, `carryVaultRegionPin`, and `persistProbedRegion`
-  all still exist and still run: `ResolveSlotRoute` decides the route ahead of
-  them, so they now only ever confirm a decision already made, but they remain
-  a second way to answer the same question and should be removed in a
-  follow-up. Until then, "identity is a route" holds for catalog operations
-  (save, overlay, merge, active-marking, slot resolution) while those legacy
-  helpers still key on `(provider, id)`.
-  `inferenceProfileBaseID` survives regardless, for its legitimate job
-  (discovery-time dedupe of a base model already covered by a profile).
+- The profile-stripped base-match resolver is unexported and confined to the
+  route-less fallback. `ResolveSlotRoute` decides the invoke path; those
+  helpers answer only a bare id no catalog has seen. `persistProbedRegion` is
+  a save-path stamp, not a resolver. `inferenceProfileBaseID` survives for
+  discovery-time dedupe of a base model already covered by a profile.
 - `ModelInfo.Region` had two owners that "must never fight over the field".
   The conflict dissolves because region is now part of the key rather than a
   shared mutable pin, but note that it IS still written in two places:

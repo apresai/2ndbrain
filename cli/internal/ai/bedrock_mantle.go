@@ -114,7 +114,7 @@ func resolveMantleBearerToken() string {
 // region that is not a bare label (contains a slash, dot, or scheme) is
 // likewise rejected rather than interpolated into the host.
 func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) (string, error) {
-	if ep := ResolveModelEndpoint("bedrock", model, vaultRoot); ep != "" {
+	if ep := resolveModelEndpoint("bedrock", model, vaultRoot); ep != "" {
 		u := strings.TrimRight(ep, "/")
 		if err := validateMantleHost(u); err != nil {
 			return "", fmt.Errorf("model %s has an invalid mantle endpoint %q: %w", model, ep, err)
@@ -126,7 +126,7 @@ func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) (string, error) {
 	// This order used to be reversed, and that made the mantle plane the one
 	// place a resolved route was still overridden at invoke time. InitBedrock
 	// sets RegionOverride from the route and ResolveBedrockConfig maps it onto
-	// cfg.Region, but consulting ResolveModelRegion first meant ANY catalog
+	// cfg.Region, but consulting resolveModelRegion first meant ANY catalog
 	// row for that id supplied the region instead — and since discovery now
 	// emits one row per region, and that lookup is exact-id, plane-blind, and
 	// first-match-wins, "any row" was routinely the wrong one. A config pinned
@@ -136,7 +136,7 @@ func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) (string, error) {
 	// is what keeps a bare mantle builtin working.
 	region := cfg.RegionOverride
 	if region == "" {
-		region = ResolveModelRegion("bedrock", model, vaultRoot)
+		region = resolveModelRegion("bedrock", model, vaultRoot)
 	}
 	if region == "" {
 		region = cfg.Region

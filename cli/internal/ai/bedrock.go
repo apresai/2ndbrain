@@ -156,8 +156,14 @@ type BedrockEmbedder struct {
 // pin on the model (or an in-memory RegionOverride) routes just this client,
 // mirroring NewBedrockReranker.
 func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, dims int) (*BedrockEmbedder, error) {
+	return newBedrockEmbedder(ctx, cfg, model, dims, "")
+}
+
+func newBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, dims int, strategy string) (*BedrockEmbedder, error) {
 	cfg = ResolveBedrockConfig(cfg)
-	cfg.Region = EffectiveBedrockRegion(cfg, model, "")
+	if strategy == "" {
+		strategy = resolveInvokeStrategy("bedrock", model, "")
+	}
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -169,7 +175,7 @@ func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, di
 		model:    model,
 		dims:     dims,
 		region:   cfg.Region,
-		strategy: ResolveInvokeStrategy("bedrock", model, ""),
+		strategy: strategy,
 	}, nil
 }
 
@@ -713,7 +719,6 @@ func NewBedrockGenerationRouted(ctx context.Context, cfg BedrockConfig, model, v
 		slog.Debug("bedrock generation: dispatching to the mantle plane", "model", model)
 		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
 	}
-	carryVaultRegionPin(&cfg, model, vaultRoot)
 	return NewBedrockGenerator(ctx, cfg, model)
 }
 
@@ -724,11 +729,10 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 	// Converse path. Builtin/global catalog resolution needs no vault root;
 	// callers with a vault root get the vault-scoped check via
 	// NewBedrockGeneration before this backstop runs.
-	if ResolveInvokeStrategy("bedrock", model, "") == StrategyBedrockMantleResponses {
+	if resolveInvokeStrategy("bedrock", model, "") == StrategyBedrockMantleResponses {
 		return nil, fmt.Errorf("%s uses the bedrock mantle plane (%s); construct it via NewBedrockGeneration", model, StrategyBedrockMantleResponses)
 	}
 	cfg = ResolveBedrockConfig(cfg)
-	cfg.Region = EffectiveBedrockRegion(cfg, model, "")
 	return newBedrockGeneratorIn(ctx, cfg, model)
 }
 
@@ -1105,10 +1109,8 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	embedCfg := cfg
 	if embedRoute.Route.Region != "" {
 		embedCfg.RegionOverride = embedRoute.Route.Region
-	} else {
-		carryVaultRegionPin(&embedCfg, aiCfg.EmbeddingModel, vaultRoot)
 	}
-	embedder, err := NewBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions)
+	embedder, err := newBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions, embedRoute.Strategy)
 	if err != nil {
 		return fmt.Errorf("init bedrock embedder: %w", err)
 	}

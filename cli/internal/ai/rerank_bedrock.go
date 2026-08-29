@@ -64,7 +64,7 @@ func rerankRegion(cfg BedrockConfig, model string) string {
 	if cfg.RegionOverride != "" {
 		return cfg.RegionOverride
 	}
-	if pinned := ResolveModelRegion("bedrock", model, ""); pinned != "" {
+	if pinned := resolveModelRegion("bedrock", model, ""); pinned != "" {
 		return pinned
 	}
 	return cfg.Region

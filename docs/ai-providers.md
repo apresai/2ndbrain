@@ -74,26 +74,15 @@ last known good, then primary region, then classic before mantle, then
 configured region order). It is shared by verify, the list view, and the
 ambiguity messages so the notion cannot drift.
 
-**Still present, now subordinate:** the pre-route resolvers
-(`resolveCatalogString` / `findCatalogString`'s profile-stripped base match,
-`effectiveInvokeStrategy` and its cross-plane vetoes, `ResolveModelRegion`,
-`EffectiveBedrockRegion`, `carryVaultRegionPin`) have NOT been deleted. Every
-serving path now decides the route first and dispatches on it, so these only
-answer when nothing was resolved — a model no catalog has seen. They remain a
-second way to answer the same question and a follow-up should remove them;
-treat the route as authoritative when the two disagree.
+The pre-route resolvers (`resolveCatalogString` / `findCatalogString`,
+`effectiveInvokeStrategy`, `resolveModelRegion`, `resolveModelEndpoint`) are
+unexported. They answer only the route-less case: a bare id no catalog has
+seen. Every serving path decides the route first and dispatches on it. A
+resolved route is a decision, never an optional hint a lookup may reconsider.
 
-Each of the three rounds of review on this change found a place where one of
-these still won: `effectiveInvokeStrategy` overruling a configured plane at
-construction, `mantleBaseURL` reading the catalog pin before the resolved
-region, and the probe re-deriving a plane-blind strategy from a hint. The
-pattern is always the same — **a hint loses to a lookup** — so a resolved route
-must be passed as a decision (dispatch on it) rather than as a parameter some
-resolver may reconsider.
-
-`persistProbedRegion` is NOT in that list: it is not a resolver but the save
-path's record of which endpoint a probe actually called, and it is deliberately
-authoritative over whatever route the base row carried.
+`persistProbedRegion` is not a resolver. It is the save path's record of which
+endpoint a probe actually called, and it is deliberately authoritative over
+whatever route the base row carried.
 
 ## Bedrock mantle plane (partner-hosted frontier models)
 

@@ -221,7 +221,7 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		passed++
 		base := findBuiltinModel(r.Provider, r.ModelID)
 		entry := promotedEntry(base, r)
-		entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, v.Root)
+		entry.InvokeStrategy = r.Strategy
 		entry.TestLatencyMs = latencyMs(r.Latency)
 		preserveRoutingFields(scope, v.Root, &entry)
 		// Stamp the probed route last, for the same reason --promote does:

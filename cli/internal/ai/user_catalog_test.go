@@ -635,21 +635,21 @@ func TestMergeFields_RegionEndpointOverlay(t *testing.T) {
 }
 
 // TestResolveModelRegion verifies the region pin resolves through the same
-// user-catalog-over-builtin chain as ResolveInvokeStrategy.
+// user-catalog-over-builtin chain as resolveInvokeStrategy.
 func TestResolveModelRegion(t *testing.T) {
 	setupHome(t)
 
 	// Builtin pin: the Cohere reranker is us-east-1 in-region only.
-	if got := ResolveModelRegion("bedrock", DefaultRerankModel, ""); got != "us-east-1" {
+	if got := resolveModelRegion("bedrock", DefaultRerankModel, ""); got != "us-east-1" {
 		t.Errorf("builtin pin: got %q, want us-east-1", got)
 	}
 
 	// Unset: a builtin without a pin resolves empty (provider default).
-	if got := ResolveModelRegion("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != "" {
+	if got := resolveModelRegion("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != "" {
 		t.Errorf("unpinned builtin should resolve empty, got %q", got)
 	}
 	// Unknown model: empty.
-	if got := ResolveModelRegion("bedrock", "not.a.known.model", ""); got != "" {
+	if got := resolveModelRegion("bedrock", "not.a.known.model", ""); got != "" {
 		t.Errorf("unknown model should resolve empty, got %q", got)
 	}
 
@@ -664,7 +664,7 @@ func TestResolveModelRegion(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", custom); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if got := ResolveModelRegion("bedrock", "xai.grok-4.3", ""); got != "us-west-2" {
+	if got := resolveModelRegion("bedrock", "xai.grok-4.3", ""); got != "us-west-2" {
 		t.Errorf("user entry: got %q, want us-west-2", got)
 	}
 
@@ -678,7 +678,7 @@ func TestResolveModelRegion(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", override); err != nil {
 		t.Fatalf("save override: %v", err)
 	}
-	if got := ResolveModelRegion("bedrock", DefaultRerankModel, ""); got != "eu-central-1" {
+	if got := resolveModelRegion("bedrock", DefaultRerankModel, ""); got != "eu-central-1" {
 		t.Errorf("user override of builtin pin: got %q, want eu-central-1", got)
 	}
 }
@@ -804,9 +804,9 @@ func TestResolveInvokeStrategy_BuiltinLookups(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider+":"+tc.modelID, func(t *testing.T) {
-			got := ResolveInvokeStrategy(tc.provider, tc.modelID, "")
+			got := resolveInvokeStrategy(tc.provider, tc.modelID, "")
 			if got != tc.want {
-				t.Errorf("ResolveInvokeStrategy(%q,%q) = %q, want %q", tc.provider, tc.modelID, got, tc.want)
+				t.Errorf("resolveInvokeStrategy(%q,%q) = %q, want %q", tc.provider, tc.modelID, got, tc.want)
 			}
 		})
 	}
@@ -829,7 +829,7 @@ func TestResolveInvokeStrategy_UserCatalogOverrides(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", custom); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if got := ResolveInvokeStrategy("openrouter", "vendor/custom-gen-v9", ""); got != StrategyOpenRouterChat {
+	if got := resolveInvokeStrategy("openrouter", "vendor/custom-gen-v9", ""); got != StrategyOpenRouterChat {
 		t.Errorf("custom user entry: got %q", got)
 	}
 
@@ -844,7 +844,7 @@ func TestResolveInvokeStrategy_UserCatalogOverrides(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", override); err != nil {
 		t.Fatalf("save override: %v", err)
 	}
-	if got := ResolveInvokeStrategy("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != StrategyBedrockInvokeAnthropic {
+	if got := resolveInvokeStrategy("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != StrategyBedrockInvokeAnthropic {
 		t.Errorf("user override of builtin: got %q", got)
 	}
 }

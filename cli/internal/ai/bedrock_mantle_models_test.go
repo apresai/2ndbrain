@@ -292,7 +292,7 @@ func TestEffectiveInvokeStrategyPrecedence(t *testing.T) {
 	}
 
 	// A non-mantle hint on a profile id passes through (the guard is
-	// mantle-specific, mirroring ResolveInvokeStrategy's base-match rule).
+	// mantle-specific, mirroring resolveInvokeStrategy's base-match rule).
 	profileClassic := ModelInfo{ID: "us.acme.model-1", Provider: "bedrock", Type: "generation", InvokeStrategy: StrategyBedrockConverse}
 	if got := effectiveInvokeStrategy("bedrock", profileClassic, ""); got != StrategyBedrockConverse {
 		t.Errorf("non-mantle hint should pass through, got %q", got)

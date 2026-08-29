@@ -106,7 +106,7 @@ func TestLiveStalePinSelfHeals(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := ResolveModelRegion("bedrock", model, vaultRoot); got != "us-west-2" {
+	if got := resolveModelRegion("bedrock", model, vaultRoot); got != "us-west-2" {
 		t.Fatalf("pin not seeded: %q", got)
 	}
 

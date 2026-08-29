@@ -469,7 +469,7 @@ func persistProbe(vaultRoot string, result *ai.TestProbeResult) {
 	}
 	base := findBuiltinModel(result.Provider, result.ModelID)
 	entry := promotedEntry(base, result)
-	entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, vaultRoot)
+	entry.InvokeStrategy = result.Strategy
 	// Stamp the probed route. promotedEntry copies none, so without this the
 	// save lands on a route that was never probed: it appends a second,
 	// route-less row for the model, which then permanently kills

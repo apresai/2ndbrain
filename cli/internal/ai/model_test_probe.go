@@ -56,14 +56,14 @@ func TestProbeModel(ctx context.Context, cfg AIConfig, modelID, provider, modelT
 // candidate. Precedence: EXACT catalog declarations (user over builtin) are
 // authored intent and always win; the candidate's own discovery-time mantle
 // hint comes next; the catalog's profile-stripped base-match INFERENCE
-// (ResolveInvokeStrategy's fallback) comes last. The hint must beat the base
+// (resolveInvokeStrategy's fallback) comes last. The hint must beat the base
 // match because base matching exists so profile VARIANTS inherit a base
 // entry's dialect — run first, it would let the classic us.xai.grok-4.6
 // builtin drag the mantle-LISTED bare xai.grok-4.6 onto Converse and record
 // a spurious FAIL, when the /v1/models listing is authoritative that the
 // exact bare id lives on the mantle plane. A profile-prefixed id never takes
 // the mantle hint (cross-region profiles exist only on the classic plane,
-// the same guard ResolveInvokeStrategy applies to its own fallback).
+// the same guard resolveInvokeStrategy applies to its own fallback).
 func effectiveInvokeStrategy(provider string, m ModelInfo, vaultRoot string) string {
 	field := func(mi ModelInfo) string { return mi.InvokeStrategy }
 	if s := findCatalogStringExact(LoadUserCatalog(vaultRoot), provider, m.ID, field); s != "" {
@@ -78,9 +78,9 @@ func effectiveInvokeStrategy(provider string, m ModelInfo, vaultRoot string) str
 		}
 		// A profile-prefixed id can never be mantle: drop the hint and let
 		// the catalog's base-match inference speak.
-		return ResolveInvokeStrategy(provider, m.ID, vaultRoot)
+		return resolveInvokeStrategy(provider, m.ID, vaultRoot)
 	}
-	if s := ResolveInvokeStrategy(provider, m.ID, vaultRoot); s != "" {
+	if s := resolveInvokeStrategy(provider, m.ID, vaultRoot); s != "" {
 		return s
 	}
 	return m.InvokeStrategy
@@ -91,7 +91,7 @@ func effectiveInvokeStrategy(provider string, m ModelInfo, vaultRoot string) str
 // mantle-DISCOVERED model (no catalog entry anywhere) probes over the mantle
 // plane in its listing region instead of classic-Converse-ing into a 404.
 // Catalog resolution always wins over the hints (effectiveInvokeStrategy /
-// the ResolveModelRegion gate below), so a user entry keeps full authority.
+// the resolveModelRegion gate below), so a user entry keeps full authority.
 func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoot string) (*TestProbeResult, error) {
 	provider := m.Provider
 	if provider == "" {
@@ -149,7 +149,7 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 	//
 	// This used to apply only to mantle candidates, and only when the catalog
 	// declared no pin of its own — so a CLASSIC candidate naming us-east-1 was
-	// probed in whatever region an exact-id, plane-blind ResolveModelRegion
+	// probed in whatever region an exact-id, plane-blind resolveModelRegion
 	// lookup returned, and the verdict was recorded against that region. Once
 	// verify selects a specific route to probe, deferring to the catalog
 	// discards the selection.
@@ -166,7 +166,11 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 		Type:     modelType,
 	}
 	if provider == "bedrock" {
-		result.Region = EffectiveBedrockRegion(cfg.Bedrock, m.ID, vaultRoot)
+		if cfg.Bedrock.RegionOverride != "" {
+			result.Region = cfg.Bedrock.RegionOverride
+		} else {
+			result.Region = ResolveBedrockConfig(cfg.Bedrock).Region
+		}
 		// Derive the plane from the strategy ACTUALLY dispatched, never from
 		// the candidate directly. The two now agree by construction (the
 		// candidate's plane is applied to the strategy above), and deriving
@@ -215,7 +219,6 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot, strategy string) error {
 	switch provider {
 	case "bedrock":
-		carryVaultRegionPin(&cfg.Bedrock, modelID, vaultRoot)
 		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding", vaultRoot); err != nil {
 			return err
 		}
@@ -321,7 +324,6 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 
 	switch provider {
 	case "bedrock":
-		carryVaultRegionPin(&cfg.Bedrock, modelID, vaultRoot)
 		if strategy != StrategyBedrockMantleResponses {
 			if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation", vaultRoot); err != nil {
 				return "", err
@@ -445,7 +447,7 @@ func TestProbeModelInfoInRegions(ctx context.Context, cfg AIConfig, m ModelInfo,
 	//
 	// This has to precede the mantle early return below. When it sat after it,
 	// a mantle candidate never received the override and fell back to the
-	// plane-blind ResolveModelRegion pin, so `verify <id>@mantle/us-east-2`
+	// plane-blind resolveModelRegion pin, so `verify <id>@mantle/us-east-2`
 	// probed us-west-2 — on exactly the plane where per-region entitlement
 	// differs most, and which is region-pinned per model by design.
 	if m.Provider == "bedrock" && m.Region != "" {
@@ -459,7 +461,7 @@ func TestProbeModelInfoInRegions(ctx context.Context, cfg AIConfig, m ModelInfo,
 	if len(regions) == 0 {
 		regions = []string{ResolveBedrockConfig(cfg.Bedrock).Region}
 	}
-	attempts := regionAttempts(regions, ResolveModelRegion("bedrock", m.ID, vaultRoot))
+	attempts := regionAttempts(regions, resolveModelRegion("bedrock", m.ID, vaultRoot))
 	if attempts == nil {
 		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}

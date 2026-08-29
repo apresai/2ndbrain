@@ -221,9 +221,9 @@ func TestProbeClassification_StaticIncompatible(t *testing.T) {
 	}
 	// TestProbeModel must populate result.Strategy from the resolver so the UI
 	// can tailor guidance (mantle vs classic). Assert the wiring: the field
-	// equals what ResolveInvokeStrategy returns for this model.
-	if want := ResolveInvokeStrategy("bedrock", "amazon.nova-canvas-v1:0", ""); result.Strategy != want {
-		t.Errorf("result.Strategy = %q, want %q (must be wired from ResolveInvokeStrategy)", result.Strategy, want)
+	// equals what resolveInvokeStrategy returns for this model.
+	if want := resolveInvokeStrategy("bedrock", "amazon.nova-canvas-v1:0", ""); result.Strategy != want {
+		t.Errorf("result.Strategy = %q, want %q (must be wired from resolveInvokeStrategy)", result.Strategy, want)
 	}
 }
 
