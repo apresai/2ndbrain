@@ -180,7 +180,7 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 
 	switch modelType {
 	case "embedding":
-		err = probeEmbedding(ctx, cfg, provider, m.ID, vaultRoot)
+		err = probeEmbedding(ctx, cfg, provider, m.ID, vaultRoot, strategy)
 	case "rerank":
 		// No rerank probe exists; don't generation-probe a reranker (which would
 		// fail confusingly). Enable a reranker with `2nb config set ai.rerank.enabled true`.
@@ -212,7 +212,7 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 	return result, nil
 }
 
-func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot string) error {
+func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot, strategy string) error {
 	switch provider {
 	case "bedrock":
 		carryVaultRegionPin(&cfg.Bedrock, modelID, vaultRoot)
@@ -223,6 +223,11 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultR
 		if err != nil {
 			return err
 		}
+		// NewBedrockEmbedder re-resolves strategy from the catalogs by exact
+		// id. A discovered-only model carrying its own InvokeStrategy would
+		// then probe with the wrong format. The resolved strategy is the
+		// decision; assign it so resolvedEmbedFormat dispatches on it.
+		assignResolvedEmbedStrategy(e, strategy)
 		vecs, err := e.Embed(ctx, []string{"test embedding probe"})
 		if err != nil {
 			return err
@@ -265,6 +270,16 @@ func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultR
 	default:
 		return fmt.Errorf("unknown provider %q", provider)
 	}
+}
+
+// assignResolvedEmbedStrategy writes the probe's already-resolved strategy
+// onto the embedder so Embed does not re-derive the format from a catalog
+// lookup of the id. Empty strategy leaves the constructor's value.
+func assignResolvedEmbedStrategy(e *BedrockEmbedder, strategy string) {
+	if e == nil || strategy == "" {
+		return
+	}
+	e.strategy = strategy
 }
 
 // probeGenMaxTokens is the generation smoke probe's output budget. 1024, not
