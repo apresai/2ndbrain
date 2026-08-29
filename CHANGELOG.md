@@ -16,11 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A model listed on both planes kept only its classic entry and silently discarded the mantle one; a model listed in several regions kept only one of them. Both are preserved now
 - `models discover` shows each row's region, so three genuinely different endpoints no longer render as three identical `classic` lines, and its freshness report lists every region walked instead of claiming one classic source while three were fetched
 - A newly-listed model is announced as NEW once rather than once per route
+- `models remove` reports when nothing matched and exits non-zero, instead of printing Removed for a route-qualified id it never found. `models test id@plane/region` probes that endpoint, so a mantle-discovered model no longer classic-probes into a 404. `models add` refuses a qualified form (it describes a model, not one endpoint); enable/disable accept one and apply it to every route of the model
+- `models calibrate --save` no longer erases the stored verdict, price override, or enabled flag on that row
+- An unrouted slot (a model with several endpoints and no pin) names the pick commands in `ask` and in `search --json` warnings, instead of a cause-free "provider not registered"
 
 ### Changed
 - A verify pass now records its verdict against the endpoint it actually probed, instead of clearing a region pin to signal "back to the default". That old self-heal cannot work when the region is part of a row's identity: clearing it wrote a second row rather than replacing one, and the stale pinned row won. Regaining access in your primary region now shows up as a fresh pass on that region's own row, which ranks above its siblings
 - `models list` gained a ROUTE column, and `models verify` probes one best route per model by default (`--all-routes` for the full matrix), so a model with several endpoints does not silently multiply the number of billed probes
 - The discovery cache version is bumped, so the first walk after upgrading re-fetches every plane and region. Cached entries written before this change hold rows with no route
+- Benchmark history records plane and region, so two endpoints of one model compare as two rows
+- **Downgrade:** a catalog written by this version, then written by an older 0.20.x binary, loses its routes permanently. That older binary drops unknown YAML keys and replaces rows keyed on (provider, id). Recover with `2nb models discover`. Homebrew is the distribution; the blast radius is a catalog discover rebuilds. This is deliberate: a second catalog file plus a forever migration was the alternative, and it was rejected
 
 ## [0.20.1] - 2026-08-26
 

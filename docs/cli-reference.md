@@ -425,7 +425,7 @@ Builtin Bedrock Anthropic line: Haiku 4.5 (the tested default) plus Sonnet 4.6, 
 
 ### models test
 
-Smoke-tests a model by id. `--save` writes to the user catalog regardless of pass or fail: success sets `tier=user_verified`; failure records `test_error` plus a classified `test_error_code`. Failures are classified via `ai.ClassifyProbeError` into a stable code vocabulary (`access_denied`, `bad_credentials`, `throttled`, `not_found`, `provider_unreachable`, `invalid_request`, `incompatible`, `timeout`, `unknown`) with a remediation hint (`--json`: `code`/`remediation`; human output: `cause:`/`fix:` lines).
+Smoke-tests a model by id. The argument accepts the route form `id@plane/region` and probes exactly that endpoint, so a mantle-discovered model can be tested without a prior catalog save. `--save` writes to the user catalog regardless of pass or fail: success sets `tier=user_verified`; failure records `test_error` plus a classified `test_error_code`. Failures are classified via `ai.ClassifyProbeError` into a stable code vocabulary (`access_denied`, `bad_credentials`, `throttled`, `not_found`, `provider_unreachable`, `invalid_request`, `incompatible`, `timeout`, `unknown`) with a remediation hint (`--json`: `code`/`remediation`; human output: `cause:`/`fix:` lines).
 
 The `access_denied` code is how the AWS staged frontier-rollout gate surfaces: a runtime 403 on the classic bedrock-runtime plane, or a runtime 401 disambiguated by the response body's `error.code` on the mantle plane, on a model the console lists as available. Only a real invoke probe detects it; availability APIs report AUTHORIZED regardless.
 
@@ -455,23 +455,23 @@ This is the per-account complement to the catalog: on a staged-rollout-gated acc
 
 ### models add
 
-Adds or updates a model by id. The default scope is the per-vault `.2ndbrain/models.yaml`; `--scope global` writes `~/.config/2nb/models.yaml`. Updates merge: `Enabled`, `TestedAt`, `TestLatencyMs`, and `Benchmark` are preserved unless explicitly re-set. `--similarity-threshold` is embedding-only; `--price-request` is for per-request priced models.
+Adds or updates a model by id. The argument is a bare model id; a route-qualified form (`id@plane/region`) is refused, because add describes a model, not one endpoint. The default scope is the per-vault `.2ndbrain/models.yaml`; `--scope global` writes `~/.config/2nb/models.yaml`. Updates merge: `Enabled`, `TestedAt`, `TestLatencyMs`, and `Benchmark` are preserved unless explicitly re-set. `--similarity-threshold` is embedding-only; `--price-request` is for per-request priced models.
 
 ### models remove
 
-Removes a model from the user catalog (`--provider`, `--scope`).
+Removes catalog rows (`--provider`, `--scope`). A bare id removes every route of that model. A route-qualified id (`id@plane/region`) removes only that route. Exits non-zero when nothing matched.
 
 ### models enable
 
-Marks a model enabled. With `--vendor <name>` (for example `anthropic`/`amazon`/`google`) it toggles every model from that vendor, which is the GUI's bulk toggle. `--vendor` and an explicit `<id>` are mutually exclusive.
+Marks a model enabled. Enable is intent about the MODEL: a route-qualified id is accepted and applied to every route of that model. With `--vendor <name>` (for example `anthropic`/`amazon`/`google`) it toggles every model from that vendor, which is the GUI's bulk toggle. `--vendor` and an explicit `<id>` are mutually exclusive.
 
 ### models disable
 
-Hides a model from selection dropdowns (it is still listed by `models list`). Same `--vendor` bulk mode as `models enable`.
+Hides a model from selection dropdowns (it is still listed by `models list`). Same `--vendor` bulk mode as `models enable`. A route-qualified id is accepted and applied to every route of that model.
 
 ### models enable-state
 
-Tri-state pointer for one model: `--state default|enabled|disabled`. `default` clears the override so tier defaults apply. Used by the GUI Enable State menu.
+Tri-state pointer for one model: `--state default|enabled|disabled`. `default` clears the override so tier defaults apply. Used by the GUI Enable State menu. A route-qualified id is accepted and applied to every route of that model.
 
 ### models policy set / show / clear
 
