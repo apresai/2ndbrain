@@ -142,16 +142,22 @@ func runBench(cmd *cobra.Command, args []string) error {
 	// Determine which models to bench.
 	type target struct {
 		provider, modelID, modelType string
+		plane                        ai.Plane
+		region                       string
 	}
 	var targets []target
 
 	if benchModelFlag != "" {
-		provider := benchProviderFlag
-		if provider == "" {
-			provider = ai.InferProvider(benchModelFlag)
+		ref, err := parseModelRef(benchModelFlag, benchProviderFlag)
+		if err != nil {
+			return err
 		}
-		modelType := ai.InferModelType(benchModelFlag)
-		targets = append(targets, target{provider, benchModelFlag, modelType})
+		provider := ref.Provider
+		if provider == "" {
+			provider = ai.InferProvider(ref.ID)
+		}
+		modelType := ai.InferModelType(ref.ID)
+		targets = append(targets, target{provider, ref.ID, modelType, ref.Plane, ref.Region})
 	} else {
 		favs, err := bdb.ListFavorites()
 		if err != nil {
@@ -160,12 +166,12 @@ func runBench(cmd *cobra.Command, args []string) error {
 		if len(favs) == 0 {
 			// Fall back to active config.
 			targets = append(targets,
-				target{cfg.Provider, cfg.EmbeddingModel, "embedding"},
-				target{cfg.Provider, cfg.GenerationModel, "generation"},
+				target{provider: cfg.Provider, modelID: cfg.EmbeddingModel, modelType: "embedding"},
+				target{provider: cfg.Provider, modelID: cfg.GenerationModel, modelType: "generation"},
 			)
 		} else {
 			for _, f := range favs {
-				targets = append(targets, target{f.Provider, f.ModelID, f.ModelType})
+				targets = append(targets, target{provider: f.Provider, modelID: f.ModelID, modelType: f.ModelType})
 			}
 		}
 	}
@@ -231,7 +237,11 @@ func runBench(cmd *cobra.Command, args []string) error {
 			if r.VaultDocCount > 0 {
 				runDocCount = r.VaultDocCount
 			}
-			route := ai.ResolveMeasurementRoute(cfg, t.modelID, v.Root).Route
+			plane, region := string(t.plane), t.region
+			if plane == "" && region == "" {
+				route := ai.ResolveMeasurementRoute(cfg, t.modelID, v.Root).Route
+				plane, region = string(route.Plane), route.Region
+			}
 			if err := bdb.InsertRun(&bench.Run{
 				Timestamp:     ts,
 				Provider:      t.provider,
@@ -241,8 +251,8 @@ func runBench(cmd *cobra.Command, args []string) error {
 				OK:            r.OK,
 				Detail:        r.Detail,
 				VaultDocCount: runDocCount,
-				Plane:         string(route.Plane),
-				Region:        route.Region,
+				Plane:         plane,
+				Region:        region,
 			}); err != nil {
 				// A transient bench.db failure (WAL busy, disk full)
 				// shouldn't abort the run and discard subsequent
@@ -457,17 +467,23 @@ func runBenchFav(cmd *cobra.Command, args []string) error {
 	}
 	defer bdb.Close()
 
-	modelID := args[0]
-	provider := benchProviderFlag
-	if provider == "" {
-		provider = ai.InferProvider(modelID)
-	}
-	modelType := ai.InferModelType(modelID)
-
-	if err := bdb.AddFavorite(provider, modelID, modelType); err != nil {
+	ref, err := parseModelRef(args[0], benchProviderFlag)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("Added %s/%s (%s) to bench favorites\n", provider, modelID, modelType)
+	provider := ref.Provider
+	if provider == "" {
+		provider = ai.InferProvider(ref.ID)
+	}
+	modelType := ai.InferModelType(ref.ID)
+
+	if err := bdb.AddFavorite(provider, ref.ID, modelType); err != nil {
+		return err
+	}
+	fmt.Printf("Added %s/%s (%s) to bench favorites\n", provider, ref.ID, modelType)
+	if ref.Plane != "" || ref.Region != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "(favorites are the model, every route)\n")
+	}
 	return nil
 }
 
@@ -484,16 +500,19 @@ func runBenchUnfav(cmd *cobra.Command, args []string) error {
 	}
 	defer bdb.Close()
 
-	modelID := args[0]
-	provider := benchProviderFlag
-	if provider == "" {
-		provider = ai.InferProvider(modelID)
-	}
-
-	if err := bdb.RemoveFavorite(provider, modelID); err != nil {
+	ref, err := parseModelRef(args[0], benchProviderFlag)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("Removed %s/%s from bench favorites\n", provider, modelID)
+	provider := ref.Provider
+	if provider == "" {
+		provider = ai.InferProvider(ref.ID)
+	}
+
+	if err := bdb.RemoveFavorite(provider, ref.ID); err != nil {
+		return err
+	}
+	fmt.Printf("Removed %s/%s from bench favorites\n", provider, ref.ID)
 	return nil
 }
 

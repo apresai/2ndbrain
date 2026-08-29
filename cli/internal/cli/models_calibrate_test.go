@@ -3,6 +3,9 @@ package cli
 import (
 	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -142,5 +145,49 @@ func TestSaveCalibrationPreservesExistingRowFields(t *testing.T) {
 	}
 	if got.Notes != "keep me" {
 		t.Errorf("notes erased: %q", got.Notes)
+	}
+}
+
+func TestSaveCalibrationUpgradesPrerouteRow(t *testing.T) {
+	_, root := newContractVault(t)
+	modelID := "amazon.nova-2-multimodal-embeddings-v1:0"
+	enabled := false
+	seed := ai.ModelInfo{
+		ID:            modelID,
+		Provider:      "bedrock",
+		Type:          "embedding",
+		Tier:          ai.TierUserVerified,
+		TestedAt:      "2026-08-01T00:00:00Z",
+		PriceOverride: true,
+		PriceIn:       1.25,
+		PriceSource:   "user",
+		Enabled:       &enabled,
+		Notes:         "keep me",
+	}
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cfg := ai.AIConfig{Provider: "bedrock", EmbeddingModel: modelID}
+	if err := saveCalibration(ai.ScopeVault, root, "bedrock", modelID, 0.33, cfg); err != nil {
+		t.Fatalf("saveCalibration: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".2ndbrain", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "id: "+modelID); n != 1 {
+		t.Fatalf("calibrate --save on a pre-route row produced %d file rows, want 1:\n%s", n, data)
+	}
+	got, ok := ai.UserCatalogEntry(ai.ScopeVault, root, ai.RouteKey{
+		Provider: "bedrock", ID: modelID, Plane: ai.PlaneClassic,
+	})
+	if !ok {
+		t.Fatal("routed lookup missed the upgraded pre-route row")
+	}
+	if got.TestedAt != seed.TestedAt || got.Enabled == nil || *got.Enabled || got.Notes != "keep me" {
+		t.Errorf("stored fields lost: tested_at=%q enabled=%v notes=%q", got.TestedAt, got.Enabled, got.Notes)
+	}
+	if got.RecommendedSimilarityThreshold != 0.33 {
+		t.Errorf("threshold = %v, want 0.33", got.RecommendedSimilarityThreshold)
 	}
 }

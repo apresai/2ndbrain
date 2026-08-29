@@ -335,6 +335,12 @@ func readCatalogForWrite(path string) (UserCatalog, error) {
 	if cat.Version == 0 {
 		cat.Version = userCatalogVersion
 	}
+	// Fill planes on pre-route rows before any routeKey match. LoadUserCatalog
+	// already does this, so a classic builtin looked like one row. The write
+	// path did not: Save/Remove keyed on the file's empty plane, missed, and
+	// appended a routed twin (or refused a qualified remove). Canonicalizing
+	// here makes the first save upgrade the row in place.
+	canonicalizeUserRoutes(cat.Models, BuiltinCatalog())
 	return cat, nil
 }
 

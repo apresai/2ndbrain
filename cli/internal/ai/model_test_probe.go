@@ -452,14 +452,17 @@ func TestProbeModelInfoInRegions(ctx context.Context, cfg AIConfig, m ModelInfo,
 		cfg.Bedrock.RegionOverride = m.Region
 		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
-	if m.Provider != "bedrock" ||
-		effectiveInvokeStrategy(m.Provider, m, vaultRoot) == StrategyBedrockMantleResponses {
+	if !usesClassicRegionFanOut(m, vaultRoot) {
 		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
 	if len(regions) == 0 {
 		regions = []string{ResolveBedrockConfig(cfg.Bedrock).Region}
 	}
-	attempts := regionAttempts(regions, resolveModelRegion("bedrock", m.ID, vaultRoot))
+	pin := ""
+	if m.Plane == "" {
+		pin = resolveModelRegion("bedrock", m.ID, vaultRoot)
+	}
+	attempts := regionAttempts(regions, pin)
 	if attempts == nil {
 		return TestProbeModelInfo(ctx, cfg, m, vaultRoot)
 	}
@@ -489,6 +492,24 @@ func TestProbeModelInfoInRegions(ctx context.Context, cfg AIConfig, m ModelInfo,
 		primary.Detail += fmt.Sprintf(" (also failed in %s)", strings.Join(alsoFailed, ", "))
 	}
 	return primary, nil
+}
+
+// usesClassicRegionFanOut is true when the candidate should be probed across
+// included classic regions. A named mantle plane, or a route-less id whose
+// effective strategy is mantle, must not fan out: the catalog lookup that
+// used to answer "is this mantle?" is plane-blind and first-match, so a
+// @classic candidate of a dual-plane id skipped classic region retry.
+func usesClassicRegionFanOut(m ModelInfo, vaultRoot string) bool {
+	if m.Provider != "bedrock" || m.Region != "" {
+		return false
+	}
+	if m.Plane == PlaneMantle {
+		return false
+	}
+	if m.Plane == "" && effectiveInvokeStrategy(m.Provider, m, vaultRoot) == StrategyBedrockMantleResponses {
+		return false
+	}
+	return true
 }
 
 // InferProvider guesses the provider from model ID patterns.

@@ -392,6 +392,65 @@ func TestRemoveUserCatalogEntry_AbsentEntryPreservesFile(t *testing.T) {
 	}
 }
 
+func TestSaveUserCatalogEntryUpgradesPrerouteRow(t *testing.T) {
+	setupHome(t)
+	id := "amazon.nova-2-multimodal-embeddings-v1:0"
+	enabled := false
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "embedding",
+		Tier: TierUserVerified, TestedAt: "2026-08-01T00:00:00Z",
+		Enabled: &enabled, PriceOverride: true, PriceIn: 1.25, PriceSource: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A routed save of the same model must replace, not append.
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "embedding",
+		Tier: TierUserVerified, Plane: PlaneClassic,
+		TestedAt: "2026-08-01T00:00:00Z",
+		Enabled:  &enabled, PriceOverride: true, PriceIn: 1.25, PriceSource: "user",
+		RecommendedSimilarityThreshold: 0.33,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(globalCatalogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "id: "+id); n != 1 {
+		t.Fatalf("file has %d rows for %s, want 1 (appended a routed twin):\n%s", n, id, data)
+	}
+	got, ok := UserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: id, Plane: PlaneClassic})
+	if !ok {
+		t.Fatal("routed lookup missed the upgraded pre-route row")
+	}
+	if got.RecommendedSimilarityThreshold != 0.33 {
+		t.Errorf("threshold = %v, want 0.33", got.RecommendedSimilarityThreshold)
+	}
+	if got.TestedAt != "2026-08-01T00:00:00Z" || got.Enabled == nil || *got.Enabled {
+		t.Errorf("stored fields lost: tested_at=%q enabled=%v", got.TestedAt, got.Enabled)
+	}
+}
+
+func TestRemoveQualifiedRouteHitsPrerouteRow(t *testing.T) {
+	setupHome(t)
+	id := "amazon.nova-2-multimodal-embeddings-v1:0"
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "embedding", Tier: TierUserVerified,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{
+		Provider: "bedrock", ID: id, Plane: PlaneClassic,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("remove @classic of a pre-route row removed %d, want 1", n)
+	}
+}
+
 func TestXDGConfigHomeOverride(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	xdg := t.TempDir()

@@ -95,3 +95,23 @@ func TestAssignResolvedEmbedStrategyOverridesCatalogLookup(t *testing.T) {
 		t.Errorf("resolvedEmbedFormat = %v, want %v (the resolved strategy's format, not id detection)", got, want)
 	}
 }
+
+func TestClassicRegionFanOutIgnoresSiblingMantleRow(t *testing.T) {
+	setupHome(t)
+	id := "xai.grok-4.6"
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "generation",
+		Plane: PlaneMantle, InvokeStrategy: StrategyBedrockMantleResponses,
+		Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	classic := ModelInfo{ID: id, Provider: "bedrock", Type: "generation", Plane: PlaneClassic}
+	if !usesClassicRegionFanOut(classic, "") {
+		t.Fatal("@classic candidate skipped classic region fan-out because a sibling mantle row won the plane-blind lookup")
+	}
+	mantle := ModelInfo{ID: id, Provider: "bedrock", Type: "generation", Plane: PlaneMantle}
+	if usesClassicRegionFanOut(mantle, "") {
+		t.Fatal("named mantle plane must not fan out across classic regions")
+	}
+}
