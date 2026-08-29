@@ -80,9 +80,12 @@ var modelsListCmd = &cobra.Command{
 }
 
 var modelsTestCmd = &cobra.Command{
-	Use:               "test <model-id>",
-	Short:             "Test if a model works with 2nb",
-	Long:              "Sends a quick probe (embed or generate) to verify a model is callable. Useful for testing unverified models before switching.",
+	Use:   "test <model-id>",
+	Short: "Test if a model works with 2nb",
+	Long: `Sends a quick probe (embed or generate) to verify a model is callable.
+The model-id argument accepts the route form id@plane/region, which probes
+exactly that endpoint (so a mantle-discovered model can be tested without a
+prior catalog save).`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsTest,
@@ -94,38 +97,50 @@ var modelsAddCmd = &cobra.Command{
 	Long: `Adds a model to the user catalog at ~/.config/2nb/models.yaml (global)
 or <vault>/.2ndbrain/models.yaml (vault). Subsequent calls to 2nb models list
 will include the entry alongside the built-in verified catalog. Use this to
-add models 2nb doesn't ship yet without editing source.`,
+add models 2nb doesn't ship yet without editing source.
+
+The argument is a bare model id. A route-qualified form (id@plane/region) is
+refused: models add describes a model, not one endpoint.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runModelsAdd,
 }
 
 var modelsRemoveCmd = &cobra.Command{
-	Use:               "remove <model-id>",
-	Short:             "Remove a model from your personal catalog",
+	Use:   "remove <model-id>",
+	Short: "Remove a model from your personal catalog",
+	Long: `Removes catalog rows for a model. A bare id removes every route of
+that model. A route-qualified id (id@plane/region) removes only that route.
+Exits non-zero when nothing matched.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsRemove,
 }
 
 var modelsEnableCmd = &cobra.Command{
-	Use:               "enable [model-id]",
-	Short:             "Mark a model (or every model from a vendor with --vendor) as enabled so it appears in selection dropdowns",
+	Use:   "enable [model-id]",
+	Short: "Mark a model (or every model from a vendor with --vendor) as enabled so it appears in selection dropdowns",
+	Long: `Enable is intent about the MODEL: a route-qualified id is accepted and
+applied to every route of that model, not just the named endpoint.`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsEnable,
 }
 
 var modelsDisableCmd = &cobra.Command{
-	Use:               "disable [model-id]",
-	Short:             "Mark a model (or every model from a vendor with --vendor) as disabled so it is hidden from selection dropdowns",
+	Use:   "disable [model-id]",
+	Short: "Mark a model (or every model from a vendor with --vendor) as disabled so it is hidden from selection dropdowns",
+	Long: `Disable is intent about the MODEL: a route-qualified id is accepted and
+applied to every route of that model, not just the named endpoint.`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsDisable,
 }
 
 var modelsEnableStateCmd = &cobra.Command{
-	Use:               "enable-state <model-id>",
-	Short:             "Set a model's enabled tri-state: default, enabled, or disabled",
+	Use:   "enable-state <model-id>",
+	Short: "Set a model's enabled tri-state: default, enabled, or disabled",
+	Long: `Enable-state is intent about the MODEL: a route-qualified id is accepted
+and applied to every route of that model, not just the named endpoint.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsEnableState,
@@ -570,23 +585,29 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 	setupFileLogging(v)
 
-	modelID := args[0]
+	ref, err := parseModelRef(args[0], testProvider)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	if !flagPorcelain && getFormat(cmd) == "" {
-		fmt.Printf("Testing %s...\n", modelID)
+		fmt.Printf("Testing %s...\n", args[0])
 	}
 
 	// Region-aware like verify: a pinned model re-checks primary (self-heal)
 	// and the included regions apply, so `models test --save` can never
-	// freeze a stale pin that verify would have cleared.
-	//
-	// Known limitation: a bare id here resolves routing from the catalogs
-	// only, so a mantle-DISCOVERED model (in no catalog yet) classic-probes
-	// and 404s. The supported routes for those are `models verify --discover
-	// <id>` (which threads the discovery row's routing hints) or a prior
-	// promote; after either, the persisted entry routes this command too.
-	result, err := ai.TestProbeModelInRegions(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
+	// freeze a stale pin that verify would have cleared. A route-qualified
+	// argument names the endpoint; TestProbeModelInfoInRegions honors a
+	// candidate that already has Plane/Region set.
+	m := ai.ModelInfo{
+		ID:       ref.ID,
+		Provider: ref.Provider,
+		Type:     testModelType,
+		Plane:    ref.Plane,
+		Region:   ref.Region,
+	}
+	result, err := ai.TestProbeModelInfoInRegions(ctx, v.Config.AI, m, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
 	if err != nil {
 		return err
 	}
@@ -655,7 +676,17 @@ func formatContext(tokens int) string {
 // runModelsAdd persists a user-defined model entry to the global or per-vault
 // catalog. The vault scope requires an open vault; global works from anywhere.
 func runModelsAdd(cmd *cobra.Command, args []string) error {
-	modelID := args[0]
+	ref, err := parseModelRef(args[0], addProvider)
+	if err != nil {
+		return err
+	}
+	if ref.Plane != "" || ref.Region != "" {
+		return fmt.Errorf("models add takes a bare model id, not a route; add %s (then pick a route with models discover or config set)", ref.ID)
+	}
+	modelID := ref.ID
+	if ref.Provider != "" {
+		addProvider = ref.Provider
+	}
 	scope, vaultRoot, err := resolveCatalogScope(addScope)
 	if err != nil {
 		return err
@@ -773,17 +804,39 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 }
 
 func runModelsRemove(cmd *cobra.Command, args []string) error {
-	modelID := args[0]
+	ref, err := parseModelRef(args[0], removeProvider)
+	if err != nil {
+		return err
+	}
 	scope, vaultRoot, err := resolveCatalogScope(removeScope)
 	if err != nil {
 		return err
 	}
-	if err := ai.RemoveUserCatalogEntry(scope, vaultRoot, ai.RouteKey{Provider: removeProvider, ID: modelID}); err != nil {
+	n, err := ai.RemoveUserCatalogEntry(scope, vaultRoot, ai.RouteKey{
+		Provider: ref.Provider, ID: ref.ID, Plane: ref.Plane, Region: ref.Region,
+	})
+	if err != nil {
 		return fmt.Errorf("remove: %w", err)
 	}
-	slog.Info("models remove", "provider", removeProvider, "model", modelID, "scope", scope)
-	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s/%s from %s catalog\n", removeProvider, modelID, scope)
+	if n == 0 {
+		return fmt.Errorf("nothing matched %s in %s catalog", args[0], scope)
+	}
+	slog.Info("models remove", "provider", ref.Provider, "model", ref.ID, "plane", ref.Plane, "region", ref.Region, "removed", n, "scope", scope)
+	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %d matching catalog row(s) for %s from %s catalog\n", n, args[0], scope)
 	return nil
+}
+
+// parseModelRef parses a positional model-id argument as a route ref.
+// An omitted provider is filled from flagProvider (the command's --provider).
+func parseModelRef(raw, flagProvider string) (ai.RouteRef, error) {
+	ref, err := ai.ParseRouteRef(raw)
+	if err != nil {
+		return ref, err
+	}
+	if ref.Provider == "" {
+		ref.Provider = flagProvider
+	}
+	return ref, nil
 }
 
 func runModelsEnable(cmd *cobra.Command, args []string) error {
@@ -795,7 +848,11 @@ func runModelsDisable(cmd *cobra.Command, args []string) error {
 }
 
 func runModelsEnableState(cmd *cobra.Command, args []string) error {
-	return setModelEnabledState(cmd, args[0], enableStateProvider, enableStateScope, enableStateValue)
+	ref, err := parseModelRef(args[0], enableStateProvider)
+	if err != nil {
+		return err
+	}
+	return setModelEnabledState(cmd, ref.ID, ref.Provider, enableStateScope, enableStateValue)
 }
 
 // runModelsEnableDisable dispatches three call shapes:
@@ -811,7 +868,11 @@ func runModelsEnableDisable(cmd *cobra.Command, args []string, provider, scopeSt
 		return fmt.Errorf("pass either a <model-id> or --vendor <name>")
 	}
 	if len(args) == 1 && vendor == "" {
-		return setModelEnabled(cmd, args[0], provider, scopeStr, enabled)
+		ref, err := parseModelRef(args[0], provider)
+		if err != nil {
+			return err
+		}
+		return setModelEnabled(cmd, ref.ID, ref.Provider, scopeStr, enabled)
 	}
 	// Vendor batch: with or without explicit IDs.
 	return setVendorEnabled(cmd, vendor, provider, scopeStr, enabled, args)
@@ -829,7 +890,13 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 
 	var modelIDs []string
 	if len(explicitIDs) > 0 {
-		modelIDs = explicitIDs
+		for _, raw := range explicitIDs {
+			ref, err := parseModelRef(raw, provider)
+			if err != nil {
+				return err
+			}
+			modelIDs = append(modelIDs, ref.ID)
+		}
 	} else {
 		// Catalog lookup: only finds verified + user-saved entries.
 		// Discovered-only models need the explicit-IDs path.
@@ -950,8 +1017,8 @@ func setModelEnabledPointer(cmd *cobra.Command, modelID, provider, scopeStr stri
 		}
 	}
 
-	slog.Info("models enable-state", "provider", provider, "model", modelID, "state", label, "scope", scope)
-	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog\n", label, provider, modelID, scope)
+	slog.Info("models enable-state", "provider", provider, "model", modelID, "state", label, "scope", scope, "routes", len(targets))
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog (every route)\n", label, provider, modelID, scope)
 	return nil
 }
 

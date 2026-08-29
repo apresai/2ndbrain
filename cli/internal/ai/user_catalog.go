@@ -181,46 +181,54 @@ func UserCatalogRouteToPreserve(scope UserCatalogScope, vaultRoot string, route 
 
 // RemoveUserCatalogEntry removes rows from the catalog at `scope`.
 //
-// A route with a plane removes exactly that route. A route with an EMPTY plane
-// removes every route of that (provider, id): `models remove <id>` means "stop
-// tracking this model", and leaving three of its four endpoints behind would
-// be a surprising partial delete. Callers that mean one endpoint pass a
-// qualified route.
-//
-// Returns nil if nothing matched — no empty catalog file is written then.
-func RemoveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, route RouteKey) error {
+// An empty plane AND empty region removes every route of that (provider, id):
+// `models remove <id>` means "stop tracking this model". A set plane and/or
+// region constrains the delete (so `id@classic/us-east-1` leaves the sibling
+// routes). Returns the number of rows removed. Zero means nothing matched;
+// no empty catalog file is written then.
+func RemoveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, route RouteKey) (int, error) {
 	userCatalogMu.Lock()
 	defer userCatalogMu.Unlock()
 
 	path, err := catalogPathForScope(scope, vaultRoot)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	cat, err := readCatalogForWrite(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	allRoutes := route.Plane == "" && route.Region == ""
-	want := routeKey(route)
 	kept := cat.Models[:0]
-	removed := false
+	n := 0
 	for _, m := range cat.Models {
-		match := routeKey(m.Route()) == want
-		if allRoutes {
-			match = m.Provider == route.Provider && m.ID == route.ID
-		}
-		if match {
-			removed = true
+		if catalogRowMatchesRoute(m, route) {
+			n++
 			continue
 		}
 		kept = append(kept, m)
 	}
-	if !removed {
-		return nil
+	if n == 0 {
+		return 0, nil
 	}
 	cat.Models = kept
-	return writeCatalog(path, cat)
+	return n, writeCatalog(path, cat)
+}
+
+// catalogRowMatchesRoute reports whether m is selected by route. Empty plane
+// and region mean "every route of this model"; any field that is set is a
+// constraint, matching RouteRef.Matches.
+func catalogRowMatchesRoute(m ModelInfo, route RouteKey) bool {
+	if m.Provider != route.Provider || m.ID != route.ID {
+		return false
+	}
+	if route.Plane != "" && m.Plane != route.Plane {
+		return false
+	}
+	if route.Region != "" && m.Region != route.Region {
+		return false
+	}
+	return true
 }
 
 // globalCatalogPath returns the path to the per-user catalog file, respecting

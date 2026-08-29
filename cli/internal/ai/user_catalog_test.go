@@ -342,8 +342,12 @@ func TestRemoveUserCatalogEntry(t *testing.T) {
 	_ = SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{ID: "keep", Provider: "bedrock"})
 	_ = SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{ID: "drop", Provider: "bedrock"})
 
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "drop"}); err != nil {
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "drop"})
+	if err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("removed %d, want 1", n)
 	}
 	models := LoadUserCatalog("")
 	if len(models) != 1 || models[0].ID != "keep" {
@@ -353,8 +357,12 @@ func TestRemoveUserCatalogEntry(t *testing.T) {
 
 func TestRemoveUserCatalogEntry_MissingFileIsNoOp(t *testing.T) {
 	setupHome(t)
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "nope"}); err != nil {
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "nope"})
+	if err != nil {
 		t.Fatalf("expected no error for missing file, got: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("removed %d from a missing file, want 0", n)
 	}
 }
 
@@ -368,8 +376,12 @@ func TestRemoveUserCatalogEntry_AbsentEntryPreservesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read before: %v", err)
 	}
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "never-existed"}); err != nil {
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "never-existed"})
+	if err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("removed %d for an absent id, want 0", n)
 	}
 	after, err := os.ReadFile(globalCatalogPath())
 	if err != nil {
