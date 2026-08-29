@@ -159,8 +159,8 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	cfg.EmbeddingModel = embedID
-	cfg.GenerationModel = genID
+	cfg.SetEmbeddingModel(embedID)
+	cfg.SetGenerationModel(genID)
 	if dims > 0 {
 		// Warn if dimensions are changing with existing embeddings.
 		if cfg.Dimensions > 0 && cfg.Dimensions != dims {
@@ -190,7 +190,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	// away: it shows up in `2nb models list` afterward.
 	fmt.Printf("\nTesting embedding model %s...\n", embedID)
 	embedProbe := probeWithRetry(ctx, scanner, &cfg, v.Root, verifiedModels, provider, "embedding", &embedID, &dims)
-	cfg.EmbeddingModel = embedID
+	cfg.SetEmbeddingModel(embedID)
 	if dims > 0 {
 		cfg.Dimensions = dims
 	}
@@ -198,7 +198,7 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Testing generation model %s...\n", genID)
 	genProbe := probeWithRetry(ctx, scanner, &cfg, v.Root, verifiedModels, provider, "generation", &genID, &dims)
-	cfg.GenerationModel = genID
+	cfg.SetGenerationModel(genID)
 	persistProbe(v.Root, genProbe)
 
 	// Step 5: Save config.
@@ -469,7 +469,15 @@ func persistProbe(vaultRoot string, result *ai.TestProbeResult) {
 	}
 	base := findBuiltinModel(result.Provider, result.ModelID)
 	entry := promotedEntry(base, result)
-	entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, vaultRoot)
+	entry.InvokeStrategy = result.Strategy
+	// Stamp the probed route. promotedEntry copies none, so without this the
+	// save lands on a route that was never probed: it appends a second,
+	// route-less row for the model, which then permanently kills
+	// UserCatalogRouteToPreserve's unique-row fallback (the fallback that fixed
+	// the 2026-08-20 invoke_strategy-stripping regression), and
+	// dropSupersededUnpinned retires the very row this just reported as saved.
+	persistProbedRegion(&entry, result, "")
+	// Wholesale: a passing probe records a complete fresh verdict.
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, vaultRoot, entry); err != nil {
 		// Keep the stderr warning (the interactive user needs to see it) and add a
 		// durable slog line so the failure is recoverable from cli.log later.

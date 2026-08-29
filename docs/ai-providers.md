@@ -21,6 +21,69 @@ Token precedence, highest first:
 
 `ensureBedrockBearerToken` (`cli/internal/ai/bedrock.go`) exports a stored token into the env var the AWS SDK reads. The SDK **prefers a bearer token over SigV4**, so a stored key overrides `~/.aws` for Bedrock. File `region`, when set, overlays vault `ai.bedrock.region` via `ResolveBedrockConfig`. The token is never written into vault `config.yaml`. A world-readable `bedrock.json` is refused. This mechanism is how the macOS app reaches Bedrock without your shell's credentials.
 
+## Model routes: `(provider, id, plane, region)`
+
+A catalog row's identity is its **route**, not its model id. The same model can
+be served on both Bedrock planes and in several regions, and those endpoints
+have independent entitlement, pricing, and wire dialect, so each is its own row.
+
+- **Plane** (`classic` / `mantle`) selects the CLIENT; `InvokeStrategy` selects
+  the ENVELOPE within that client. The mantle plane has one dialect, classic
+  has many. `ModelInfo.Plane` is derived from the strategy for builtins, and
+  stamped by discovery for everything else.
+- **Region** is the endpoint the route calls, not a preference. An empty region
+  on a Bedrock row means an *unpinned template* (a builtin authored
+  region-agnostically, or a row predating routes). Templates are retired by
+  `retireSupersededTemplates` once concrete per-region routes cover them, so a
+  model is never listed both ways.
+- **Canonical text form:** `[<provider>|]<id>[@<plane>[/<region>]]`, e.g.
+  `xai.grok-4.6@mantle/us-west-2`. The separators are forced, not chosen: `:`
+  appears in model ids (`cohere.rerank-v3-5:0`, `llama3.1:8b`) and `/` appears
+  in OpenRouter ids, so `@` is the only unambiguous marker that also needs no
+  shell quoting. Print `RouteKey.Unqualified()` in any suggested command: the
+  provider prefix uses `|`, which a shell reads as a pipe.
+
+**Discovery walks both planes across `us-east-1`, `us-east-2`, `us-west-2`**
+(`BedrockDiscoveryRegions`). Classic previously listed only the primary region
+while mantle listed three, so a model served only in another US region was
+invisible. Listing is free and cached 24h per `(plane, region)`, so the extra
+coverage costs six cached listings. `mantleDiscoveryRegions` stays narrower on
+purpose: the mantle host is derived per region, so walking a region AWS does
+not serve resolves a host that does not exist. A failure in a region the user
+did **not** configure is logged, never warned, because the discover diff's GONE
+shield keys off `"<source> discovery failed"` and a permanent warning would
+permanently disable GONE detection.
+
+**Config names the route explicitly.** Each model key is accompanied by a
+plane and a region: `ai.generation_{plane,region}`, `ai.embedding_{plane,region}`,
+and the nested `ai.rerank.{plane,region}` (rerank does NOT use the underscore
+form). Setting the model key writes all three as one unit so a slot is never
+half-routed. A bare id resolves when the model has exactly one route; with
+several it is **refused**, printing each qualified form.
+
+**Invocation refuses rather than guesses.** `ResolveSlotRoute` deliberately
+does not fall back to `PreferRoutes`: preference is right for choosing what to
+PROBE (a wrong guess costs a probe) and wrong for choosing what to INVOKE (a
+wrong guess silently sends a real query to the wrong endpoint). This is the fix
+for the live failure that motivated routes, where a bare mantle id fell through
+to classic Converse and Bedrock answered `ValidationException: Invocation of
+model ID xai.grok-4.6 with on-demand throughput isn't supported`.
+
+`PreferRoutes` is the single definition of "best route" (configured route, then
+last known good, then primary region, then classic before mantle, then
+configured region order). It is shared by verify, the list view, and the
+ambiguity messages so the notion cannot drift.
+
+The pre-route resolvers (`resolveCatalogString` / `findCatalogString`,
+`effectiveInvokeStrategy`, `resolveModelRegion`, `resolveModelEndpoint`) are
+unexported. They answer only the route-less case: a bare id no catalog has
+seen. Every serving path decides the route first and dispatches on it. A
+resolved route is a decision, never an optional hint a lookup may reconsider.
+
+`persistProbedRegion` is not a resolver. It is the save path's record of which
+endpoint a probe actually called, and it is deliberately authoritative over
+whatever route the base row carried.
+
 ## Bedrock mantle plane (partner-hosted frontier models)
 
 Two builtin, non-curated generation entries, `openai.gpt-5.5` (region us-east-2) and `xai.grok-4.3` (region us-west-2), run on AWS's newer **mantle** plane. (Grok **4.6**, unlike 4.3, is dual-plane: its builtin entry is the CLASSIC `us.xai.grok-4.6` Converse profile in the builtin catalog below, and the mantle id `xai.grok-4.6` remains reachable via a user-catalog entry with the mantle strategy.) The mantle plane is an OpenAI-Responses REST API at `https://bedrock-mantle.<region>.api.aws` rather than the classic Converse API. Mantle models are **bearer-token only** (SigV4 does not work; set a key via Settings or `2nb config bedrock --set`), region-pinned per model (`ModelInfo.Region`), invisible to `ListFoundationModels`, and per-account entitlement varies.

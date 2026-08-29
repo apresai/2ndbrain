@@ -15,6 +15,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/bench"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -91,6 +92,24 @@ func openBenchDB(dotDir string) (*bench.DB, error) {
 	return bench.Open(filepath.Join(dotDir, "bench.db"))
 }
 
+func openVaultBenchDB(v *vault.Vault) (*bench.DB, error) {
+	db, err := openBenchDB(v.DotDir)
+	if err != nil {
+		return nil, err
+	}
+	cfg := v.Config.AI
+	if err := db.BackfillMissingRoutes(func(provider, modelID string) (string, string) {
+		tmp := cfg
+		tmp.Provider = provider
+		r := ai.ResolveMeasurementRoute(tmp, modelID, v.Root).Route
+		return string(r.Plane), r.Region
+	}); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
 func benchVaultDocCount(db *sql.DB) (int, error) {
 	var docCount int
 	if err := db.QueryRow("SELECT COUNT(*) FROM documents").Scan(&docCount); err != nil {
@@ -107,7 +126,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 	setupFileLogging(v)
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -123,16 +142,22 @@ func runBench(cmd *cobra.Command, args []string) error {
 	// Determine which models to bench.
 	type target struct {
 		provider, modelID, modelType string
+		plane                        ai.Plane
+		region                       string
 	}
 	var targets []target
 
 	if benchModelFlag != "" {
-		provider := benchProviderFlag
-		if provider == "" {
-			provider = ai.InferProvider(benchModelFlag)
+		ref, err := parseModelRef(benchModelFlag, benchProviderFlag)
+		if err != nil {
+			return err
 		}
-		modelType := ai.InferModelType(benchModelFlag)
-		targets = append(targets, target{provider, benchModelFlag, modelType})
+		provider := ref.Provider
+		if provider == "" {
+			provider = ai.InferProvider(ref.ID)
+		}
+		modelType := ai.InferModelType(ref.ID)
+		targets = append(targets, target{provider, ref.ID, modelType, ref.Plane, ref.Region})
 	} else {
 		favs, err := bdb.ListFavorites()
 		if err != nil {
@@ -141,12 +166,12 @@ func runBench(cmd *cobra.Command, args []string) error {
 		if len(favs) == 0 {
 			// Fall back to active config.
 			targets = append(targets,
-				target{cfg.Provider, cfg.EmbeddingModel, "embedding"},
-				target{cfg.Provider, cfg.GenerationModel, "generation"},
+				target{provider: cfg.Provider, modelID: cfg.EmbeddingModel, modelType: "embedding"},
+				target{provider: cfg.Provider, modelID: cfg.GenerationModel, modelType: "generation"},
 			)
 		} else {
 			for _, f := range favs {
-				targets = append(targets, target{f.Provider, f.ModelID, f.ModelType})
+				targets = append(targets, target{provider: f.Provider, modelID: f.ModelID, modelType: f.ModelType})
 			}
 		}
 	}
@@ -212,6 +237,11 @@ func runBench(cmd *cobra.Command, args []string) error {
 			if r.VaultDocCount > 0 {
 				runDocCount = r.VaultDocCount
 			}
+			plane, region := string(t.plane), t.region
+			if plane == "" && region == "" {
+				route := ai.ResolveMeasurementRoute(cfg, t.modelID, v.Root).Route
+				plane, region = string(route.Plane), route.Region
+			}
 			if err := bdb.InsertRun(&bench.Run{
 				Timestamp:     ts,
 				Provider:      t.provider,
@@ -221,6 +251,8 @@ func runBench(cmd *cobra.Command, args []string) error {
 				OK:            r.OK,
 				Detail:        r.Detail,
 				VaultDocCount: runDocCount,
+				Plane:         plane,
+				Region:        region,
 			}); err != nil {
 				// A transient bench.db failure (WAL busy, disk full)
 				// shouldn't abort the run and discard subsequent
@@ -387,7 +419,13 @@ func resolveBenchSummaryScope(vaultRoot, scope string) (ai.UserCatalogScope, str
 }
 
 func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCatalogScope, vaultRoot, provider, modelID, modelType string, summary *ai.BenchmarkSummary) error {
-	entry, ok := findModelInfo(ctx, cfg, vaultRoot, provider, modelID)
+	// Record the summary against the route that was BENCHMARKED. The probe
+	// picks its endpoint with ResolveMeasurementRoute, so looking the base row
+	// up route-blind filed the number on a sibling: measured
+	// @classic/us-west-2, recorded on @classic/us-east-1. models list --sort
+	// best is bench-informed, so the wrong row then ranks.
+	route := ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot).Route
+	entry, ok := findModelInfoForRoute(ctx, cfg, vaultRoot, route)
 	if !ok {
 		entry = ai.ModelInfo{
 			ID:       modelID,
@@ -399,11 +437,16 @@ func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCat
 	entry.ID = modelID
 	entry.Provider = provider
 	entry.Type = modelType
+	entry.Plane = route.Plane
+	entry.Region = route.Region
 	entry.Benchmark = summary
 	entry.Enabled = preserveScopeEnabled(scope, vaultRoot, provider, modelID)
 	if entry.Tier == "" {
 		entry.Tier = ai.TierUserVerified
 	}
+	// RMW: copy the existing route's row (findModelInfoForRoute), then stamp
+	// Benchmark. A site that constructed a fresh row here would erase the
+	// stored verdict, prices, and enabled pointer, the same as calibrate --save.
 	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 		return err
 	}
@@ -418,23 +461,29 @@ func runBenchFav(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
 	defer bdb.Close()
 
-	modelID := args[0]
-	provider := benchProviderFlag
-	if provider == "" {
-		provider = ai.InferProvider(modelID)
-	}
-	modelType := ai.InferModelType(modelID)
-
-	if err := bdb.AddFavorite(provider, modelID, modelType); err != nil {
+	ref, err := parseModelRef(args[0], benchProviderFlag)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("Added %s/%s (%s) to bench favorites\n", provider, modelID, modelType)
+	provider := ref.Provider
+	if provider == "" {
+		provider = ai.InferProvider(ref.ID)
+	}
+	modelType := ai.InferModelType(ref.ID)
+
+	if err := bdb.AddFavorite(provider, ref.ID, modelType); err != nil {
+		return err
+	}
+	fmt.Printf("Added %s/%s (%s) to bench favorites\n", provider, ref.ID, modelType)
+	if ref.Plane != "" || ref.Region != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "(favorites are the model, every route)\n")
+	}
 	return nil
 }
 
@@ -445,22 +494,25 @@ func runBenchUnfav(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
 	defer bdb.Close()
 
-	modelID := args[0]
-	provider := benchProviderFlag
-	if provider == "" {
-		provider = ai.InferProvider(modelID)
-	}
-
-	if err := bdb.RemoveFavorite(provider, modelID); err != nil {
+	ref, err := parseModelRef(args[0], benchProviderFlag)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("Removed %s/%s from bench favorites\n", provider, modelID)
+	provider := ref.Provider
+	if provider == "" {
+		provider = ai.InferProvider(ref.ID)
+	}
+
+	if err := bdb.RemoveFavorite(provider, ref.ID); err != nil {
+		return err
+	}
+	fmt.Printf("Removed %s/%s from bench favorites\n", provider, ref.ID)
 	return nil
 }
 
@@ -471,7 +523,7 @@ func runBenchFavs(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -507,7 +559,7 @@ func runBenchHistory(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -548,7 +600,7 @@ func runBenchCompare(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}

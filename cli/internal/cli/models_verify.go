@@ -19,6 +19,7 @@ var (
 	verifyVendor      string
 	verifyRecommended bool
 	verifyAll         bool
+	verifyAllRoutes   bool
 	verifyScope       string
 	verifyCostCap     float64
 	verifyYes         bool
@@ -54,6 +55,7 @@ func init() {
 	modelsVerifyCmd.Flags().StringVar(&verifyVendor, "vendor", "", "Restrict to one vendor (e.g. anthropic, amazon, google)")
 	modelsVerifyCmd.Flags().BoolVar(&verifyRecommended, "recommended", false, "Probe only the curated recommended models")
 	modelsVerifyCmd.Flags().BoolVar(&verifyAll, "all", false, "Probe every catalog model (verified + user catalog)")
+	modelsVerifyCmd.Flags().BoolVar(&verifyAllRoutes, "all-routes", false, "Probe EVERY route of each model, not just its best one (a model served on both planes or in several regions has several routes; each probe is billed)")
 	modelsVerifyCmd.Flags().StringVar(&verifyScope, "scope", "vault", "Catalog scope for saved results: vault or global")
 	modelsVerifyCmd.Flags().Float64Var(&verifyCostCap, "cost-cap", 0.50, "Abort if the estimated probe cost exceeds this many USD")
 	modelsVerifyCmd.Flags().BoolVar(&verifyYes, "yes", false, "Skip the interactive confirmation")
@@ -248,6 +250,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
 		adoptCandidateRouting(&entry, m)
+		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && humanMode {
 			fmt.Printf("[%d/%d] warning: save %s failed: %v\n", n, total, m.ID, saveErr)
 		}
@@ -321,6 +324,45 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 // catalog entry: the policy pre-enables future discoveries, and those only
 // exist in merged.Unverified. Off by default so the CLI's candidate set is
 // unchanged for existing callers.
+// bestRoutePerModel collapses candidates to ONE route per model, unless
+// --all-routes asks for the full matrix.
+//
+// Verify iterates catalog ROWS, and a row is now a route, so a model served on
+// both planes or in three regions became three candidates and three BILLED
+// probes where one was wanted. On this machine's catalog that is a three-to
+// four-fold increase, enough to trip the default $0.50 cost cap on a workload
+// that previously completed.
+//
+// Probing the best route rather than all of them is safe in a way that
+// choosing an invoke route is not: PreferRoutes ranks the configured route
+// first, then the last known good, then the primary region, so the probe
+// lands on the endpoint the user actually depends on. A model whose best
+// route fails is exactly the case --all-routes exists for.
+func bestRoutePerModel(rows []ai.ModelInfo, cfg ai.AIConfig) []ai.ModelInfo {
+	if verifyAllRoutes {
+		return rows
+	}
+	byModel := map[string][]ai.ModelInfo{}
+	order := []string{}
+	for _, m := range rows {
+		k := m.Provider + "\x00" + m.ID
+		if _, seen := byModel[k]; !seen {
+			order = append(order, k)
+		}
+		byModel[k] = append(byModel[k], m)
+	}
+	out := make([]ai.ModelInfo, 0, len(order))
+	for _, k := range order {
+		group := byModel[k]
+		if len(group) == 1 {
+			out = append(out, group[0])
+			continue
+		}
+		out = append(out, ai.PreferRoutes(group, cfg)[0])
+	}
+	return out
+}
+
 func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, args []string) ([]ai.ModelInfo, error) {
 	merged, err := ai.BuildModelList(ctx, ai.MergedListOptions{
 		Config:      cfg,
@@ -339,24 +381,43 @@ func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, ar
 	if len(args) > 0 {
 		var out []ai.ModelInfo
 		for _, id := range args {
-			found := false
+			// Accept the canonical route form, so ONE endpoint of a
+			// multi-route model can be verified. Without this, a route string
+			// fell through to the synthesized-candidate branch below, where
+			// InferProvider reads the '/' in `id@plane/region` as an
+			// OpenRouter id and probes a model that does not exist. The
+			// `discover --add` duplicate hint emits exactly that string.
+			ref, err := ai.ParseRouteRef(id)
+			if err != nil {
+				return nil, err
+			}
+			if verifyProvider != "" {
+				ref.Provider = verifyProvider
+			}
+			var matched []ai.ModelInfo
 			for _, m := range catalog {
-				if m.ID == id && (verifyProvider == "" || m.Provider == verifyProvider) {
-					out = append(out, m)
-					found = true
-					break
+				if ref.Matches(m) {
+					matched = append(matched, m)
 				}
 			}
-			if !found {
-				provider := verifyProvider
-				if provider == "" {
-					provider = ai.InferProvider(id)
-				}
-				if provider == "" {
-					return nil, fmt.Errorf("cannot infer provider for %q — pass --provider", id)
-				}
-				out = append(out, ai.ModelInfo{ID: id, Provider: provider, Type: ai.InferModelType(id), Compatible: true})
+			if len(matched) > 0 {
+				// Several routes of one model: probe the best unless the
+				// caller asked for all of them. An explicit route argument
+				// narrows to one by construction.
+				out = append(out, bestRoutePerModel(matched, cfg)...)
+				continue
 			}
+			provider := ref.Provider
+			if provider == "" {
+				provider = ai.InferProvider(ref.ID)
+			}
+			if provider == "" {
+				return nil, fmt.Errorf("cannot infer provider for %q — pass --provider", id)
+			}
+			out = append(out, ai.ModelInfo{
+				ID: ref.ID, Provider: provider, Type: ai.InferModelType(ref.ID),
+				Plane: ref.Plane, Region: ref.Region, Compatible: true,
+			})
 		}
 		return skipUnprobeable(out), nil
 	}
@@ -397,7 +458,7 @@ func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, ar
 		}
 		out = append(out, m)
 	}
-	return skipUnprobeable(out), nil
+	return skipUnprobeable(bestRoutePerModel(out, cfg)), nil
 }
 
 // verifyCandidatePool is the catalog verify filters over. Without discovery

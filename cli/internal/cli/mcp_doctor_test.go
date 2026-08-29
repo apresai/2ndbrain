@@ -29,10 +29,10 @@ func TestBuildMCPDoctorReport_HealthyOffline(t *testing.T) {
 	// The four engine checks must be OK (hard); ai/configured/instructions/wal/
 	// servers are warn-only, so the roll-up stays true offline + not-configured.
 	engine := map[string]bool{
-		"mcp tools registered":   false,
-		"kb_info round-trip":     false,
-		"kb_list round-trip":     false,
-		"kb_search round-trip":   false,
+		"mcp tools registered": false,
+		"kb_info round-trip":   false,
+		"kb_list round-trip":   false,
+		"kb_search round-trip": false,
 	}
 	for _, c := range report.Checks {
 		if _, ok := engine[c.Name]; ok {

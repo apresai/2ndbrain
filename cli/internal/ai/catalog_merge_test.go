@@ -431,12 +431,19 @@ func TestAdoptRoutingHints(t *testing.T) {
 		}
 	})
 
-	t.Run("region is adopted only under the mantle strategy", func(t *testing.T) {
+	// This subtest used to assert the OPPOSITE: that a classic region was
+	// never adopted, because region was a mutable pin owned by
+	// persistProbedRegion. Under route identity region is part of the key, and
+	// that rule meant a classic per-region route could not be persisted at
+	// all — `discover --add` printed `x@classic/us-east-2` and stored
+	// `x@classic`, so the three-region classic sweep produced rows the user
+	// catalog could never hold.
+	t.Run("a classic region is adopted, because region is identity", func(t *testing.T) {
 		entry := ModelInfo{ID: "x", Provider: "bedrock"}
-		classic := ModelInfo{ID: "x", Provider: "bedrock", Region: "us-east-2"}
+		classic := ModelInfo{ID: "x", Provider: "bedrock", Plane: PlaneClassic, Region: "us-east-2"}
 		AdoptRoutingHints(&entry, classic)
-		if entry.Region != "" {
-			t.Fatalf("classic region adopted; persistProbedRegion owns classic pins: %+v", entry)
+		if entry.Region != "us-east-2" || entry.Plane != PlaneClassic {
+			t.Fatalf("classic route not adopted, so it could never be persisted: %+v", entry)
 		}
 	})
 
@@ -449,44 +456,59 @@ func TestAdoptRoutingHints(t *testing.T) {
 	})
 }
 
-// TestMergeDiscoveredGraftsHintsOntoRoutingEmptyRows pins the self-heal for
-// the 2026-08-21 live incident: a user-catalog row whose routing was stripped
-// by a pre-0.19.0 save clobber must adopt the discovered row's hints instead
-// of shadowing them (which probed a mantle-only id over classic Converse
-// until the row was manually removed).
-func TestMergeDiscoveredGraftsHintsOntoRoutingEmptyRows(t *testing.T) {
+// TestMergeDiscoveredStrippedRowIsSupersededNotGrafted pins the route-era cure
+// for the 2026-08-21 live incident.
+//
+// Before routes, a user row whose routing had been stripped by a pre-0.19.0
+// save clobber SHADOWED its own cure: it matched the discovered row on
+// (provider, id), so the discovery result was folded into the broken row and
+// the hints had to be grafted back onto it. That graft was delicate, and until
+// it ran the row probed a mantle-only id over classic Converse.
+//
+// With route identity the fix is structural rather than delicate: the
+// discovered mantle endpoint is a DIFFERENT route from the region-less
+// template, so it arrives as its own fully-routed row and cannot be shadowed.
+// The stale template then retires via dropSupersededUnpinned. Nothing has to
+// be repaired in place.
+func TestMergeDiscoveredStrippedRowIsSupersededNotGrafted(t *testing.T) {
 	stripped := ModelInfo{ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation", Tier: TierUserVerified}
-	authored := ModelInfo{ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation",
+	authored := ModelInfo{ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation", Plane: PlaneMantle,
 		InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-east-2"}
-	classicOnly := ModelInfo{ID: "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider: "bedrock", Type: "generation"}
-	catalog := []ModelInfo{stripped, authored, classicOnly}
+	catalog := []ModelInfo{stripped, authored}
 
 	discovered := []ModelInfo{
-		// Mantle listing row for the stripped id: hints must graft.
-		{ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation",
+		// The real mantle endpoint for the stripped id.
+		{ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation", Plane: PlaneMantle,
 			InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-west-2"},
-		// Mantle listing row for an authored id: must not touch it.
-		{ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation",
+		// A different region of an authored route: also its own row, and it
+		// must not disturb the authored one.
+		{ID: "openai.gpt-5.5", Provider: "bedrock", Type: "generation", Plane: PlaneMantle,
 			InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-west-2"},
-		// Classic discovery row for a merged id: empty strategy, graft no-ops.
-		{ID: "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider: "bedrock", Type: "generation"},
-		// Genuinely new id: joins unverified with hints intact.
-		{ID: "zai.glm-9", Provider: "bedrock", Type: "generation",
-			InvokeStrategy: StrategyBedrockMantleResponses, Region: "us-east-1"},
 	}
 
 	unverified := mergeDiscovered(catalog, discovered)
 
-	if len(unverified) != 1 || unverified[0].ID != "zai.glm-9" || unverified[0].InvokeStrategy != StrategyBedrockMantleResponses {
-		t.Fatalf("unverified = %+v, want only zai.glm-9 with hints", unverified)
+	// Both discovered endpoints are new ROUTES, so both surface.
+	if len(unverified) != 2 {
+		t.Fatalf("unverified = %+v, want both discovered routes", unverified)
 	}
-	if catalog[0].InvokeStrategy != StrategyBedrockMantleResponses || catalog[0].Region != "us-west-2" {
-		t.Fatalf("stripped row did not adopt hints: %+v", catalog[0])
+	for _, m := range unverified {
+		if m.Plane != PlaneMantle || m.Region == "" {
+			t.Errorf("discovered row lost its route: %+v", m.Route())
+		}
 	}
+	// The authored route keeps its own region: a sibling region's listing
+	// must never repoint it.
 	if catalog[1].Region != "us-east-2" {
-		t.Fatalf("authored row was clobbered: %+v", catalog[1])
+		t.Fatalf("authored route was clobbered by a sibling region: %+v", catalog[1])
 	}
-	if catalog[2].InvokeStrategy != "" || catalog[2].Region != "" {
-		t.Fatalf("classic row gained routing from a classic discovery row: %+v", catalog[2])
+	// The stripped template is retired by the concrete route, so it can no
+	// longer shadow it.
+	pinned := pinnedRoutePlanes(catalog, unverified)
+	kept := dropSupersededUnpinned(catalog, pinned)
+	for _, m := range kept {
+		if m.ID == "xai.grok-4.6" && m.Region == "" {
+			t.Errorf("region-less template survived alongside its concrete route: %+v", m)
+		}
 	}
 }

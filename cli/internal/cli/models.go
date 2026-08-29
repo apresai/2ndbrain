@@ -80,9 +80,12 @@ var modelsListCmd = &cobra.Command{
 }
 
 var modelsTestCmd = &cobra.Command{
-	Use:               "test <model-id>",
-	Short:             "Test if a model works with 2nb",
-	Long:              "Sends a quick probe (embed or generate) to verify a model is callable. Useful for testing unverified models before switching.",
+	Use:   "test <model-id>",
+	Short: "Test if a model works with 2nb",
+	Long: `Sends a quick probe (embed or generate) to verify a model is callable.
+The model-id argument accepts the route form id@plane/region, which probes
+exactly that endpoint (so a mantle-discovered model can be tested without a
+prior catalog save).`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsTest,
@@ -94,38 +97,50 @@ var modelsAddCmd = &cobra.Command{
 	Long: `Adds a model to the user catalog at ~/.config/2nb/models.yaml (global)
 or <vault>/.2ndbrain/models.yaml (vault). Subsequent calls to 2nb models list
 will include the entry alongside the built-in verified catalog. Use this to
-add models 2nb doesn't ship yet without editing source.`,
+add models 2nb doesn't ship yet without editing source.
+
+The argument is a bare model id. A route-qualified form (id@plane/region) is
+refused: models add describes a model, not one endpoint.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runModelsAdd,
 }
 
 var modelsRemoveCmd = &cobra.Command{
-	Use:               "remove <model-id>",
-	Short:             "Remove a model from your personal catalog",
+	Use:   "remove <model-id>",
+	Short: "Remove a model from your personal catalog",
+	Long: `Removes catalog rows for a model. A bare id removes every route of
+that model. A route-qualified id (id@plane/region) removes only that route.
+Exits non-zero when nothing matched.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsRemove,
 }
 
 var modelsEnableCmd = &cobra.Command{
-	Use:               "enable [model-id]",
-	Short:             "Mark a model (or every model from a vendor with --vendor) as enabled so it appears in selection dropdowns",
+	Use:   "enable [model-id]",
+	Short: "Mark a model (or every model from a vendor with --vendor) as enabled so it appears in selection dropdowns",
+	Long: `Enable is intent about the MODEL: a route-qualified id is accepted and
+applied to every route of that model, not just the named endpoint.`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsEnable,
 }
 
 var modelsDisableCmd = &cobra.Command{
-	Use:               "disable [model-id]",
-	Short:             "Mark a model (or every model from a vendor with --vendor) as disabled so it is hidden from selection dropdowns",
+	Use:   "disable [model-id]",
+	Short: "Mark a model (or every model from a vendor with --vendor) as disabled so it is hidden from selection dropdowns",
+	Long: `Disable is intent about the MODEL: a route-qualified id is accepted and
+applied to every route of that model, not just the named endpoint.`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsDisable,
 }
 
 var modelsEnableStateCmd = &cobra.Command{
-	Use:               "enable-state <model-id>",
-	Short:             "Set a model's enabled tri-state: default, enabled, or disabled",
+	Use:   "enable-state <model-id>",
+	Short: "Set a model's enabled tri-state: default, enabled, or disabled",
+	Long: `Enable-state is intent about the MODEL: a route-qualified id is accepted
+and applied to every route of that model, not just the named endpoint.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeModelIDs,
 	RunE:              runModelsEnableState,
@@ -312,6 +327,15 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 			entry := promotedEntry(&m, result)
 			preserveRoutingFields(scope, v.Root, &entry)
 			adoptCandidateRouting(&entry, m)
+			// Stamp the probed route LAST, so the save lands on the endpoint
+			// that was actually called. promotedEntry copies no route, and
+			// preserveRoutingFields' unique-row fallback would otherwise
+			// supply a SIBLING's: a classic promote of a dual-plane id saved
+			// under the stored mantle route, overwriting that row's real
+			// verdict with a false positive that even carried the mantle
+			// strategy. adoptCandidateRouting cannot correct it (fill-only-empty).
+			persistProbedRegion(&entry, result, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
+			// Wholesale: a passing probe records a complete fresh verdict.
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
 				passed++
 				fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",
@@ -408,9 +432,9 @@ func filterModels(models []ai.ModelInfo) []ai.ModelInfo {
 
 func printModelHeader(w *tabwriter.Writer, showStatus bool) {
 	if showStatus {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE\tSTATUS")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tROUTE\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE\tSTATUS")
 	} else {
-		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE")
+		fmt.Fprintln(w, "PROVIDER\tTYPE\tMODEL\tROUTE\tPRICE\tCTX\tTHRESHOLD\tBENCH\tSTATE")
 	}
 }
 
@@ -430,12 +454,30 @@ func printModelRow(w *tabwriter.Writer, m ai.ModelInfo, showStatus bool) {
 
 	if showStatus {
 		status := statusLabel(m)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold, benchLabel(m), stateLabel(m), status)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, routeLabel(m), price, ctxLen, threshold, benchLabel(m), stateLabel(m), status)
 	} else {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			m.Provider, m.Type, m.ID, price, ctxLen, threshold, benchLabel(m), stateLabel(m))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Provider, m.Type, m.ID, routeLabel(m), price, ctxLen, threshold, benchLabel(m), stateLabel(m))
 	}
+}
+
+// routeLabel renders the endpoint a row invokes: "<plane> <region>", or the
+// plane alone for an unpinned template, or "-" for a provider with no routes.
+//
+// Without this column, a model served in three regions printed three
+// byte-identical lines, which reads as a duplicate bug and hides the only
+// thing that distinguishes them. `models discover` already names the route
+// for the same reason; leaving `models list` without it made the two commands
+// contradict each other.
+func routeLabel(m ai.ModelInfo) string {
+	if m.Provider != "bedrock" || m.Plane == "" {
+		return "-"
+	}
+	if m.Region == "" {
+		return string(m.Plane)
+	}
+	return string(m.Plane) + " " + m.Region
 }
 
 // benchLabel renders the latest benchmark summary compactly: retrieval
@@ -543,23 +585,29 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 	setupFileLogging(v)
 
-	modelID := args[0]
+	ref, err := parseModelRef(args[0], testProvider)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	if !flagPorcelain && getFormat(cmd) == "" {
-		fmt.Printf("Testing %s...\n", modelID)
+		fmt.Printf("Testing %s...\n", args[0])
 	}
 
 	// Region-aware like verify: a pinned model re-checks primary (self-heal)
 	// and the included regions apply, so `models test --save` can never
-	// freeze a stale pin that verify would have cleared.
-	//
-	// Known limitation: a bare id here resolves routing from the catalogs
-	// only, so a mantle-DISCOVERED model (in no catalog yet) classic-probes
-	// and 404s. The supported routes for those are `models verify --discover
-	// <id>` (which threads the discovery row's routing hints) or a prior
-	// promote; after either, the persisted entry routes this command too.
-	result, err := ai.TestProbeModelInRegions(ctx, v.Config.AI, modelID, testProvider, testModelType, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
+	// freeze a stale pin that verify would have cleared. A route-qualified
+	// argument names the endpoint; TestProbeModelInfoInRegions honors a
+	// candidate that already has Plane/Region set.
+	m := ai.ModelInfo{
+		ID:       ref.ID,
+		Provider: ref.Provider,
+		Type:     testModelType,
+		Plane:    ref.Plane,
+		Region:   ref.Region,
+	}
+	result, err := ai.TestProbeModelInfoInRegions(ctx, v.Config.AI, m, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
 	if err != nil {
 		return err
 	}
@@ -570,6 +618,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
+		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			if getFormat(cmd) != "" {
 				return fmt.Errorf("save test result: %w", err)
@@ -627,7 +676,17 @@ func formatContext(tokens int) string {
 // runModelsAdd persists a user-defined model entry to the global or per-vault
 // catalog. The vault scope requires an open vault; global works from anywhere.
 func runModelsAdd(cmd *cobra.Command, args []string) error {
-	modelID := args[0]
+	ref, err := parseModelRef(args[0], addProvider)
+	if err != nil {
+		return err
+	}
+	if ref.Plane != "" || ref.Region != "" {
+		return fmt.Errorf("models add takes a bare model id, not a route; add %s (then pick a route with models discover or config set)", ref.ID)
+	}
+	modelID := ref.ID
+	if ref.Provider != "" {
+		addProvider = ref.Provider
+	}
 	scope, vaultRoot, err := resolveCatalogScope(addScope)
 	if err != nil {
 		return err
@@ -673,6 +732,8 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		entry.Name = modelID
 	}
 
+	// Wholesale for a new row; mergeAddCatalogEntry already merged when a
+	// stored row existed. models add describes a MODEL, not one endpoint.
 	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 		return fmt.Errorf("save: %w", err)
 	}
@@ -704,6 +765,14 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 	out.ID = patch.ID
 	out.Provider = patch.Provider
 	out.Type = patch.Type
+	// `models add` describes a MODEL, not one of its endpoints: it takes no
+	// route argument and its fields (name, prices, dimensions, context length,
+	// notes) are all model-level. Writing it route-less makes it a template,
+	// whose facts retireSupersededTemplates distributes to every concrete
+	// route. Inheriting `existing`'s route instead landed the edit on whichever
+	// row sorted first, so a price override applied to one region and not its
+	// siblings.
+	out.Plane, out.Region = "", ""
 	if patch.Name != "" {
 		out.Name = patch.Name
 	} else if out.Name == "" {
@@ -735,17 +804,39 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 }
 
 func runModelsRemove(cmd *cobra.Command, args []string) error {
-	modelID := args[0]
+	ref, err := parseModelRef(args[0], removeProvider)
+	if err != nil {
+		return err
+	}
 	scope, vaultRoot, err := resolveCatalogScope(removeScope)
 	if err != nil {
 		return err
 	}
-	if err := ai.RemoveUserCatalogEntry(scope, vaultRoot, removeProvider, modelID); err != nil {
+	n, err := ai.RemoveUserCatalogEntry(scope, vaultRoot, ai.RouteKey{
+		Provider: ref.Provider, ID: ref.ID, Plane: ref.Plane, Region: ref.Region,
+	})
+	if err != nil {
 		return fmt.Errorf("remove: %w", err)
 	}
-	slog.Info("models remove", "provider", removeProvider, "model", modelID, "scope", scope)
-	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s/%s from %s catalog\n", removeProvider, modelID, scope)
+	if n == 0 {
+		return fmt.Errorf("nothing matched %s in %s catalog", args[0], scope)
+	}
+	slog.Info("models remove", "provider", ref.Provider, "model", ref.ID, "plane", ref.Plane, "region", ref.Region, "removed", n, "scope", scope)
+	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %d matching catalog row(s) for %s from %s catalog\n", n, args[0], scope)
 	return nil
+}
+
+// parseModelRef parses a positional model-id argument as a route ref.
+// An omitted provider is filled from flagProvider (the command's --provider).
+func parseModelRef(raw, flagProvider string) (ai.RouteRef, error) {
+	ref, err := ai.ParseRouteRef(raw)
+	if err != nil {
+		return ref, err
+	}
+	if ref.Provider == "" {
+		ref.Provider = flagProvider
+	}
+	return ref, nil
 }
 
 func runModelsEnable(cmd *cobra.Command, args []string) error {
@@ -757,7 +848,11 @@ func runModelsDisable(cmd *cobra.Command, args []string) error {
 }
 
 func runModelsEnableState(cmd *cobra.Command, args []string) error {
-	return setModelEnabledState(cmd, args[0], enableStateProvider, enableStateScope, enableStateValue)
+	ref, err := parseModelRef(args[0], enableStateProvider)
+	if err != nil {
+		return err
+	}
+	return setModelEnabledState(cmd, ref.ID, ref.Provider, enableStateScope, enableStateValue)
 }
 
 // runModelsEnableDisable dispatches three call shapes:
@@ -773,7 +868,11 @@ func runModelsEnableDisable(cmd *cobra.Command, args []string, provider, scopeSt
 		return fmt.Errorf("pass either a <model-id> or --vendor <name>")
 	}
 	if len(args) == 1 && vendor == "" {
-		return setModelEnabled(cmd, args[0], provider, scopeStr, enabled)
+		ref, err := parseModelRef(args[0], provider)
+		if err != nil {
+			return err
+		}
+		return setModelEnabled(cmd, ref.ID, ref.Provider, scopeStr, enabled)
 	}
 	// Vendor batch: with or without explicit IDs.
 	return setVendorEnabled(cmd, vendor, provider, scopeStr, enabled, args)
@@ -791,7 +890,13 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 
 	var modelIDs []string
 	if len(explicitIDs) > 0 {
-		modelIDs = explicitIDs
+		for _, raw := range explicitIDs {
+			ref, err := parseModelRef(raw, provider)
+			if err != nil {
+				return err
+			}
+			modelIDs = append(modelIDs, ref.ID)
+		}
 	} else {
 		// Catalog lookup: only finds verified + user-saved entries.
 		// Discovered-only models need the explicit-IDs path.
@@ -813,28 +918,36 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 		return fmt.Errorf("no models found for vendor=%s provider=%s (tip: pass model IDs as positional args to cover discovered-only entries)", vendor, provider)
 	}
 
-	// Preload the user catalog so we merge rather than fetching per
-	// model. Entries keyed by (provider, id).
-	userByKey := make(map[string]ai.ModelInfo)
+	// Preload the user catalog so we merge rather than fetching per model.
+	// Grouped by (provider, id) but keeping EVERY route: a map keyed by
+	// (provider, id) would retain only the last row per model, so the batch
+	// would flag one of N routes. filterEnabled is per-row, so a model
+	// "disabled" that way stays in dropdowns via its other routes — the same
+	// silently-ineffective command setModelEnabledPointer was fixed for, and
+	// this is the path the macOS app's vendor toggles call.
+	userByModel := make(map[string][]ai.ModelInfo)
 	for _, m := range ai.LoadUserCatalog(vaultRoot) {
-		userByKey[m.Provider+"|"+m.ID] = m
+		k := m.Provider + "|" + m.ID
+		userByModel[k] = append(userByModel[k], m)
 	}
 
 	count := 0
 	for _, id := range modelIDs {
-		key := provider + "|" + id
-		entry, found := userByKey[key]
-		if !found {
-			entry = ai.ModelInfo{
+		targets := userByModel[provider+"|"+id]
+		if len(targets) == 0 {
+			targets = []ai.ModelInfo{{
 				ID:       id,
 				Provider: provider,
 				Tier:     ai.TierUserVerified,
-			}
+			}}
 		}
-		entry.Enabled = ai.Ptr(enabled)
-		preserveRoutingFields(scope, vaultRoot, &entry)
-		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
-			return fmt.Errorf("save %s: %w", id, err)
+		for _, entry := range targets {
+			entry.Enabled = ai.Ptr(enabled)
+			preserveRoutingFields(scope, vaultRoot, &entry)
+			// RMW: copy every stored route of the model, then stamp Enabled.
+			if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+				return fmt.Errorf("save %s: %w", id, err)
+			}
 		}
 		count++
 	}
@@ -874,33 +987,38 @@ func setModelEnabledPointer(cmd *cobra.Command, modelID, provider, scopeStr stri
 		return err
 	}
 
-	// Load user catalog and find an existing entry; fall back to a minimal one
-	// so enable/disable work against purely-builtin models too.
+	// Enable/disable is intent about the MODEL, so it applies to every route
+	// of that model, matching `models remove`.
+	//
+	// Taking the first (provider, id) match set the flag on 1 of N rows, and
+	// filterEnabled is per-row, so a disabled model stayed in dropdowns via its
+	// other routes — a silently ineffective command, reachable from the GUI.
 	user := ai.LoadUserCatalog(vaultRoot)
-	var entry ai.ModelInfo
-	found := false
+	var targets []ai.ModelInfo
 	for _, m := range user {
 		if m.Provider == provider && m.ID == modelID {
-			entry = m
-			found = true
-			break
+			targets = append(targets, m)
 		}
 	}
-	if !found {
-		entry = ai.ModelInfo{
+	if len(targets) == 0 {
+		// Purely-builtin model: a minimal row carries the flag.
+		targets = []ai.ModelInfo{{
 			ID:       modelID,
 			Provider: provider,
 			Tier:     ai.TierUserVerified,
+		}}
+	}
+
+	for _, entry := range targets {
+		entry.Enabled = enabled
+		// RMW: copy every stored route of the model, then stamp Enabled.
+		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+			return fmt.Errorf("save: %w", err)
 		}
 	}
 
-	entry.Enabled = enabled
-	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
-		return fmt.Errorf("save: %w", err)
-	}
-
-	slog.Info("models enable-state", "provider", provider, "model", modelID, "state", label, "scope", scope)
-	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog\n", label, provider, modelID, scope)
+	slog.Info("models enable-state", "provider", provider, "model", modelID, "state", label, "scope", scope, "routes", len(targets))
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog (every route)\n", label, provider, modelID, scope)
 	return nil
 }
 
@@ -912,8 +1030,26 @@ func enabledStateLabel(enabled bool) string {
 }
 
 func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot string, result *ai.TestProbeResult) ai.ModelInfo {
+	// The base row must be the one for the ROUTE that was probed.
+	//
+	// findModelInfo matches (provider, id) and returns the FIRST row, which
+	// among a model's routes is arbitrary (sortModels sorts by provider,
+	// type, id with a non-stable sort). A wrong base carries a non-empty
+	// Region, and since persistProbedRegion and AdoptRoutingHints are both
+	// fill-only-empty, neither corrects it — so the verdict was written under
+	// a route key that was never probed, destroying that endpoint's good
+	// result and leaving the endpoint that actually failed still reading as
+	// last-known-good, which PreferRoutes then ranks first.
+	//
+	// Harmless before routes (one row per model); destructive after.
+	probed := ai.RouteKey{
+		Provider: result.Provider,
+		ID:       result.ModelID,
+		Plane:    result.Plane,
+		Region:   result.Region,
+	}
 	var base *ai.ModelInfo
-	if current, ok := findModelInfo(ctx, cfg, vaultRoot, result.Provider, result.ModelID); ok {
+	if current, ok := findModelInfoForRoute(ctx, cfg, vaultRoot, probed); ok {
 		base = &current
 	} else {
 		base = findBuiltinModel(result.Provider, result.ModelID)
@@ -957,17 +1093,28 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 // and the merged row a save is built from can lose these fields — observed
 // live 2026-08-20 when `models test --save` stripped a hand-added mantle
 // entry's invoke_strategy, leaving a row that had just PASSED its probe
-// classified statically incompatible. Region for CLASSIC entries is
-// deliberately NOT preserved: persistProbedRegion owns it (a primary-region
-// pass must clear a stale pin, and preservation would resurrect it).
+// classified statically incompatible. Region and Plane are preserved like the
+// rest now: they are the row's IDENTITY rather than a mutable pin, and
+// persistProbedRegion overwrites them from the probe result anyway, which is
+// the authoritative statement of which endpoint was actually called.
 func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
-	existing, ok := ai.UserCatalogEntry(scope, vaultRoot, entry.Provider, entry.ID)
+	// Resolve by route where the entry knows it, else by a UNIQUE row for the
+	// model. A probe result turned into a save often carries no plane yet, so
+	// an exact-route lookup would find nothing and the routing this function
+	// exists to rescue would be lost. Where several routes are stored the
+	// resolver deliberately returns nothing rather than grafting one
+	// endpoint's routing onto another.
+	existing, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, entry.Route())
 	if !ok {
-		slog.Debug("preserve routing fields: no existing scope entry, nothing to carry",
+		slog.Debug("preserve routing fields: no unique existing scope entry, nothing to carry",
 			"provider", entry.Provider, "model", entry.ID, "scope", scope)
 		return
 	}
 	var carried []string
+	if entry.Plane == "" && existing.Plane != "" {
+		entry.Plane = existing.Plane
+		carried = append(carried, "plane")
+	}
 	if entry.InvokeStrategy == "" && existing.InvokeStrategy != "" {
 		entry.InvokeStrategy = existing.InvokeStrategy
 		carried = append(carried, "invoke_strategy")
@@ -1007,42 +1154,104 @@ func adoptCandidateRouting(entry *ai.ModelInfo, candidate ai.ModelInfo) {
 	ai.AdoptRoutingHints(entry, candidate)
 }
 
-// persistProbedRegion records where a classic-Bedrock model actually passed so
-// future generation/embedding invokes route there (EffectiveBedrockRegion
-// honors the pin). A pass in the PRIMARY region clears any stale pin — every
-// verify re-checks primary first, so a model that regains primary access
-// self-heals back to the default route. Failures leave the pin untouched, and
-// mantle models are excluded (their builtin endpoint pins must never be
-// clobbered by a probe that never used them).
+// persistProbedRegion stamps the row with the region the probe actually used,
+// so the verdict is recorded against the endpoint that produced it.
+//
+// It no longer clears the region on a primary-region pass. That clearing was
+// the old self-heal: region was a mutable pin, so blanking it returned the
+// model to the default route. Under route identity it does the opposite of
+// what it says. Region is part of the key, so a save with the region cleared
+// writes a SECOND row rather than replacing the pinned one, and the stale
+// pinned row then WINS, because dropSupersededUnpinned retires the unpinned
+// one as a template. A user regaining primary-region access would have been
+// permanently stuck on the fallback region with no command to clear it.
+//
+// The self-heal still happens, one level up: every verify re-probes the
+// primary region first (regionAttempts), and a pass there now records a
+// verdict on the primary route's own row, which PreferRoutes ranks above its
+// siblings. Recording the truth about each endpoint replaces mutating one
+// shared field.
+//
+// Mantle rows keep their endpoint region, which the probe reports unchanged.
+//
+// The PLANE is stamped alongside the region, because the two together are the
+// route key the verdict is saved under. Stamping only the region would leave a
+// row whose key differs from the endpoint that was actually probed.
 func persistProbedRegion(entry *ai.ModelInfo, result *ai.TestProbeResult, primaryRegion string) {
-	if !result.OK || result.Provider != "bedrock" || result.Region == "" {
+	if result.Provider != "bedrock" {
 		return
 	}
-	if result.Strategy == ai.StrategyBedrockMantleResponses {
-		return
+	// AUTHORITATIVE, not fill-only-empty. The probe result is by definition
+	// the truth about which endpoint was called, so it must overwrite whatever
+	// route the base row carried.
+	//
+	// Fill-only-empty was wrong here in a way that destroyed state. The base
+	// row comes from a lookup that falls back to (provider, id) first-match
+	// when the exact route is absent, and on a FAILED probe
+	// catalogEntryFromTestResult copies that row wholesale (`entry = *base`),
+	// route fields included. A non-empty stale Region then blocked its own
+	// correction, so a failed probe of us-east-1 was saved onto the
+	// us-east-2 row: the good endpoint's pass was overwritten with a failure
+	// it never had, no row was created for the endpoint that actually failed,
+	// and since access_denied is region-retryable, routeDemoted then sorted
+	// the previously-working route last.
+	if result.Region != "" {
+		entry.Region = result.Region
 	}
-	if result.Region == primaryRegion {
-		entry.Region = ""
-		return
+	if result.Plane != "" {
+		entry.Plane = result.Plane
 	}
-	entry.Region = result.Region
+	// The envelope too. preserveRoutingFields can graft a SIBLING's
+	// invoke_strategy onto the row (it is fill-only-empty, and the sibling is
+	// the only match when the exact route is absent), which left classic rows
+	// carrying bedrock_mantle_responses. Harmless for dispatch today, since
+	// NewBedrockGenerationForRoute switches on plane and ignores Strategy, but
+	// it is a lie in the catalog that never self-heals.
+	if result.Strategy != "" {
+		entry.InvokeStrategy = result.Strategy
+	} else if result.Plane == ai.PlaneClassic && entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
+		entry.InvokeStrategy = ""
+	}
 }
 
 func findModelInfo(ctx context.Context, cfg ai.AIConfig, vaultRoot, provider, id string) (ai.ModelInfo, bool) {
+	return findModelInfoForRoute(ctx, cfg, vaultRoot, ai.RouteKey{Provider: provider, ID: id})
+}
+
+// findModelInfoForRoute returns the catalog row for a specific ROUTE, falling
+// back to any row of that model when the route names no plane or region.
+//
+// The exact-route pass has to come first and has to be exact. Matching on
+// (provider, id) and taking the first hit is arbitrary among a model's routes
+// (sortModels uses a non-stable sort keyed on provider/type/id), so a caller
+// saving a probe verdict could pick up a sibling endpoint's row and write the
+// result under a route that was never probed.
+func findModelInfoForRoute(ctx context.Context, cfg ai.AIConfig, vaultRoot string, route ai.RouteKey) (ai.ModelInfo, bool) {
 	list, err := ai.BuildModelList(ctx, ai.MergedListOptions{
 		Config:    cfg,
 		VaultRoot: vaultRoot,
 	})
+	var pools [][]ai.ModelInfo
 	if err == nil {
-		for _, m := range list.Verified {
-			if m.Provider == provider && m.ID == id {
-				return m, true
+		pools = append(pools, list.Verified, list.Unverified)
+	}
+	pools = append(pools, ai.LoadUserCatalog(vaultRoot))
+
+	if route.Plane != "" || route.Region != "" {
+		want := route
+		for _, pool := range pools {
+			for _, m := range pool {
+				if m.Route() == want {
+					return m, true
+				}
 			}
 		}
 	}
-	for _, m := range ai.LoadUserCatalog(vaultRoot) {
-		if m.Provider == provider && m.ID == id {
-			return m, true
+	for _, pool := range pools {
+		for _, m := range pool {
+			if m.Provider == route.Provider && m.ID == route.ID {
+				return m, true
+			}
 		}
 	}
 	return ai.ModelInfo{}, false

@@ -115,16 +115,16 @@ func TestEffectiveBedrockRegionPrecedence(t *testing.T) {
 	setupBedrockHome(t)
 
 	// Override wins over everything, including a builtin catalog pin.
-	if r := EffectiveBedrockRegion(BedrockConfig{Region: "us-east-1", RegionOverride: "eu-west-1"}, "openai.gpt-5.5", ""); r != "eu-west-1" {
+	if r := effectiveBedrockRegion(BedrockConfig{Region: "us-east-1", RegionOverride: "eu-west-1"}, "openai.gpt-5.5", ""); r != "eu-west-1" {
 		t.Fatalf("override should win: %q", r)
 	}
 	// Catalog pin wins over the configured region (openai.gpt-5.5 is builtin
 	// region-pinned to us-east-2).
-	if r := EffectiveBedrockRegion(BedrockConfig{Region: "us-east-1"}, "openai.gpt-5.5", ""); r != "us-east-2" {
+	if r := effectiveBedrockRegion(BedrockConfig{Region: "us-east-1"}, "openai.gpt-5.5", ""); r != "us-east-2" {
 		t.Fatalf("catalog pin should win: %q", r)
 	}
 	// No pin, no override: the configured region.
-	if r := EffectiveBedrockRegion(BedrockConfig{Region: "ap-southeast-2"}, "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); r != "ap-southeast-2" {
+	if r := effectiveBedrockRegion(BedrockConfig{Region: "ap-southeast-2"}, "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); r != "ap-southeast-2" {
 		t.Fatalf("configured region should apply: %q", r)
 	}
 }
@@ -362,25 +362,25 @@ func TestCrossPlanePinsNeverBleed(t *testing.T) {
 	}
 
 	// Exact id: mantle strategy, region, and endpoint apply.
-	if s := ResolveInvokeStrategy("bedrock", "xai.grok-4.6", root); s != StrategyBedrockMantleResponses {
+	if s := resolveInvokeStrategy("bedrock", "xai.grok-4.6", root); s != StrategyBedrockMantleResponses {
 		t.Errorf("exact mantle strategy lost: %q", s)
 	}
-	if r := ResolveModelRegion("bedrock", "xai.grok-4.6", root); r != "us-west-2" {
+	if r := resolveModelRegion("bedrock", "xai.grok-4.6", root); r != "us-west-2" {
 		t.Errorf("exact mantle region lost: %q", r)
 	}
-	if ep := ResolveModelEndpoint("bedrock", "xai.grok-4.6", root); ep != "https://bedrock-mantle.us-west-2.api.aws" {
+	if ep := resolveModelEndpoint("bedrock", "xai.grok-4.6", root); ep != "https://bedrock-mantle.us-west-2.api.aws" {
 		t.Errorf("exact mantle endpoint lost: %q", ep)
 	}
 
 	// Profile forms: NOTHING bleeds across the plane boundary.
 	for _, id := range []string{"us.xai.grok-4.6", "global.xai.grok-4.6"} {
-		if s := ResolveInvokeStrategy("bedrock", id, root); s == StrategyBedrockMantleResponses {
+		if s := resolveInvokeStrategy("bedrock", id, root); s == StrategyBedrockMantleResponses {
 			t.Errorf("%s inherited the mantle strategy via base match", id)
 		}
-		if r := ResolveModelRegion("bedrock", id, root); r != "" {
+		if r := resolveModelRegion("bedrock", id, root); r != "" {
 			t.Errorf("%s inherited region %q via base match", id, r)
 		}
-		if ep := ResolveModelEndpoint("bedrock", id, root); ep != "" {
+		if ep := resolveModelEndpoint("bedrock", id, root); ep != "" {
 			t.Errorf("%s inherited endpoint %q via base match", id, ep)
 		}
 	}

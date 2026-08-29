@@ -149,7 +149,7 @@ func BedrockPreflightModel(ctx context.Context, cfg BedrockConfig, modelID, mode
 	// static allowlist doesn't know them and GetFoundationModel would 404,
 	// so both checks are skipped. The real invoke probe is the only check
 	// that means anything for these models.
-	if ResolveInvokeStrategy("bedrock", modelID, vaultRoot) == StrategyBedrockMantleResponses {
+	if resolveInvokeStrategy("bedrock", modelID, vaultRoot) == StrategyBedrockMantleResponses {
 		slog.Debug("bedrock preflight: mantle strategy, skipping control-plane checks", "model", modelID)
 		return nil
 	}

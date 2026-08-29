@@ -75,3 +75,43 @@ func TestProbeBudgetConstantsPinned(t *testing.T) {
 		t.Errorf("probeGenMaxTokens = %d below mantleMinOutputTokens = %d; the classic probe budget must cover the same reasoning overhead the mantle floor exists for", probeGenMaxTokens, mantleMinOutputTokens)
 	}
 }
+
+func TestAssignResolvedEmbedStrategyOverridesCatalogLookup(t *testing.T) {
+	// A discovered-only id has no catalog row, so the constructor would
+	// store an empty strategy and fall through to detectEmbedFormat. The
+	// probe already resolved the candidate's InvokeStrategy; that value
+	// must win.
+	e := &BedrockEmbedder{model: "vendor.custom-embed-v9"}
+	assignResolvedEmbedStrategy(e, StrategyBedrockInvokeCohereEmbed)
+	if e.strategy != StrategyBedrockInvokeCohereEmbed {
+		t.Fatalf("strategy = %q, want the resolved Cohere embed strategy", e.strategy)
+	}
+	got := e.resolvedEmbedFormat()
+	want, ok := bedrockEmbedFormatFromStrategy(StrategyBedrockInvokeCohereEmbed)
+	if !ok {
+		t.Fatal("Cohere embed strategy should map to a format")
+	}
+	if got != want {
+		t.Errorf("resolvedEmbedFormat = %v, want %v (the resolved strategy's format, not id detection)", got, want)
+	}
+}
+
+func TestClassicRegionFanOutIgnoresSiblingMantleRow(t *testing.T) {
+	setupHome(t)
+	id := "xai.grok-4.6"
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "generation",
+		Plane: PlaneMantle, InvokeStrategy: StrategyBedrockMantleResponses,
+		Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	classic := ModelInfo{ID: id, Provider: "bedrock", Type: "generation", Plane: PlaneClassic}
+	if !usesClassicRegionFanOut(classic, "") {
+		t.Fatal("@classic candidate skipped classic region fan-out because a sibling mantle row won the plane-blind lookup")
+	}
+	mantle := ModelInfo{ID: id, Provider: "bedrock", Type: "generation", Plane: PlaneMantle}
+	if usesClassicRegionFanOut(mantle, "") {
+		t.Fatal("named mantle plane must not fan out across classic regions")
+	}
+}

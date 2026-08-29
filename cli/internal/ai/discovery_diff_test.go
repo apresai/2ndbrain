@@ -297,7 +297,7 @@ func TestDiscoveryCacheAges_TokenRevealsUncachedMantleRegions(t *testing.T) {
 			}
 		}
 	}
-	for _, r := range bedrockMantleRegions {
+	for _, r := range bedrockDiscoveryRegions {
 		if !mantleRegions[r] {
 			t.Fatalf("with a bearer token every documented mantle region must be reported; missing %s in %+v", r, ages)
 		}

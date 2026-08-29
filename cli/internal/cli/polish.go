@@ -287,7 +287,7 @@ func preparePolishLinks(ctx context.Context, v *vault.Vault, parsed *document.Do
 	var docIDs []string
 	var embeddings [][]float32
 	warnMsg := ""
-	if ready, msg := retrieve.VectorCompat(ctx, v, embedder); ready {
+	if ready, msg := retrieve.VectorCompat(ctx, v, embedder, embErr); ready {
 		docIDs, embeddings, _ = v.DB.AllEmbeddings()
 	} else {
 		warnMsg = msg // empty for a zero-embedding vault; substring matching still runs

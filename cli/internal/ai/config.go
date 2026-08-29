@@ -11,7 +11,20 @@ type AIConfig struct {
 	Provider        string `yaml:"provider" json:"provider"` // ollama, bedrock, openrouter
 	EmbeddingModel  string `yaml:"embedding_model" json:"embedding_model"`
 	GenerationModel string `yaml:"generation_model" json:"generation_model"`
-	Dimensions      int    `yaml:"dimensions" json:"dimensions"`
+	// {Embedding,Generation}Plane and {Embedding,Generation}Region name the
+	// ROUTE each slot invokes, explicitly. Nothing is inferred at invoke
+	// time: a bare model id that resolves to more than one route is refused
+	// at `config set`, not guessed at call time. Bedrock only; empty on
+	// every other provider, and empty on a config written before routes
+	// existed. An empty pair is resolved by ResolveSlotRoute at construction
+	// (one route resolves, several refuse); AIConfig.Validate does NOT check
+	// these fields, and the write-time checks live in parsePlaneValue and
+	// validateRegionValue.
+	EmbeddingPlane   Plane  `yaml:"embedding_plane,omitempty" json:"embedding_plane,omitempty"`
+	EmbeddingRegion  string `yaml:"embedding_region,omitempty" json:"embedding_region,omitempty"`
+	GenerationPlane  Plane  `yaml:"generation_plane,omitempty" json:"generation_plane,omitempty"`
+	GenerationRegion string `yaml:"generation_region,omitempty" json:"generation_region,omitempty"`
+	Dimensions       int    `yaml:"dimensions" json:"dimensions"`
 	// SimilarityThreshold is the minimum cosine similarity for a vector
 	// search hit to be included in results. Below this, results are
 	// treated as noise and dropped from the RRF merge so they don't pad
@@ -56,9 +69,58 @@ type RerankConfig struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	// Model is the rerank model id; empty resolves to DefaultRerankModel.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// Plane and Region name the rerank slot's route, like the generation and
+	// embedding slots. Rerank is classic-only (the mantle plane is
+	// generation-only in 2nb), so Plane is validated against that.
+	Plane  Plane  `yaml:"plane,omitempty" json:"plane,omitempty"`
+	Region string `yaml:"region,omitempty" json:"region,omitempty"`
 	// CandidateDocs is the over-fetch pool size; <=0 resolves to
 	// DefaultRerankCandidateDocs.
 	CandidateDocs int `yaml:"candidate_docs,omitempty" json:"candidate_docs,omitempty"`
+}
+
+// SetGenerationModel, SetEmbeddingModel, and SetRerankModel change a slot's
+// model AND clear its route.
+//
+// Use these instead of assigning the model field directly. A slot's plane and
+// region describe the endpoint the PREVIOUS model was served from; carrying
+// them onto a new model pins it to an endpoint that may not serve it at all,
+// which is the misroute route identity exists to remove. Clearing means the
+// next resolve either finds the new model's single route or refuses with the
+// pick commands — both correct, neither silent.
+//
+// The route is re-established by `config set ai.<slot>_model <route>`, the
+// wizard, or the app picker, all of which write all three fields together.
+func (c *AIConfig) SetGenerationModel(id string) {
+	c.GenerationModel = id
+	c.GenerationPlane, c.GenerationRegion = "", ""
+}
+
+func (c *AIConfig) SetEmbeddingModel(id string) {
+	c.EmbeddingModel = id
+	c.EmbeddingPlane, c.EmbeddingRegion = "", ""
+}
+
+func (c *AIConfig) SetRerankModel(id string) {
+	c.Rerank.Model = id
+	c.Rerank.Plane, c.Rerank.Region = "", ""
+}
+
+// GenerationRoute, EmbeddingRoute, and RerankRoute return the route each slot
+// invokes. The plane and region come from config verbatim: they are what the
+// user picked, and nothing here infers a missing one. A slot whose plane or
+// region is empty is a config written before routes existed; the invoke path
+// reports that rather than guessing (which is exactly the bug routes fix).
+func (c AIConfig) GenerationRoute() RouteKey {
+	return RouteKey{Provider: c.Provider, ID: c.GenerationModel, Plane: c.GenerationPlane, Region: c.GenerationRegion}
+}
+
+func (c AIConfig) EmbeddingRoute() RouteKey {
+	return RouteKey{Provider: c.Provider, ID: c.EmbeddingModel, Plane: c.EmbeddingPlane, Region: c.EmbeddingRegion}
+}
+
+func (c AIConfig) RerankRoute() RouteKey {
+	return RouteKey{Provider: c.Provider, ID: c.ResolveRerankModel(), Plane: c.Rerank.Plane, Region: c.Rerank.Region}
 }
 
 // RerankEnabled reports whether the rerank stage is on.

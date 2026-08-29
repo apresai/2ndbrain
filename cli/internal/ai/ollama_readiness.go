@@ -52,16 +52,16 @@ type UpgradeRec struct {
 
 // ReadinessReport is the full local AI readiness output.
 type ReadinessReport struct {
-	Ollama      OllamaStatus      `json:"ollama"`
-	Disk        DiskInfo           `json:"disk"`
-	Memory      MemInfo            `json:"memory"`
-	EmbedModel  *LocalModelStatus  `json:"embedding_model"`
-	GenModel    *LocalModelStatus  `json:"generation_model"`
-	RAMVerdict  string             `json:"ram_verdict"`
-	Embeddings  *EmbeddingStatus   `json:"embeddings,omitempty"`
-	Upgrade     *UpgradeRec        `json:"upgrade_recommendation,omitempty"`
-	Overall     string             `json:"overall"`
-	Actions     []string           `json:"actions,omitempty"`
+	Ollama     OllamaStatus      `json:"ollama"`
+	Disk       DiskInfo          `json:"disk"`
+	Memory     MemInfo           `json:"memory"`
+	EmbedModel *LocalModelStatus `json:"embedding_model"`
+	GenModel   *LocalModelStatus `json:"generation_model"`
+	RAMVerdict string            `json:"ram_verdict"`
+	Embeddings *EmbeddingStatus  `json:"embeddings,omitempty"`
+	Upgrade    *UpgradeRec       `json:"upgrade_recommendation,omitempty"`
+	Overall    string            `json:"overall"`
+	Actions    []string          `json:"actions,omitempty"`
 }
 
 // Default recommended models.
@@ -74,28 +74,28 @@ const (
 
 // knownDownloadSizes maps model names to approximate download sizes in bytes.
 var knownDownloadSizes = map[string]int64{
-	"embeddinggemma":      278 * 1024 * 1024,
-	"nomic-embed-text":    261 * 1024 * 1024,
-	"all-minilm":          23 * 1024 * 1024,
-	"mxbai-embed-large":   638 * 1024 * 1024,
-	"qwen2.5:0.5b":        375 * 1024 * 1024,
-	"qwen2.5:1.5b":        935 * 1024 * 1024,
-	"gemma3:1b":            815 * 1024 * 1024,
-	"gemma3:4b":           3100 * 1024 * 1024,
-	"qwen3:30b-a3b":      18 * 1024 * 1024 * 1024,
+	"embeddinggemma":    278 * 1024 * 1024,
+	"nomic-embed-text":  261 * 1024 * 1024,
+	"all-minilm":        23 * 1024 * 1024,
+	"mxbai-embed-large": 638 * 1024 * 1024,
+	"qwen2.5:0.5b":      375 * 1024 * 1024,
+	"qwen2.5:1.5b":      935 * 1024 * 1024,
+	"gemma3:1b":         815 * 1024 * 1024,
+	"gemma3:4b":         3100 * 1024 * 1024,
+	"qwen3:30b-a3b":     18 * 1024 * 1024 * 1024,
 }
 
 // knownRAMEstimates maps model names to approximate RAM needed in bytes.
 var knownRAMEstimates = map[string]int64{
-	"embeddinggemma":      400 * 1024 * 1024,
-	"nomic-embed-text":    350 * 1024 * 1024,
-	"all-minilm":          100 * 1024 * 1024,
-	"mxbai-embed-large":   800 * 1024 * 1024,
-	"qwen2.5:0.5b":        500 * 1024 * 1024,
-	"qwen2.5:1.5b":       1200 * 1024 * 1024,
-	"gemma3:1b":           1000 * 1024 * 1024,
-	"gemma3:4b":          3200 * 1024 * 1024,
-	"qwen3:30b-a3b":      6 * 1024 * 1024 * 1024,
+	"embeddinggemma":    400 * 1024 * 1024,
+	"nomic-embed-text":  350 * 1024 * 1024,
+	"all-minilm":        100 * 1024 * 1024,
+	"mxbai-embed-large": 800 * 1024 * 1024,
+	"qwen2.5:0.5b":      500 * 1024 * 1024,
+	"qwen2.5:1.5b":      1200 * 1024 * 1024,
+	"gemma3:1b":         1000 * 1024 * 1024,
+	"gemma3:4b":         3200 * 1024 * 1024,
+	"qwen3:30b-a3b":     6 * 1024 * 1024 * 1024,
 }
 
 // CheckOllamaStatus checks if Ollama is installed and running.

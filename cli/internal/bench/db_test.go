@@ -1,9 +1,12 @@
 package bench
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func openTestDB(t *testing.T) *DB {
@@ -161,5 +164,125 @@ func TestLatestRunsPerModel(t *testing.T) {
 	}
 	if got[2].Probe != "search" {
 		t.Errorf("third: expected search probe, got %s", got[2].Probe)
+	}
+}
+
+func TestLatestRunsPerModelSeparatesRoutes(t *testing.T) {
+	db := openTestDB(t)
+	ts := "2026-04-09T10:00:00Z"
+	if err := db.InsertRun(&Run{
+		Timestamp: ts, Provider: "bedrock", ModelID: "grok", Probe: "generate",
+		LatencyMs: 100, OK: true, Plane: "classic", Region: "us-east-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertRun(&Run{
+		Timestamp: ts, Provider: "bedrock", ModelID: "grok", Probe: "generate",
+		LatencyMs: 200, OK: true, Plane: "mantle", Region: "us-west-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.LatestRunsPerModel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows (one per route), got %d", len(got))
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		seen[r.Plane+"/"+r.Region] = true
+	}
+	if !seen["classic/us-east-1"] || !seen["mantle/us-west-2"] {
+		t.Errorf("routes = %v, want both classic/us-east-1 and mantle/us-west-2", seen)
+	}
+}
+
+func TestMigrateCollapsesSchemaVersionStamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bench.db")
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Exec(`
+CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    probe TEXT NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    ok INTEGER NOT NULL DEFAULT 1,
+    detail TEXT NOT NULL DEFAULT '',
+    vault_doc_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE schema_version (version INTEGER NOT NULL);
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		if _, err := conn.Exec(`INSERT INTO schema_version (version) VALUES (1)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(
+		`INSERT INTO runs (timestamp, provider, model_id, probe, latency_ms, ok, detail, vault_doc_count)
+		 VALUES ('2026-04-09T10:00:00Z','bedrock','haiku','generate',500,1,'',10)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open migrated db: %v", err)
+	}
+	defer db.Close()
+	var n, ver int
+	if err := db.conn.QueryRow(`SELECT COUNT(*), MAX(version) FROM schema_version`).Scan(&n, &ver); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || ver != benchSchemaVersion {
+		t.Fatalf("schema_version: count=%d max=%d, want 1 row at version %d", n, ver, benchSchemaVersion)
+	}
+	has, err := db.hasColumn("runs", "plane")
+	if err != nil || !has {
+		t.Fatalf("plane column missing after migrate: has=%v err=%v", has, err)
+	}
+}
+
+func TestBackfillMissingRoutesInfersOnce(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.InsertRun(&Run{
+		Timestamp: "2026-04-09T10:00:00Z", Provider: "bedrock", ModelID: "haiku",
+		Probe: "generate", LatencyMs: 500, OK: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BackfillMissingRoutes(func(provider, modelID string) (string, string) {
+		return "classic", "us-east-1"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.ListRuns(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d runs", len(got))
+	}
+	if got[0].Plane != "classic" || got[0].Region != "us-east-1" {
+		t.Errorf("backfill = %s/%s, want classic/us-east-1", got[0].Plane, got[0].Region)
+	}
+	// A second pass with a different lookup must not rewrite a filled row.
+	if err := db.BackfillMissingRoutes(func(provider, modelID string) (string, string) {
+		return "mantle", "us-west-2"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = db.ListRuns(1)
+	if got[0].Plane != "classic" || got[0].Region != "us-east-1" {
+		t.Errorf("second backfill rewrote a filled row: %s/%s", got[0].Plane, got[0].Region)
 	}
 }

@@ -49,8 +49,8 @@ const (
 // `2nb doctor --json` (SuiteStatus) and `2nb update --json` (UpdateStatus), so
 // keep the field names stable.
 type ProductState struct {
-	Name            string `json:"name"`             // "cli" | "app" | "plugin"
-	Status          string `json:"status"`           // ok | outdated | missing | unknown | n/a
+	Name            string `json:"name"`   // "cli" | "app" | "plugin"
+	Status          string `json:"status"` // ok | outdated | missing | unknown | n/a
 	Installed       bool   `json:"installed"`
 	Version         string `json:"version,omitempty"`
 	UpdateAvailable bool   `json:"update_available"`

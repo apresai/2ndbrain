@@ -59,6 +59,7 @@ type Retriever struct {
 	v            *vault.Vault
 	engine       *search.Engine
 	embedder     ai.EmbeddingProvider
+	embedderErr  error             // registry lookup error; VectorCompat renders it when embedder is nil
 	reranker     ai.RerankProvider // nil unless ai.rerank.enabled and registered
 	loadCorpus   CorpusLoader
 	embedTimeout time.Duration
@@ -75,12 +76,13 @@ type Retriever struct {
 // corpus with WithCorpusLoader (MCP) and the per-embed timeout with
 // WithEmbedTimeout.
 func New(v *vault.Vault) *Retriever {
-	embedder, _ := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
+	embedder, embedderErr := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
 	r := &Retriever{
-		v:          v,
-		engine:     search.NewEngine(v.DB.Conn()),
-		embedder:   embedder,
-		loadCorpus: v.DB.AllEmbeddings,
+		v:           v,
+		engine:      search.NewEngine(v.DB.Conn()),
+		embedder:    embedder,
+		embedderErr: embedderErr,
+		loadCorpus:  v.DB.AllEmbeddings,
 	}
 	// The rerank stage is optional (default off): resolve it only when enabled,
 	// so a disabled config leaves the RRF order untouched and adds no cloud call.
@@ -122,7 +124,7 @@ func (r *Retriever) ensureReady(ctx context.Context) (warn string) {
 	}
 	r.inited = true
 
-	ready, msg := VectorCompat(ctx, r.v, r.embedder)
+	ready, msg := VectorCompat(ctx, r.v, r.embedder, r.embedderErr)
 	if !ready {
 		r.vecOK = false
 		if msg != "" {

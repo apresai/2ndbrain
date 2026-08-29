@@ -45,8 +45,8 @@ func TestConfiguredFromFile(t *testing.T) {
 			wantKey:    "2ndbrain",
 		},
 		{
-			name: "project scope under vault path",
-			config: `{"projects": {"/Users/test/dev/obsidian": {"mcpServers": {"2ndbrain": {"command": "2nb", "args": ["mcp-server"], "cwd": "/Users/test/dev/obsidian"}}}}}`,
+			name:       "project scope under vault path",
+			config:     `{"projects": {"/Users/test/dev/obsidian": {"mcpServers": {"2ndbrain": {"command": "2nb", "args": ["mcp-server"], "cwd": "/Users/test/dev/obsidian"}}}}}`,
 			wantConfig: true,
 			wantScope:  "project",
 			wantKey:    "2ndbrain",

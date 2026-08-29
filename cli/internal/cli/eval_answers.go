@@ -81,7 +81,12 @@ func estimateAnswersCostUSD(genM ai.ModelInfo, judges []ai.ModelInfo, n int) flo
 func judgeGenerator(ctx context.Context, cfg ai.AIConfig, modelID, vaultRoot string) (ai.GenerationProvider, error) {
 	switch provider := ai.InferProvider(modelID); provider {
 	case "bedrock":
-		return ai.NewBedrockGeneration(ctx, cfg.Bedrock, modelID, vaultRoot)
+		// Judge on the endpoint the model is actually served from. Building
+		// from cfg.Bedrock alone let catalog row order pick the region, so a
+		// jury could grade answers from a different endpoint than the one
+		// under evaluation.
+		route := ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot)
+		return ai.NewBedrockGenerationForRoute(ctx, ai.ApplyRouteRegion(cfg.Bedrock, route), route, vaultRoot)
 	case "openrouter":
 		key, err := ai.GetAPIKey("openrouter")
 		if err != nil {

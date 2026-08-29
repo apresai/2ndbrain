@@ -75,12 +75,16 @@ var (
 // vault is open (builtin entries still resolve). It errors when no bearer
 // token resolves, since the plane has no SigV4 fallback.
 func NewBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot string) (*BedrockMantleGenerator, error) {
+	return newBedrockMantleGenerator(cfg, model, vaultRoot, "")
+}
+
+func newBedrockMantleGenerator(cfg BedrockConfig, model, vaultRoot, endpoint string) (*BedrockMantleGenerator, error) {
 	cfg = ResolveBedrockConfig(cfg)
 	token := resolveMantleBearerToken()
 	if token == "" {
 		return nil, errors.New(errNoMantleTokenText)
 	}
-	baseURL, err := mantleBaseURL(cfg, model, vaultRoot)
+	baseURL, err := mantleBaseURL(cfg, model, vaultRoot, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -113,15 +117,38 @@ func resolveMantleBearerToken() string {
 // token to an attacker. The host must be https and end in ".api.aws"; a
 // region that is not a bare label (contains a slash, dot, or scheme) is
 // likewise rejected rather than interpolated into the host.
-func mantleBaseURL(cfg BedrockConfig, model, vaultRoot string) (string, error) {
-	if ep := ResolveModelEndpoint("bedrock", model, vaultRoot); ep != "" {
-		u := strings.TrimRight(ep, "/")
+func mantleBaseURL(cfg BedrockConfig, model, vaultRoot, endpoint string) (string, error) {
+	// A resolved route's endpoint is a decision. The catalog lookup is
+	// exact-id, plane-blind, and first-match-wins, so it must not run when
+	// the caller already named a region or an endpoint: a leftover template
+	// row for the same id would send the token to the wrong host.
+	if endpoint == "" && cfg.RegionOverride == "" {
+		endpoint = resolveModelEndpoint("bedrock", model, vaultRoot)
+	}
+	if endpoint != "" {
+		u := strings.TrimRight(endpoint, "/")
 		if err := validateMantleHost(u); err != nil {
-			return "", fmt.Errorf("model %s has an invalid mantle endpoint %q: %w", model, ep, err)
+			return "", fmt.Errorf("model %s has an invalid mantle endpoint %q: %w", model, endpoint, err)
 		}
 		return u, nil
 	}
-	region := ResolveModelRegion("bedrock", model, vaultRoot)
+	// An EXPLICIT region wins over the catalog.
+	//
+	// This order used to be reversed, and that made the mantle plane the one
+	// place a resolved route was still overridden at invoke time. InitBedrock
+	// sets RegionOverride from the route and ResolveBedrockConfig maps it onto
+	// cfg.Region, but consulting resolveModelRegion first meant ANY catalog
+	// row for that id supplied the region instead — and since discovery now
+	// emits one row per region, and that lookup is exact-id, plane-blind, and
+	// first-match-wins, "any row" was routinely the wrong one. A config pinned
+	// to @mantle/us-west-2 built a client against us-east-2.
+	//
+	// The catalog pin still applies when nothing explicit was resolved, which
+	// is what keeps a bare mantle builtin working.
+	region := cfg.RegionOverride
+	if region == "" {
+		region = resolveModelRegion("bedrock", model, vaultRoot)
+	}
 	if region == "" {
 		region = cfg.Region
 	}
@@ -153,6 +180,15 @@ func validateMantleHost(raw string) error {
 
 // isBareRegionLabel accepts only a plain AWS region token (letters, digits,
 // hyphens) so it cannot smuggle a host, path, or scheme into the derived URL.
+// IsBareRegionLabel reports whether region is a plain AWS region label.
+//
+// Exported so the config write path can enforce it too: the region is
+// interpolated into the mantle host and the bearer token is sent to whatever
+// that resolves to, so validating at write time keeps a bad value out of the
+// file a shared vault carries between machines, rather than catching it only
+// at invoke time.
+func IsBareRegionLabel(region string) bool { return isBareRegionLabel(region) }
+
 func isBareRegionLabel(region string) bool {
 	if region == "" {
 		return false

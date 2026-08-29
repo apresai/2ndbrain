@@ -52,6 +52,21 @@ func compareRowsGrouping() {
     #expect(rows[1].cells["embed"] == nil)
 }
 
+@Test("Two routes of one model are two rows")
+func compareRowsSeparateRoutes() {
+    let feed = runs(#"""
+    [
+     {"id":1,"timestamp":"t","provider":"bedrock","model_id":"xai.grok-4.6","probe":"generate","latency_ms":100,"ok":true,"plane":"classic","region":"us-east-1"},
+     {"id":2,"timestamp":"t","provider":"bedrock","model_id":"xai.grok-4.6","probe":"generate","latency_ms":200,"ok":true,"plane":"mantle","region":"us-west-2"}
+    ]
+    """#)
+    let rows = BenchCompareMatrix.rows(feed)
+    #expect(rows.count == 2)
+    #expect(rows[0].id != rows[1].id)
+    #expect(rows.map(\.label).contains("xai.grok-4.6@classic/us-east-1"))
+    #expect(rows.map(\.label).contains("xai.grok-4.6@mantle/us-west-2"))
+}
+
 @Test("Duplicate (model, probe) pairs keep the latest run")
 func compareRowsLatestWins() {
     let feed = runs(#"""

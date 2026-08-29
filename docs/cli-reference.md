@@ -414,7 +414,7 @@ Model pins and licenses live in `internal/llama/models.go`.
 The verified catalog. Flags: `--type`, `--free`, `--discover`, `--status`, `--provider`, `--promote`, `--scope`, `--enabled-only`, `--recommended`, `--working-set`, `--sort best`.
 
 - `--discover --promote` tests unverified models concurrently and adds the passing ones.
-- `--discover` enumerates BOTH Bedrock planes: the classic control plane (ListInferenceProfiles plus ListFoundationModels) and the mantle plane's own `/v1/models` listing per documented mantle region, merging unverified generation rows that carry `invoke_strategy` plus a listing-region pin. On an exact-id collision across planes, the classic row wins.
+- `--discover` enumerates BOTH Bedrock planes: the classic control plane (ListInferenceProfiles plus ListFoundationModels) and the mantle plane's own `/v1/models` listing per documented mantle region, merging unverified generation rows that carry `invoke_strategy` plus a listing-region pin. An exact-id collision across planes is no longer collapsed: both rows survive as distinct routes, and `PreferRoutes` merely ranks classic ahead of mantle when choosing which to probe.
 - `--enabled-only` drops user-disabled models (selection dropdowns pass this; CLI use does not).
 - `--recommended` shows only the curated short list (`ModelInfo.Recommended`, add-only through the user-catalog merge).
 - `--working-set` shows only the working set: the models this account has PROVEN it can invoke, from the `working` field on every `--json` row (`ModelInfo.Working`, derived at list time like `vendor`/`compatible`, never persisted to `models.yaml`; always serialized both true and false, matching `compatible`). A model is working when it carries a passing probe (`tested_at` set, `test_error` empty) and is neither explicitly disabled nor statically incompatible. A builtin `tier: verified` entry alone is deliberately NOT enough, since verified means 2nb has a harness for the model, not that AWS has entitled this account (the staged frontier rollout lists models that still 403). Untested active embedding and generation models are members, so a picker is never empty on a freshly bound vault; a FAILED probe on the active slot is `working:false` (the GUI keeps it selectable as current, separately from working).
@@ -425,15 +425,17 @@ Builtin Bedrock Anthropic line: Haiku 4.5 (the tested default) plus Sonnet 4.6, 
 
 ### models test
 
-Smoke-tests a model by id. `--save` writes to the user catalog regardless of pass or fail: success sets `tier=user_verified`; failure records `test_error` plus a classified `test_error_code`. Failures are classified via `ai.ClassifyProbeError` into a stable code vocabulary (`access_denied`, `bad_credentials`, `throttled`, `not_found`, `provider_unreachable`, `invalid_request`, `incompatible`, `timeout`, `unknown`) with a remediation hint (`--json`: `code`/`remediation`; human output: `cause:`/`fix:` lines).
+Smoke-tests a model by id. The argument accepts the route form `id@plane/region` and probes exactly that endpoint, so a mantle-discovered model can be tested without a prior catalog save. `--save` writes to the user catalog regardless of pass or fail: success sets `tier=user_verified`; failure records `test_error` plus a classified `test_error_code`. Failures are classified via `ai.ClassifyProbeError` into a stable code vocabulary (`access_denied`, `bad_credentials`, `throttled`, `not_found`, `provider_unreachable`, `invalid_request`, `incompatible`, `timeout`, `unknown`) with a remediation hint (`--json`: `code`/`remediation`; human output: `cause:`/`fix:` lines).
 
 The `access_denied` code is how the AWS staged frontier-rollout gate surfaces: a runtime 403 on the classic bedrock-runtime plane, or a runtime 401 disambiguated by the response body's `error.code` on the mantle plane, on a model the console lists as available. Only a real invoke probe detects it; availability APIs report AUTHORIZED regardless.
 
-The command is region-aware like `verify`: it rides the same included-region fallback, and a model carrying a catalog Region pin always re-checks the primary region first (a primary pass clears the pin, a self-heal). Default `--scope vault`. The probe's output budget is 1024 tokens (`probeGenMaxTokens`), so cost estimates scale from that, not from a real answer's typical length. The probe deadline is strategy-aware (`ai.ProbeDeadline`, `cli/internal/ai/timeouts.go`): it contains the resolved route's full transport worst case (attempts x per-attempt timeout, plus backoff) plus slack, so a slow cold-starting reasoning model is never failed, only a hang. The old flat 30s cap sat inside the mantle client's own retry budget and timed out working models; `TestTimeoutBudgetsNested` pins the nesting.
+The command is region-aware like `verify`: it rides the same included-region fallback, and a route-less candidate re-checks the primary region first, while a candidate that NAMES its region is probed there and nowhere else (fan-out existed to discover which region serves a model; a route already answers that). Default `--scope vault`. The probe's output budget is 1024 tokens (`probeGenMaxTokens`), so cost estimates scale from that, not from a real answer's typical length. The probe deadline is strategy-aware (`ai.ProbeDeadline`, `cli/internal/ai/timeouts.go`): it contains the resolved route's full transport worst case (attempts x per-attempt timeout, plus backoff) plus slack, so a slow cold-starting reasoning model is never failed, only a hang. The old flat 30s cap sat inside the mantle client's own retry budget and timed out working models; `TestTimeoutBudgetsNested` pins the nesting.
 
 ### models verify [ids...]
 
 Batch access probe: runs a real test probe per candidate and persists EVERY result, pass and fail, with `test_error_code`, so `models list`'s STATE column and `ai status`'s Model access summary reflect what THIS account can invoke.
+
+**One route per model.** Candidates are catalog ROWS, and a row is a route, so a model served on both planes or in three regions would otherwise cost three BILLED probes where one was wanted (enough to trip the default `--cost-cap`). Verify collapses each model to its best route via `PreferRoutes` (configured route, then last known good, then primary region). `--all-routes` probes the whole matrix instead, for when the best route fails and you need to know which endpoints your account can actually reach. Probing the best route is safe in a way that choosing an INVOKE route is not: a wrong guess costs one probe and reports it.
 
 **Candidates.** The default set is recommended ∪ active models on providers whose credentials resolve. `--provider`/`--vendor`/`--recommended` narrow it, `--all` probes the whole catalog, and explicit IDs win. `--enabled-only` restricts candidates to effectively-enabled models (post vendor policy, the same filter as `models list --enabled-only`; explicit IDs still win), so "validate what I just enabled" is exact. Rerank and statically incompatible entries are skipped.
 
@@ -447,29 +449,29 @@ Batch access probe: runs a real test probe per candidate and persists EVERY resu
 
 This is the per-account complement to the catalog: on a staged-rollout-gated account the Anthropic line reports `access_denied` for Sonnet 5 and Opus 4.8; on a provisioned account they pass.
 
-**Multi-region.** With additional included regions configured (`config bedrock --set --regions`), a classic-Bedrock probe that fails with a region-shaped code (`not_found`, `invalid_request`, `access_denied`; Bedrock entitlement is per-region) retries sequentially in the next included region, stopping at the first pass. It is never a full model x region matrix, and refused probes bill nothing, so the cost gate is unchanged. Each result carries the probed `region` (additive JSON; also on the `--events` `start` header as `regions`). A pass in a non-primary region persists that region onto the user-catalog entry so future invokes route there (`ai.EffectiveBedrockRegion`; generation and embedding honor catalog Region pins the way mantle and rerank always did), while a pass in the primary region clears any stale pin (self-heal). Mantle models never fan out (each is endpoint-pinned per model).
+**Multi-region.** With additional included regions configured (`config bedrock --set --regions`), a classic-Bedrock probe that fails with a region-shaped code (`not_found`, `invalid_request`, `access_denied`; Bedrock entitlement is per-region) retries sequentially in the next included region, stopping at the first pass. It is never a full model x region matrix, and refused probes bill nothing, so the cost gate is unchanged. Each result carries the probed `region` (additive JSON; also on the `--events` `start` header as `regions`). Every verdict is persisted onto the row for the ROUTE that was probed, so each endpoint carries its own record rather than competing to redefine one shared pin. The self-heal that used to work by CLEARING a pin on a primary-region pass is gone: under route identity clearing the region writes a second row rather than replacing one. Regaining primary access now shows up as a fresh pass on the primary route's own row, which `PreferRoutes` ranks above its siblings. Mantle models never fan out (each is endpoint-pinned per model).
 
 **Wall clock.** `--max-duration` (default 30m; `0` disables) is the whole-run wall clock, the runaway-cost bound: individual probes keep their strategy-aware transport-derived deadlines (a slow model is never failed, only a hang); the flag only stops a runaway batch.
 
 ### models add
 
-Adds or updates a model by id. The default scope is the per-vault `.2ndbrain/models.yaml`; `--scope global` writes `~/.config/2nb/models.yaml`. Updates merge: `Enabled`, `TestedAt`, `TestLatencyMs`, and `Benchmark` are preserved unless explicitly re-set. `--similarity-threshold` is embedding-only; `--price-request` is for per-request priced models.
+Adds or updates a model by id. The argument is a bare model id; a route-qualified form (`id@plane/region`) is refused, because add describes a model, not one endpoint. The default scope is the per-vault `.2ndbrain/models.yaml`; `--scope global` writes `~/.config/2nb/models.yaml`. Updates merge: `Enabled`, `TestedAt`, `TestLatencyMs`, and `Benchmark` are preserved unless explicitly re-set. `--similarity-threshold` is embedding-only; `--price-request` is for per-request priced models.
 
 ### models remove
 
-Removes a model from the user catalog (`--provider`, `--scope`).
+Removes catalog rows (`--provider`, `--scope`). A bare id removes every route of that model. A route-qualified id (`id@plane/region`) removes only that route. Exits non-zero when nothing matched.
 
 ### models enable
 
-Marks a model enabled. With `--vendor <name>` (for example `anthropic`/`amazon`/`google`) it toggles every model from that vendor, which is the GUI's bulk toggle. `--vendor` and an explicit `<id>` are mutually exclusive.
+Marks a model enabled. Enable is intent about the MODEL: a route-qualified id is accepted and applied to every route of that model. With `--vendor <name>` (for example `anthropic`/`amazon`/`google`) it toggles every model from that vendor, which is the GUI's bulk toggle. `--vendor` and an explicit `<id>` are mutually exclusive.
 
 ### models disable
 
-Hides a model from selection dropdowns (it is still listed by `models list`). Same `--vendor` bulk mode as `models enable`.
+Hides a model from selection dropdowns (it is still listed by `models list`). Same `--vendor` bulk mode as `models enable`. A route-qualified id is accepted and applied to every route of that model.
 
 ### models enable-state
 
-Tri-state pointer for one model: `--state default|enabled|disabled`. `default` clears the override so tier defaults apply. Used by the GUI Enable State menu.
+Tri-state pointer for one model: `--state default|enabled|disabled`. `default` clears the override so tier defaults apply. Used by the GUI Enable State menu. A route-qualified id is accepted and applied to every route of that model.
 
 ### models policy set / show / clear
 
@@ -489,7 +491,9 @@ Estimates USD cost across one or more models. `--probe test|bench_embed|bench_ge
 
 ### models discover
 
-Discovery as a verb: reports the vendor-discovered pool (both Bedrock planes plus the other providers' listings) with per-source cache ages and a NEW/GONE diff. Ages read the discovery cache files' mtime against the 24h TTL ("classic us-east-1: 3h ago", "mantle us-west-2: stale (26h)"); a mantle region with no token and no cached file is omitted, not reported as "missing". The default is the cached read-through; `--refresh` deletes the cache files first (`ai.InvalidateDiscoveryCache`), so the same read-through IS a live walk that re-warms them.
+Discovery as a verb: reports the vendor-discovered pool (both Bedrock planes plus the other providers' listings) with per-source cache ages and a NEW/GONE diff.
+
+**Rows are ROUTES, one per `(plane, region)`.** Both planes are walked across `us-east-1`, `us-east-2`, and `us-west-2`, so a model served in three regions is three rows and the ROUTE column names each one (`classic us-east-1`). Bedrock entitlement is per-region, so those endpoints succeed and fail independently; collapsing them by id (as this did before) silently discarded real routes. A failure in a region the user has not configured via `config bedrock --regions` is logged rather than warned, because the GONE shield keys off discovery warnings and a permanent warning would permanently disable GONE detection. The NEW/GONE diff stays keyed by MODEL, so a newly-listed model is announced once, not once per route. Ages read the discovery cache files' mtime against the 24h TTL ("classic us-east-1: 3h ago", "mantle us-west-2: stale (26h)"); a mantle region with no token and no cached file is omitted, not reported as "missing". The default is the cached read-through; `--refresh` deletes the cache files first (`ai.InvalidateDiscoveryCache`), so the same read-through IS a live walk that re-warms them.
 
 The diff baseline is a dedicated machine-local `discovery-seen-bedrock-<profile>.json` in the XDG discovery cache dir: deliberately NOT the vault (a synced sidecar would mis-badge models on another machine, the same rationale as the GUI's UserDefaults snapshot) and not the cache files (`--refresh` deletes those). The first run seeds silently: the pool is reported, nothing is badged NEW, and the baseline saves. The baseline updates only after a successful listing; a failed source's keys are carried forward (unknown, not gone), and a model adopted into the catalog is never badged GONE (it graduated, it did not vanish).
 
@@ -516,6 +520,15 @@ Samples the baseline cosine distribution and recommends a similarity threshold. 
 ### config show / get / set / set-key / bedrock / doctor
 
 Reads and writes config.
+
+**Model slots name a ROUTE.** Each of the three slots carries a plane and a region alongside its model: `ai.{generation,embedding}_{plane,region}` and `ai.rerank.{plane,region}`. `config set ai.<slot>_model` accepts either a bare id or a full route (`xai.grok-4.6@mantle/us-west-2`) and writes all three keys as one unit, so a slot is never left half-routed.
+
+- A bare id whose model has exactly one route resolves, and the file still ends up explicit.
+- A bare id with SEVERAL routes is **refused** with `ExitValidation`, printing each qualified form to paste; nothing is written. Silently picking one endpoint is how a mantle-only model ended up dispatched over classic Converse.
+- An unknown model is still settable: a model can exist before 2nb's catalog knows it.
+- Plane is validated against the closed set `{classic, mantle}`, and rejected outright for the embedding and rerank slots, where the mantle plane has no client. Region must be a bare label; that check is a security control, since the region is interpolated into the mantle host the bearer token is sent to.
+
+At invoke time nothing is inferred: a slot whose model has several routes and names none of them is refused with the `config set` commands to run, rather than falling through to classic Converse. See [ai-providers.md](ai-providers.md#model-routes-provider-id-plane-region).
 
 `config bedrock` shows and sets the machine-local `~/.config/2nb/bedrock.json` (no vault needed):
 

@@ -342,8 +342,12 @@ func TestRemoveUserCatalogEntry(t *testing.T) {
 	_ = SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{ID: "keep", Provider: "bedrock"})
 	_ = SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{ID: "drop", Provider: "bedrock"})
 
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", "bedrock", "drop"); err != nil {
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "drop"})
+	if err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("removed %d, want 1", n)
 	}
 	models := LoadUserCatalog("")
 	if len(models) != 1 || models[0].ID != "keep" {
@@ -353,8 +357,12 @@ func TestRemoveUserCatalogEntry(t *testing.T) {
 
 func TestRemoveUserCatalogEntry_MissingFileIsNoOp(t *testing.T) {
 	setupHome(t)
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", "bedrock", "nope"); err != nil {
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "nope"})
+	if err != nil {
 		t.Fatalf("expected no error for missing file, got: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("removed %d from a missing file, want 0", n)
 	}
 }
 
@@ -368,8 +376,12 @@ func TestRemoveUserCatalogEntry_AbsentEntryPreservesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read before: %v", err)
 	}
-	if err := RemoveUserCatalogEntry(ScopeGlobal, "", "bedrock", "never-existed"); err != nil {
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: "never-existed"})
+	if err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("removed %d for an absent id, want 0", n)
 	}
 	after, err := os.ReadFile(globalCatalogPath())
 	if err != nil {
@@ -377,6 +389,65 @@ func TestRemoveUserCatalogEntry_AbsentEntryPreservesFile(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Fatalf("file mutated on no-op remove\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestSaveUserCatalogEntryUpgradesPrerouteRow(t *testing.T) {
+	setupHome(t)
+	id := "amazon.nova-2-multimodal-embeddings-v1:0"
+	enabled := false
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "embedding",
+		Tier: TierUserVerified, TestedAt: "2026-08-01T00:00:00Z",
+		Enabled: &enabled, PriceOverride: true, PriceIn: 1.25, PriceSource: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A routed save of the same model must replace, not append.
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "embedding",
+		Tier: TierUserVerified, Plane: PlaneClassic,
+		TestedAt: "2026-08-01T00:00:00Z",
+		Enabled:  &enabled, PriceOverride: true, PriceIn: 1.25, PriceSource: "user",
+		RecommendedSimilarityThreshold: 0.33,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(globalCatalogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "id: "+id); n != 1 {
+		t.Fatalf("file has %d rows for %s, want 1 (appended a routed twin):\n%s", n, id, data)
+	}
+	got, ok := UserCatalogEntry(ScopeGlobal, "", RouteKey{Provider: "bedrock", ID: id, Plane: PlaneClassic})
+	if !ok {
+		t.Fatal("routed lookup missed the upgraded pre-route row")
+	}
+	if got.RecommendedSimilarityThreshold != 0.33 {
+		t.Errorf("threshold = %v, want 0.33", got.RecommendedSimilarityThreshold)
+	}
+	if got.TestedAt != "2026-08-01T00:00:00Z" || got.Enabled == nil || *got.Enabled {
+		t.Errorf("stored fields lost: tested_at=%q enabled=%v", got.TestedAt, got.Enabled)
+	}
+}
+
+func TestRemoveQualifiedRouteHitsPrerouteRow(t *testing.T) {
+	setupHome(t)
+	id := "amazon.nova-2-multimodal-embeddings-v1:0"
+	if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+		ID: id, Provider: "bedrock", Type: "embedding", Tier: TierUserVerified,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := RemoveUserCatalogEntry(ScopeGlobal, "", RouteKey{
+		Provider: "bedrock", ID: id, Plane: PlaneClassic,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("remove @classic of a pre-route row removed %d, want 1", n)
 	}
 }
 
@@ -623,21 +694,21 @@ func TestMergeFields_RegionEndpointOverlay(t *testing.T) {
 }
 
 // TestResolveModelRegion verifies the region pin resolves through the same
-// user-catalog-over-builtin chain as ResolveInvokeStrategy.
+// user-catalog-over-builtin chain as resolveInvokeStrategy.
 func TestResolveModelRegion(t *testing.T) {
 	setupHome(t)
 
 	// Builtin pin: the Cohere reranker is us-east-1 in-region only.
-	if got := ResolveModelRegion("bedrock", DefaultRerankModel, ""); got != "us-east-1" {
+	if got := resolveModelRegion("bedrock", DefaultRerankModel, ""); got != "us-east-1" {
 		t.Errorf("builtin pin: got %q, want us-east-1", got)
 	}
 
 	// Unset: a builtin without a pin resolves empty (provider default).
-	if got := ResolveModelRegion("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != "" {
+	if got := resolveModelRegion("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != "" {
 		t.Errorf("unpinned builtin should resolve empty, got %q", got)
 	}
 	// Unknown model: empty.
-	if got := ResolveModelRegion("bedrock", "not.a.known.model", ""); got != "" {
+	if got := resolveModelRegion("bedrock", "not.a.known.model", ""); got != "" {
 		t.Errorf("unknown model should resolve empty, got %q", got)
 	}
 
@@ -652,7 +723,7 @@ func TestResolveModelRegion(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", custom); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if got := ResolveModelRegion("bedrock", "xai.grok-4.3", ""); got != "us-west-2" {
+	if got := resolveModelRegion("bedrock", "xai.grok-4.3", ""); got != "us-west-2" {
 		t.Errorf("user entry: got %q, want us-west-2", got)
 	}
 
@@ -666,7 +737,7 @@ func TestResolveModelRegion(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", override); err != nil {
 		t.Fatalf("save override: %v", err)
 	}
-	if got := ResolveModelRegion("bedrock", DefaultRerankModel, ""); got != "eu-central-1" {
+	if got := resolveModelRegion("bedrock", DefaultRerankModel, ""); got != "eu-central-1" {
 		t.Errorf("user override of builtin pin: got %q, want eu-central-1", got)
 	}
 }
@@ -792,9 +863,9 @@ func TestResolveInvokeStrategy_BuiltinLookups(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider+":"+tc.modelID, func(t *testing.T) {
-			got := ResolveInvokeStrategy(tc.provider, tc.modelID, "")
+			got := resolveInvokeStrategy(tc.provider, tc.modelID, "")
 			if got != tc.want {
-				t.Errorf("ResolveInvokeStrategy(%q,%q) = %q, want %q", tc.provider, tc.modelID, got, tc.want)
+				t.Errorf("resolveInvokeStrategy(%q,%q) = %q, want %q", tc.provider, tc.modelID, got, tc.want)
 			}
 		})
 	}
@@ -817,7 +888,7 @@ func TestResolveInvokeStrategy_UserCatalogOverrides(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", custom); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if got := ResolveInvokeStrategy("openrouter", "vendor/custom-gen-v9", ""); got != StrategyOpenRouterChat {
+	if got := resolveInvokeStrategy("openrouter", "vendor/custom-gen-v9", ""); got != StrategyOpenRouterChat {
 		t.Errorf("custom user entry: got %q", got)
 	}
 
@@ -832,7 +903,7 @@ func TestResolveInvokeStrategy_UserCatalogOverrides(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeGlobal, "", override); err != nil {
 		t.Fatalf("save override: %v", err)
 	}
-	if got := ResolveInvokeStrategy("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != StrategyBedrockInvokeAnthropic {
+	if got := resolveInvokeStrategy("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0", ""); got != StrategyBedrockInvokeAnthropic {
 		t.Errorf("user override of builtin: got %q", got)
 	}
 }

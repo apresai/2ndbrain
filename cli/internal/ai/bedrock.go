@@ -156,8 +156,14 @@ type BedrockEmbedder struct {
 // pin on the model (or an in-memory RegionOverride) routes just this client,
 // mirroring NewBedrockReranker.
 func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, dims int) (*BedrockEmbedder, error) {
+	return newBedrockEmbedder(ctx, cfg, model, dims, "")
+}
+
+func newBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, dims int, strategy string) (*BedrockEmbedder, error) {
 	cfg = ResolveBedrockConfig(cfg)
-	cfg.Region = EffectiveBedrockRegion(cfg, model, "")
+	if strategy == "" {
+		strategy = resolveInvokeStrategy("bedrock", model, "")
+	}
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -169,7 +175,7 @@ func NewBedrockEmbedder(ctx context.Context, cfg BedrockConfig, model string, di
 		model:    model,
 		dims:     dims,
 		region:   cfg.Region,
-		strategy: ResolveInvokeStrategy("bedrock", model, ""),
+		strategy: strategy,
 	}, nil
 }
 
@@ -679,13 +685,40 @@ func NewBedrockGeneration(ctx context.Context, cfg BedrockConfig, model, vaultRo
 // us.xai.grok-4.6 builtin must not drag the mantle-listed bare xai.grok-4.6
 // onto Converse — observed live 2026-08-20 as a ValidationException before
 // this constructor adopted the shared precedence).
+// NewBedrockGenerationForRoute constructs the generation client for an
+// ALREADY-RESOLVED route, and is the only correct entry point once a slot's
+// route is known.
+//
+// It exists because the strategy-hint path below cannot express "I have
+// decided". effectiveInvokeStrategy consults two plane-blind exact-id catalog
+// lookups BEFORE it reads the hint, so a configured route lost to whatever the
+// catalog said first: with `ai.generation_plane: classic` on openai.gpt-5.5
+// (whose builtin is a mantle row), the pin resolved classic and the client
+// dispatched MANTLE. That is the same class of silent misroute this whole
+// change exists to remove, reintroduced one layer down.
+//
+// With an explicit plane, the plane IS the answer and no catalog lookup runs.
+// An empty plane means the route is genuinely unknown (a model no catalog has
+// seen), and only then does the legacy hint precedence apply.
+func NewBedrockGenerationForRoute(ctx context.Context, cfg BedrockConfig, route SlotRoute, vaultRoot string) (GenerationProvider, error) {
+	model := route.Route.ID
+	switch route.Route.Plane {
+	case PlaneMantle:
+		slog.Debug("bedrock generation: mantle plane, from the resolved route", "model", model, "region", route.Route.Region)
+		return newBedrockMantleGenerator(cfg, model, vaultRoot, route.Endpoint)
+	case PlaneClassic:
+		slog.Debug("bedrock generation: classic plane, from the resolved route", "model", model, "region", route.Route.Region)
+		return newBedrockGeneratorForClassicRoute(ctx, cfg, model)
+	}
+	return NewBedrockGenerationRouted(ctx, cfg, model, vaultRoot, route.Strategy)
+}
+
 func NewBedrockGenerationRouted(ctx context.Context, cfg BedrockConfig, model, vaultRoot, strategyHint string) (GenerationProvider, error) {
 	strategy := effectiveInvokeStrategy("bedrock", ModelInfo{ID: model, Provider: "bedrock", InvokeStrategy: strategyHint}, vaultRoot)
 	if strategy == StrategyBedrockMantleResponses {
 		slog.Debug("bedrock generation: dispatching to the mantle plane", "model", model)
 		return NewBedrockMantleGenerator(cfg, model, vaultRoot)
 	}
-	carryVaultRegionPin(&cfg, model, vaultRoot)
 	return NewBedrockGenerator(ctx, cfg, model)
 }
 
@@ -696,11 +729,31 @@ func NewBedrockGenerator(ctx context.Context, cfg BedrockConfig, model string) (
 	// Converse path. Builtin/global catalog resolution needs no vault root;
 	// callers with a vault root get the vault-scoped check via
 	// NewBedrockGeneration before this backstop runs.
-	if ResolveInvokeStrategy("bedrock", model, "") == StrategyBedrockMantleResponses {
+	if resolveInvokeStrategy("bedrock", model, "") == StrategyBedrockMantleResponses {
 		return nil, fmt.Errorf("%s uses the bedrock mantle plane (%s); construct it via NewBedrockGeneration", model, StrategyBedrockMantleResponses)
 	}
 	cfg = ResolveBedrockConfig(cfg)
-	cfg.Region = EffectiveBedrockRegion(cfg, model, "")
+	return newBedrockGeneratorIn(ctx, cfg, model)
+}
+
+// newBedrockGeneratorForClassicRoute builds the Converse client for a route
+// whose plane is EXPLICITLY classic.
+//
+// It skips the mantle backstop in NewBedrockGenerator on purpose. That guard
+// asks the catalog "is this id mantle?", which is exactly the plane-blind
+// question route identity replaces: a dual-plane id would answer yes and
+// refuse to build the classic client the user explicitly asked for. The route
+// already carries the answer, so the guard has nothing left to protect and
+// would only veto a correct decision.
+//
+// The region still comes from cfg (the caller sets RegionOverride from the
+// route), so ResolveBedrockConfig's precedence applies unchanged.
+func newBedrockGeneratorForClassicRoute(ctx context.Context, cfg BedrockConfig, model string) (*BedrockGenerator, error) {
+	cfg = ResolveBedrockConfig(cfg)
+	return newBedrockGeneratorIn(ctx, cfg, model)
+}
+
+func newBedrockGeneratorIn(ctx context.Context, cfg BedrockConfig, model string) (*BedrockGenerator, error) {
 	awsCfg, err := loadBedrockAWSConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -961,7 +1014,16 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 				ContextLen: bedrockContextLenHint(id),
 				Local:      false,
 				Tier:       TierUnverified,
-				Notes:      "use 2nb models test to verify",
+				// The listing region IS this row's identity: Bedrock
+				// entitlement is per-region, so the same profile listed in
+				// another region is a different route that can independently
+				// succeed or fail. Before routes, cfg.Region was read at the
+				// top of this function and then thrown away, so every classic
+				// row arrived region-less and fell back to whatever
+				// ai.bedrock.region happened to say.
+				Plane:  PlaneClassic,
+				Region: cfg.Region,
+				Notes:  "use 2nb models test to verify",
 			})
 			coveredBaseIDs[baseID] = true
 		}
@@ -1001,6 +1063,8 @@ func ListBedrockVendorModels(ctx context.Context, cfg BedrockConfig) ([]ModelInf
 			ContextLen: bedrockContextLenHint(id),
 			Local:      false,
 			Tier:       TierUnverified,
+			Plane:      PlaneClassic,
+			Region:     cfg.Region,
 			Notes:      "use 2nb models test to verify",
 		})
 	}
@@ -1030,15 +1094,37 @@ func CheckBedrockCredentials(ctx context.Context, cfg BedrockConfig) bool {
 // vaultRoot scopes user-catalog invoke-strategy lookups (a vault-scoped mantle
 // entry must dispatch to the mantle client); pass "" when no vault is open.
 func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AIConfig, vaultRoot string) error {
+	// Resolve each slot to ONE endpoint before constructing anything. A model
+	// with several routes and a config that names none of them is refused
+	// here, with the pick commands to run. Previously such a slot fell
+	// through to classic Converse, which is how a mantle-only id reached a
+	// plane that cannot serve it.
+	rows := LoadUserCatalog(vaultRoot)
+	rows = append(rows, BuiltinCatalog()...)
+
+	embedRoute, err := ResolveSlotRoute("embedding", aiCfg.EmbeddingRoute(), rows)
+	if err != nil {
+		return noteBedrockUnrouted(reg, err)
+	}
 	embedCfg := cfg
-	carryVaultRegionPin(&embedCfg, aiCfg.EmbeddingModel, vaultRoot)
-	embedder, err := NewBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions)
+	if embedRoute.Route.Region != "" {
+		embedCfg.RegionOverride = embedRoute.Route.Region
+	}
+	embedder, err := newBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions, embedRoute.Strategy)
 	if err != nil {
 		return fmt.Errorf("init bedrock embedder: %w", err)
 	}
 	reg.RegisterEmbedder("bedrock", embedder)
 
-	generator, err := NewBedrockGeneration(ctx, cfg, aiCfg.GenerationModel, vaultRoot)
+	genRoute, err := ResolveSlotRoute("generation", aiCfg.GenerationRoute(), rows)
+	if err != nil {
+		return noteBedrockUnrouted(reg, err)
+	}
+	genCfg := cfg
+	if genRoute.Route.Region != "" {
+		genCfg.RegionOverride = genRoute.Route.Region
+	}
+	generator, err := NewBedrockGenerationForRoute(ctx, genCfg, genRoute, vaultRoot)
 	if err != nil {
 		return fmt.Errorf("init bedrock generator: %w", err)
 	}
@@ -1048,7 +1134,20 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	// distinct API (bedrockagentruntime.Rerank), so a disabled rerank config
 	// leaves the slot empty and retrieve keeps the RRF order.
 	if aiCfg.RerankEnabled() {
-		reranker, err := NewBedrockReranker(ctx, cfg, aiCfg.ResolveRerankModel())
+		// The rerank slot's route is honored like the other two. Without
+		// this, ai.rerank.plane and ai.rerank.region were a dead knob:
+		// settable, gettable, validated, documented, and read by nothing at
+		// invoke time, so a user who pinned a rerank region silently kept
+		// calling us-east-1.
+		rerankRoute, err := ResolveSlotRoute("rerank", aiCfg.RerankRoute(), rows)
+		if err != nil {
+			return noteBedrockUnrouted(reg, err)
+		}
+		rerankCfg := cfg
+		if rerankRoute.Route.Region != "" {
+			rerankCfg.RegionOverride = rerankRoute.Route.Region
+		}
+		reranker, err := NewBedrockReranker(ctx, rerankCfg, aiCfg.ResolveRerankModel())
 		if err != nil {
 			return fmt.Errorf("init bedrock reranker: %w", err)
 		}
@@ -1056,6 +1155,17 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	}
 
 	return nil
+}
+
+// noteBedrockUnrouted records an *UnroutedSlotError against the bedrock
+// provider so later registry lookups wrap the pick-command cause instead of
+// returning a bare "not registered". Other init errors pass through unchanged.
+func noteBedrockUnrouted(reg *Registry, err error) error {
+	var unrouted *UnroutedSlotError
+	if errors.As(err, &unrouted) {
+		reg.NoteUnavailable("bedrock", err)
+	}
+	return err
 }
 
 // ── Inference profile helpers ──────────────────────────────────────────────

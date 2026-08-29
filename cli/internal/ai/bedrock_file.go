@@ -267,6 +267,40 @@ func ResolveBedrockRegions(vault BedrockConfig) []string {
 	return out
 }
 
+// BedrockDiscoveryRegions returns the regions a discovery walk covers, on BOTH
+// Bedrock planes, primary region first.
+//
+// This is deliberately WIDER than ResolveBedrockRegions. That function answers
+// "which regions did the user ask us to verify in", and its default is the
+// single primary region, which is why the classic plane was only ever listed
+// in one region while the mantle plane was listed in three. The result was a
+// lopsided catalog: a model served only in us-west-2 on classic was invisible
+// to a us-east-1 user, with no signal that a region had gone unlooked-at.
+//
+// Discovery is free (listing never invokes a model) and 24h-cached per
+// (plane, region), so covering the documented US set on both planes costs six
+// cached listings and removes a whole class of "why can't 2nb see this model".
+// Any extra region the user configured is appended, so widening the machine
+// file still widens discovery.
+func BedrockDiscoveryRegions(vault BedrockConfig) []string {
+	primary := ResolveBedrockConfig(vault).Region
+	out := []string{primary}
+	seen := map[string]bool{primary: true}
+	for _, r := range bedrockDiscoveryRegions {
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	for _, r := range ResolveBedrockRegions(vault) {
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // ClearBedrockStoredToken removes the file token and, on macOS, the Keychain
 // item so a Settings / `config bedrock --clear-token` action cannot leave a
 // fallback key in place.

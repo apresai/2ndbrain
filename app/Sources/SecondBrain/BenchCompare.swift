@@ -22,10 +22,28 @@ enum BenchCompareMatrix {
     }
 
     struct Row: Identifiable, Equatable {
-        var id: String { provider + "|" + modelID }
+        var id: String { routeKey(provider: provider, modelID: modelID, plane: plane, region: region) }
         let provider: String
         let modelID: String
+        let plane: String
+        let region: String
         let cells: [String: Cell]
+
+        var label: String {
+            if plane.isEmpty && region.isEmpty { return modelID }
+            if plane.isEmpty { return modelID + "@/" + region }
+            if region.isEmpty { return modelID + "@" + plane }
+            return modelID + "@" + plane + "/" + region
+        }
+    }
+
+    static func routeKey(provider: String, modelID: String, plane: String, region: String) -> String {
+        var s = provider + "|" + modelID
+        if !plane.isEmpty || !region.isEmpty {
+            s += "@" + plane
+            if !region.isEmpty { s += "/" + region }
+        }
+        return s
     }
 
     /// The ordered probe columns actually present in the feed: the known
@@ -43,10 +61,12 @@ enum BenchCompareMatrix {
     /// this keeps the matrix honest against a merged or stale feed). Rows
     /// sort by model id then provider for a stable table.
     static func rows(_ runs: [BenchRunInfo]) -> [Row] {
-        var byModel: [String: (provider: String, modelID: String, cells: [String: BenchRunInfo])] = [:]
+        var byModel: [String: (provider: String, modelID: String, plane: String, region: String, cells: [String: BenchRunInfo])] = [:]
         for run in runs {
-            let key = run.provider + "|" + run.modelID
-            var entry = byModel[key] ?? (run.provider, run.modelID, [:])
+            let plane = run.plane ?? ""
+            let region = run.region ?? ""
+            let key = routeKey(provider: run.provider, modelID: run.modelID, plane: plane, region: region)
+            var entry = byModel[key] ?? (run.provider, run.modelID, plane, region, [:])
             if let existing = entry.cells[run.probe] {
                 // RFC3339 timestamps compare lexicographically.
                 if run.timestamp > existing.timestamp { entry.cells[run.probe] = run }
@@ -60,6 +80,8 @@ enum BenchCompareMatrix {
                 Row(
                     provider: entry.provider,
                     modelID: entry.modelID,
+                    plane: entry.plane,
+                    region: entry.region,
                     cells: entry.cells.mapValues { run in
                         Cell(
                             latencyMs: run.latencyMs,
@@ -77,7 +99,9 @@ enum BenchCompareMatrix {
             }
             .sorted {
                 if $0.modelID != $1.modelID { return $0.modelID < $1.modelID }
-                return $0.provider < $1.provider
+                if $0.provider != $1.provider { return $0.provider < $1.provider }
+                if $0.plane != $1.plane { return $0.plane < $1.plane }
+                return $0.region < $1.region
             }
     }
 

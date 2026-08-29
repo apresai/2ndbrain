@@ -300,7 +300,7 @@ func classifyHTTPStatus(status int) TestErrorCode {
 // classified probe failure. Empty for codes with no better advice than the
 // raw error text.
 //
-// strategy is the model's resolved InvokeStrategy (from ResolveInvokeStrategy),
+// strategy is the model's resolved InvokeStrategy (from resolveInvokeStrategy),
 // used to tailor Bedrock guidance: a model on the mantle plane
 // (StrategyBedrockMantleResponses) is entitled per-account through AWS Sales,
 // NOT the Bedrock console's "Model access" page (mantle models are invisible to

@@ -71,11 +71,11 @@ type wizardEvent struct {
 	LatencyMs int64             `json:"latency_ms,omitempty"`
 	Error     string            `json:"error,omitempty"`
 	// Code classifies a test_result failure (ai.TestErrorCode vocabulary).
-	Code string `json:"code,omitempty"`
-	Scope     string            `json:"scope,omitempty"`
-	Tested    int               `json:"tested,omitempty"`
-	Passed    int               `json:"passed,omitempty"`
-	Saved     int               `json:"saved,omitempty"`
+	Code   string `json:"code,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	Tested int    `json:"tested,omitempty"`
+	Passed int    `json:"passed,omitempty"`
+	Saved  int    `json:"saved,omitempty"`
 	// Keys names the config keys written by a set_active event (e.g.
 	// ["ai.provider", "ai.embedding_model", "ai.generation_model"]).
 	Keys []string `json:"keys,omitempty"`
@@ -221,9 +221,14 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		passed++
 		base := findBuiltinModel(r.Provider, r.ModelID)
 		entry := promotedEntry(base, r)
-		entry.InvokeStrategy = ai.ResolveInvokeStrategy(entry.Provider, entry.ID, v.Root)
+		entry.InvokeStrategy = r.Strategy
 		entry.TestLatencyMs = latencyMs(r.Latency)
 		preserveRoutingFields(scope, v.Root, &entry)
+		// Stamp the probed route last, for the same reason --promote does:
+		// promotedEntry carries none, and preserveRoutingFields' unique-row
+		// fallback would otherwise supply a SIBLING route's.
+		persistProbedRegion(&entry, r, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
+		// Wholesale: a passing probe records a complete fresh verdict.
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			events.emit(wizardEvent{
 				Step:    "save_error",

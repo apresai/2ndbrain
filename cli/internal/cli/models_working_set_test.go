@@ -137,7 +137,7 @@ func TestContract_ModelsListFailedActiveNotInWorkingSet(t *testing.T) {
 	cfg := ai.DefaultAIConfig()
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
 		ID: cfg.GenerationModel, Provider: "bedrock", Type: "generation",
-		TestedAt: time.Now().UTC().Format(time.RFC3339),
+		TestedAt:      time.Now().UTC().Format(time.RFC3339),
 		TestError:     "403 access denied",
 		TestErrorCode: string(ai.TestErrAccessDenied),
 	}); err != nil {

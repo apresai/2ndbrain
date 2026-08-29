@@ -310,10 +310,10 @@ func downloadTo(ctx context.Context, url, path string, total int64, onProgress P
 // progressReader wraps the download body, reporting cumulative bytes (throttled
 // to ~5x/sec, plus a final report on EOF/error) to onProgress as it is read.
 type progressReader struct {
-	r          io.Reader
+	r           io.Reader
 	done, total int64
-	onProgress ProgressFunc
-	last       time.Time
+	onProgress  ProgressFunc
+	last        time.Time
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {

@@ -68,10 +68,10 @@ func TestPromptSweep_Bedrock(t *testing.T) {
 	t.Logf("%-22s  %-7s %-6s %-6s %-6s %-7s", "variant", "COMP", "corr", "compl", "grnd", "len")
 
 	type row struct {
-		pv                         PromptVariant
-		comp, corr, compl, grnd    float64
-		meanLen                    float64
-		n                          int
+		pv                      PromptVariant
+		comp, corr, compl, grnd float64
+		meanLen                 float64
+		n                       int
 	}
 	variants := promptVariants
 	if os.Getenv("EVAL_PROMPT_CONFIRM") != "" {

@@ -166,4 +166,3 @@ func probeAppliesToModel(m ModelInfo, spec ProbeSpec) bool {
 	// rather than silently dropping it.
 	return true
 }
-

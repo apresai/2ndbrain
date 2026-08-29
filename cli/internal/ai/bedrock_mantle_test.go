@@ -361,7 +361,7 @@ func TestMantleBaseURL(t *testing.T) {
 
 	mustURL := func(model string, cfg BedrockConfig) string {
 		t.Helper()
-		got, err := mantleBaseURL(cfg, model, "")
+		got, err := mantleBaseURL(cfg, model, "", "")
 		if err != nil {
 			t.Fatalf("mantleBaseURL(%s): %v", model, err)
 		}
@@ -439,7 +439,7 @@ func TestMantleBaseURL_RejectsHostileEndpoint(t *testing.T) {
 				// Ensure the derivation path (not the config fallback) is exercised.
 				cfg.Region = ""
 			}
-			if got, err := mantleBaseURL(cfg, id, ""); err == nil {
+			if got, err := mantleBaseURL(cfg, id, "", ""); err == nil {
 				t.Errorf("hostile input (%q/%q) must be rejected, got URL %q", tc.endpoint, tc.region, got)
 			}
 		})

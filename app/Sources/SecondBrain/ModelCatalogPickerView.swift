@@ -597,7 +597,7 @@ struct ModelCatalogPickerView: View {
 
     private func setActive(_ model: CatalogModelInfo, reembed: Bool) async {
         do {
-            try await appState.setActiveModel(type: model.modelType, modelID: model.modelID, provider: model.provider)
+            try await appState.setActiveModel(type: model.modelType, modelID: model.routeQualifiedID, provider: model.provider)
             statusText = "Active \(model.modelType) updated"
             if reembed {
                 appState.rebuildIndex(forceReembed: true)

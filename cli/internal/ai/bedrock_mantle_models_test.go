@@ -154,7 +154,7 @@ func TestMantleDiscoveryRegionsOrdering(t *testing.T) {
 func TestMantleBaseURL_RegionOverridePin(t *testing.T) {
 	setupHome(t)
 	cfg := ResolveBedrockConfig(BedrockConfig{Region: "us-east-1", RegionOverride: "us-west-2"})
-	got, err := mantleBaseURL(cfg, "deepseek.v3.2", "")
+	got, err := mantleBaseURL(cfg, "deepseek.v3.2", "", "")
 	if err != nil {
 		t.Fatalf("mantleBaseURL: %v", err)
 	}
@@ -181,42 +181,60 @@ func TestVendorDisplayCoversMantleListing(t *testing.T) {
 	}
 }
 
-func TestDedupeDiscoveredBedrock(t *testing.T) {
-	classic := ModelInfo{ID: "openai.gpt-oss-120b", Provider: "bedrock", Type: "generation"}
+// TestDedupeDiscoveredRoutesKeepsBothPlanes replaces the old
+// TestDedupeDiscoveredBedrock, which asserted the opposite: that a model
+// listed on both planes kept its classic row and DISCARDED the mantle one.
+// That is the bug. Measured against the live discovery caches on 2026-08-26,
+// it destroyed a route for 26 of 120 discovered ids.
+func TestDedupeDiscoveredRoutesKeepsBothPlanes(t *testing.T) {
+	classic := ModelInfo{ID: "openai.gpt-oss-120b", Provider: "bedrock", Type: "generation", Plane: PlaneClassic, Region: "us-east-1"}
 	mantle := mantleModelInfo("openai.gpt-oss-120b", "us-east-1")
-	other := ModelInfo{ID: "deepseek.v3.2", Provider: "bedrock", Type: "generation", InvokeStrategy: StrategyBedrockMantleResponses}
+	other := ModelInfo{ID: "deepseek.v3.2", Provider: "bedrock", Type: "generation", Plane: PlaneMantle, Region: "us-east-1", InvokeStrategy: StrategyBedrockMantleResponses}
 	openrouter := ModelInfo{ID: "openai.gpt-oss-120b", Provider: "openrouter", Type: "generation"}
 
-	assertClassicWins := func(t *testing.T, out []ModelInfo) {
+	assertBothSurvive := func(t *testing.T, out []ModelInfo) {
 		t.Helper()
-		if len(out) != 3 {
-			t.Fatalf("got %d rows, want 3: %+v", len(out), out)
+		if len(out) != 4 {
+			t.Fatalf("got %d rows, want 4 (both planes kept): %+v", len(out), out)
 		}
-		found := 0
+		planes := map[Plane]bool{}
 		for _, m := range out {
 			if m.Provider == "bedrock" && m.ID == "openai.gpt-oss-120b" {
-				found++
-				if m.InvokeStrategy != "" {
-					t.Errorf("cross-plane collision kept strategy %q, want classic (empty)", m.InvokeStrategy)
-				}
+				planes[m.Plane] = true
 			}
 		}
-		if found != 1 {
-			t.Errorf("bedrock rows for the colliding id = %d, want exactly 1", found)
+		if !planes[PlaneClassic] || !planes[PlaneMantle] {
+			t.Errorf("both planes must survive for a dual-plane id, got %v", planes)
 		}
 	}
 
-	// The goroutines append in nondeterministic order: classic-wins must
-	// hold in BOTH arrival orders.
+	// The goroutines append in nondeterministic order, so the outcome must
+	// not depend on arrival order.
 	t.Run("classic first", func(t *testing.T) {
-		assertClassicWins(t, dedupeDiscoveredBedrock([]ModelInfo{classic, other, mantle, openrouter}))
+		assertBothSurvive(t, dedupeDiscoveredRoutes([]ModelInfo{classic, other, mantle, openrouter}))
 	})
 	t.Run("mantle first", func(t *testing.T) {
-		assertClassicWins(t, dedupeDiscoveredBedrock([]ModelInfo{mantle, other, openrouter, classic}))
+		assertBothSurvive(t, dedupeDiscoveredRoutes([]ModelInfo{mantle, other, openrouter, classic}))
 	})
 
+	// Same region twice on the same plane IS the same route: still deduped,
+	// which is what protects a walk where a cached and a live path both emit
+	// the row.
+	dup := dedupeDiscoveredRoutes([]ModelInfo{mantle, mantle})
+	if len(dup) != 1 {
+		t.Errorf("identical routes must dedupe, got %d rows", len(dup))
+	}
+
+	// The same model on the same plane in a DIFFERENT region is a different
+	// route: separately entitled, so it must survive.
+	west := mantleModelInfo("openai.gpt-oss-120b", "us-west-2")
+	both := dedupeDiscoveredRoutes([]ModelInfo{mantle, west})
+	if len(both) != 2 {
+		t.Errorf("per-region routes must survive, got %+v", both)
+	}
+
 	// Distinct ids and non-bedrock providers pass through untouched.
-	out := dedupeDiscoveredBedrock([]ModelInfo{other, openrouter})
+	out := dedupeDiscoveredRoutes([]ModelInfo{other, openrouter})
 	if len(out) != 2 {
 		t.Errorf("distinct rows must survive, got %+v", out)
 	}
@@ -274,7 +292,7 @@ func TestEffectiveInvokeStrategyPrecedence(t *testing.T) {
 	}
 
 	// A non-mantle hint on a profile id passes through (the guard is
-	// mantle-specific, mirroring ResolveInvokeStrategy's base-match rule).
+	// mantle-specific, mirroring resolveInvokeStrategy's base-match rule).
 	profileClassic := ModelInfo{ID: "us.acme.model-1", Provider: "bedrock", Type: "generation", InvokeStrategy: StrategyBedrockConverse}
 	if got := effectiveInvokeStrategy("bedrock", profileClassic, ""); got != StrategyBedrockConverse {
 		t.Errorf("non-mantle hint should pass through, got %q", got)
@@ -381,15 +399,19 @@ func TestLiveMantleDiscoveredProbe_CredGated(t *testing.T) {
 	t.Logf("hinted xai.grok-4.6 probe passed in %s: %s", gres.Latency, gres.Detail)
 }
 
-// TestStrippedRowSelfHealsOnVerifyDiscover_CredGated is the regression test
-// for the 2026-08-21 live incident: a vault-catalog row for xai.grok-4.6
-// whose invoke_strategy/region were stripped by a pre-0.19.0 save clobber
-// could not be healed by `verify --discover` — the hint-less row shadowed the
-// discovered row's hints, the probe base-matched onto classic Converse, and
-// the only recovery was `models remove` then re-verify. With the merge graft
-// (mergeDiscovered + AdoptRoutingHints) the stripped row adopts the hints at
-// discovery time, probes over the mantle plane, and persists its routing —
-// no manual removal.
+// TestStrippedRowSelfHealsOnVerifyDiscover_CredGated is the live regression
+// test for the 2026-08-21 incident: a vault-catalog row for xai.grok-4.6 whose
+// invoke_strategy/region were stripped by a pre-0.19.0 save clobber could not
+// be healed by `verify --discover`, because the hint-less row shadowed the
+// discovered row on (provider, id), the probe base-matched onto classic
+// Converse, and the only recovery was `models remove` then re-verify.
+//
+// Under route identity the cure is structural instead of a repair: the real
+// mantle endpoint is a different ROUTE from the region-less template, so it
+// arrives as its own fully-routed row that the template cannot shadow, and
+// the template retires once the concrete route exists. The assertion is
+// therefore "a correctly-routed mantle row is present and probes over the
+// mantle plane", not "the broken row was patched in place".
 func TestStrippedRowSelfHealsOnVerifyDiscover_CredGated(t *testing.T) {
 	setupHome(t) // isolate catalogs; the bearer token must come from the env
 	if os.Getenv(bedrockBearerTokenEnv) == "" {
@@ -410,24 +432,32 @@ func TestStrippedRowSelfHealsOnVerifyDiscover_CredGated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Look across BOTH halves: the concrete mantle route normally arrives as
+	// a discovered (Unverified) row, while the stale template sat in Verified.
 	var candidate *ModelInfo
-	for i := range list.Verified {
-		if list.Verified[i].Provider == "bedrock" && list.Verified[i].ID == "xai.grok-4.6" {
-			candidate = &list.Verified[i]
+	rows := append(append([]ModelInfo{}, list.Verified...), list.Unverified...)
+	for i := range rows {
+		if rows[i].Provider == "bedrock" && rows[i].ID == "xai.grok-4.6" &&
+			rows[i].Plane == PlaneMantle && rows[i].Region == "us-west-2" {
+			candidate = &rows[i]
 			break
 		}
 	}
 	if candidate == nil {
-		t.Fatalf("stripped row missing from merged list")
+		if len(list.Warnings) > 0 {
+			t.Skipf("mantle discovery unavailable (no route source): %v", list.Warnings)
+		}
+		t.Fatalf("no xai.grok-4.6@mantle/us-west-2 route in the merged list")
 	}
 	if candidate.InvokeStrategy != StrategyBedrockMantleResponses {
-		if len(list.Warnings) > 0 {
-			t.Skipf("mantle discovery unavailable (no graft source): %v", list.Warnings)
-		}
-		t.Fatalf("stripped row did not adopt the discovery hints: %+v", *candidate)
+		t.Errorf("mantle route carries strategy %q, want %q", candidate.InvokeStrategy, StrategyBedrockMantleResponses)
 	}
-	if candidate.Region != "us-west-2" {
-		t.Errorf("grafted region = %q, want the us-west-2 mantle listing region", candidate.Region)
+	// The region-less template must not survive next to its concrete route,
+	// or it could still be picked and still fall through to classic.
+	for _, m := range rows {
+		if m.Provider == "bedrock" && m.ID == "xai.grok-4.6" && m.Region == "" {
+			t.Errorf("the stripped template survived alongside its concrete route: %+v", m)
+		}
 	}
 
 	result, err := TestProbeModelInfo(ctx, AIConfig{}, *candidate, root)
@@ -450,7 +480,7 @@ func TestStrippedRowSelfHealsOnVerifyDiscover_CredGated(t *testing.T) {
 	if err := SaveUserCatalogEntry(ScopeVault, root, saved); err != nil {
 		t.Fatal(err)
 	}
-	persisted, ok := UserCatalogEntry(ScopeVault, root, "bedrock", "xai.grok-4.6")
+	persisted, ok := UserCatalogEntry(ScopeVault, root, RouteKey{Provider: "bedrock", ID: "xai.grok-4.6", Plane: PlaneMantle, Region: "us-west-2"})
 	if !ok || persisted.InvokeStrategy != StrategyBedrockMantleResponses || persisted.Region != "us-west-2" {
 		t.Fatalf("routing did not persist (ok=%v): %+v", ok, persisted)
 	}
