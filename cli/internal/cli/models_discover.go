@@ -294,6 +294,8 @@ func discoverAddModels(v *vault.Vault, scope ai.UserCatalogScope, pool, catalog 
 		if entry.Tier == "" {
 			entry.Tier = ai.TierUnverified
 		}
+		// RMW: start from the stored route's row (or a new unverified row)
+		// and adopt discovery routing onto it.
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			return nil, fmt.Errorf("save %s: %w", m.ID, err)
 		}
@@ -364,6 +366,7 @@ func discoverValidateModels(ctx context.Context, v *vault.Vault, scope ai.UserCa
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
 		adoptCandidateRouting(&entry, m)
+		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && humanMode {
 			fmt.Printf("[%d/%d] warning: save %s failed: %v\n", n, total, m.ID, saveErr)
 		}

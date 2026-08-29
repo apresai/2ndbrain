@@ -4,6 +4,8 @@ import (
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/ai"
 )
 
 func TestPercentile(t *testing.T) {
@@ -82,5 +84,63 @@ func TestSampleUnrelatedCosines_EmptyInputs(t *testing.T) {
 	}
 	if got := sampleUnrelatedCosines(rng, [][]float32{{1, 0}}, 10); got != nil {
 		t.Errorf("single-vec input should return nil (no pairs), got %v", got)
+	}
+}
+
+// TestSaveCalibrationPreservesExistingRowFields pins that --save is a
+// one-field write. SaveUserCatalogEntry replaces the matching route wholesale,
+// so constructing a fresh six-field ModelInfo destroyed the stored verdict,
+// any user price override, and the enabled pointer.
+func TestSaveCalibrationPreservesExistingRowFields(t *testing.T) {
+	_, root := newContractVault(t)
+	modelID := "amazon.nova-2-multimodal-embeddings-v1:0"
+	enabled := false
+	seed := ai.ModelInfo{
+		ID:                             modelID,
+		Provider:                       "bedrock",
+		Type:                           "embedding",
+		Tier:                           ai.TierUserVerified,
+		Plane:                          ai.PlaneClassic,
+		Region:                         "us-east-1",
+		TestedAt:                       "2026-08-01T00:00:00Z",
+		PriceOverride:                  true,
+		PriceIn:                        1.25,
+		PriceSource:                    "user",
+		Enabled:                        &enabled,
+		Notes:                          "keep me",
+		RecommendedSimilarityThreshold: 0.20,
+	}
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cfg := ai.AIConfig{
+		Provider:        "bedrock",
+		EmbeddingModel:  modelID,
+		EmbeddingPlane:  ai.PlaneClassic,
+		EmbeddingRegion: "us-east-1",
+	}
+	if err := saveCalibration(ai.ScopeVault, root, "bedrock", modelID, 0.33, cfg); err != nil {
+		t.Fatalf("saveCalibration: %v", err)
+	}
+
+	got, ok := ai.UserCatalogEntry(ai.ScopeVault, root, seed.Route())
+	if !ok {
+		t.Fatal("calibrate --save dropped the stored row")
+	}
+	if got.RecommendedSimilarityThreshold != 0.33 {
+		t.Errorf("threshold = %v, want 0.33", got.RecommendedSimilarityThreshold)
+	}
+	if got.TestedAt != seed.TestedAt {
+		t.Errorf("verdict timestamp erased: got %q", got.TestedAt)
+	}
+	if !got.PriceOverride || got.PriceIn != 1.25 || got.PriceSource != "user" {
+		t.Errorf("price override erased: override=%v in=%v source=%q", got.PriceOverride, got.PriceIn, got.PriceSource)
+	}
+	if got.Enabled == nil || *got.Enabled {
+		t.Errorf("enabled pointer erased: %v", got.Enabled)
+	}
+	if got.Notes != "keep me" {
+		t.Errorf("notes erased: %q", got.Notes)
 	}
 }

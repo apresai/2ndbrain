@@ -412,6 +412,9 @@ func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCat
 	if entry.Tier == "" {
 		entry.Tier = ai.TierUserVerified
 	}
+	// RMW: copy the existing route's row (findModelInfoForRoute), then stamp
+	// Benchmark. A site that constructed a fresh row here would erase the
+	// stored verdict, prices, and enabled pointer, the same as calibrate --save.
 	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 		return err
 	}

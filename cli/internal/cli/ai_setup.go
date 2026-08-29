@@ -477,6 +477,7 @@ func persistProbe(vaultRoot string, result *ai.TestProbeResult) {
 	// the 2026-08-20 invoke_strategy-stripping regression), and
 	// dropSupersededUnpinned retires the very row this just reported as saved.
 	persistProbedRegion(&entry, result, "")
+	// Wholesale: a passing probe records a complete fresh verdict.
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, vaultRoot, entry); err != nil {
 		// Keep the stderr warning (the interactive user needs to see it) and add a
 		// durable slog line so the failure is recoverable from cli.log later.

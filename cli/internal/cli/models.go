@@ -320,6 +320,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 			// verdict with a false positive that even carried the mantle
 			// strategy. adoptCandidateRouting cannot correct it (fill-only-empty).
 			persistProbedRegion(&entry, result, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
+			// Wholesale: a passing probe records a complete fresh verdict.
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
 				passed++
 				fmt.Printf("[%d/%d] PASS  %s/%s  (%s)  → saved\n",
@@ -596,6 +597,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
+		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			if getFormat(cmd) != "" {
 				return fmt.Errorf("save test result: %w", err)
@@ -699,6 +701,8 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		entry.Name = modelID
 	}
 
+	// Wholesale for a new row; mergeAddCatalogEntry already merged when a
+	// stored row existed. models add describes a MODEL, not one endpoint.
 	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 		return fmt.Errorf("save: %w", err)
 	}
@@ -873,6 +877,7 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 		for _, entry := range targets {
 			entry.Enabled = ai.Ptr(enabled)
 			preserveRoutingFields(scope, vaultRoot, &entry)
+			// RMW: copy every stored route of the model, then stamp Enabled.
 			if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 				return fmt.Errorf("save %s: %w", id, err)
 			}
@@ -939,6 +944,7 @@ func setModelEnabledPointer(cmd *cobra.Command, modelID, provider, scopeStr stri
 
 	for _, entry := range targets {
 		entry.Enabled = enabled
+		// RMW: copy every stored route of the model, then stamp Enabled.
 		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 			return fmt.Errorf("save: %w", err)
 		}

@@ -67,8 +67,10 @@ func LoadUserCatalog(vaultRoot string) []ModelInfo {
 }
 
 // SaveUserCatalogEntry writes a single entry to the catalog at `scope`. The
-// file is created if it doesn't exist; an existing entry with the same
-// (provider, id) is replaced in place.
+// file is created if it doesn't exist. An existing entry with the same ROUTE
+// is replaced wholesale: fields omitted on entry are deleted from the stored
+// row. Callers that persist one field must read the stored row first via
+// UserCatalogEntry.
 func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelInfo) error {
 	userCatalogMu.Lock()
 	defer userCatalogMu.Unlock()

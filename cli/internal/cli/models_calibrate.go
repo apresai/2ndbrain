@@ -244,9 +244,14 @@ func percentile(sorted []float64, q float64) float64 {
 	return sorted[idx]
 }
 
-// saveCalibration upserts a user-catalog entry for the calibrated model that
-// carries only the recommended threshold. Existing fields on a matching entry
-// are preserved via overlay semantics in LoadUserCatalog.
+// saveCalibration writes the recommended similarity threshold onto the
+// user-catalog row for the embedding model's resolved route.
+//
+// SaveUserCatalogEntry replaces a matching row wholesale, so this reads the
+// stored row first and changes only the threshold. LoadUserCatalog's overlay
+// merges builtin under user; it cannot resurrect fields the user file no
+// longer holds. A new row (the model has never been saved) gets identity
+// fields plus the threshold, nothing else.
 func saveCalibration(scope ai.UserCatalogScope, vaultRoot, provider, modelID string, threshold float64, cfg ai.AIConfig) error {
 	// Carry the embedding slot's ROUTE, or the save appends a second,
 	// route-less row instead of updating the real one: SaveUserCatalogEntry is
@@ -258,15 +263,24 @@ func saveCalibration(scope ai.UserCatalogScope, vaultRoot, provider, modelID str
 	// plane therefore produced an EMPTY route and the route-keyed save appended
 	// a second, route-less row instead of updating the real one.
 	route := ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot).Route
-	entry := ai.ModelInfo{
-		ID:                             modelID,
-		Provider:                       provider,
-		Type:                           "embedding",
-		Tier:                           ai.TierUserVerified,
-		Plane:                          route.Plane,
-		Region:                         route.Region,
-		RecommendedSimilarityThreshold: threshold,
+	if route.Provider == "" {
+		route.Provider = provider
 	}
+	if route.ID == "" {
+		route.ID = modelID
+	}
+	entry, ok := ai.UserCatalogEntry(scope, vaultRoot, route)
+	if !ok {
+		entry = ai.ModelInfo{
+			ID:       modelID,
+			Provider: provider,
+			Type:     "embedding",
+			Tier:     ai.TierUserVerified,
+			Plane:    route.Plane,
+			Region:   route.Region,
+		}
+	}
+	entry.RecommendedSimilarityThreshold = threshold
 	return ai.SaveUserCatalogEntry(scope, vaultRoot, entry)
 }
 

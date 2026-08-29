@@ -228,6 +228,7 @@ func runModelsWizard(cmd *cobra.Command, args []string) error {
 		// promotedEntry carries none, and preserveRoutingFields' unique-row
 		// fallback would otherwise supply a SIBLING route's.
 		persistProbedRegion(&entry, r, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
+		// Wholesale: a passing probe records a complete fresh verdict.
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			events.emit(wizardEvent{
 				Step:    "save_error",
