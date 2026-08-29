@@ -77,21 +77,36 @@ func TestParseRouteRef(t *testing.T) {
 
 // TestRouteRoundTrip pins that a fully-qualified route string parses back to
 // the same key, so the form printed in an ambiguity message is pasteable.
+// The four plane/region combinations are the property: a single example
+// would miss id@/us-west-2, which String used to drop.
 func TestRouteRoundTrip(t *testing.T) {
-	for _, k := range []RouteKey{
-		{Provider: "bedrock", ID: "xai.grok-4.6", Plane: PlaneMantle, Region: "us-west-2"},
-		{Provider: "bedrock", ID: "cohere.rerank-v3-5:0", Plane: PlaneClassic, Region: "us-east-1"},
-		{Provider: "openrouter", ID: "nvidia/llama-nemotron-embed-vl-1b-v2:free"},
-	} {
-		s := k.String()
-		ref, err := ParseRouteRef(s)
-		if err != nil {
-			t.Fatalf("ParseRouteRef(%q): %v", s, err)
+	id := "xai.grok-4.6"
+	for _, plane := range []Plane{"", PlaneClassic, PlaneMantle} {
+		for _, region := range []string{"", "us-west-2"} {
+			k := RouteKey{Provider: "bedrock", ID: id, Plane: plane, Region: region}
+			s := k.String()
+			ref, err := ParseRouteRef(s)
+			if err != nil {
+				t.Fatalf("ParseRouteRef(%q): %v", s, err)
+			}
+			got := RouteKey{Provider: ref.Provider, ID: ref.ID, Plane: ref.Plane, Region: ref.Region}
+			if got != k {
+				t.Errorf("round trip of %q = %+v (plane=%q region=%q), want plane=%q region=%q",
+					s, got, got.Plane, got.Region, k.Plane, k.Region)
+			}
 		}
-		got := RouteKey{Provider: ref.Provider, ID: ref.ID, Plane: ref.Plane, Region: ref.Region}
-		if got != k {
-			t.Errorf("round trip of %q = %+v, want %+v", s, got, k)
-		}
+	}
+	// Non-Bedrock ids (no plane, no region) still round-trip as a bare id.
+	k := RouteKey{Provider: "openrouter", ID: "nvidia/llama-nemotron-embed-vl-1b-v2:free"}
+	s := k.String()
+	ref, err := ParseRouteRef(s)
+	if err != nil {
+		t.Fatalf("ParseRouteRef(%q): %v", s, err)
+	}
+	got := RouteKey{Provider: ref.Provider, ID: ref.ID, Plane: ref.Plane, Region: ref.Region}
+	if got != k {
+		t.Errorf("round trip of %q = plane=%q region=%q, want plane=%q region=%q",
+			s, got.Plane, got.Region, k.Plane, k.Region)
 	}
 }
 

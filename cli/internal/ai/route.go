@@ -83,7 +83,7 @@ func (k RouteKey) String() string {
 		b.WriteByte('|')
 	}
 	b.WriteString(k.ID)
-	if k.Plane != "" {
+	if k.Plane != "" || k.Region != "" {
 		b.WriteByte('@')
 		b.WriteString(string(k.Plane))
 		if k.Region != "" {
@@ -163,7 +163,9 @@ func ParseRouteRef(s string) (RouteRef, error) {
 		}
 		plane, region, hasRegion := strings.Cut(suffix, "/")
 		ref.Plane = Plane(plane)
-		if !IsKnownPlane(ref.Plane) {
+		// An empty plane is unconstrained, matching RouteRef.Matches. That
+		// is how id@/us-west-2 round-trips: region set, plane not.
+		if plane != "" && !IsKnownPlane(ref.Plane) {
 			return ref, fmt.Errorf("unknown plane %q in %q (want one of: %s)", plane, s, planeList())
 		}
 		if hasRegion {
