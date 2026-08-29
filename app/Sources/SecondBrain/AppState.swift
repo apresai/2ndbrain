@@ -4483,9 +4483,11 @@ struct BenchRunInfo: Codable, Identifiable {
     let ok: Bool
     let detail: String?
     let vaultDocCount: Int?
+    let plane: String?
+    let region: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, provider, probe, ok, detail
+        case id, timestamp, provider, probe, ok, detail, plane, region
         case modelID = "model_id"
         case latencyMs = "latency_ms"
         case vaultDocCount = "vault_doc_count"

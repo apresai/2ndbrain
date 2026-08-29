@@ -270,7 +270,7 @@ struct TestingBenchmarksView: View {
                     }
                     ForEach(rows) { row in
                         GridRow {
-                            Text(row.modelID)
+                            Text(row.label)
                                 .font(.caption.monospaced())
                                 .lineLimit(1)
                                 .truncationMode(.middle)

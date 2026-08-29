@@ -15,6 +15,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/bench"
 	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -91,6 +92,24 @@ func openBenchDB(dotDir string) (*bench.DB, error) {
 	return bench.Open(filepath.Join(dotDir, "bench.db"))
 }
 
+func openVaultBenchDB(v *vault.Vault) (*bench.DB, error) {
+	db, err := openBenchDB(v.DotDir)
+	if err != nil {
+		return nil, err
+	}
+	cfg := v.Config.AI
+	if err := db.BackfillMissingRoutes(func(provider, modelID string) (string, string) {
+		tmp := cfg
+		tmp.Provider = provider
+		r := ai.ResolveMeasurementRoute(tmp, modelID, v.Root).Route
+		return string(r.Plane), r.Region
+	}); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
 func benchVaultDocCount(db *sql.DB) (int, error) {
 	var docCount int
 	if err := db.QueryRow("SELECT COUNT(*) FROM documents").Scan(&docCount); err != nil {
@@ -107,7 +126,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 	setupFileLogging(v)
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -212,6 +231,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 			if r.VaultDocCount > 0 {
 				runDocCount = r.VaultDocCount
 			}
+			route := ai.ResolveMeasurementRoute(cfg, t.modelID, v.Root).Route
 			if err := bdb.InsertRun(&bench.Run{
 				Timestamp:     ts,
 				Provider:      t.provider,
@@ -221,6 +241,8 @@ func runBench(cmd *cobra.Command, args []string) error {
 				OK:            r.OK,
 				Detail:        r.Detail,
 				VaultDocCount: runDocCount,
+				Plane:         string(route.Plane),
+				Region:        route.Region,
 			}); err != nil {
 				// A transient bench.db failure (WAL busy, disk full)
 				// shouldn't abort the run and discard subsequent
@@ -429,7 +451,7 @@ func runBenchFav(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -456,7 +478,7 @@ func runBenchUnfav(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -482,7 +504,7 @@ func runBenchFavs(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -518,7 +540,7 @@ func runBenchHistory(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
@@ -559,7 +581,7 @@ func runBenchCompare(cmd *cobra.Command, args []string) error {
 	}
 	defer v.Close()
 
-	bdb, err := openBenchDB(v.DotDir)
+	bdb, err := openVaultBenchDB(v)
 	if err != nil {
 		return err
 	}
