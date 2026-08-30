@@ -323,8 +323,7 @@ func Start(v *vault.Vault, version string, idleTimeout time.Duration) error {
 	}
 
 	// Wrap stdout so tools/list omits empty annotations/required that mcp-go
-	// always emits. Grok session cataloging records tool_count 0 for that
-	// shape; Claude Code still sees the same 22 tools either way.
+	// always emits. Claude Code still sees the same 22 tools either way.
 	stdio := server.NewStdioServer(s)
 	err := stdio.Listen(context.Background(), os.Stdin, newToolsListSanitizer(os.Stdout))
 	if statusWriter != nil {

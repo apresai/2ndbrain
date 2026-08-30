@@ -9,9 +9,7 @@ import (
 // sanitizeToolsListJSON rewrites a JSON-RPC tools/list response so empty
 // annotations objects and empty required arrays are omitted. mcp-go v0.58.0
 // always emits both (Tool.MarshalJSON assigns annotations unconditionally;
-// ToolInputSchema marshal writes required: [] when the slice is empty). Grok
-// session cataloging records tool_count 0 for that shape; gcloud, which Grok
-// does catalog, omits the annotations key and never sends required: [].
+// ToolInputSchema marshal writes required: [] when the slice is empty).
 //
 // Other JSON-RPC messages pass through unchanged. IDs are preserved as raw
 // JSON so an integer id does not become 2.0.
@@ -91,7 +89,7 @@ func sanitizeOneToolJSON(raw json.RawMessage) json.RawMessage {
 
 // toolsListSanitizer is a line-buffered stdout wrapper. Each complete
 // JSON-RPC line is passed through sanitizeToolsListJSON so a live stdio
-// client (Grok, Claude Code) sees the Grok-ingestible tools/list shape.
+// client sees the compact tools/list shape.
 type toolsListSanitizer struct {
 	w   io.Writer
 	buf []byte

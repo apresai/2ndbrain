@@ -16,10 +16,10 @@ var toolNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$`)
 const maxToolDescriptionBytes = 400
 const maxToolsListPayloadBytes = 16000
 
-// TestToolsListJSONShape pins the on-wire tools/list bytes Grok session
-// cataloging reads. Assertions are on the sanitized JSON (the same rewrite
-// stdout applies), not on the mcp-go Tool struct, because mcp-go always
-// emits empty annotations and empty required arrays.
+// TestToolsListJSONShape pins the on-wire tools/list bytes. Assertions are
+// on the sanitized JSON (the same rewrite stdout applies), not on the
+// mcp-go Tool struct, because mcp-go always emits empty annotations and
+// empty required arrays.
 func TestToolsListJSONShape(t *testing.T) {
 	raw := toolsListWireJSON(t)
 	if len(raw) >= maxToolsListPayloadBytes {
