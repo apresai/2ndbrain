@@ -6,28 +6,28 @@
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `kb_info` | none | Show vault root, counts, schemas, provider readiness, and suggested next actions |
-| `kb_search` | `query` (required), `type`, `status`, `tag`, `limit` | Hybrid BM25 search with structured filters |
-| `kb_ask` | `question` (required) | RAG Q&A with source citations |
-| `kb_read` | `path` (required), `chunk` | Read full document or specific heading section |
-| `kb_list` | `type`, `status`, `tag`, `limit` | List documents with metadata filters |
-| `kb_create` | `title` (required), `type` (required), `path` (optional vault-relative subdirectory, created if missing) | Create document from template with auto UUID |
-| `kb_update_meta` | `path` (required), `fields` (required) | Update frontmatter with schema validation |
-| `kb_append` | `path` (required), `text` (required) | Append text to the end of a document body (explicit body write; reindexes + re-embeds) |
-| `kb_replace_section` | `path` (required), `section` (required), `text` (required) | Replace the content under one heading, leaving siblings untouched (explicit body write) |
-| `kb_related` | `path` (required), `depth` | Find connected documents via wikilink graph |
-| `kb_backlinks` | `path` (required) | List resolved inbound links (what links INTO this doc); check before delete/rename |
-| `kb_links` | `path` (required) | List outbound links including broken ones (each carries a `resolved` flag) |
-| `kb_structure` | `path` (required) | Get heading tree as JSON with chunk IDs |
-| `kb_tags` | none | List every tag in the vault with its document count, descending |
-| `kb_tasks` | `path` | List GFM checkbox tasks (`- [ ]` / `- [x]`) across the vault, one file, or a directory |
-| `kb_delete` | `path` (required) | Delete document from vault and index |
-| `kb_index` | none | Rebuild the vault index and refresh embeddings |
-| `kb_suggest_links` | `path` (required), `limit` | Suggest semantic wikilinks for a document |
-| `kb_polish` | `path` (required) | Generate a polished revision without writing it back |
-| `kb_git_activity` | `since_days` | Summarize recent git commits for the vault |
-| `kb_git_diff` | `path` (required) | Return a unified diff for one file versus HEAD |
-| `kb_git_status` | none | Return porcelain-style git status for tracked and untracked files |
+| `kb_info` | none | Vault overview: name, root, types/schemas, counts, AI readiness. Call first. |
+| `kb_search` | `query` (required), `type`, `status`, `tag`, `limit` | Hybrid BM25 plus vector search. Rank by `vector_score` (cosine), not `score` (RRF). |
+| `kb_ask` | `question` (required) | RAG answer plus source paths. Verify cites with `kb_read`. If no hits, drop to `kb_search`. |
+| `kb_read` | `path` (required), `chunk` | Read a vault-relative path, or one heading via `chunk`. |
+| `kb_list` | `type`, `status`, `tag`, `limit` | Enumerate docs by type/status/tag without content. No query. Follow with `kb_read`. |
+| `kb_create` | `title` (required), `type` (required), `path` (optional vault-relative subdirectory, created if missing) | Create from template (UUID plus frontmatter). Types: adr, runbook, prd, prfaq, postmortem, note. Search first. |
+| `kb_update_meta` | `path` (required), `fields` (required) | Schema-validated frontmatter only. Status transitions are enforced. |
+| `kb_append` | `path` (required), `text` (required) | Append text to body end, then reindex. Frontmatter untouched. |
+| `kb_replace_section` | `path` (required), `section` (required), `text` (required) | Replace one heading body. Call `kb_structure` first for heading names. |
+| `kb_related` | `path` (required), `depth` | Wikilink graph from path, depth N (default 2). For semantic "should link", use `kb_suggest_links`. |
+| `kb_backlinks` | `path` (required) | Resolved inbound links to path. Check before delete/rename. |
+| `kb_links` | `path` (required) | Outbound links from path, including broken (`resolved=false`). |
+| `kb_structure` | `path` (required) | Heading tree for path. Then `kb_read` with `chunk`. |
+| `kb_tags` | none | Vault tag vocabulary with counts. |
+| `kb_tasks` | `path`, `done`, `todo` | GFM checkboxes (`- [ ]` / `- [x]`) vault-wide or under path. |
+| `kb_delete` | `path` (required) | Delete file plus index. Irreversible except via git. |
+| `kb_index` | none | Full reindex plus re-embed. Only after bulk external edits or model switch. |
+| `kb_suggest_links` | `path` (required), `limit` | Semantic wikilink candidates for path, excluding already-linked. |
+| `kb_polish` | `path` (required), `links`, `system` | Copy-edit preview; does not write. |
+| `kb_git_activity` | `since_days` | Recent vault commits (default 7 days). No-op if not a git repo. |
+| `kb_git_diff` | `path` (required) | Unified diff of path vs HEAD. |
+| `kb_git_status` | none | Porcelain map of dirty/untracked vault files. |
 
 ## Setup
 
@@ -89,6 +89,23 @@ Add to `.cursor/mcp.json` in your project:
   }
 }
 ```
+
+### Grok
+
+Grok prefixes each tool as `<server>__<name>` and keeps only names matching
+`^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$`. A server key that starts with a digit
+(`2ndbrain`, which Grok also imports from `~/.claude.json`) makes every
+prefixed name illegal, so a session records `mcp_server_connected` with
+`tool_count` 0 even though `grok mcp doctor 2ndbrain` lists 22 tools (doctor
+does not prefix). Use `twonb` (same stem as the Homebrew formula):
+
+```toml
+[mcp_servers.twonb]
+command = "2nb"
+args = ["mcp-server", "--vault", "/path/to/your/vault"]
+```
+
+Paste that into `~/.grok/config.toml`. Do not name the server `2ndbrain`.
 
 ### Claude Desktop
 

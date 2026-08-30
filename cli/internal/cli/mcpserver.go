@@ -33,7 +33,7 @@ index open). It does NOT self-exit while a client is connected.
 To also cap on inactivity, set --idle-timeout or the 2NB_MCP_IDLE_TIMEOUT env
 var (e.g. 30m, 1h); the default is 0 (no activity-based self-exit).
 
-Available tools: kb_search, kb_read, kb_related, kb_create, kb_update_meta, kb_structure`,
+Available tools: kb_info, kb_search, kb_ask, kb_read, kb_list, kb_create, kb_update_meta, kb_append, kb_replace_section, kb_related, kb_backlinks, kb_links, kb_structure, kb_tags, kb_tasks, kb_delete, kb_index, kb_suggest_links, kb_polish, kb_git_activity, kb_git_diff, kb_git_status`,
 	RunE: runMCPServer,
 }
 
