@@ -3,13 +3,14 @@ package cli
 import (
 	"fmt"
 
+	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
 var mcpSetupCmd = &cobra.Command{
 	Use:   "mcp-setup",
 	Short: "Show MCP server setup instructions for AI tools",
-	Long:  "Prints configuration snippets for connecting the 2ndbrain MCP server to Claude Code, Claude Desktop, Cursor, Gemini CLI, Amazon Q, and Kiro. The printed snippets include the active vault path so they're ready to paste.",
+	Long:  "Prints configuration snippets for connecting the 2ndbrain MCP server to Claude Code, Claude Desktop, Cursor, Codex, Grok, Gemini CLI, Amazon Q, and Kiro. The printed snippets include the active vault path so they're ready to paste.",
 	Example: `  2nb mcp-setup                                     # print all snippets
   2nb mcp-setup | pbcopy                            # copy to clipboard (macOS)`,
 	RunE: runMCPSetup,
@@ -28,12 +29,14 @@ func runMCPSetup(cmd *cobra.Command, args []string) error {
 		v.Close()
 	}
 
+	catalog := mcppkg.ToolCatalog()
+
 	fmt.Printf(`2ndbrain MCP Server Setup
 =========================
 
 Your vault: %s
 
-The MCP server exposes 11 tools for searching, reading, creating,
+The MCP server exposes %d tools for searching, reading, creating,
 and asking questions about your knowledge base.
 
 ───────────────────────────────────────────────
@@ -72,6 +75,18 @@ and asking questions about your knowledge base.
 ───────────────────────────────────────────────
 
 [mcp_servers.2ndbrain]
+command = "2nb"
+args = ["mcp-server", "--vault", "%s"]
+
+───────────────────────────────────────────────
+ Grok  (~/.grok/config.toml)
+   Grok also imports servers from ~/.claude.json. Use the key "twonb", not
+   "2ndbrain": Grok prefixes tools as <server>__<name> and keeps only names
+   matching ^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$, so a key that starts with a digit
+   catalogs as 0 tools even when grok mcp doctor reports 22.
+───────────────────────────────────────────────
+
+[mcp_servers.twonb]
 command = "2nb"
 args = ["mcp-server", "--vault", "%s"]
 
@@ -132,22 +147,13 @@ args = ["mcp-server", "--vault", "%s"]
   }
 }
 
-───────────────────────────────────────────────
- Available Tools (11)
-───────────────────────────────────────────────
+`, vaultPath, len(catalog), vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath)
 
-  kb_info         Get vault overview (call first)
-  kb_search       Hybrid keyword + semantic search
-  kb_ask          Ask questions, get AI answers with sources
-  kb_read         Read a document or specific section
-  kb_list         List documents with filters
-  kb_create       Create ADR, runbook, PRD, PR/FAQ, postmortem, or note
-  kb_update_meta  Update frontmatter fields
-  kb_related      Find connected documents via links
-  kb_structure    Get document heading outline
-  kb_delete       Delete a document
-  kb_index        Rebuild search index + embeddings
-
+	fmt.Printf("───────────────────────────────────────────────\n Available Tools (%d)\n───────────────────────────────────────────────\n\n", len(catalog))
+	for _, t := range catalog {
+		fmt.Printf("  %-18s %s\n", t.Name, t.Description)
+	}
+	fmt.Printf(`
 ───────────────────────────────────────────────
  Example Prompts to Try
 ───────────────────────────────────────────────
@@ -164,7 +170,7 @@ args = ["mcp-server", "--vault", "%s"]
   "Mark the JWT ADR as accepted"
   "Reindex the knowledge base"
 
-`, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath, vaultPath)
+`)
 
 	return nil
 }

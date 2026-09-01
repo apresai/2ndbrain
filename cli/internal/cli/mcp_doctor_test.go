@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
 	"github.com/apresai/2ndbrain/internal/testutil"
 )
 
@@ -17,8 +18,8 @@ func TestBuildMCPDoctorReport_HealthyOffline(t *testing.T) {
 
 	report := buildMCPDoctorReport(context.Background(), v)
 
-	if report.ToolCount != 22 {
-		t.Errorf("tool_count = %d, want 22", report.ToolCount)
+	if report.ToolCount != len(mcppkg.ToolCatalog()) {
+		t.Errorf("tool_count = %d, want %d", report.ToolCount, len(mcppkg.ToolCatalog()))
 	}
 	if !report.InstructionsPresent {
 		t.Error("instructions should be present")

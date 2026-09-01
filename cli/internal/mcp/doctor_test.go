@@ -10,8 +10,8 @@ import (
 func TestEngine_ToolCountMatchesServer(t *testing.T) {
 	v := testutil.NewTestVault(t)
 	eng := NewEngine(v)
-	if got := eng.ToolCount(); got != 22 {
-		t.Errorf("ToolCount() = %d, want 22 (drift from mcpToolRegistrations)", got)
+	if got := eng.ToolCount(); got != len(allMCPToolNames) {
+		t.Errorf("ToolCount() = %d, want %d (drift from mcpToolRegistrations)", got, len(allMCPToolNames))
 	}
 	names := eng.ToolNames()
 	want := map[string]bool{"kb_info": false, "kb_search": false, "kb_list": false}
