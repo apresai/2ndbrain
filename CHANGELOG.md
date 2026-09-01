@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.21.0] - 2026-09-01
+
 ### Added
 - **Bedrock models are now identified by their route**, `id@plane/region`. The same model can be served on both Bedrock planes and in several US regions, and those endpoints have independent entitlement, so each is its own catalog entry. `2nb models discover` walks BOTH planes across us-east-1, us-east-2, and us-west-2 (listing is free and cached 24h) and names every route it finds; classic previously listed only your primary region, so a model served elsewhere was invisible. Measured on one real account, the old behavior discarded a route for 26 of 120 discovered models and hid 6 that exist in only one region
 - Model slots name their route explicitly: `ai.{generation,embedding}_{plane,region}` and `ai.rerank.{plane,region}`. `2nb config set ai.generation_model xai.grok-4.6@mantle/us-west-2` writes all three keys at once, so a slot is never left half-routed. A bare model id still works when the model has one route

@@ -1,2 +1,2 @@
 // Auto-generated from VERSION file - do not edit manually.
-let appVersion = "0.20.1"
+let appVersion = "0.21.0"
