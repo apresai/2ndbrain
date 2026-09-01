@@ -93,8 +93,8 @@ Created on the first `2nb models bench` run. Backs benchmark history, favorites,
 | Table | Purpose |
 |-------|---------|
 | `favorites` | Models to benchmark regularly (`provider`, `model_id`, `model_type`, `added_at`; primary key `provider, model_id`) |
-| `runs` | One row per benchmark run (`timestamp`, `provider`, `model_id`, `probe`, `latency_ms`, `ok`, `detail`, `vault_doc_count`) |
-| `schema_version` | Single-row schema version (currently 1) |
+| `runs` | One row per benchmark run (`timestamp`, `provider`, `model_id`, `plane`, `region`, `probe`, `latency_ms`, `ok`, `detail`, `vault_doc_count`) |
+| `schema_version` | Single-row schema version (currently 2). Schema v2 adds the `plane` and `region` columns through an idempotent `ALTER TABLE ... ADD COLUMN`, so existing history is preserved. Runs recorded before v2 carry no route and are back-filled once with the route currently resolved for that model |
 
 ## Metrics Database (`metrics.db`)
 
