@@ -252,7 +252,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `ai embed <text>` | Generate embedding vector (debug) |
 | `models list [--discover] [--status] [--provider] [--promote] [--enabled-only] [--recommended]` | Verified model catalog + user catalog + vendor discovery; `--discover --promote` tests unverified models concurrently and adds those that pass; `--enabled-only` filters out user-disabled models (dropdowns use this); `--recommended` shows only the curated short list, and the STATE column marks curation (★) plus each model's last test outcome |
 | `models test <model-id> [--save] [--scope global\|vault]` | Smoke-test any model (embed or generate probe); `id@plane/region` probes exactly that endpoint; failures are classified (`access_denied`, `bad_credentials`, `throttled`, ...) with a fix hint; `--save` records the result in your catalog, pass or fail |
-| `models verify [ids...] [--provider] [--vendor] [--recommended] [--all] [--enabled-only] [--yes] [--events]` | Batch-probe models to check YOUR account can invoke them (AWS can gate newer frontier models per account even when the console shows access). Cost-gated; every result is recorded so `models list` and `ai status` reflect your real access. `--enabled-only` probes only effectively-enabled models (post vendor policy); `--events` streams line-delimited JSON progress (start/result/done) for GUIs, requires `--yes`, and is mutually exclusive with `--json`. Bedrock model access is granted per region, so with additional regions configured (`config bedrock --set --regions`) a failing probe retries in each included region, stopping at the first pass; a model that only works in a non-primary region is pinned there and future calls route to it |
+| `models verify [ids...] [--provider] [--vendor] [--recommended] [--all] [--enabled-only] [--all-routes] [--yes] [--events]` | Batch-probe models to check YOUR account can invoke them (AWS can gate newer frontier models per account even when the console shows access). Cost-gated; every result is recorded so `models list` and `ai status` reflect your real access. `--enabled-only` probes only effectively-enabled models (post vendor policy); `--events` streams line-delimited JSON progress (start/result/done) for GUIs, requires `--yes`, and is mutually exclusive with `--json`. Candidates are routes, so a model served on several endpoints is probed on its best route only (the configured route, then the last known good, then the primary region) and extra endpoints never multiply the billed probes; `--all-routes` probes the full matrix when the best route fails and you need to know which endpoints your account can actually reach. Bedrock model access is granted per region, so with additional regions configured (`config bedrock --set --regions`) a failing probe retries in each included region, stopping at the first pass; the verdict is recorded on the route that was actually probed, and that route ranks first on the next pass. Point your queries at a specific endpoint with `2nb config set ai.generation_model <id>@<plane>/<region>` |
 | `models policy set --provider <p> --enable-only <vendors> [--scope global\|vault] [--dry-run] [--keep-model-overrides]` / `show` / `clear` | Persistent enable-only vendor policy per provider: models from vendors outside the list are disabled, including ones discovered later; explicit per-model enable/disable still wins, and the active models are never disabled. Bare `models policy` shows the current policies |
 | `models add <id> --provider --type [--scope global\|vault] [--price-in --price-out --dimensions --context-length --name --notes]` | Add a model to your user catalog (per-vault by default, or global with `--scope global`); a route-qualified id is refused |
 | `models remove <id> --provider [--scope global\|vault]` | Remove a model from your user catalog; a route-qualified id removes only that route; exits non-zero if nothing matched |
@@ -423,7 +423,7 @@ The MCP server exposes 22 tools for AI coding assistants:
 
 Each running `2nb mcp-server` writes a sidecar status file to `.2ndbrain/mcp/<pid>.json` with PID, start time, parent PID, and the last 50 tool invocations. Run `2nb mcp status` to list live servers, or use the Cmd+Shift+M status panel in the dashboard.
 
-**The easy way:** `2nb setup --client claude-code` (or `claude-desktop`, `warp`, `codex`, or `--all`) installs the skill and writes the MCP config for you, backing up any existing file and preserving your other servers. `2nb mcp install --client <name>` writes just the MCP entry. The manual snippets below are a fallback.
+**The easy way:** `2nb setup --client claude-code` (or `claude-desktop`, `warp`, `codex`, or `--all`) installs the skill and writes the MCP config for you, backing up any existing file and preserving your other servers. `2nb mcp install --client <name>` writes just the MCP entry. The manual snippets below are a fallback. Per-client parameters, server internals, and the full tool table live in [docs/mcp-integration.md](docs/mcp-integration.md).
 
 ### Claude Code
 
@@ -477,6 +477,18 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ### Codex
 
 `2nb mcp install --client codex` (or `2nb setup --client codex`) runs `codex mcp add` so Codex manages its own `~/.codex/config.toml` — no manual edit. If the `codex` CLI isn't installed, the command prints the exact `codex mcp add` line and the `[mcp_servers.2ndbrain]` TOML to paste.
+
+### Grok
+
+Add to `~/.grok/config.toml`:
+
+```toml
+[mcp_servers.twonb]
+command = "2nb"
+args = ["mcp-server", "--vault", "/path/to/your/vault"]
+```
+
+Name the server `twonb`, not `2ndbrain`. Grok prefixes every tool as `<server>__<name>` and keeps only names matching `^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$`, so a key starting with a digit makes all 22 tool names illegal and the session catalogs 0 tools. Grok also imports servers from `~/.claude.json`, so the Claude Code entry above hits the same wall; the `twonb` key fixes both. `grok mcp doctor` does not apply the prefix and still reports 22, which is why the breakage is easy to miss.
 
 Run `2nb mcp-setup` for config snippets for additional tools (Gemini CLI, Amazon Q, Kiro).
 
