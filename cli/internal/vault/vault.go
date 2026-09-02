@@ -95,6 +95,16 @@ func Open(dir string) (*Vault, error) {
 		return nil, fmt.Errorf("open index: %w", err)
 	}
 	if indexWasMissing {
+		// The same reasoning as Init: a database that did not exist a moment
+		// ago holds no chunks and no vectors, so it is at the current generation
+		// by construction. Without this, adopting an existing Obsidian vault and
+		// writing to it before the first full index (create, append, daily) left
+		// inline embeddings with no stamp, and the next `index` reported the
+		// same false "UPGRADE REEMBED RECOMMENDED" that Init's stamp fixes.
+		if serr := StampFreshGenerations(db); serr != nil {
+			db.Close()
+			return nil, fmt.Errorf("stamp generations: %w", serr)
+		}
 		fmt.Fprintln(os.Stderr, "  .2ndbrain/index.db was missing — created empty index (run '2nb index' to rebuild)")
 	}
 

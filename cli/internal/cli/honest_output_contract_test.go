@@ -29,9 +29,21 @@ func captureStderr(t *testing.T, fn func()) string {
 		_, _ = io.Copy(&buf, pr)
 		done <- buf.Bytes()
 	}()
+	// Restore under defer: a t.Fatal inside fn unwinds through here, and
+	// without this the swapped os.Stderr and the reader goroutine would leak
+	// into every later test in the package.
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
+		pw.Close()
+		os.Stderr = orig
+	}
+	defer restore()
 	fn()
-	pw.Close()
-	os.Stderr = orig
+	restore()
 	return string(<-done)
 }
 
@@ -191,11 +203,15 @@ func TestContract_ListFilterMissMessageNamesTheFilter(t *testing.T) {
 
 // F. cobra prints "Error: " itself; the message must not carry its own.
 func TestExitError_StripsRedundantErrorPrefix(t *testing.T) {
-	if got := (&ExitError{Message: "error: boom"}).Error(); got != "boom" {
-		t.Errorf("got %q, want %q (cobra adds the prefix; 51 call sites produced \"Error: error: ...\")", got, "boom")
-	}
-	if got := (&ExitError{Message: "boom"}).Error(); got != "boom" {
-		t.Errorf("an unprefixed message changed: %q", got)
+	for in, want := range map[string]string{
+		"error: boom": "boom",        // the 52 self-prefixing call sites
+		"Error: boom": "boom",        // a message that quoted an upstream error verbatim
+		"boom":        "boom",        // unprefixed, unchanged
+		"errors: two": "errors: two", // not the prefix; must survive
+	} {
+		if got := (&ExitError{Message: in}).Error(); got != want {
+			t.Errorf("ExitError(%q).Error() = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -209,7 +225,39 @@ func TestContract_UnknownFormatIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "unknown --format") || !strings.Contains(err.Error(), "json") {
 		t.Errorf("refusal %q should name the flag and list valid values", err)
 	}
-	if out, err := runCLIArgs(t, root, "list", "--format", "json"); err != nil {
-		t.Fatalf("--format json regressed: %v\n%s", err, out)
+	// The gate must reject only the unknown, never a documented value. `table`
+	// is deliberately absent: nothing renders it, so accepting it would let it
+	// fall through to JSON, the exact failure the gate exists to stop.
+	for _, f := range []string{"json", "csv", "tsv", "yaml", "text", "paths", "tree"} {
+		if out, err := runCLIArgs(t, root, "list", "--format", f); err != nil {
+			t.Errorf("--format %s was refused by the format gate: %v\n%s", f, err, out)
+		}
+	}
+	if _, err := runCLIArgs(t, root, "list", "--format", "table"); err == nil {
+		t.Error("--format table was accepted, but nothing renders a table; it would fall through to JSON")
+	}
+}
+
+// A section IS a body. `read --chunk <heading> --format raw` printed a Go
+// struct dump on 0.21.1 and was refused by the first version of the no-body
+// guard; both were wrong for the same reason.
+func TestContract_ReadChunkRawEmitsTheSectionBody(t *testing.T) {
+	_, root := newContractVault(t)
+	body := "---\ntitle: Doc\ntype: note\nstatus: draft\n---\nintro\n\n## Setup\n\nsetup body here\n"
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"raw", "md"} {
+		out, err := runCLIArgs(t, root, "read", "doc.md", "--chunk", "Setup", "--format", format)
+		if err != nil {
+			t.Fatalf("read --chunk --format %s: %v\n%s", format, err, out)
+		}
+		s := string(out)
+		if !strings.Contains(s, "setup body here") {
+			t.Errorf("--format %s did not emit the section body:\n%s", format, s)
+		}
+		if strings.Contains(s, "{") && strings.Contains(s, "doc_id") {
+			t.Errorf("--format %s emitted a struct rendering, not the body:\n%s", format, s)
+		}
 	}
 }

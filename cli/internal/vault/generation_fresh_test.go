@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -56,5 +57,31 @@ func TestCheckIndexFreshness_UnstampedVaultWithEmbeddingsStillStale(t *testing.T
 	f := CheckIndexFreshness(v.DB)
 	if !f.ReembedRecommended {
 		t.Errorf("an unstamped vault holding embeddings must still recommend a re-embed: %+v", f)
+	}
+}
+
+// Open's self-heal creates an empty index.db for a vault 2nb has never seen
+// (an existing Obsidian vault adopted via --vault). That database is empty, so
+// it is at the current generation for the same reason a freshly Init'd one
+// is; without the stamp, a write that embeds inline before the first full
+// index (create, append, daily) left the vault nagging for a re-embed.
+func TestOpen_SelfHealedIndexIsStampedCurrent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "adopted")
+	if err := os.MkdirAll(filepath.Join(root, ".obsidian"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "existing.md"), []byte("---\ntitle: Existing\ntype: note\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer v.Close()
+	if got := v.DB.GetMetaInt(store.MetaEmbedGeneration, 0); got != EmbedGeneration {
+		t.Errorf("embed_generation after self-heal = %d, want %d", got, EmbedGeneration)
+	}
+	if f := CheckIndexFreshness(v.DB); f.Stale() {
+		t.Errorf("a self-healed empty index reads as stale: %+v", f)
 	}
 }

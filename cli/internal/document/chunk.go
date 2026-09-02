@@ -289,6 +289,14 @@ func getStackLevel(stack []string, targetLevel int) bool {
 	return level >= targetLevel
 }
 
+// Serialize returns the section body, which is the raw and markdown form of a
+// chunk. `read --chunk <heading> --format raw` reaches output.Write with a
+// Chunk value; before this it fell to the %v struct dump on 0.21.1 and to the
+// no-body refusal after, and neither is the section the caller asked for.
+func (c Chunk) Serialize() ([]byte, error) {
+	return []byte(c.Content), nil
+}
+
 // idKeyOrHeading is the base a derived chunk id hashes from. Falling back to
 // HeadingPath keeps a hand-built Chunk (tests, callers outside ChunkDocument)
 // working exactly as before.

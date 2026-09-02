@@ -5,16 +5,15 @@ import (
 	"testing"
 )
 
-// What raw/md are FOR must keep working exactly as before.
-func TestWrite_RawStillEmitsBodies(t *testing.T) {
+// Scalars keep their obvious raw form; only bodiless composites are refused.
+func TestWrite_RawScalarsStillEmit(t *testing.T) {
+	// string, []byte and Serialize() are covered by TestWrite_Raw already; the
+	// scalar forms are what the refusal must NOT catch.
 	cases := []struct {
 		name string
 		data any
 		want string
 	}{
-		{"string", "hello\n", "hello\n"},
-		{"bytes", []byte("bytes\n"), "bytes\n"},
-		{"serializable", serializable{body: "body\n"}, "body\n"},
 		{"int scalar", 42, "42\n"},
 		{"bool scalar", true, "true\n"},
 	}

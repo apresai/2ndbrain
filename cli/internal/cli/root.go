@@ -564,7 +564,7 @@ func unconfiguredVaultError(root, configured string) error {
 var knownFormats = map[output.Format]bool{
 	output.FormatJSON: true, output.FormatCSV: true, output.FormatTSV: true,
 	output.FormatYAML: true, output.FormatRaw: true, output.FormatMD: true,
-	output.FormatText: true, output.FormatTable: true, "paths": true, "tree": true,
+	output.FormatText: true, "paths": true, "tree": true,
 }
 
 // validateFormatFlag refuses a --format value the CLI does not know. A typo
@@ -631,7 +631,7 @@ type ExitError struct {
 }
 
 func (e *ExitError) Error() string {
-	// cobra prints "Error: " in front of whatever this returns, and 51 call
+	// cobra prints "Error: " in front of whatever this returns, and 52 call
 	// sites build their message with their own "error: " prefix, so users saw
 	// "Error: error: frontmatter key not found". Strip it here rather than
 	// touching every caller: the prefix is cobra's job.

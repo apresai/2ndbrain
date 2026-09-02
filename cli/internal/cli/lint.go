@@ -63,7 +63,7 @@ type LintIssue struct {
 }
 
 type LintReport struct {
-	Issues []LintIssue `json:"issues"` // always [] in JSON, never null; see finalizeLintReport
+	Issues []LintIssue `json:"issues"` // always [] in JSON, never null; initialized non-nil in runLint
 	Files  int         `json:"files_checked"`
 	Errors int         `json:"errors"`
 	Warns  int         `json:"warnings"`
