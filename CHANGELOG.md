@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **`--type`, `--status` and `--tag` were ignored by semantic search.** The filters were applied to the keyword leg in SQL, but the vector leg scores on embeddings alone and never saw them, so the moment rank fusion merged an unfiltered vector hit in, the filter was gone: `search --type adr` returned notes, `--status accepted` returned drafts, and a filter matching no document at all still returned results. Hybrid is the default mode, so this was the normal path whenever the semantic channel was healthy; `--bm25-only` was always correct. The vector candidates are now filtered on the same criteria, and the candidate pool is over-fetched when a filter is active so a selective filter does not starve the result set
+- **A document that repeated a heading lost the earlier section from the index.** A chunk id is a hash of the document id and the heading path, and `chunks.id` is a primary key, so two sections sharing a path (a second `## Standup` under `# Log`, which is what every daily-note and meeting-note template produces) collided and the later one overwrote the earlier. That text was then absent from search and from RAG grounding, with no warning and a zero exit. Repeats now get distinct ids. The displayed heading path is unchanged, and the FIRST section keeps the id it already had, so only documents that actually repeat a heading are re-chunked
+
+### Changed
+- `EmbedGeneration` 2 to 3. **A re-embed is recommended after upgrading** (`2nb index --force-reembed`) so documents with repeated headings get their missing sections indexed. Vaults with no repeated headings are unaffected in content, but the generation stamp is what tells the CLI a vault predates the fix
 
 ## [0.21.1] - 2026-09-02
 

@@ -3,6 +3,7 @@ package search
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode"
 )
@@ -102,18 +103,117 @@ func (e *Engine) HybridSearch(opts Options, queryEmbedding []float32, docIDs []s
 	// table isn't present, or when it doesn't yet cover the whole corpus (a
 	// vault only partially re-embedded under the vec0 index) — len(embeddings)
 	// is the coverage target, since every embedded doc is in that corpus.
+	// Both vector legs score on embeddings alone and know nothing about
+	// doc_type, status or tags, so their candidates are filtered afterwards.
+	// Over-fetch harder when a filter is active: the discard happens after the
+	// KNN has already chosen its k, so a selective filter would otherwise starve
+	// the result set.
+	vecFetch := opts.Limit * 4
+	if opts.hasFilters() {
+		vecFetch = opts.Limit * 20
+	}
 	var vectorResults []ScoredDoc
-	if vd, ok, verr := e.vecChunkSearchByDoc(queryEmbedding, opts.Limit*4, opts.MinVectorScore, len(embeddings)); verr == nil && ok {
+	if vd, ok, verr := e.vecChunkSearchByDoc(queryEmbedding, vecFetch, opts.MinVectorScore, len(embeddings)); verr == nil && ok {
 		vectorResults = vd
 	} else if len(embeddings) > 0 {
-		vectorResults = VectorSearchThreshold(queryEmbedding, docIDs, embeddings, opts.Limit*2, opts.MinVectorScore)
+		vectorResults = VectorSearchThreshold(queryEmbedding, docIDs, embeddings, vecFetch/2, opts.MinVectorScore)
 	} else {
 		return bm25Results, ModeKeyword, nil
+	}
+
+	// WITHOUT this the structured filters were silently discarded the moment RRF
+	// merged an unfiltered vector hit in: `search --type adr` returned notes,
+	// `--status accepted` returned drafts. Only the BM25 leg applied them, so
+	// the bug appeared exactly when the semantic channel was healthy, which is
+	// the default.
+	vectorResults, err = e.filterScoredDocs(vectorResults, opts)
+	if err != nil {
+		return nil, "", err
 	}
 
 	// Combine with RRF (engine implements DocLookup for vector-only results)
 	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e, opts.BM25Weight, opts.VectorWeight)
 	return combined, ModeHybrid, nil
+}
+
+// hasFilters reports whether any structured filter is set.
+func (o Options) hasFilters() bool {
+	return o.Type != "" || o.Status != "" || o.Tag != ""
+}
+
+// filterConditions renders the structured filters as SQL against a documents
+// alias of `d`. One definition for all three readers (the BM25 leg, the
+// query-less listing, and the vector-candidate filter), because three copies is
+// how the vector leg came to disagree with the BM25 leg in the first place.
+func (o Options) filterConditions() ([]string, []any) {
+	var conditions []string
+	var args []any
+	if o.Type != "" {
+		conditions = append(conditions, "d.doc_type = ?")
+		args = append(args, o.Type)
+	}
+	if o.Status != "" {
+		conditions = append(conditions, "d.status = ?")
+		args = append(args, o.Status)
+	}
+	if o.Tag != "" {
+		conditions = append(conditions, "d.id IN (SELECT doc_id FROM tags WHERE tag = ?)")
+		args = append(args, o.Tag)
+	}
+	return conditions, args
+}
+
+// filterScoredDocs drops vector candidates whose document does not satisfy the
+// structured filters, so the vector leg honors --type/--status/--tag exactly
+// like the BM25 leg does. One query, so a large candidate pool costs one round
+// trip rather than one per document.
+func (e *Engine) filterScoredDocs(docs []ScoredDoc, opts Options) ([]ScoredDoc, error) {
+	if len(docs) == 0 || !opts.hasFilters() {
+		return docs, nil
+	}
+	placeholders := make([]string, len(docs))
+	args := make([]any, 0, len(docs)+3)
+	for i, d := range docs {
+		placeholders[i] = "?"
+		args = append(args, d.DocID)
+	}
+	query := "SELECT d.id FROM documents d WHERE d.id IN (" + strings.Join(placeholders, ",") + ")"
+	conditions, filterArgs := opts.filterConditions()
+	for _, c := range conditions {
+		query += " AND " + c
+	}
+	args = append(args, filterArgs...)
+	rows, err := e.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("filter vector candidates: %w", err)
+	}
+	defer rows.Close()
+	allowed := make(map[string]bool, len(docs))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		allowed[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	kept := make([]ScoredDoc, 0, len(docs))
+	for _, d := range docs {
+		if allowed[d.DocID] {
+			kept = append(kept, d)
+		}
+	}
+	if len(kept) == 0 {
+		// Not a user-facing warning: a filter excluding every semantic candidate
+		// is the filter working, and a line on every such query would be noise on
+		// the common `search --type adr` path. Debug-level so a "why did semantic
+		// ranking stop contributing?" question is answerable from cli.log.
+		slog.Debug("search: structured filters discarded every vector candidate",
+			"candidates", len(docs), "type", opts.Type, "status", opts.Status, "tag", opts.Tag)
+	}
+	return kept, nil
 }
 
 func (e *Engine) bm25Search(opts Options) ([]Result, error) {
@@ -135,18 +235,9 @@ func (e *Engine) bm25Search(opts Options) ([]Result, error) {
 	conditions = append(conditions, "chunks_fts MATCH ?")
 	args = append(args, ftsQuery(opts.Query))
 
-	if opts.Type != "" {
-		conditions = append(conditions, "d.doc_type = ?")
-		args = append(args, opts.Type)
-	}
-	if opts.Status != "" {
-		conditions = append(conditions, "d.status = ?")
-		args = append(args, opts.Status)
-	}
-	if opts.Tag != "" {
-		conditions = append(conditions, "d.id IN (SELECT doc_id FROM tags WHERE tag = ?)")
-		args = append(args, opts.Tag)
-	}
+	filterConds, filterArgs := opts.filterConditions()
+	conditions = append(conditions, filterConds...)
+	args = append(args, filterArgs...)
 
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
@@ -168,21 +259,7 @@ func (e *Engine) listByFilters(opts Options) ([]Result, error) {
 		FROM documents d
 	`
 
-	var conditions []string
-	var args []any
-
-	if opts.Type != "" {
-		conditions = append(conditions, "d.doc_type = ?")
-		args = append(args, opts.Type)
-	}
-	if opts.Status != "" {
-		conditions = append(conditions, "d.status = ?")
-		args = append(args, opts.Status)
-	}
-	if opts.Tag != "" {
-		conditions = append(conditions, "d.id IN (SELECT doc_id FROM tags WHERE tag = ?)")
-		args = append(args, opts.Tag)
-	}
+	conditions, args := opts.filterConditions()
 
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")

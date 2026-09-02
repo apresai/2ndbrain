@@ -25,6 +25,13 @@ type Chunk struct {
 	// BlockID is the last Obsidian block-reference id (^id) found in the chunk,
 	// best-effort: a heading-bounded chunk can hold several, so the last wins.
 	BlockID string `json:"block_id,omitempty"`
+
+	// idKey is what the chunk id was hashed from. It is the heading path for the
+	// first section carrying that path and a disambiguated variant for any
+	// repeat, so splitChunk can derive part ids from a base that is already
+	// unique within the document. Unexported: it is derivation state, not part
+	// of the chunk contract.
+	idKey string
 }
 
 // ChunkDocument splits a document into chunks at heading boundaries. Obsidian
@@ -41,6 +48,15 @@ func ChunkDocument(doc *Document) []Chunk {
 	currentLevel := 0
 	startLine := 1
 	order := 0
+	// A heading path is NOT unique within a document: "# Log > ## Standup"
+	// repeats in every daily note, and "## Notes" or "## Decision" repeat in
+	// meeting notes and ADR logs. The chunk id hashes (doc id, heading path)
+	// and chunks.id is a PRIMARY KEY, so the second section used to overwrite
+	// the first and that text vanished from the index. It was searchable
+	// content lost silently, with exit 0 and no warning. Count occurrences and
+	// disambiguate the repeats; the FIRST keeps its original id so upgrading
+	// does not churn every chunk in every vault.
+	seenHeadingPath := map[string]int{}
 
 	flushChunk := func(endLine int) {
 		content := strings.TrimSpace(currentContent.String())
@@ -51,9 +67,15 @@ func ChunkDocument(doc *Document) []Chunk {
 		if headingPath == "" {
 			headingPath = "(preamble)"
 		}
-		chunkID := makeChunkID(doc.ID, headingPath)
+		idKey := headingPath
+		if n := seenHeadingPath[headingPath]; n > 0 {
+			idKey = fmt.Sprintf("%s#dup-%d", headingPath, n+1)
+		}
+		seenHeadingPath[headingPath]++
+		chunkID := makeChunkID(doc.ID, idKey)
 		chunks = append(chunks, Chunk{
 			ID:          chunkID,
+			idKey:       idKey,
 			DocID:       doc.ID,
 			HeadingPath: headingPath,
 			Level:       currentLevel,
@@ -162,7 +184,7 @@ func splitChunk(c Chunk, maxChars, overlap int) []Chunk {
 		}
 		startLine := c.StartLine + strings.Count(string(runes[:r[0]]), "\n")
 		out = append(out, Chunk{
-			ID:          makeChunkID(c.DocID, fmt.Sprintf("%s#part-%d", c.HeadingPath, i)),
+			ID:          makeChunkID(c.DocID, fmt.Sprintf("%s#part-%d", c.idKeyOrHeading(), i)),
 			DocID:       c.DocID,
 			HeadingPath: c.HeadingPath,
 			Level:       c.Level,
@@ -265,6 +287,16 @@ func getStackLevel(stack []string, targetLevel int) bool {
 	last := stack[len(stack)-1]
 	level := headingLevel(last)
 	return level >= targetLevel
+}
+
+// idKeyOrHeading is the base a derived chunk id hashes from. Falling back to
+// HeadingPath keeps a hand-built Chunk (tests, callers outside ChunkDocument)
+// working exactly as before.
+func (c Chunk) idKeyOrHeading() string {
+	if c.idKey != "" {
+		return c.idKey
+	}
+	return c.HeadingPath
 }
 
 func makeChunkID(docID, headingPath string) string {
