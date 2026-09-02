@@ -744,7 +744,6 @@ func (h *handlers) handleKBGitActivity(ctx context.Context, request mcplib.CallT
 
 func (h *handlers) handleKBGitDiff(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	path := strings.TrimSpace(argString(request, "path"))
-	path = strings.TrimSpace(path)
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
 	}
