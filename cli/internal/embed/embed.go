@@ -32,12 +32,17 @@ func Document(ctx context.Context, db *store.DB, embedder ai.EmbeddingProvider, 
 	// chunk_id join stays valid and no chunk exceeds Nova's embed limits.
 	chunks := document.ChunkForStorage(parsed)
 	// Dedup the kept chunks by ID (last occurrence wins), mirroring the chunks
-	// table's INSERT ... ON CONFLICT(id) DO UPDATE collapse. Two sections that
-	// share a heading path (e.g. two `## Notes`, a repeated changelog date)
-	// produce the SAME chunk_id (makeChunkID = sha256(docID+":"+headingPath)),
-	// and vec0's chunk_id PRIMARY KEY has no UPSERT — a duplicate INSERT would
-	// hard-error and leave the doc with no embedding. Deduping before embedding
-	// also avoids paying for an embedding call on the discarded collision.
+	// table's INSERT ... ON CONFLICT(id) DO UPDATE collapse. vec0's chunk_id
+	// PRIMARY KEY has no UPSERT, so a duplicate INSERT would hard-error and
+	// leave the doc with no embedding at all.
+	//
+	// This is now a BACKSTOP rather than the load-bearing collapse it used to
+	// be. Two sections sharing a heading path (two `## Notes`, a repeated
+	// changelog date) once hashed to the same chunk_id, because the id was
+	// sha256(docID+":"+headingPath); ChunkDocument disambiguates repeats now, so
+	// in practice nothing collides here. Keep the dedup anyway: it is cheap, and
+	// a hand-built or future chunk source that reuses an id should degrade to a
+	// dropped duplicate rather than wedging the document.
 	idx := make(map[string]int, len(chunks))
 	var embedChunks []document.Chunk
 	for _, ch := range chunks {

@@ -136,11 +136,13 @@ func TestSetDocChunkVectors_DedupLastWins(t *testing.T) {
 	if err := db.EnsureVecChunks(dim); err != nil {
 		t.Fatal(err)
 	}
-	// Two chunk vectors collide on chunk_id — the duplicate-heading case, since
-	// makeChunkID hashes only docID+headingPath. vec0's chunk_id PRIMARY KEY has
-	// no UPSERT, so inserting both naively would UNIQUE-fail and wedge the doc's
-	// embedding; SetDocChunkVectors must collapse them last-wins (mirroring the
-	// chunks table's ON CONFLICT(id) DO UPDATE) instead.
+	// Two chunk vectors that collide on chunk_id. ChunkDocument no longer
+	// PRODUCES such a pair (repeated heading paths get disambiguated ids), so
+	// this is a synthetic input guarding the store layer directly: vec0's
+	// chunk_id PRIMARY KEY has no UPSERT, so inserting both naively would
+	// UNIQUE-fail and wedge the doc's embedding. SetDocChunkVectors must
+	// collapse them last-wins (mirroring the chunks table's ON CONFLICT(id) DO
+	// UPDATE) whatever the caller hands it.
 	batch := []ChunkVector{
 		{ChunkID: "dup", DocID: "d1", ContentHash: "h-a", Vector: []float32{1, 0, 0, 0}},
 		{ChunkID: "dup", DocID: "d1", ContentHash: "h-b", Vector: []float32{0, 1, 0, 0}},

@@ -74,3 +74,28 @@ func TestChunkDocument_FirstOccurrenceKeepsItsOriginalID(t *testing.T) {
 			single[1].ID, repeated[1].ID)
 	}
 }
+
+// The two id-disambiguation suffixes compose: a repeated heading whose section
+// is ALSO long enough to split produces #dup-N and #part-N on the same chunk.
+// splitChunk derives part ids from the already-disambiguated key precisely so
+// that two duplicate sections which both split cannot collide one level down,
+// which is where a naive fix would still lose content.
+func TestSplitLongChunks_RepeatedHeadingsThatAlsoSplitStayUnique(t *testing.T) {
+	long := strings.Repeat("alpha beta gamma delta ", 200) // comfortably over the cap
+	doc := &Document{ID: "d1", Body: "# Log\n\n## Standup\n\n" + long + "\n\n## Standup\n\n" + long + "\n"}
+
+	chunks := SplitLongChunks(ChunkDocument(doc), 500)
+	if len(chunks) < 4 {
+		t.Fatalf("expected both sections to split into multiple parts, got %d chunks", len(chunks))
+	}
+	seen := map[string]bool{}
+	for _, c := range chunks {
+		if seen[c.ID] {
+			t.Errorf("duplicate chunk id %s across split parts of two same-heading sections; one would be lost on insert", c.ID)
+		}
+		seen[c.ID] = true
+	}
+	if len(seen) != len(chunks) {
+		t.Errorf("got %d unique ids for %d chunks", len(seen), len(chunks))
+	}
+}

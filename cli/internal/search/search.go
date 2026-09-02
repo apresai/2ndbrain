@@ -3,6 +3,7 @@ package search
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode"
 )
@@ -140,6 +141,28 @@ func (o Options) hasFilters() bool {
 	return o.Type != "" || o.Status != "" || o.Tag != ""
 }
 
+// filterConditions renders the structured filters as SQL against a documents
+// alias of `d`. One definition for all three readers (the BM25 leg, the
+// query-less listing, and the vector-candidate filter), because three copies is
+// how the vector leg came to disagree with the BM25 leg in the first place.
+func (o Options) filterConditions() ([]string, []any) {
+	var conditions []string
+	var args []any
+	if o.Type != "" {
+		conditions = append(conditions, "d.doc_type = ?")
+		args = append(args, o.Type)
+	}
+	if o.Status != "" {
+		conditions = append(conditions, "d.status = ?")
+		args = append(args, o.Status)
+	}
+	if o.Tag != "" {
+		conditions = append(conditions, "d.id IN (SELECT doc_id FROM tags WHERE tag = ?)")
+		args = append(args, o.Tag)
+	}
+	return conditions, args
+}
+
 // filterScoredDocs drops vector candidates whose document does not satisfy the
 // structured filters, so the vector leg honors --type/--status/--tag exactly
 // like the BM25 leg does. One query, so a large candidate pool costs one round
@@ -155,18 +178,11 @@ func (e *Engine) filterScoredDocs(docs []ScoredDoc, opts Options) ([]ScoredDoc, 
 		args = append(args, d.DocID)
 	}
 	query := "SELECT d.id FROM documents d WHERE d.id IN (" + strings.Join(placeholders, ",") + ")"
-	if opts.Type != "" {
-		query += " AND d.doc_type = ?"
-		args = append(args, opts.Type)
+	conditions, filterArgs := opts.filterConditions()
+	for _, c := range conditions {
+		query += " AND " + c
 	}
-	if opts.Status != "" {
-		query += " AND d.status = ?"
-		args = append(args, opts.Status)
-	}
-	if opts.Tag != "" {
-		query += " AND d.id IN (SELECT doc_id FROM tags WHERE tag = ?)"
-		args = append(args, opts.Tag)
-	}
+	args = append(args, filterArgs...)
 	rows, err := e.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("filter vector candidates: %w", err)
@@ -188,6 +204,14 @@ func (e *Engine) filterScoredDocs(docs []ScoredDoc, opts Options) ([]ScoredDoc, 
 		if allowed[d.DocID] {
 			kept = append(kept, d)
 		}
+	}
+	if len(kept) == 0 {
+		// Not a user-facing warning: a filter excluding every semantic candidate
+		// is the filter working, and a line on every such query would be noise on
+		// the common `search --type adr` path. Debug-level so a "why did semantic
+		// ranking stop contributing?" question is answerable from cli.log.
+		slog.Debug("search: structured filters discarded every vector candidate",
+			"candidates", len(docs), "type", opts.Type, "status", opts.Status, "tag", opts.Tag)
 	}
 	return kept, nil
 }
@@ -211,18 +235,9 @@ func (e *Engine) bm25Search(opts Options) ([]Result, error) {
 	conditions = append(conditions, "chunks_fts MATCH ?")
 	args = append(args, ftsQuery(opts.Query))
 
-	if opts.Type != "" {
-		conditions = append(conditions, "d.doc_type = ?")
-		args = append(args, opts.Type)
-	}
-	if opts.Status != "" {
-		conditions = append(conditions, "d.status = ?")
-		args = append(args, opts.Status)
-	}
-	if opts.Tag != "" {
-		conditions = append(conditions, "d.id IN (SELECT doc_id FROM tags WHERE tag = ?)")
-		args = append(args, opts.Tag)
-	}
+	filterConds, filterArgs := opts.filterConditions()
+	conditions = append(conditions, filterConds...)
+	args = append(args, filterArgs...)
 
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
@@ -244,21 +259,7 @@ func (e *Engine) listByFilters(opts Options) ([]Result, error) {
 		FROM documents d
 	`
 
-	var conditions []string
-	var args []any
-
-	if opts.Type != "" {
-		conditions = append(conditions, "d.doc_type = ?")
-		args = append(args, opts.Type)
-	}
-	if opts.Status != "" {
-		conditions = append(conditions, "d.status = ?")
-		args = append(args, opts.Status)
-	}
-	if opts.Tag != "" {
-		conditions = append(conditions, "d.id IN (SELECT doc_id FROM tags WHERE tag = ?)")
-		args = append(args, opts.Tag)
-	}
+	conditions, args := opts.filterConditions()
 
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")

@@ -1,6 +1,10 @@
 package search
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/apresai/2ndbrain/internal/store"
+)
 
 // The structured filters (--type/--status/--tag) are applied by the BM25 leg in
 // SQL. The vector legs score on embeddings alone and know nothing about
@@ -66,6 +70,21 @@ func TestHybridSearch_FiltersApplyToTheVectorLeg(t *testing.T) {
 		}
 	})
 
+	t.Run("tag filter excludes an untagged doc", func(t *testing.T) {
+		// --tag is a different SQL shape from type/status (a subquery against the
+		// tags table), so it needs its own coverage.
+		if err := db.UpsertTags("d-adr", []string{"space"}); err != nil {
+			t.Fatalf("UpsertTags: %v", err)
+		}
+		got := paths(t, Options{Query: "rocket", Limit: 10, Tag: "space"})
+		if len(got) != 1 || got[0] != "a.md" {
+			t.Errorf("--tag space returned %v, want only a.md", got)
+		}
+		if got := paths(t, Options{Query: "rocket", Limit: 10, Tag: "nosuchtag"}); len(got) != 0 {
+			t.Errorf("--tag nosuchtag returned %v, want none", got)
+		}
+	})
+
 	t.Run("a filter matching nothing returns nothing", func(t *testing.T) {
 		if got := paths(t, Options{Query: "rocket", Limit: 10, Type: "postmortem"}); len(got) != 0 {
 			t.Errorf("--type postmortem returned %v on a vault with no postmortem, want none", got)
@@ -78,4 +97,60 @@ func TestHybridSearch_FiltersApplyToTheVectorLeg(t *testing.T) {
 			t.Errorf("type+status matching one doc returned %v, want n.md", got)
 		}
 	})
+}
+
+// The test above exercises the brute-force vector fallback. The PRIMARY path is
+// the per-chunk vec0 KNN (vecChunkSearchByDoc), which is a different query and
+// was equally unfiltered, so it needs its own coverage: populating vec_chunks
+// makes HybridSearch take that branch instead.
+func TestHybridSearch_FiltersApplyToTheVec0KNNPath(t *testing.T) {
+	db := setupSearchDB(t)
+	insertTestDoc(t, db, "d-adr", "a.md", "Aligned ADR", "adr", "accepted",
+		"# Rocket\n\nRocket science in an ADR.\n")
+	insertTestDoc(t, db, "d-note", "n.md", "Aligned Note", "note", "draft",
+		"# Rocket\n\nRocket science in a note.\n")
+
+	const dim = 2
+	if err := db.EnsureVecChunks(dim); err != nil {
+		t.Skipf("vec_chunks unavailable in this build: %v", err)
+	}
+	// Identical vectors again, so only the filter can explain a difference.
+	for _, d := range []struct{ doc, chunk string }{{"d-adr", "c-adr"}, {"d-note", "c-note"}} {
+		if err := db.SetDocChunkVectors(d.doc, []store.ChunkVector{{
+			ChunkID: d.chunk, DocID: d.doc, ContentHash: "h", Vector: []float32{1, 0},
+		}}, "t"); err != nil {
+			t.Fatalf("SetDocChunkVectors(%s): %v", d.doc, err)
+		}
+		// documents.embedding is what len(embeddings) coverage is measured against.
+		if err := db.SetEmbedding(d.doc, []float32{1, 0}, "t", "h"); err != nil {
+			t.Fatalf("SetEmbedding(%s): %v", d.doc, err)
+		}
+	}
+	ids, vecs, err := db.AllEmbeddings()
+	if err != nil {
+		t.Fatalf("AllEmbeddings: %v", err)
+	}
+	engine := NewEngine(db.Conn())
+
+	// Confirm the vec0 branch is the one under test; otherwise this duplicates
+	// the brute-force test and proves nothing new.
+	if _, ok, verr := engine.vecChunkSearchByDoc([]float32{1, 0}, 40, 0, len(vecs)); verr != nil || !ok {
+		t.Skipf("vec0 path not taken (ok=%v err=%v); the brute-force test covers the fallback", ok, verr)
+	}
+
+	res, mode, err := engine.HybridSearch(Options{Query: "rocket", Limit: 10, Type: "adr"}, []float32{1, 0}, ids, vecs)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+	if mode != ModeHybrid {
+		t.Fatalf("mode = %q, want hybrid", mode)
+	}
+	for _, r := range res {
+		if r.DocType != "adr" {
+			t.Errorf("--type adr returned %s [%s]; the vec0 KNN leg leaked the filter", r.Path, r.DocType)
+		}
+	}
+	if len(res) != 1 {
+		t.Errorf("want exactly the one adr, got %d results", len(res))
+	}
 }
