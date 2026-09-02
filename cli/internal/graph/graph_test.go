@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/testutil"
@@ -29,6 +31,22 @@ func TestTraverse_SingleNode(t *testing.T) {
 	}
 	if len(g.Edges) != 0 {
 		t.Errorf("edges: got %d, want 0", len(g.Edges))
+	}
+
+	// `len(g.Edges) == 0` is true for BOTH a nil slice and an empty one, so it
+	// cannot catch a regression that makes Edges nil again. The JSON is what
+	// `2nb related --json` and `2nb graph --json` hand an agent, and a nil
+	// slice marshals to `null`, which `jq '.edges[]'` rejects. Assert on the
+	// marshalled bytes so a revert of newGraph() fails here.
+	blob, err := json.Marshal(g)
+	if err != nil {
+		t.Fatalf("marshal graph: %v", err)
+	}
+	if bytes.Contains(blob, []byte(`"edges":null`)) {
+		t.Errorf("edges marshalled as null for an isolated document, want []: %s", blob)
+	}
+	if !bytes.Contains(blob, []byte(`"edges":[]`)) {
+		t.Errorf("expected an empty edges array in %s", blob)
 	}
 }
 

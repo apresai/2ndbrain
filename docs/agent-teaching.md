@@ -62,7 +62,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 
    `ask` is different by design: when retrieval finds nothing it exits **non-zero** with an error on stderr rather than returning an envelope with an empty answer, so check the exit code first.
 
-   The empty document is JSON-only. `--format csv|tsv|raw` render zero rows as an empty stream, because a literal `[]` in a CSV would corrupt it.
+   The normalization is JSON-only: every other format renders exactly what it rendered in 0.21.0, deliberately, because a literal `[]` in a csv or tsv stream would corrupt a consumer. What that means varies by command and is not a guarantee worth relying on. `search` and `list` write nothing at all for zero rows in the non-JSON formats, while the bare-array listings write whatever `output.Write` makes of an empty slice. Use `--json` if you need a parseable empty result.
 
 ## Teaching improvements (Phase B — additions to `SKILL.md`)
 

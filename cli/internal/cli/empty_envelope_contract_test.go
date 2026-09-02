@@ -16,7 +16,7 @@ import (
 //
 // Credential-free by construction. VectorCompat silently falls back when a
 // vault holds ZERO embeddings, so a synthetic vector is seeded to get past that
-// (the same trick TestContract_UnroutedSlotWarnings uses), and the provider is
+// (the same trick TestSearchJSONCarriesUnroutedCause uses), and the provider is
 // set to a name that will never register an embedder. No provider is called.
 func TestContract_DegradedSearchWithZeroResultsStillWarns(t *testing.T) {
 	v, root := newContractVault(t)
