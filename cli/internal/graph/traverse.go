@@ -19,9 +19,17 @@ type Edge struct {
 	Label  string `json:"label,omitempty"`
 }
 
+// Graph is a JSON payload, so Nodes and Edges must marshal as `[]` and never
+// as `null`: a caller walking `.edges[]` errors on null, and an isolated
+// document (no links either way) is an ordinary case, not an error. Build one
+// with newGraph so both slices start non-nil.
 type Graph struct {
 	Nodes []Node `json:"nodes"`
 	Edges []Edge `json:"edges"`
+}
+
+func newGraph() *Graph {
+	return &Graph{Nodes: []Node{}, Edges: []Edge{}}
 }
 
 // edgeKey is used to dedup edges emitted during BFS. Label is excluded
@@ -31,7 +39,7 @@ type edgeKey struct{ Source, Target string }
 
 // Traverse performs a BFS from the given document to the specified depth.
 func Traverse(db *sql.DB, docID string, maxDepth int) (*Graph, error) {
-	g := &Graph{}
+	g := newGraph()
 	visited := make(map[string]bool)
 	// getNeighbors returns both forward and backward links, so an A-B
 	// edge surfaces when visiting A *and* again when visiting B. Dedup

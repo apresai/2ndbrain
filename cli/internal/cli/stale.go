@@ -71,10 +71,5 @@ func runStale(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	if format == output.FormatJSON {
-		// `null` is not an empty list: `jq '.[]'` errors on it. Normalize for
-		// JSON only, so csv/tsv/raw render exactly as they did before.
-		return output.Write(os.Stdout, format, nonNilSlice(results))
-	}
-	return output.Write(os.Stdout, format, results)
+	return output.Write(os.Stdout, format, jsonSafeList(format, results))
 }

@@ -573,15 +573,29 @@ func getFormat(cmd *cobra.Command) output.Format {
 
 // nonNilSlice returns s, or an empty slice when s is nil. Go marshals a nil
 // slice as JSON `null` and a non-nil empty slice as `[]`, and a machine
-// consumer doing `.results[]` or `.[]` errors on the former. Every command
-// that can legitimately produce zero rows routes its payload through this so
-// an empty result is an empty LIST, never a null. (yaml/csv are unaffected;
-// this exists for the JSON contract.)
+// consumer doing `.results[]` or `.[]` errors on the former.
+//
+// Use it directly only where the payload is JSON by construction (the search
+// and ask envelopes). For a command that renders the SAME payload in several
+// formats, use jsonSafeList instead: normalizing unconditionally would change
+// csv/tsv/raw output too, and there a literal `[]` is not an improvement.
 func nonNilSlice[T any](s []T) []T {
 	if s == nil {
 		return []T{}
 	}
 	return s
+}
+
+// jsonSafeList normalizes a nil slice to `[]` for JSON ONLY, passing every
+// other format through untouched. This is the shape a listing command wants:
+// `2nb tags --json` on a vault with no tags must emit `[]` rather than `null`
+// so `jq '.[]'` works, while `--format csv` keeps rendering exactly what it
+// rendered before.
+func jsonSafeList[T any](format output.Format, rows []T) []T {
+	if format == output.FormatJSON {
+		return nonNilSlice(rows)
+	}
+	return rows
 }
 
 // ExitError is an error that carries an exit code for the CLI.

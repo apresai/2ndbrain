@@ -69,7 +69,7 @@ func runUnresolved(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	if format != "" {
-		return writeOut(cmd, format, list)
+		return writeOut(cmd, format, jsonSafeList(format, list))
 	}
 
 	if len(list) == 0 {

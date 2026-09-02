@@ -423,7 +423,7 @@ When semantic search falls back to BM25, the CLI prints a warning to stderr and 
 
 ## Worked JSON examples
 
-`2nb search --json` returns an envelope. Decode `{mode, warnings?, results}`, not a raw array. `warnings` is omitted when empty (`omitempty`), and a result's `vector_score` is omitted for a BM25-only hit, so branch on field presence, not on a zero value:
+`2nb search --json` returns an envelope. Decode `{mode, warnings, results}`, not a raw array. `mode`, `warnings` and `results` are ALWAYS present and never `null`: an empty `warnings` or `results` is `[]`. A query that matched nothing still returns the full envelope, which matters because `warnings` is where a vault reports that semantic search has degraded to keyword-only. A result's `vector_score` is still omitted for a BM25-only hit, so branch on field presence there, not on a zero value:
 
 ```bash
 $ 2nb search "authentication" --json --limit 2
@@ -457,7 +457,7 @@ $ 2nb search "authentication" --json
 }
 ```
 
-`2nb ask --json` uses the same envelope shape (`warnings` likewise omitted when empty). With `--history`, the standalone query the follow-up was rewritten into appears as `rewritten_query` (omitted on single-shot asks):
+`2nb ask --json` uses the same envelope shape (`warnings` is likewise always present, and `sources` is `[]` rather than `null`). Unlike `search`, `ask` exits NON-ZERO when retrieval finds nothing, so check the exit code before parsing. With `--history`, the standalone query the follow-up was rewritten into appears as `rewritten_query` (this one IS omitted on single-shot asks):
 
 ```bash
 $ printf '[{"role":"user","content":"tell me about auth"},{"role":"assistant","content":"Auth uses JWT..."}]' \

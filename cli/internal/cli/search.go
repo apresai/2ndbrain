@@ -151,6 +151,7 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		fmt.Fprintf(os.Stderr, "search mode: %s\n", mode)
 	}
 
+	format := getFormat(cmd)
 	if len(results) == 0 {
 		if !flagPorcelain {
 			fmt.Fprintln(os.Stderr, "No results found. Try broader terms, remove filters, or run `2nb list` to see all documents.")
@@ -166,13 +167,12 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		// Scoped to JSON deliberately: it is the format with a documented
 		// envelope. csv/tsv/raw would be CORRUPTED by a literal "[]" where an
 		// empty stream is the correct rendering of zero rows, so they keep
-		// returning nothing. The pretty path no-ops on an empty slice.
-		if getFormat(cmd) != output.FormatJSON {
+		// returning nothing, and so does the human path.
+		if format != output.FormatJSON {
 			return nil
 		}
 	}
 
-	format := getFormat(cmd)
 	if format == output.FormatJSON {
 		// JSON consumers (the Swift macOS app, automation) need to see
 		// mode + warnings alongside results, so the `--json` output is

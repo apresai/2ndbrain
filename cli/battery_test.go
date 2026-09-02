@@ -349,13 +349,14 @@ func TestBattery_SearchThreshold(t *testing.T) {
 	}
 
 	// countResults parses a `search --json` envelope and returns the number of
-	// hits. The CLI short-circuits empty results with zero stdout output
-	// (see cli/internal/cli/search.go:173-180), so empty stdout is treated
-	// as 0, not a parse failure.
+	// hits. Empty stdout is a FAILURE, not zero hits: `search --json` always
+	// emits the envelope, including on a zero-result query, and treating an
+	// empty stream as "0 results" would let a revert of that fix pass silently
+	// through the very test that exercises the command.
 	countResults := func(t *testing.T, out string) int {
 		t.Helper()
 		if strings.TrimSpace(out) == "" {
-			return 0
+			t.Fatalf("search --json wrote nothing to stdout; the envelope is emitted even when nothing matches")
 		}
 		env := map[string]any{}
 		if err := json.Unmarshal([]byte(out), &env); err != nil {

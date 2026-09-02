@@ -36,5 +36,5 @@ func runAliases(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, aliases)
+	return output.Write(os.Stdout, format, jsonSafeList(format, aliases))
 }
