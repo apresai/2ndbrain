@@ -59,6 +59,14 @@ func init() {
 }
 
 func runSearch(cmd *cobra.Command, args []string) (err error) {
+	// cobra's MinimumNArgs(1) refuses an ABSENT query, but a blank one used to
+	// reach the query-less listing path and return EVERY document with score 0,
+	// rendered as ranked hits. `2nb search ""` is what an empty shell variable
+	// produces, so the caller least able to notice got the most misleading
+	// answer. Refuse it here, matching kb_search on the MCP surface.
+	if strings.TrimSpace(strings.Join(args, " ")) == "" {
+		return fmt.Errorf("search needs a query; pass one, or use `2nb list` with filters to enumerate documents")
+	}
 	v, err := openVault()
 	if err != nil {
 		return err

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/testutil"
@@ -25,7 +26,13 @@ import (
 // test, and a NEW required argument cannot ship unenforced.
 func TestMCPTools_DeclaredRequiredArgumentsAreEnforced(t *testing.T) {
 	v := testutil.NewTestVault(t)
-	testutil.CreateAndIndex(t, v, "Alpha", "note", "alpha body with words")
+	// The body carries an "## Alpha" heading on purpose. Without it,
+	// kb_replace_section's section lookup fails FIRST and returns an error for
+	// an unrelated reason, which made this test pass while `text` went
+	// unenforced: a green test hiding the exact gap it exists to close. Every
+	// sample argument below must resolve, so that omitting one is the ONLY
+	// reason a call can fail.
+	testutil.CreateAndIndex(t, v, "Alpha", "note", "alpha body with words\n\n## Alpha\n\nsection body\n")
 	eng := NewEngine(v)
 
 	// A plausible value for every argument any tool declares required, so the
@@ -39,7 +46,24 @@ func TestMCPTools_DeclaredRequiredArgumentsAreEnforced(t *testing.T) {
 		"text":     "some text",
 		"section":  "Alpha",
 		"fields":   map[string]any{"status": "complete"},
-		"target":   "alpha",
+	}
+
+	// A BLANK required value is as malformed as an absent one, and it took a
+	// different path: a whitespace-only query slipped past an == "" check,
+	// reached FTS5, and leaked `syntax error near ""` to the client. Only
+	// string arguments have a meaningful blank form.
+	blank := map[string]any{
+		"query":    "   ",
+		"question": "  ",
+		"path":     "  ",
+		"title":    "   ",
+		"type":     "  ",
+		"section":  "  ",
+		"fields":   map[string]any{},
+		// No entry for kb_replace_section's "text": an EXPLICIT empty string is
+		// the documented way to clear a section, so blank is a legitimate value
+		// there. The dangerous case, the argument absent entirely, is covered by
+		// the omitted-argument subtest above.
 	}
 
 	for _, reg := range eng.regs {
@@ -73,12 +97,44 @@ func TestMCPTools_DeclaredRequiredArgumentsAreEnforced(t *testing.T) {
 					}
 					args[req] = val
 				}
-				_, isErr, err := eng.Call(context.Background(), name, args)
+				text, isErr, err := eng.Call(context.Background(), name, args)
 				if err != nil {
 					t.Fatalf("%s: Call returned a Go error: %v", name, err)
 				}
 				if !isErr {
 					t.Errorf("%s reported SUCCESS with required argument %q omitted; the schema says it is required, so the handler must refuse rather than act on a zero value", name, omitted)
+					return
+				}
+				// An error alone is not enough: a handler can fail for an
+				// unrelated reason (a path that does not resolve, a section that
+				// is not found) and look enforced while the argument is ignored.
+				// That is exactly how kb_replace_section's missing `text` check
+				// hid behind a "section not found" error. Require the message to
+				// name the argument.
+				if !strings.Contains(text, omitted) {
+					t.Errorf("%s refused with %q, which does not mention the omitted argument %q; the refusal may be for an unrelated reason", name, text, omitted)
+				}
+			})
+
+			t.Run(name+"/blank_"+omitted, func(t *testing.T) {
+				blankVal, ok := blank[omitted]
+				if !ok {
+					t.Skipf("no meaningful blank form for %q", omitted)
+				}
+				args := map[string]any{}
+				for _, req := range def.InputSchema.Required {
+					if req == omitted {
+						args[req] = blankVal
+						continue
+					}
+					args[req] = sample[req]
+				}
+				_, isErr, err := eng.Call(context.Background(), name, args)
+				if err != nil {
+					t.Fatalf("%s: Call returned a Go error: %v", name, err)
+				}
+				if !isErr {
+					t.Errorf("%s reported SUCCESS with required argument %q blank; a blank required value is as malformed as an absent one", name, omitted)
 				}
 			})
 		}
