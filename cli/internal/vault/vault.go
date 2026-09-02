@@ -149,6 +149,13 @@ func Init(dir string) (*Vault, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create index: %w", err)
 	}
+	// A new vault is at the current logic generation by construction. Stamping
+	// it here is what lets the quick start (create, then index) end up OK
+	// rather than nagging for a re-embed; see StampFreshGenerations.
+	if err := StampFreshGenerations(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("stamp generations: %w", err)
+	}
 
 	ensureGitignore(absDir)
 

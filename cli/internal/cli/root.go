@@ -62,6 +62,14 @@ Quick start:
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "", "Output format: json, csv, tsv, yaml, raw, md, text (listings also: paths, tree)")
+	// Installed here rather than in Execute() so that every way of running the
+	// root command gets it, including the in-process test harness, which calls
+	// rootCmd.Execute() directly. Sets up slog, then refuses an unknown
+	// --format before any command can silently render it as JSON.
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		setupLogging()
+		return validateFormatFlag()
+	}
 	rootCmd.PersistentFlags().BoolVar(&flagPorcelain, "porcelain", false, "Machine-readable output (no color, no progress)")
 	rootCmd.PersistentFlags().Bool("json", false, "Output as JSON (shorthand for --format json)")
 	rootCmd.PersistentFlags().Bool("csv", false, "Output as CSV (shorthand for --format csv)")
@@ -101,10 +109,6 @@ func init() {
 func Execute() error {
 	os.Args = preprocessArgs(os.Args)
 
-	// Set up slog before any command runs
-	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		setupLogging()
-	}
 	return rootCmd.Execute()
 }
 
@@ -555,6 +559,24 @@ func unconfiguredVaultError(root, configured string) error {
 	return errors.New(b.String())
 }
 
+// knownFormats is what --format accepts. `paths` and `tree` are listing-only
+// shapes handled by renderList before getFormat matters.
+var knownFormats = map[output.Format]bool{
+	output.FormatJSON: true, output.FormatCSV: true, output.FormatTSV: true,
+	output.FormatYAML: true, output.FormatRaw: true, output.FormatMD: true,
+	output.FormatText: true, output.FormatTable: true, "paths": true, "tree": true,
+}
+
+// validateFormatFlag refuses a --format value the CLI does not know. A typo
+// used to fall through output.Write's default branch and silently render JSON,
+// which changes the output shape without a word; --format documents a fixed set.
+func validateFormatFlag() error {
+	if flagFormat == "" || knownFormats[output.Format(flagFormat)] {
+		return nil
+	}
+	return exitWithError(ExitValidation, fmt.Sprintf("unknown --format %q (want one of: json, csv, tsv, yaml, raw, md, text; listings also accept paths, tree)", flagFormat))
+}
+
 func getFormat(cmd *cobra.Command) output.Format {
 	if flagFormat != "" {
 		return output.Format(flagFormat)
@@ -592,7 +614,11 @@ func nonNilSlice[T any](s []T) []T {
 // so `jq '.[]'` works, while `--format csv` keeps rendering exactly what it
 // rendered before.
 func jsonSafeList[T any](format output.Format, rows []T) []T {
-	if format == output.FormatJSON {
+	// output.RendersJSON, not == FormatJSON: for the listing commands the EMPTY
+	// format also renders as JSON (output.Write's default branch), so matching
+	// only the explicit --json constant left a bare `2nb tags` and every
+	// --porcelain form printing `null` on an empty vault after the first fix.
+	if output.RendersJSON(format) {
 		return nonNilSlice(rows)
 	}
 	return rows
@@ -605,7 +631,17 @@ type ExitError struct {
 }
 
 func (e *ExitError) Error() string {
-	return e.Message
+	// cobra prints "Error: " in front of whatever this returns, and 51 call
+	// sites build their message with their own "error: " prefix, so users saw
+	// "Error: error: frontmatter key not found". Strip it here rather than
+	// touching every caller: the prefix is cobra's job.
+	msg := e.Message
+	for _, p := range []string{"error: ", "Error: "} {
+		if strings.HasPrefix(msg, p) {
+			return strings.TrimPrefix(msg, p)
+		}
+	}
+	return msg
 }
 
 func exitWithError(code int, msg string) error {

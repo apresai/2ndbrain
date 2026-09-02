@@ -93,6 +93,13 @@ type moveResult struct {
 	SkippedAmbiguous []moveAmbiguous `json:"skipped_ambiguous"`
 	Failed           []moveFailure   `json:"failed"`
 	DryRun           bool            `json:"dry_run"`
+	// Refused is set when a non-force move was stopped by the ambiguity guard
+	// BEFORE any write. It is reported in the JSON so a machine consumer can
+	// tell a refusal from a completed move without parsing the exit code, and
+	// it switches the human summary to preview phrasing: the summary used to
+	// say "Moved: a -> b" and "Rewrote N link(s)" in the past tense on a move
+	// that never happened, on the one command whose write is the widest.
+	Refused bool `json:"refused"`
 }
 
 func runMove(cmd *cobra.Command, args []string) error {
@@ -221,6 +228,7 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 	// (g) Refuse a real (non-force) move when the pre-scan found blocking
 	// ambiguity, BEFORE any write. The dry-run still reports it below.
 	if !moveDryRun && len(result.SkippedAmbiguous) > 0 && !moveForce {
+		result.Refused = true
 		printMoveResult(cmd, &result)
 		return exitWithError(ExitValidation, fmt.Sprintf("error: %d ambiguous link(s) cannot be safely rewritten; re-run with --dry-run to inspect, or --force to move anyway (rewriting only the unambiguous path-qualified links and leaving the bare ones untouched)", len(result.SkippedAmbiguous)))
 	}
@@ -385,8 +393,12 @@ func printMoveResult(cmd *cobra.Command, r *moveResult) {
 	}
 
 	w := os.Stderr
+	preview := r.DryRun || r.Refused
+	if r.Refused {
+		fmt.Fprintln(w, "Refused: nothing was moved or rewritten.")
+	}
 	verb := "Moved"
-	if r.DryRun {
+	if preview {
 		verb = "Would move"
 	}
 	fmt.Fprintf(w, "%s: %s -> %s\n", verb, r.Moved.From, r.Moved.To)
@@ -397,7 +409,7 @@ func printMoveResult(cmd *cobra.Command, r *moveResult) {
 	}
 	if len(r.Rewritten) > 0 {
 		label := "Rewrote"
-		if r.DryRun {
+		if preview {
 			label = "Would rewrite"
 		}
 		fmt.Fprintf(w, "%s %d link(s) across %d note(s):\n", label, total, len(r.Rewritten))
