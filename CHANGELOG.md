@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.21.1] - 2026-09-02
+
 ### Fixed
 - **A search that matched nothing printed nothing at all to `--json`.** `2nb search --json` wrote zero bytes to stdout and exited 0 whenever a query had no hits, so piping it to `jq` failed on the ordinary case of a query that matched nothing. `2nb list --json` had the same early return and the same empty stdout when a filter matched no document. Both now emit a document: the full `{mode, warnings, results}` envelope, and `[]`
 - The worst of that was silent degradation. The search envelope is also how a vault reports that its semantic channel has fallen back to keyword-only, so a degraded vault whose query happened to match nothing returned no `mode` and no `warnings` either, and an agent could not tell "nothing matched" from "semantic search is off". A zero-result search now carries both
