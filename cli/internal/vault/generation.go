@@ -19,6 +19,13 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	  2  fenced-code heading exemption: `#` inside ``` / ~~~ is no longer an
 //	     ATX heading, so heading_path / chunk ids change for notes with
 //	     in-fence `#` comments (typical of runbooks).
+//	  3  repeated heading paths get distinct chunk ids. A document with two
+//	     sections sharing a heading path (a second `## Standup` under `# Log`,
+//	     which every daily-note template produces) hashed both to the same
+//	     chunk id, and chunks.id is a PRIMARY KEY, so the later section
+//	     overwrote the earlier and that text disappeared from the index. The
+//	     first occurrence keeps its old id, so only documents that actually
+//	     repeat a heading re-chunk, but their vectors must be regenerated.
 //	IndexGeneration
 //	  1  baseline.
 //	  2  percent-encoding-aware link resolution: an Obsidian-encoded markdown
@@ -38,7 +45,7 @@ const (
 	// (chunk boundaries, purpose, pooling, normalization) at the SAME model and
 	// dimension. A full re-embed is required because vec_chunks ids/vectors must be
 	// regenerated to match the rebuilt chunks table. Fix: 2nb index --force-reembed.
-	EmbedGeneration = 2
+	EmbedGeneration = 3
 )
 
 // IndexFreshness reports whether a vault's index was built by an older 2nb whose
