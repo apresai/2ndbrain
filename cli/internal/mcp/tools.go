@@ -379,7 +379,7 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 }
 
 func (h *handlers) handleKBRead(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	chunk, _ := request.GetArguments()["chunk"].(string)
 
 	if path == "" {
@@ -421,7 +421,7 @@ func (h *handlers) handleKBRead(ctx context.Context, request mcplib.CallToolRequ
 }
 
 func (h *handlers) handleKBRelated(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	depth := 2
 	if d, ok := request.GetArguments()["depth"].(float64); ok {
 		depth = int(d)
@@ -519,7 +519,7 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 }
 
 func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	fieldsRaw, _ := request.GetArguments()["fields"].(map[string]any)
 
 	if path == "" {
@@ -601,7 +601,7 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 }
 
 func (h *handlers) handleKBStructure(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
@@ -635,7 +635,7 @@ func (h *handlers) handleKBStructure(ctx context.Context, request mcplib.CallToo
 }
 
 func (h *handlers) handleKBDelete(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
@@ -743,7 +743,7 @@ func (h *handlers) handleKBGitActivity(ctx context.Context, request mcplib.CallT
 }
 
 func (h *handlers) handleKBGitDiff(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
@@ -776,7 +776,7 @@ func (h *handlers) handleKBGitStatus(ctx context.Context, request mcplib.CallToo
 }
 
 func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
 	}
@@ -878,6 +878,15 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	return mcplib.NewToolResultText(string(data)), nil
 }
 
+// argString reads a string argument, or "" when absent or not a string. Callers
+// that require the argument trim it and refuse a blank, so a whitespace-only
+// value cannot slip past an == "" check the way it once did for kb_ask (where it
+// reached FTS5) and for the path handlers (where it resolved to the vault root).
+func argString(request mcplib.CallToolRequest, name string) string {
+	v, _ := request.GetArguments()[name].(string)
+	return v
+}
+
 // resolvePathArg validates an untrusted vault-relative path argument and
 // returns its absolute on-disk form. It mirrors the guard used by handleKBRead:
 // reject ".." traversal, resolve against the vault root, and confirm the
@@ -960,7 +969,7 @@ func (h *handlers) writeBodyAndReindex(ctx context.Context, doc *document.Docume
 }
 
 func (h *handlers) handleKBBacklinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if _, errRes := h.resolvePathArg(path); errRes != nil {
 		return errRes, nil
 	}
@@ -983,7 +992,7 @@ func (h *handlers) handleKBBacklinks(ctx context.Context, request mcplib.CallToo
 }
 
 func (h *handlers) handleKBLinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if _, errRes := h.resolvePathArg(path); errRes != nil {
 		return errRes, nil
 	}
@@ -1095,7 +1104,7 @@ func pathInScope(p, scope string) bool {
 }
 
 func (h *handlers) handleKBAppend(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	text, _ := request.GetArguments()["text"].(string)
 
 	absPath, errRes := h.resolvePathArg(path)
@@ -1124,7 +1133,7 @@ func (h *handlers) handleKBAppend(ctx context.Context, request mcplib.CallToolRe
 }
 
 func (h *handlers) handleKBReplaceSection(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	section, _ := request.GetArguments()["section"].(string)
 	text, _ := request.GetArguments()["text"].(string)
 
@@ -1132,6 +1141,7 @@ func (h *handlers) handleKBReplaceSection(ctx context.Context, request mcplib.Ca
 	if errRes != nil {
 		return errRes, nil
 	}
+	section = strings.TrimSpace(section)
 	if section == "" {
 		return mcplib.NewToolResultError("section is required"), nil
 	}
@@ -1167,7 +1177,7 @@ func (h *handlers) handleKBReplaceSection(ctx context.Context, request mcplib.Ca
 }
 
 func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
 	}

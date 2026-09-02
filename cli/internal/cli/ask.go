@@ -113,6 +113,13 @@ func loadHistoryArg(arg string) ([]ai.ChatTurn, error) {
 }
 
 func runAsk(cmd *cobra.Command, args []string) (err error) {
+	// Refuse a blank question before opening the vault or touching a provider.
+	// The shared retrieval guard would catch it later, but only after provider
+	// setup, so a blank `2nb ask ""` on a machine with no credentials reported
+	// "no generation provider" instead of the actual mistake.
+	if strings.TrimSpace(strings.Join(args, " ")) == "" {
+		return fmt.Errorf("ask needs a question; pass one, or use `2nb search` to look something up")
+	}
 	v, err := openVault()
 	if err != nil {
 		return err

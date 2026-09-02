@@ -129,12 +129,18 @@ func TestMCPTools_DeclaredRequiredArgumentsAreEnforced(t *testing.T) {
 					}
 					args[req] = sample[req]
 				}
-				_, isErr, err := eng.Call(context.Background(), name, args)
+				text, isErr, err := eng.Call(context.Background(), name, args)
 				if err != nil {
 					t.Fatalf("%s: Call returned a Go error: %v", name, err)
 				}
 				if !isErr {
 					t.Errorf("%s reported SUCCESS with required argument %q blank; a blank required value is as malformed as an absent one", name, omitted)
+					return
+				}
+				// Same rigor as the omitted case: a blank path that merely fails
+				// downstream with "not found" is not enforcement, it is luck.
+				if !strings.Contains(text, omitted) {
+					t.Errorf("%s refused a blank %q with %q, which does not name the argument; the refusal may be for an unrelated reason", name, omitted, text)
 				}
 			})
 		}
