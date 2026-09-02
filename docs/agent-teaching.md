@@ -41,20 +41,26 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
    // SearchResponse in cli/internal/cli/search.go
    type SearchResponse struct {
        Mode     string          `json:"mode"`      // "hybrid" or "keyword"
-       Warnings []string        `json:"warnings,omitempty"`
+       Warnings []string        `json:"warnings"`
        Results  []search.Result `json:"results"`
    }
 
    // AskResponse in cli/internal/cli/ask.go
    type AskResponse struct {
        Mode     string   `json:"mode"`
-       Warnings []string `json:"warnings,omitempty"`
+       Warnings []string `json:"warnings"`
        Answer   string   `json:"answer"`
        Sources  []string `json:"sources"`
    }
    ```
 
    Any agent that consumes these must decode the envelope and extract `.results` / `.answer`. A raw array decode will fail.
+
+   **Every key is always present, and a zero-result search still returns the envelope.** `mode`, `warnings` and `results` are never omitted and never `null`: an empty `warnings` or `results` is `[]`. This matters most in the case that looks like nothing happening. A query that matches nothing is an ordinary outcome, and it is also exactly when you need `mode` and `warnings`, because a vault whose semantic channel has degraded to BM25 reports that fact here. If `2nb search --json` gave you an empty stdout you could not tell "nothing matched" from "semantic search is off". `2nb list --json` and `2nb stale --json` likewise return `[]`, never `null` and never nothing.
+
+   `ask` is different by design: when retrieval finds nothing it exits **non-zero** with an error on stderr rather than returning an envelope with an empty answer, so check the exit code first.
+
+   The empty document is JSON-only. `--format csv|tsv|raw` render zero rows as an empty stream, because a literal `[]` in a CSV would corrupt it.
 
 ## Teaching improvements (Phase B — additions to `SKILL.md`)
 

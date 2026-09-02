@@ -571,6 +571,19 @@ func getFormat(cmd *cobra.Command) output.Format {
 	return "" // default: pretty output; use --json for machine-readable
 }
 
+// nonNilSlice returns s, or an empty slice when s is nil. Go marshals a nil
+// slice as JSON `null` and a non-nil empty slice as `[]`, and a machine
+// consumer doing `.results[]` or `.[]` errors on the former. Every command
+// that can legitimately produce zero rows routes its payload through this so
+// an empty result is an empty LIST, never a null. (yaml/csv are unaffected;
+// this exists for the JSON contract.)
+func nonNilSlice[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
 // ExitError is an error that carries an exit code for the CLI.
 type ExitError struct {
 	Code    int

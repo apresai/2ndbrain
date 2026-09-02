@@ -43,7 +43,10 @@ func TestContract_CoreDocumentCommandPaths(t *testing.T) {
 		{"graph", []string{"graph", createdDoc.Path, "--json", "--porcelain"}, `{`},
 		{"related", []string{"related", createdDoc.Path, "--json", "--porcelain"}, `"nodes"`},
 		{"lint", []string{"lint", "--json", "--porcelain"}, `"files_checked"`},
-		{"stale", []string{"stale", "--json", "--porcelain"}, `null`},
+		// `[]`, not `null`: an empty result set is an empty LIST. This assertion
+		// used to read `null`, which pinned a defect rather than a contract, since
+		// `jq '.[]'` errors on null. See TestBattery_EmptyResultsStillEmitJSON.
+		{"stale", []string{"stale", "--json", "--porcelain"}, `[]`},
 		{"index doc", []string{"index", "--doc", createdDoc.Path, "--json", "--porcelain"}, `"embedded"`},
 	}
 	for _, tc := range commands {

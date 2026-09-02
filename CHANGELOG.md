@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **A search that matched nothing printed nothing at all to `--json`.** `2nb search --json` wrote zero bytes to stdout and exited 0 whenever a query had no hits, so piping it to `jq` failed on the ordinary case of a query that matched nothing. The same early return affected `2nb list --json` (empty stdout when a filter matched no document) and `2nb stale --json` (the literal `null` instead of `[]`, which `jq '.[]'` rejects). All three now emit a document: the full `{mode, warnings, results}` envelope, or `[]`
+- The worst of that was silent degradation. The search envelope is also how a vault reports that its semantic channel has fallen back to keyword-only, so a degraded vault whose query happened to match nothing returned no `mode` and no `warnings` either, and an agent could not tell "nothing matched" from "semantic search is off". A zero-result search now carries both
+- `warnings` is no longer omitted when empty, in `search --json` and `ask --json` alike. It was `omitempty`, so the documented `{mode, warnings, results}` envelope was really `{mode, results}` on every healthy query, and `.warnings[]` failed against the missing key. `sources` in the `ask` envelope is likewise `[]` rather than `null`
+- The empty document is deliberately JSON-only: `--format csv|tsv|raw` still render zero rows as an empty stream, since a literal `[]` would corrupt a CSV consumer. Human output is unchanged, with the empty-state hint staying on stderr
 
 ## [0.21.0] - 2026-09-01
 
