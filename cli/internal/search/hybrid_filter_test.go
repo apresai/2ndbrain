@@ -111,8 +111,13 @@ func TestHybridSearch_FiltersApplyToTheVec0KNNPath(t *testing.T) {
 		"# Rocket\n\nRocket science in a note.\n")
 
 	const dim = 2
+	// Fatal, not Skip. sqlite-vec is compiled into the pure-Go build
+	// unconditionally, so an unavailable vec_chunks is a real defect and not a
+	// capability gap. Skipping here would let a future break silently reopen the
+	// exact hole this test exists to close (the sibling
+	// TestVecChunkSearchByDoc_CoverageGate treats the same condition as fatal).
 	if err := db.EnsureVecChunks(dim); err != nil {
-		t.Skipf("vec_chunks unavailable in this build: %v", err)
+		t.Fatalf("EnsureVecChunks: %v", err)
 	}
 	// Identical vectors again, so only the filter can explain a difference.
 	for _, d := range []struct{ doc, chunk string }{{"d-adr", "c-adr"}, {"d-note", "c-note"}} {
@@ -135,7 +140,7 @@ func TestHybridSearch_FiltersApplyToTheVec0KNNPath(t *testing.T) {
 	// Confirm the vec0 branch is the one under test; otherwise this duplicates
 	// the brute-force test and proves nothing new.
 	if _, ok, verr := engine.vecChunkSearchByDoc([]float32{1, 0}, 40, 0, len(vecs)); verr != nil || !ok {
-		t.Skipf("vec0 path not taken (ok=%v err=%v); the brute-force test covers the fallback", ok, verr)
+		t.Fatalf("vec0 path not taken (ok=%v err=%v); this test would otherwise duplicate the brute-force one and prove nothing", ok, verr)
 	}
 
 	res, mode, err := engine.HybridSearch(Options{Query: "rocket", Limit: 10, Type: "adr"}, []float32{1, 0}, ids, vecs)
@@ -152,5 +157,57 @@ func TestHybridSearch_FiltersApplyToTheVec0KNNPath(t *testing.T) {
 	}
 	if len(res) != 1 {
 		t.Errorf("want exactly the one adr, got %d results", len(res))
+	}
+}
+
+// The over-fetch exists because filtering happens AFTER the vector leg has
+// already chosen its k. Without a bigger pool when a filter is active, a
+// selective filter starves the result set: every candidate the KNN returned is
+// the wrong type, so the caller sees nothing even though a matching document
+// sits just outside the pool.
+//
+// The target here is reachable ONLY through the vector leg (the BM25 query word
+// does not appear in it), and it is deliberately ranked below a wall of
+// wrong-typed noise, so it clears the filtered pool but not the unfiltered one.
+// This is what pins the multiplier rather than merely the filtering.
+func TestHybridSearch_FilteredQueryOverFetchesDeepEnough(t *testing.T) {
+	db := setupSearchDB(t)
+
+	// Noise: nine notes that DO match the BM25 query and sit nearest the query
+	// vector, so they crowd the top of the vector ranking.
+	for i := range 9 {
+		id := "d-noise-" + string(rune('a'+i))
+		insertTestDoc(t, db, id, id+".md", "Noise", "note", "draft",
+			"# Rocket\n\nRocket telemetry notes.\n")
+		if err := db.SetEmbedding(id, []float32{1, 0}, "t", "h"); err != nil {
+			t.Fatalf("SetEmbedding(%s): %v", id, err)
+		}
+	}
+	// The target: an adr with NO occurrence of "rocket", so BM25 cannot find it,
+	// and a vector further from the query than all the noise.
+	insertTestDoc(t, db, "d-target", "target.md", "Target ADR", "adr", "accepted",
+		"# Propulsion\n\nStaging and thrust decisions.\n")
+	if err := db.SetEmbedding("d-target", []float32{0.7, 0.7}, "t", "h"); err != nil {
+		t.Fatalf("SetEmbedding(target): %v", err)
+	}
+
+	ids, vecs, err := db.AllEmbeddings()
+	if err != nil {
+		t.Fatalf("AllEmbeddings: %v", err)
+	}
+	engine := NewEngine(db.Conn())
+
+	// Limit 1. The unfiltered over-fetch would take 2 vector candidates, all
+	// noise; the filtered over-fetch reaches deep enough to include the target.
+	res, mode, err := engine.HybridSearch(
+		Options{Query: "rocket", Limit: 1, Type: "adr"}, []float32{1, 0}, ids, vecs)
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+	if mode != ModeHybrid {
+		t.Fatalf("mode = %q, want hybrid", mode)
+	}
+	if len(res) != 1 || res[0].Path != "target.md" {
+		t.Errorf("filtered search returned %v; the matching adr sits below the wrong-typed noise, so a filtered query must over-fetch past it", res)
 	}
 }
