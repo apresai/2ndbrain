@@ -100,11 +100,11 @@ type moveResult struct {
 	// say "Moved: a -> b" and "Rewrote N link(s)" in the past tense on a move
 	// that never happened, on the one command whose write is the widest.
 	Refused bool `json:"refused"`
-	// MoveFailed is set when the final rename (or its directory creation) failed
-	// AFTER referencing notes were already rewritten to the destination. The
-	// summary used to print "Moved:" on that path too. Reported in the JSON,
-	// and the human summary says the links now point at a path that does not
-	// exist, because that is the state the vault is in.
+	// MoveFailed is set when the final rename (or its directory creation)
+	// failed. The summary used to print "Moved:" on that path too. Reported in
+	// the JSON, and the human summary describes the vault's actual state: any
+	// referencing notes whose rewrite landed now point at a destination that
+	// does not exist, and when none did it says nothing else was changed.
 	MoveFailed bool `json:"move_failed"`
 }
 

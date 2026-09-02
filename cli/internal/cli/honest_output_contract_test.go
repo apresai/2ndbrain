@@ -261,3 +261,89 @@ func TestContract_ReadChunkRawEmitsTheSectionBody(t *testing.T) {
 		}
 	}
 }
+
+// A failed rename is neither a move nor a refusal, and the summary must say
+// which notes it left pointing at nothing. The plan rewrites referencing notes
+// BEFORE the rename, so a rename that then fails is exactly the case where an
+// honest count matters. Forced by making the destination directory unwritable.
+func TestContract_FailedRenameIsReportedAsFailed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions; the forced failure cannot be produced")
+	}
+	_, root := newContractVault(t)
+	write := func(rel, body string) {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("lone.md", "---\ntitle: Lone\ntype: note\nstatus: draft\n---\nnobody links here\n")
+	write("target.md", "---\ntitle: Target\ntype: note\nstatus: draft\n---\nlinked\n")
+	write("ref.md", "---\ntitle: Ref\ntype: note\nstatus: draft\n---\nsee [[target]]\n")
+	if out, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v\n%s", err, out)
+	}
+	blocked := filepath.Join(root, "blocked")
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+
+	// The JSON form emits only the document; the human summary is the default
+	// form. Run each once.
+	run := func(src string) (out []byte, jsonErr error, stderr string, humanErr error) {
+		out, jsonErr = runCLIArgs(t, root, "move", src, "blocked/"+src, "--json")
+		stderr = captureStderr(t, func() {
+			_, humanErr = runCLIArgs(t, root, "move", src, "blocked/"+src)
+		})
+		return
+	}
+
+	t.Run("no referencing notes: says nothing else changed", func(t *testing.T) {
+		out, jsonErr, stderr, humanErr := run("lone.md")
+		if jsonErr == nil || humanErr == nil {
+			t.Fatal("a rename into an unwritable directory must fail")
+		}
+		var res struct {
+			MoveFailed bool `json:"move_failed"`
+		}
+		if jerr := json.NewDecoder(bytes.NewReader(out)).Decode(&res); jerr != nil || !res.MoveFailed {
+			t.Errorf("want move_failed: true in JSON, got %s (err %v)", out, jerr)
+		}
+		if strings.Contains(stderr, "Moved:") {
+			t.Errorf("stderr claims a completed move:\n%s", stderr)
+		}
+		if !strings.Contains(stderr, "Move FAILED") || !strings.Contains(stderr, "no referencing note was changed") {
+			t.Errorf("stderr should report the failure and that nothing else changed:\n%s", stderr)
+		}
+		if _, serr := os.Stat(filepath.Join(root, "lone.md")); serr != nil {
+			t.Error("source file is gone after a failed rename")
+		}
+	})
+
+	t.Run("with a referencing note: counts the rewrite that landed", func(t *testing.T) {
+		// One invocation only. A first attempt rewrites ref.md to the destination
+		// BEFORE the rename fails, so a second attempt would find nothing left to
+		// rewrite and truthfully report "no referencing note was changed". That
+		// is the dangling-link hazard itself, not a test artifact to paper over.
+		// The destination changes the BASENAME. A bare [[target]] resolves by
+		// basename, so a move that keeps it needs no rewrite at all; only a
+		// rename forces the referencing note to be rewritten before the file
+		// move, which is the ordering under test.
+		var humanErr error
+		stderr := captureStderr(t, func() {
+			_, humanErr = runCLIArgs(t, root, "move", "target.md", "blocked/renamed.md")
+		})
+		if humanErr == nil {
+			t.Fatal("a rename into an unwritable directory must fail")
+		}
+		if !strings.Contains(stderr, "1 referencing note(s) were already rewritten") {
+			t.Errorf("stderr should count the one rewrite that landed:\n%s", stderr)
+		}
+		if strings.Contains(stderr, "no referencing note was changed") {
+			t.Errorf("stderr denies a rewrite that did happen:\n%s", stderr)
+		}
+	})
+}
