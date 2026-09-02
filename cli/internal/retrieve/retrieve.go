@@ -152,6 +152,23 @@ func (r *Retriever) ensureReady(ctx context.Context) (warn string) {
 // (never an empty-but-non-nil) hybrid result triggers the BM25 fallback, so a
 // legitimately empty hybrid result set is preserved.
 func (r *Retriever) Retrieve(ctx context.Context, opts Options) (Result, error) {
+	// A blank query with NO structured filter is refused HERE rather than at
+	// each entry point, because this package exists so those paths cannot
+	// drift, and they did: the MCP and CLI surfaces disagreed about a blank
+	// query for exactly as long as each carried its own check. Downstream, an
+	// empty query means "list by filters" to the search engine, which with no
+	// filter returns EVERY document with score 0 rendered as ranked hits; a
+	// whitespace-only one is worse still and reaches FTS5, which answers
+	// `syntax error near ""`. Neither is a search result.
+	//
+	// WITH a filter, an empty query is legitimate and documented: `2nb search
+	// "type:adr"` is an inline-filter form, and the CLI's prefix extraction
+	// leaves Query empty with Type set. That is the engine's enumerate-by-filter
+	// path and must keep working; the first version of this guard broke it.
+	opts.Query = strings.TrimSpace(opts.Query)
+	if opts.Query == "" && opts.Type == "" && opts.Status == "" && opts.Tag == "" {
+		return Result{}, fmt.Errorf("a search needs a non-empty query, or a filter to enumerate by")
+	}
 	cfg := r.v.Config.AI
 
 	threshold := opts.Threshold

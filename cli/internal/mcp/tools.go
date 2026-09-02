@@ -226,6 +226,16 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 
 func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	query, _ := request.GetArguments()["query"].(string)
+	// `query` is declared required in the tool schema, and an absent or blank one
+	// used to fall through to the query-less listing path, which returns EVERY
+	// document with score 0 dressed as search results: a whole-vault dump that
+	// reads like ranked hits. `2nb search` refuses an ABSENT query through
+	// cobra's MinimumNArgs, but a blank one reached the same listing path there
+	// too, so runSearch now guards it as well and both surfaces agree.
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return mcplib.NewToolResultError("query is required"), nil
+	}
 	docType, _ := request.GetArguments()["type"].(string)
 	status, _ := request.GetArguments()["status"].(string)
 	tag, _ := request.GetArguments()["tag"].(string)
@@ -280,6 +290,7 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 
 func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	question, _ := request.GetArguments()["question"].(string)
+	question = strings.TrimSpace(question)
 	if question == "" {
 		return mcplib.NewToolResultError("question is required"), nil
 	}
@@ -368,7 +379,7 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 }
 
 func (h *handlers) handleKBRead(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	chunk, _ := request.GetArguments()["chunk"].(string)
 
 	if path == "" {
@@ -410,7 +421,7 @@ func (h *handlers) handleKBRead(ctx context.Context, request mcplib.CallToolRequ
 }
 
 func (h *handlers) handleKBRelated(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	depth := 2
 	if d, ok := request.GetArguments()["depth"].(float64); ok {
 		depth = int(d)
@@ -439,7 +450,11 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 	docType, _ := request.GetArguments()["type"].(string)
 	subdir, _ := request.GetArguments()["path"].(string)
 
+	title = strings.TrimSpace(title)
+	docType = strings.TrimSpace(docType)
 	if title == "" || docType == "" {
+		// Trimmed: a whitespace-only title used to pass and produce a note whose
+		// slug fell back to a UUID, which is not what the caller asked for.
 		return mcplib.NewToolResultError("title and type are required"), nil
 	}
 
@@ -504,11 +519,18 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 }
 
 func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	fieldsRaw, _ := request.GetArguments()["fields"].(map[string]any)
 
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
+	}
+	// `fields` is declared required. Without this the tool rewrote the file with
+	// the frontmatter it already had and reported success, so an agent believed
+	// it had written metadata that never changed. A write tool reporting success
+	// while doing nothing is the one failure an agent cannot detect.
+	if len(fieldsRaw) == 0 {
+		return mcplib.NewToolResultError("fields is required: pass a non-empty object of frontmatter keys to set"), nil
 	}
 
 	if strings.Contains(path, "..") {
@@ -579,7 +601,7 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 }
 
 func (h *handlers) handleKBStructure(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
@@ -613,7 +635,7 @@ func (h *handlers) handleKBStructure(ctx context.Context, request mcplib.CallToo
 }
 
 func (h *handlers) handleKBDelete(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
@@ -721,7 +743,7 @@ func (h *handlers) handleKBGitActivity(ctx context.Context, request mcplib.CallT
 }
 
 func (h *handlers) handleKBGitDiff(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
 	}
@@ -753,7 +775,7 @@ func (h *handlers) handleKBGitStatus(ctx context.Context, request mcplib.CallToo
 }
 
 func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
 	}
@@ -855,12 +877,24 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	return mcplib.NewToolResultText(string(data)), nil
 }
 
+// argString reads a string argument, or "" when absent or not a string. Callers
+// that require the argument trim it and refuse a blank, so a whitespace-only
+// value cannot slip past an == "" check the way it once did for kb_ask (where it
+// reached FTS5) and for the path handlers (where it resolved to the vault root).
+func argString(request mcplib.CallToolRequest, name string) string {
+	v, _ := request.GetArguments()[name].(string)
+	return v
+}
+
 // resolvePathArg validates an untrusted vault-relative path argument and
 // returns its absolute on-disk form. It mirrors the guard used by handleKBRead:
 // reject ".." traversal, resolve against the vault root, and confirm the
 // resolved path stays inside the vault. The second return value is an error
 // CallToolResult ready to return; it is nil when the path is acceptable.
 func (h *handlers) resolvePathArg(path string) (string, *mcplib.CallToolResult) {
+	// Trim first: a whitespace-only path is as malformed as an absent one, and
+	// an == "" check alone let it through to resolve against the vault root.
+	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", mcplib.NewToolResultError("path is required")
 	}
@@ -934,7 +968,7 @@ func (h *handlers) writeBodyAndReindex(ctx context.Context, doc *document.Docume
 }
 
 func (h *handlers) handleKBBacklinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if _, errRes := h.resolvePathArg(path); errRes != nil {
 		return errRes, nil
 	}
@@ -957,7 +991,7 @@ func (h *handlers) handleKBBacklinks(ctx context.Context, request mcplib.CallToo
 }
 
 func (h *handlers) handleKBLinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if _, errRes := h.resolvePathArg(path); errRes != nil {
 		return errRes, nil
 	}
@@ -1069,7 +1103,7 @@ func pathInScope(p, scope string) bool {
 }
 
 func (h *handlers) handleKBAppend(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	text, _ := request.GetArguments()["text"].(string)
 
 	absPath, errRes := h.resolvePathArg(path)
@@ -1098,7 +1132,7 @@ func (h *handlers) handleKBAppend(ctx context.Context, request mcplib.CallToolRe
 }
 
 func (h *handlers) handleKBReplaceSection(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	section, _ := request.GetArguments()["section"].(string)
 	text, _ := request.GetArguments()["text"].(string)
 
@@ -1106,8 +1140,18 @@ func (h *handlers) handleKBReplaceSection(ctx context.Context, request mcplib.Ca
 	if errRes != nil {
 		return errRes, nil
 	}
+	section = strings.TrimSpace(section)
 	if section == "" {
 		return mcplib.NewToolResultError("section is required"), nil
+	}
+	// `text` is declared required, and an empty one is not a no-op: ReplaceSection
+	// reports ok with the section's content replaced by nothing, and
+	// writeBodyAndReindex persists that. Omitting the argument would silently
+	// ERASE the section and report success, which is worse than the two bugs
+	// this change set out to fix. Use kb_replace_section with explicit empty
+	// text only through a deliberate call, never through an absent argument.
+	if _, ok := request.GetArguments()["text"]; !ok {
+		return mcplib.NewToolResultError("text is required: pass the replacement content (an explicit empty string clears the section)"), nil
 	}
 
 	doc, err := document.ParseFile(absPath)
@@ -1132,7 +1176,7 @@ func (h *handlers) handleKBReplaceSection(ctx context.Context, request mcplib.Ca
 }
 
 func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
+	path := strings.TrimSpace(argString(request, "path"))
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
 	}
