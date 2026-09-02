@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.22.0] - 2026-09-03
+
 ### Fixed
 - **`kb_replace_section` erased a section when its required `text` argument was missing, and reported success.** `ReplaceSection` treats empty replacement content as "replace the section with nothing", so an MCP client that omitted the argument destroyed the section's body and was told the write succeeded. Reproduced against 0.21.1 through a real MCP session: the section content was gone and the tool returned no error. It is refused now; passing an explicit empty string still clears a section, which is the deliberate form of that operation
 - **Arguments an MCP tool declares required are now actually enforced, absent or blank.** Declaring `required` in an inputSchema constrains nothing at runtime: the transport passes whatever the client sent and a handler reading a missing argument gets the zero value. `kb_search` without a `query` returned EVERY document with `score: 0` dressed as ranked results, where `2nb search` refuses the same call. `kb_update_meta` without `fields` rewrote the note with the frontmatter it already had and reported success, so an agent believed it had written metadata that never changed. A whitespace-only value slipped past the `== ""` checks separately: on `kb_search` and `kb_ask` it reached FTS5 and leaked `SQL logic error: fts5: syntax error near ""` to the client, `kb_create` accepted a blank title and produced a note whose slug fell back to a UUID, and `kb_git_diff` accepted a blank path
