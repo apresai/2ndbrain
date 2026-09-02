@@ -226,6 +226,14 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 
 func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	query, _ := request.GetArguments()["query"].(string)
+	// `query` is declared required in the tool schema, and an absent or blank one
+	// used to fall through to the query-less listing path, which returns EVERY
+	// document with score 0 dressed as search results. An agent that built a
+	// malformed call got a whole-vault dump that reads like ranked hits, where
+	// the CLI refuses the same input outright.
+	if strings.TrimSpace(query) == "" {
+		return mcplib.NewToolResultError("query is required"), nil
+	}
 	docType, _ := request.GetArguments()["type"].(string)
 	status, _ := request.GetArguments()["status"].(string)
 	tag, _ := request.GetArguments()["tag"].(string)
@@ -509,6 +517,13 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 
 	if path == "" {
 		return mcplib.NewToolResultError("path is required"), nil
+	}
+	// `fields` is declared required. Without this the tool rewrote the file with
+	// the frontmatter it already had and reported success, so an agent believed
+	// it had written metadata that never changed. A write tool reporting success
+	// while doing nothing is the one failure an agent cannot detect.
+	if len(fieldsRaw) == 0 {
+		return mcplib.NewToolResultError("fields is required: pass a non-empty object of frontmatter keys to set"), nil
 	}
 
 	if strings.Contains(path, "..") {
