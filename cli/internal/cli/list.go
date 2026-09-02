@@ -120,10 +120,16 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	if len(items) == 0 {
-		if !flagPorcelain {
-			fmt.Fprintln(os.Stderr, "No documents yet. Create one with: 2nb create \"My Note\"")
-		} else {
+		filtered := listType != "" || listStatus != "" || listTag != ""
+		switch {
+		case flagPorcelain:
 			fmt.Fprintln(os.Stderr, "No documents found.")
+		case filtered:
+			// Naming the wrong cause sends the user the wrong way: this vault
+			// may hold hundreds of notes, just none matching the filter.
+			fmt.Fprintln(os.Stderr, "No documents match those filters. Drop a filter, or run `2nb list` to see everything.")
+		default:
+			fmt.Fprintln(os.Stderr, "No documents yet. Create one with: 2nb create \"My Note\"")
 		}
 		// JSON still owes stdout an empty document (see search.go). csv/tsv/raw
 		// keep emitting nothing, which is the correct rendering of zero rows,

@@ -207,13 +207,23 @@ func TestWrite_Raw(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown type falls back to %v without erroring", func(t *testing.T) {
-		var buf bytes.Buffer
-		if err := Write(&buf, FormatRaw, testItem{Name: "x", Value: 1}); err != nil {
-			t.Fatalf("Write(raw, struct) should not error: %v", err)
-		}
-		if buf.Len() == 0 {
-			t.Errorf("raw fallback produced no output")
+	t.Run("a value with no body is refused, not dumped", func(t *testing.T) {
+		// This subtest used to pin the opposite: "unknown type falls back to %v
+		// without erroring". That fallback is what made `search --format md`
+		// print a Go struct dump like `[{uuid path title ...}]` with exit 0.
+		// raw and md emit a document body; a value without one is a caller
+		// error, and saying so beats emitting something that is neither
+		// markdown nor a body.
+		for _, format := range []Format{FormatRaw, FormatMD} {
+			var buf bytes.Buffer
+			err := Write(&buf, format, []testItem{{Name: "x", Value: 1}})
+			if err == nil {
+				t.Errorf("%s on a struct slice wrote %q with no error; want a refusal", format, buf.String())
+				continue
+			}
+			if !strings.Contains(err.Error(), "document body") {
+				t.Errorf("%s refusal %q does not explain that raw/md emit a document body", format, err)
+			}
 		}
 	})
 }

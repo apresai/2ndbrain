@@ -63,7 +63,7 @@ type LintIssue struct {
 }
 
 type LintReport struct {
-	Issues []LintIssue `json:"issues"`
+	Issues []LintIssue `json:"issues"` // always [] in JSON, never null; initialized non-nil in runLint
 	Files  int         `json:"files_checked"`
 	Errors int         `json:"errors"`
 	Warns  int         `json:"warnings"`
@@ -118,7 +118,9 @@ func runLint(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	report := &LintReport{}
+	// Issues starts non-nil: an issue-free vault must marshal as `"issues": []`,
+	// not `null`, or `jq '.issues[]'` fails on the good case.
+	report := &LintReport{Issues: []LintIssue{}}
 
 	// First pass: build the SAME tiered lookup the rest of 2nb uses
 	// (store.NewResolver -> the canonical buildLookupIndex), sourced from the

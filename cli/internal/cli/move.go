@@ -93,6 +93,35 @@ type moveResult struct {
 	SkippedAmbiguous []moveAmbiguous `json:"skipped_ambiguous"`
 	Failed           []moveFailure   `json:"failed"`
 	DryRun           bool            `json:"dry_run"`
+	// Refused is set when a non-force move was stopped by the ambiguity guard
+	// BEFORE any write. It is reported in the JSON so a machine consumer can
+	// tell a refusal from a completed move without parsing the exit code, and
+	// it switches the human summary to preview phrasing: the summary used to
+	// say "Moved: a -> b" and "Rewrote N link(s)" in the past tense on a move
+	// that never happened, on the one command whose write is the widest.
+	Refused bool `json:"refused"`
+	// MoveFailed is set when the final rename (or its directory creation)
+	// failed. The summary used to print "Moved:" on that path too. Reported in
+	// the JSON, and the human summary describes the vault's actual state: any
+	// referencing notes whose rewrite landed now point at a destination that
+	// does not exist, and when none did it says nothing else was changed.
+	MoveFailed bool `json:"move_failed"`
+}
+
+// rewritesApplied counts the planned rewrites whose write did not fail: the
+// referencing notes that genuinely point at the destination now.
+func (r *moveResult) rewritesApplied() int {
+	failed := make(map[string]bool, len(r.Failed))
+	for _, f := range r.Failed {
+		failed[f.Path] = true
+	}
+	n := 0
+	for _, rw := range r.Rewritten {
+		if !failed[rw.Path] {
+			n++
+		}
+	}
+	return n
 }
 
 func runMove(cmd *cobra.Command, args []string) error {
@@ -221,6 +250,10 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 	// (g) Refuse a real (non-force) move when the pre-scan found blocking
 	// ambiguity, BEFORE any write. The dry-run still reports it below.
 	if !moveDryRun && len(result.SkippedAmbiguous) > 0 && !moveForce {
+		result.Refused = true
+		// Every other refused write in this package leaves a trace in cli.log;
+		// this one did not.
+		slog.Warn("move refused: ambiguous bare links", "from", srcRel, "to", dstRel, "ambiguous", len(result.SkippedAmbiguous))
 		printMoveResult(cmd, &result)
 		return exitWithError(ExitValidation, fmt.Sprintf("error: %d ambiguous link(s) cannot be safely rewritten; re-run with --dry-run to inspect, or --force to move anyway (rewriting only the unambiguous path-qualified links and leaving the bare ones untouched)", len(result.SkippedAmbiguous)))
 	}
@@ -242,11 +275,13 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 	// (e) Move the target file LAST, after referencing notes are rewritten.
 	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
 		result.Failed = append(result.Failed, moveFailure{Path: dstRel, Error: err.Error()})
+		result.MoveFailed = true
 		printMoveResult(cmd, &result)
 		return exitWithError(ExitValidation, fmt.Sprintf("error: create destination directory: %v", err))
 	}
 	if err := os.Rename(srcAbs, dstAbs); err != nil {
 		result.Failed = append(result.Failed, moveFailure{Path: dstRel, Error: err.Error()})
+		result.MoveFailed = true
 		printMoveResult(cmd, &result)
 		return exitWithError(ExitValidation, fmt.Sprintf("error: move file: %v", err))
 	}
@@ -385,11 +420,29 @@ func printMoveResult(cmd *cobra.Command, r *moveResult) {
 	}
 
 	w := os.Stderr
+	preview := r.DryRun || r.Refused
+	if r.Refused {
+		fmt.Fprintln(w, "Refused: nothing was moved or rewritten.")
+	}
 	verb := "Moved"
-	if r.DryRun {
+	switch {
+	case r.MoveFailed:
+		verb = "Move FAILED"
+	case preview:
 		verb = "Would move"
 	}
 	fmt.Fprintf(w, "%s: %s -> %s\n", verb, r.Moved.From, r.Moved.To)
+	if r.MoveFailed {
+		// Say only what is true of the vault at this point. Rewritten is the
+		// PLAN; a planned rewrite whose write failed is in Failed too, so the
+		// notes that really point at the destination are the planned ones
+		// minus those. With none, nothing else was changed.
+		if n := r.rewritesApplied(); n > 0 {
+			fmt.Fprintf(w, "The file is still at %s, but %d referencing note(s) were already rewritten to %s and now point at a path that does not exist. Fix the cause and re-run the move to retry the rename.\n", r.Moved.From, n, r.Moved.To)
+		} else {
+			fmt.Fprintf(w, "The file is still at %s and no referencing note was changed.\n", r.Moved.From)
+		}
+	}
 
 	total := 0
 	for _, rw := range r.Rewritten {
@@ -397,7 +450,7 @@ func printMoveResult(cmd *cobra.Command, r *moveResult) {
 	}
 	if len(r.Rewritten) > 0 {
 		label := "Rewrote"
-		if r.DryRun {
+		if preview {
 			label = "Would rewrite"
 		}
 		fmt.Fprintf(w, "%s %d link(s) across %d note(s):\n", label, total, len(r.Rewritten))

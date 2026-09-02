@@ -117,6 +117,25 @@ func StampEmbedGeneration(db *store.DB, cliVersion string) error {
 	return StampIndexGeneration(db, cliVersion)
 }
 
+// StampFreshGenerations records the current generations on a vault that was
+// just created. It holds no chunks and no vectors yet, so it is trivially at
+// the current logic generation for both, and every embedding it acquires from
+// here on is produced by this binary.
+//
+// Without this stamp the quick start that `2nb --help` prints (vault create,
+// then create, then index) reported "UPGRADE REEMBED RECOMMENDED" on a vault
+// seconds old: `create` embeds inline without stamping, so by the time `index`
+// ran there were already embeddings and no stamp, which is exactly what an old
+// pre-stamp vault looks like, and StampAfterIndex correctly refused to guess.
+// The nag then told a brand-new user to pay for a full re-embed to fix nothing.
+// indexed_by_version is deliberately NOT written here: nothing has been indexed.
+func StampFreshGenerations(db *store.DB) error {
+	if err := db.SetMetaInt(store.MetaEmbedGeneration, EmbedGeneration); err != nil {
+		return err
+	}
+	return db.SetMetaInt(store.MetaIndexGeneration, IndexGeneration)
+}
+
 // PriorEmbedGeneration reads the embed-generation stamp from before a run (0 when
 // absent). Capture it BEFORE an embed pass to feed StampAfterIndex.
 func PriorEmbedGeneration(db *store.DB) int {

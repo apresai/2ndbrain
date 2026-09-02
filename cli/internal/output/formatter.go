@@ -24,6 +24,13 @@ const (
 	FormatText  Format = "text"
 )
 
+// RendersJSON reports whether Write will emit JSON for this format. The empty
+// format falls to the JSON branch below, so it is JSON too; callers normalizing
+// a nil slice to [] for machine consumers must treat both the same.
+func RendersJSON(format Format) bool {
+	return format == FormatJSON || format == ""
+}
+
 func Write(w io.Writer, format Format, data any) error {
 	switch format {
 	case FormatJSON:
@@ -101,9 +108,17 @@ func writeRaw(w io.Writer, data any) error {
 			_, err = w.Write(b)
 			return err
 		}
-		// Fallback: print string representation
-		_, err := fmt.Fprintf(w, "%v\n", data)
-		return err
+		// A scalar still has an obvious raw form.
+		switch data.(type) {
+		case int, int64, float64, bool:
+			_, err := fmt.Fprintf(w, "%v\n", data)
+			return err
+		}
+		// Anything else has no body to emit. The old fallback printed Go's %v
+		// rendering of the value, so `search --format md` produced a struct dump
+		// like `[{uuid path title ...}]` and exit 0. raw and md exist for a
+		// document body; a value without one is a caller error worth saying.
+		return fmt.Errorf("--format raw/md emits a document body; this value has none (use --json)")
 	}
 }
 
