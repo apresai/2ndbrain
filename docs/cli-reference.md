@@ -130,6 +130,8 @@ Rebuild the index. `--doc <path>` indexes a single doc; `--force-reembed` invali
 
 Hybrid BM25 plus semantic search. Filters: `--type --status --tag --limit`. `--threshold` overrides the cosine cutoff; `--bm25-only` disables the vector channel.
 
+`--json` returns the envelope `{mode, warnings, results}`, not a bare array. All three keys are always present and never `null`; `mode` is `hybrid` or `keyword`, and `warnings` carries the `semantic search disabled: ` line when the vector channel is unusable. A query that matches nothing still returns the envelope with `results: []` (see "Global flags and output formats"), so a caller can always tell "nothing matched" apart from "semantic search is off". Full contract and the degraded-mode playbook: [agent-teaching.md](agent-teaching.md).
+
 ### suggest-links
 
 Suggest semantically related documents to link from a given document (`--limit`).
@@ -581,6 +583,8 @@ Checks whether a newer 2ndbrain release is available: compares the installed ver
 Global flags: `--format` (json/csv/tsv/yaml/raw/md/text; listings also accept `paths`/`tree`), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--unconfigured` (permit a write to a vault Obsidian doesn't know; without it such a write is refused), `--verbose` / `-v`, `--copy`.
 
 `--format raw` (and `md`) emits a value's `Serialize()` output (or the raw string/bytes) with no JSON wrapping, for piping a document body verbatim; `tsv` is tab-separated CSV; `text` is best-effort plain text.
+
+**An empty result is still a JSON document.** Every command that can legitimately return zero rows emits a parseable payload on stdout under `--json`: `search` returns its full `{mode, warnings, results}` envelope with `results: []`, and the bare-array listings (`list`, `stale`, `tags`, `aliases`, `orphans`, `deadends`, `unresolved`, `backlinks`, `links`, plus `related`'s nested `edges`) return `[]`, never `null` and never nothing. That matters most for `search`: `warnings` is where a vault reports that its semantic channel degraded to keyword-only, so a query matching nothing is exactly when a caller needs the envelope. Two deliberate exceptions: `ask` exits NON-ZERO with an error when retrieval finds nothing rather than answering emptily, so check the exit code before parsing; and the normalization is JSON-only, because a literal `[]` in a csv or tsv stream would corrupt a consumer. Human output is unaffected, with each command's empty-state hint on stderr.
 
 `--copy` also writes a command's rendered output to the clipboard (macOS `pbcopy`; a clear unsupported error elsewhere): `read`/`print` (body), `meta`/`property:read` (value), and `daily`/`daily path` (path) copy in their default output, and any command run with a machine format (`--json`/`--csv`/`--format ...`, including `search`/`unresolved`/`list`) copies that rendered output.
 
