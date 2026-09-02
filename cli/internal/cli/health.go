@@ -50,7 +50,7 @@ func runOrphans(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, refs)
+	return output.Write(os.Stdout, format, jsonSafeList(format, refs))
 }
 
 func runDeadends(cmd *cobra.Command, args []string) error {
@@ -70,5 +70,5 @@ func runDeadends(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, refs)
+	return output.Write(os.Stdout, format, jsonSafeList(format, refs))
 }

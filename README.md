@@ -388,7 +388,7 @@ Include `.2ndbrain/config.yaml` and `.2ndbrain/index.db` — the receiver gets t
 
 **Privacy caveat:** embeddings are a lossy reconstruction of the source text, so shipping a vault with embeddings is functionally equivalent to shipping (approximate) content, and the `.2ndbrain/eval/` QA cache embeds note bodies verbatim. Strip both when the receiver should not see the content; a `--strip-embeddings` export mode is future work.
 
-> **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`; multi-turn asks via `--history` add `rewritten_query`). If you were parsing a raw array/object, extract `.results` / `.answer`.
+> **Heads-up for scripters:** `2nb search --json` and `2nb ask --json` now return envelopes (`{mode, warnings, results}` / `{mode, warnings, answer, sources}`; multi-turn asks via `--history` add `rewritten_query`). If you were parsing a raw array/object, extract `.results` / `.answer`. `mode`, `warnings` and `results`/`sources` are always present and never `null` (`rewritten_query` remains optional, appearing only on a rewritten multi-turn ask), and a search that matches nothing still returns the envelope with `results: []`, so `| jq .results` is safe on any query. Every other `--json` listing returns `[]` rather than `null` when empty: `list`, `stale`, `tags`, `aliases`, `orphans`, `deadends`, `unresolved`, `backlinks`, `links`. `ask` exits non-zero when retrieval finds nothing, so check the exit code before parsing.
 
 ## MCP Server
 

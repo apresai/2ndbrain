@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **A search that matched nothing printed nothing at all to `--json`.** `2nb search --json` wrote zero bytes to stdout and exited 0 whenever a query had no hits, so piping it to `jq` failed on the ordinary case of a query that matched nothing. `2nb list --json` had the same early return and the same empty stdout when a filter matched no document. Both now emit a document: the full `{mode, warnings, results}` envelope, and `[]`
+- The worst of that was silent degradation. The search envelope is also how a vault reports that its semantic channel has fallen back to keyword-only, so a degraded vault whose query happened to match nothing returned no `mode` and no `warnings` either, and an agent could not tell "nothing matched" from "semantic search is off". A zero-result search now carries both
+- **Every `--json` listing returns `[]` for an empty result, never `null`.** `jq '.[]'` rejects `null`, so an empty vault or an unmatched filter could break a pipeline on nine commands: `stale`, `tags`, `aliases`, `orphans`, `deadends`, `unresolved`, `backlinks`, `links`, and the nested `edges` of `related` for a document with no links
+- `warnings` is no longer omitted when empty, in `search --json` and `ask --json` alike. It was `omitempty`, so the documented `{mode, warnings, results}` envelope was really `{mode, results}` on every healthy query, and `.warnings[]` failed against the missing key. `sources` in the `ask` envelope is likewise `[]` rather than `null`. `rewritten_query` stays optional: it is present only on a multi-turn `ask` whose question was rewritten
+- All of this is scoped to JSON. Every other format renders byte-for-byte what it rendered in 0.21.0, including the cases where that is nothing at all, because a literal `[]` in a csv or tsv stream would corrupt a consumer. Human output is unchanged too, with the empty-state hint staying on stderr
 
 ## [0.21.0] - 2026-09-01
 

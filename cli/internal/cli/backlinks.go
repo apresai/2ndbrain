@@ -49,5 +49,5 @@ func runBacklinks(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, refs)
+	return output.Write(os.Stdout, format, jsonSafeList(format, refs))
 }

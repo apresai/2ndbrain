@@ -41,20 +41,28 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
    // SearchResponse in cli/internal/cli/search.go
    type SearchResponse struct {
        Mode     string          `json:"mode"`      // "hybrid" or "keyword"
-       Warnings []string        `json:"warnings,omitempty"`
+       Warnings []string        `json:"warnings"`
        Results  []search.Result `json:"results"`
    }
 
    // AskResponse in cli/internal/cli/ask.go
    type AskResponse struct {
        Mode     string   `json:"mode"`
-       Warnings []string `json:"warnings,omitempty"`
+       Warnings []string `json:"warnings"`
        Answer   string   `json:"answer"`
        Sources  []string `json:"sources"`
    }
    ```
 
    Any agent that consumes these must decode the envelope and extract `.results` / `.answer`. A raw array decode will fail.
+
+   **Every key is always present, and a zero-result search still returns the envelope.** `mode`, `warnings` and `results` are never omitted and never `null`: an empty `warnings` or `results` is `[]`. (`rewritten_query` is the one optional field, present only on a multi-turn ask whose question was rewritten. The token-count fields are elided from the snippets above.) This matters most in the case that looks like nothing happening. A query that matches nothing is an ordinary outcome, and it is also exactly when you need `mode` and `warnings`, because a vault whose semantic channel has degraded to BM25 reports that fact here. If `2nb search --json` gave you an empty stdout you could not tell "nothing matched" from "semantic search is off".
+
+   The other `--json` listings return a BARE ARRAY, not an envelope, and that array is `[]` rather than `null` when empty: `list`, `stale`, `tags`, `aliases`, `orphans`, `deadends`, `unresolved`, `backlinks`, `links` (and `related`'s nested `edges`). This is a CLI guarantee. The MCP tools are a separate surface with their own shapes: `kb_search` returns results directly rather than the CLI envelope, so do not assume `mode`/`warnings` there.
+
+   `ask` is different by design: when retrieval finds nothing it exits **non-zero** with an error on stderr rather than returning an envelope with an empty answer, so check the exit code first.
+
+   The normalization is JSON-only: every other format renders exactly what it rendered in 0.21.0, deliberately, because a literal `[]` in a csv or tsv stream would corrupt a consumer. What that means varies by command and is not a guarantee worth relying on. `search` and `list` write nothing at all for zero rows in the non-JSON formats, while the bare-array listings write whatever `output.Write` makes of an empty slice. Use `--json` if you need a parseable empty result.
 
 ## Teaching improvements (Phase B — additions to `SKILL.md`)
 

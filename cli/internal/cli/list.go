@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -117,16 +118,23 @@ func runList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	format := getFormat(cmd)
 	if len(items) == 0 {
 		if !flagPorcelain {
 			fmt.Fprintln(os.Stderr, "No documents yet. Create one with: 2nb create \"My Note\"")
 		} else {
 			fmt.Fprintln(os.Stderr, "No documents found.")
 		}
+		// JSON still owes stdout an empty document (see search.go). csv/tsv/raw
+		// keep emitting nothing, which is the correct rendering of zero rows,
+		// and the human table returns early too: a bare header with no data
+		// under it reads as a broken listing.
+		if format == output.FormatJSON {
+			return writeOut(cmd, format, nonNilSlice(items))
+		}
 		return nil
 	}
 
-	format := getFormat(cmd)
 	if format != "" {
 		return writeOut(cmd, format, items)
 	}

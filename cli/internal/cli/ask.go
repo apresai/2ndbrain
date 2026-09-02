@@ -27,7 +27,7 @@ import (
 // out of the envelope.
 type AskResponse struct {
 	Mode     string   `json:"mode"` // "hybrid" or "keyword"
-	Warnings []string `json:"warnings,omitempty"`
+	Warnings []string `json:"warnings"`
 	Answer   string   `json:"answer"`
 	Sources  []string `json:"sources"`
 	// RewrittenQuery is the standalone retrieval query the conversation
@@ -304,9 +304,9 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 
 	resp := AskResponse{
 		Mode:         mode,
-		Warnings:     warnings,
+		Warnings:     nonNilSlice(warnings),
 		Answer:       result.Answer,
-		Sources:      result.Sources,
+		Sources:      nonNilSlice(result.Sources),
 		InputTokens:  inTokens,
 		OutputTokens: outTokens,
 	}

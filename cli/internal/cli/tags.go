@@ -76,7 +76,7 @@ func runTagsList(cmd *cobra.Command, args []string) error {
 	}
 
 	format := getFormat(cmd)
-	return output.Write(os.Stdout, format, tags)
+	return output.Write(os.Stdout, format, jsonSafeList(format, tags))
 }
 
 // tagsRenameFailure is one document that could not be rewritten, with the error.

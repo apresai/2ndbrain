@@ -31,7 +31,7 @@ var (
 // acceptable at pre-1.0 and documented in the release notes.
 type SearchResponse struct {
 	Mode     string          `json:"mode"` // "hybrid" or "keyword"
-	Warnings []string        `json:"warnings,omitempty"`
+	Warnings []string        `json:"warnings"`
 	Results  []search.Result `json:"results"`
 }
 
@@ -151,16 +151,28 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		fmt.Fprintf(os.Stderr, "search mode: %s\n", mode)
 	}
 
+	format := getFormat(cmd)
 	if len(results) == 0 {
 		if !flagPorcelain {
 			fmt.Fprintln(os.Stderr, "No results found. Try broader terms, remove filters, or run `2nb list` to see all documents.")
 		} else {
 			fmt.Fprintln(os.Stderr, "No results found.")
 		}
-		return nil
+		// Deliberately NOT returning here. The hint above is stderr, for a human;
+		// a machine consumer still needs a parseable document on stdout. Returning
+		// early emitted nothing at all, so `search --json | jq` failed on the
+		// ordinary case of a query that matched nothing. Worse: a DEGRADED vault
+		// with zero results returned no `mode` and no `warnings` either, so an
+		// agent could not tell "nothing matched" from "semantic search is off".
+		// Scoped to JSON deliberately: it is the format with a documented
+		// envelope. csv/tsv/raw would be CORRUPTED by a literal "[]" where an
+		// empty stream is the correct rendering of zero rows, so they keep
+		// returning nothing, and so does the human path.
+		if format != output.FormatJSON {
+			return nil
+		}
 	}
 
-	format := getFormat(cmd)
 	if format == output.FormatJSON {
 		// JSON consumers (the Swift macOS app, automation) need to see
 		// mode + warnings alongside results, so the `--json` output is
@@ -168,8 +180,8 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		// makes sense for JSON.
 		return writeOut(cmd, format, SearchResponse{
 			Mode:     string(mode),
-			Warnings: warnings,
-			Results:  results,
+			Warnings: nonNilSlice(warnings),
+			Results:  nonNilSlice(results),
 		})
 	}
 	if format != "" {
