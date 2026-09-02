@@ -108,6 +108,22 @@ type moveResult struct {
 	MoveFailed bool `json:"move_failed"`
 }
 
+// rewritesApplied counts the planned rewrites whose write did not fail: the
+// referencing notes that genuinely point at the destination now.
+func (r *moveResult) rewritesApplied() int {
+	failed := make(map[string]bool, len(r.Failed))
+	for _, f := range r.Failed {
+		failed[f.Path] = true
+	}
+	n := 0
+	for _, rw := range r.Rewritten {
+		if !failed[rw.Path] {
+			n++
+		}
+	}
+	return n
+}
+
 func runMove(cmd *cobra.Command, args []string) error {
 	return moveImpl(cmd, args[0], args[1])
 }
@@ -417,7 +433,15 @@ func printMoveResult(cmd *cobra.Command, r *moveResult) {
 	}
 	fmt.Fprintf(w, "%s: %s -> %s\n", verb, r.Moved.From, r.Moved.To)
 	if r.MoveFailed {
-		fmt.Fprintf(w, "The file is still at %s, but referencing notes were already rewritten to %s and now point at a path that does not exist. Fix the cause and re-run the move to retry the rename.\n", r.Moved.From, r.Moved.To)
+		// Say only what is true of the vault at this point. Rewritten is the
+		// PLAN; a planned rewrite whose write failed is in Failed too, so the
+		// notes that really point at the destination are the planned ones
+		// minus those. With none, nothing else was changed.
+		if n := r.rewritesApplied(); n > 0 {
+			fmt.Fprintf(w, "The file is still at %s, but %d referencing note(s) were already rewritten to %s and now point at a path that does not exist. Fix the cause and re-run the move to retry the rename.\n", r.Moved.From, n, r.Moved.To)
+		} else {
+			fmt.Fprintf(w, "The file is still at %s and no referencing note was changed.\n", r.Moved.From)
+		}
 	}
 
 	total := 0
