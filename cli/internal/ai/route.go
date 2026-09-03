@@ -833,3 +833,127 @@ func fillModelFacts(dst *ModelInfo, src ModelInfo, facts factDonor) {
 		dst.Recommended = src.Recommended
 	}
 }
+
+// reconcileBuiltinFacts makes the builtin catalog's declaration of a model win
+// over a user row's unauthored COPY of it, on every row of that model, whatever
+// route the row names.
+//
+// mergeFields already enforces this, but only for a user row whose route
+// matches a builtin row EXACTLY. It never runs for the commonest contaminated
+// shape: a probe save that pinned a plane and a region (`models test --save`
+// after a region fallback) writes a row whose route no builtin shares, because
+// builtins are authored route-less on purpose. That row then supersedes the
+// builtin template, and template retirement only fills EMPTY facts, so the
+// row's stale snapshot stands. A released 0.22.2 vault showed exactly that:
+// Nova pinned to classic/us-east-1 rendering context_length 2048 and
+// recommended_similarity_threshold 0.65 in `models list --json` while
+// `ai status` correctly ignored the 0.65 and named the file it came from. Two
+// commands, one model, two answers.
+//
+// Authorship is read from the RAW user catalog rather than from the merged
+// rows, which is what lets this run AFTER retirement: a fact the user typed on
+// any route of the model is still theirs even once retirement has donated it to
+// a sibling, and everything the user did not type belongs to the builtin.
+//
+// A model no builtin declares has no owner to defer to, so its rows keep their
+// own facts untouched.
+func reconcileBuiltinFacts(user []ModelInfo, lists ...*[]ModelInfo) {
+	builtins := bestDonorByModel(BuiltinCatalog())
+	if len(builtins) == 0 {
+		return
+	}
+	authored := authoredFactDonors(user)
+	stamped := stampedThresholdByModel(user)
+	for _, l := range lists {
+		rows := *l
+		for i := range rows {
+			key := catalogKey(rows[i].Provider, rows[i].ID)
+			b, ok := builtins[key]
+			if !ok {
+				continue
+			}
+			reconcileRowAgainstBuiltin(&rows[i], b, key, authored, stamped)
+		}
+	}
+}
+
+// stampedThresholdByModel indexes the user rows carrying a STAMPED calibration,
+// one per model. Deterministic (richest row, then lowest route key) for the
+// same reason authoredFactDonors is: several routes of a model can each hold a
+// threshold, and the merged view must not change on map order alone.
+func stampedThresholdByModel(user []ModelInfo) map[string]ModelInfo {
+	out := map[string]ModelInfo{}
+	for _, u := range user {
+		if !IsUserThreshold(u) {
+			continue
+		}
+		k := catalogKey(u.Provider, u.ID)
+		if prev, ok := out[k]; ok && !betterFactDonor(u, prev) {
+			continue
+		}
+		out[k] = u
+	}
+	return out
+}
+
+// reconcileRowAgainstBuiltin applies the builtin-owned facts to one row. The
+// three user-typeable facts go through takeTopFact, the SAME predicate
+// mergeFields uses with a builtin base, so the rule lives in one place. A fact
+// the builtin does not declare is left as it is: there is nothing to restore.
+func reconcileRowAgainstBuiltin(dst *ModelInfo, b ModelInfo, key string, authored map[factKey]ModelInfo, stamped map[string]ModelInfo) {
+	var kept []string
+	// take reports whether the user's authored value wins over the builtin's.
+	take := func(fact string, donor ModelInfo, donorSet bool) bool {
+		t, isAuthored := takeTopFact(donorSet, false, HasAuthoredFact(donor, fact), true)
+		if isAuthored {
+			kept = append(kept, fact)
+		}
+		return t
+	}
+	nameDonor := authored[factKey{key, FactName}]
+	if take(FactName, nameDonor, nameDonor.Name != "") {
+		dst.Name = nameDonor.Name
+	} else if b.Name != "" {
+		dst.Name = b.Name
+	}
+	dimDonor := authored[factKey{key, FactDimensions}]
+	if take(FactDimensions, dimDonor, dimDonor.Dimensions != 0) {
+		dst.Dimensions = dimDonor.Dimensions
+	} else if b.Dimensions != 0 {
+		dst.Dimensions = b.Dimensions
+	}
+	ctxDonor := authored[factKey{key, FactContextLen}]
+	if take(FactContextLen, ctxDonor, ctxDonor.ContextLen != 0) {
+		dst.ContextLen = ctxDonor.ContextLen
+	} else if b.ContextLen != 0 {
+		dst.ContextLen = b.ContextLen
+	}
+	dst.AuthoredFacts = WithAuthoredFacts(nil, kept...)
+
+	// Builtin-owned outright: no user-catalog writer sets these, so a copy in a
+	// user file is only ever a snapshot of an older builtin.
+	if len(b.SupportedDimensions) > 0 {
+		dst.SupportedDimensions = b.SupportedDimensions
+	}
+	if len(b.Modalities) > 0 {
+		dst.Modalities = b.Modalities
+	}
+	if b.ConfigHint != "" {
+		dst.ConfigHint = b.ConfigHint
+	}
+	// Curation is the builtin's, including a demotion: assigning false is the
+	// only way a model the catalog has since demoted stops being recommended.
+	dst.Recommended = b.Recommended
+
+	// The displayed threshold is the one the resolver uses. IsUserThreshold is
+	// the single read-side predicate (stamp-only), so an unstamped copy is
+	// nobody's calibration and the builtin's recommendation is shown instead,
+	// with no threshold_source to imply otherwise.
+	if u, ok := stamped[key]; ok {
+		dst.RecommendedSimilarityThreshold = u.RecommendedSimilarityThreshold
+		dst.ThresholdSource = ThresholdSourceUser
+		return
+	}
+	dst.RecommendedSimilarityThreshold = b.RecommendedSimilarityThreshold
+	dst.ThresholdSource = ""
+}

@@ -61,8 +61,12 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	catalog := BuiltinCatalog()
 	result := &MergedModelList{}
 
-	// Layer 2+3: overlay user catalog (global merged with per-vault).
-	if user := LoadUserCatalog(opts.VaultRoot); len(user) > 0 {
+	// Layer 2+3: overlay user catalog (global merged with per-vault). The raw
+	// rows are kept: reconcileBuiltinFacts below reads AUTHORSHIP from them,
+	// which the merged rows can no longer answer once retirement has moved
+	// facts between routes.
+	user := LoadUserCatalog(opts.VaultRoot)
+	if len(user) > 0 {
 		// The base here IS the builtin catalog, so the builtin owns its model
 		// facts, its ConfigHint and its curation unless the user stamped
 		// otherwise (see mergeFields).
@@ -138,6 +142,12 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// that pair un-retired, listing the model twice and (worse) making its
 	// slot look ambiguous to the invoke path.
 	retireSupersededTemplates(&result.Verified, &result.Unverified)
+
+	// A builtin's facts win over a user row's unauthored copies of them, on
+	// every row of that model rather than only on a row whose route a builtin
+	// happens to share. Runs after retirement, so a fact retirement donated
+	// from a route-less authored row is still recognized as the user's.
+	reconcileBuiltinFacts(user, &result.Verified, &result.Unverified)
 
 	// Re-mark Active AFTER retiring, and across BOTH halves.
 	//

@@ -62,6 +62,19 @@ region row to every sibling discovery found. A probe save now drops an unlisted
 fact for a builtin model and keeps one for a model no builtin declares, where the
 stored row is the only copy.
 
+Since 0.22.3 the read side applies the same rules whatever ROUTE the user row
+names, not only where it matches a builtin row exactly
+(`reconcileBuiltinFacts`). Builtins are authored route-less, so a probe save
+that pinned a plane and a region (`models test --save` after a region fallback)
+writes a row no builtin shares a route key with: the overlay never ran for it,
+the row superseded the builtin template instead, and template retirement only
+fills EMPTY facts, so the row's stale snapshot stood. A released 0.22.2 vault had
+Nova pinned to `classic/us-east-1` printing `context_length: 2048` and
+`recommended_similarity_threshold: 0.65` in `models list --json` while `ai
+status` correctly ignored the 0.65 and named the file it came from. The merged
+view now shows the threshold the resolver actually uses, and `threshold_source`
+appears only on a stamped value.
+
 Different embedding models have very different baseline distributions. Builtin recommendations:
 Nova-2 `0.25` (measured on a real 151-doc vault under the asymmetric query purpose, see below),
 Nemotron-VL `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`,
