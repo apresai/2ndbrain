@@ -214,6 +214,10 @@ type mcpMetricDetail struct {
 	Embedded     int
 	TotalChars   int
 	Mode         string
+	// EmbedRetries is filled by the wrapper from the call's own retry counter,
+	// not by a handler: no handler can see how many times the provider was
+	// retried underneath it.
+	EmbedRetries int
 }
 
 type mcpMetricDetailKey struct{}
@@ -236,7 +240,15 @@ func wrapMCPMetric(mdb *metrics.DB, op, version string, fn server.ToolHandlerFun
 		start := time.Now()
 		detail := &mcpMetricDetail{}
 		ctx = context.WithValue(ctx, mcpMetricDetailKey{}, detail)
+		// A FRESH counter per call, never shared: two concurrent tool calls
+		// would otherwise each report the other's retries. Without this every
+		// MCP row recorded embed_retries 0 while the CLI rows recorded the real
+		// number, so the observatory's retry history had a hole exactly the
+		// shape of agent-driven work.
+		retries := &ai.RetryCounter{}
+		ctx = ai.WithRetryCounter(ctx, retries)
 		result, err := fn(ctx, req)
+		detail.EmbedRetries = retries.Count()
 		errMsg := ""
 		if err != nil {
 			errMsg = err.Error()
@@ -255,6 +267,7 @@ func wrapMCPMetric(mdb *metrics.DB, op, version string, fn server.ToolHandlerFun
 			Embedded:     detail.Embedded,
 			TotalChars:   detail.TotalChars,
 			Mode:         detail.Mode,
+			EmbedRetries: detail.EmbedRetries,
 		})
 		return result, err
 	}

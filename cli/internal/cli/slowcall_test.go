@@ -53,6 +53,40 @@ func TestSlowCallNamesTheRetryCause(t *testing.T) {
 	}
 }
 
+// TestSlowCallLineQuotesTheLoopsOwnCap is reviewer G4: the line hardcoded "of 5"
+// while the mantle loops allow three attempts, telling a mantle caller they had
+// two more rounds of patience than they did. The cap now comes from the loop
+// that recorded the retry.
+func TestSlowCallLineQuotesTheLoopsOwnCap(t *testing.T) {
+	got := slowCallLine("generating answer", 9*time.Second, 2, 3, "Bedrock throttled")
+	want := "generating answer, 9s, Bedrock throttled, retry 2 of 3"
+	if got != want {
+		t.Errorf("mantle-shaped retry: %q, want %q", got, want)
+	}
+	// A retry with no budget recorded prints the count without inventing one.
+	got = slowCallLine("generating answer", 9*time.Second, 1, 0, "Bedrock throttled")
+	want = "generating answer, 9s, Bedrock throttled, retry 1"
+	if got != want {
+		t.Errorf("no recorded cap: %q, want %q", got, want)
+	}
+}
+
+// TestSlowCallReadsTheCapFromTheCounter closes the loop: the notice renders from
+// what the retry loop recorded, not from a constant in the CLI.
+func TestSlowCallReadsTheCapFromTheCounter(t *testing.T) {
+	counter := &ai.RetryCounter{}
+	ctx := ai.WithRetryCounter(t.Context(), counter)
+	ai.RecordRetryForTest(ctx, 3)
+
+	var buf bytes.Buffer
+	s := newSlowCall("generating answer", &buf, 10*time.Millisecond, 5*time.Millisecond, counter)
+	time.Sleep(40 * time.Millisecond)
+	s.stop()
+	if !strings.Contains(buf.String(), "retry 1 of 3") {
+		t.Errorf("notice = %q, want it to quote the recorded cap of 3", buf.String())
+	}
+}
+
 // TestSlowCallNoticeSuppressedByPorcelain: --porcelain is a machine-readable
 // stream, so it never carries a status line. Same rule noteWrite applies.
 func TestSlowCallNoticeSuppressedByPorcelain(t *testing.T) {

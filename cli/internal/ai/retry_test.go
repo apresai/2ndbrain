@@ -98,6 +98,9 @@ func TestBedrockRetryIsLoggedAndCounted(t *testing.T) {
 	if counter.Cause() != "Bedrock throttled" {
 		t.Errorf("counter cause = %q, want %q", counter.Cause(), "Bedrock throttled")
 	}
+	if counter.MaxAttempts() != maxBedrockAttempts {
+		t.Errorf("counter max = %d, want the classic loop's %d", counter.MaxAttempts(), maxBedrockAttempts)
+	}
 	if got := RetriesFrom(ctx); got != 1 {
 		t.Errorf("RetriesFrom = %d, want 1", got)
 	}
@@ -137,6 +140,14 @@ func TestMantleRetryUsesTheSameCounter(t *testing.T) {
 	}
 	if counter.Count() != 1 || counter.Cause() != "Bedrock throttled" {
 		t.Errorf("counter = %d / %q, want 1 / %q", counter.Count(), counter.Cause(), "Bedrock throttled")
+	}
+	// The planes do not share a budget: quoting the classic loop's five to a
+	// mantle caller promises patience the loop does not have.
+	if counter.MaxAttempts() != mantleMaxAttempts {
+		t.Errorf("counter max = %d, want the mantle loop's %d", counter.MaxAttempts(), mantleMaxAttempts)
+	}
+	if mantleMaxAttempts == maxBedrockAttempts {
+		t.Fatal("the two planes now share an attempt budget; this test can no longer tell them apart")
 	}
 }
 

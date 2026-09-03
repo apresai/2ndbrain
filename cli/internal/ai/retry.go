@@ -32,6 +32,12 @@ import (
 type RetryCounter struct {
 	n     atomic.Int64
 	cause atomic.Value // string, the most recent retry's human cause
+	// max is the attempt budget of the loop that recorded the most recent
+	// retry. It is recorded rather than assumed because the planes do not
+	// agree: the classic loops allow maxBedrockAttempts, the mantle ones
+	// mantleMaxAttempts, and a notice that quotes the wrong one tells the user
+	// they have more patience left than they do.
+	max atomic.Int64
 }
 
 // Count returns how many retries have been recorded so far.
@@ -52,12 +58,22 @@ func (c *RetryCounter) Cause() string {
 	return s
 }
 
-func (c *RetryCounter) record(cause string) {
+// MaxAttempts returns the attempt budget of the loop that recorded the most
+// recent retry, or 0 when nothing has retried.
+func (c *RetryCounter) MaxAttempts() int {
+	if c == nil {
+		return 0
+	}
+	return int(c.max.Load())
+}
+
+func (c *RetryCounter) record(cause string, max int) {
 	if c == nil {
 		return
 	}
 	c.n.Add(1)
 	c.cause.Store(cause)
+	c.max.Store(int64(max))
 }
 
 type retryCounterKey struct{}
@@ -97,7 +113,7 @@ func noteBedrockRetry(ctx context.Context, plane string, attempt, max int, wait 
 		"cause", cause,
 		"err", err,
 	)
-	RetryCounterFrom(ctx).record("Bedrock " + cause)
+	RetryCounterFrom(ctx).record("Bedrock "+cause, max)
 }
 
 // bedrockRetryCause names why a retryable Bedrock error is being retried, in
@@ -145,5 +161,13 @@ func noteMantleRetry(ctx context.Context, attempt, max int, wait time.Duration, 
 		"cause", "throttled",
 		"status", status,
 	)
-	RetryCounterFrom(ctx).record("Bedrock throttled")
+	RetryCounterFrom(ctx).record("Bedrock throttled", max)
+}
+
+// RecordRetryForTest records one retry against the context's counter, using the
+// production recording path. It exists so a test in another package can exercise
+// a retry-counting call site without reaching a provider: the alternative is an
+// HTTP mock, which the project forbids, or exporting the whole retry loop.
+func RecordRetryForTest(ctx context.Context, maxAttempts int) {
+	RetryCounterFrom(ctx).record("Bedrock throttled", maxAttempts)
 }

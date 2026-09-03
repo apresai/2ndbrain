@@ -101,7 +101,7 @@ func (s *slowCall) run() {
 			return
 		case <-timer.C:
 			fmt.Fprintf(s.out, "\r2nb: %s\033[K",
-				slowCallLine(s.what, time.Since(s.start), s.counter.Count(), maxProviderRetries, s.counter.Cause()))
+				slowCallLine(s.what, time.Since(s.start), s.counter.Count(), s.counter.MaxAttempts(), s.counter.Cause()))
 			printed = true
 			timer.Reset(s.tick)
 		}
@@ -113,18 +113,21 @@ func (s *slowCall) stop() {
 	<-s.done
 }
 
-// maxProviderRetries is the attempt budget the line quotes. It matches the
-// classic Bedrock loop, which is the path that actually produces multi-second
-// waits; quoting a number is what makes "retry 2 of 5" readable as progress
-// rather than as an error.
-const maxProviderRetries = 5
-
 // slowCallLine renders the one-line status. Without a retry there is nothing to
 // explain beyond the wait itself, so the line stays short.
+//
+// max is the budget the RETRYING LOOP reported, not a constant: the classic
+// Bedrock loops allow five attempts and the mantle ones three, so a hardcoded
+// "of 5" told a mantle caller they had two more rounds of patience than they
+// actually did. A retry with no budget recorded prints without the count rather
+// than inventing one.
 func slowCallLine(what string, elapsed time.Duration, retries, max int, cause string) string {
 	secs := int(elapsed.Round(time.Second) / time.Second)
-	if retries > 0 && cause != "" {
+	switch {
+	case retries > 0 && cause != "" && max > 0:
 		return fmt.Sprintf("%s, %ds, %s, retry %d of %d", what, secs, cause, retries, max)
+	case retries > 0 && cause != "":
+		return fmt.Sprintf("%s, %ds, %s, retry %d", what, secs, cause, retries)
 	}
 	return fmt.Sprintf("%s, %ds", what, secs)
 }
