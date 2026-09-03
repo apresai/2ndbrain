@@ -325,7 +325,7 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 | `kb_replace_section` | Replace the content under ONE heading (siblings untouched, first match wins), then reindex + re-embed. Call `kb_structure` first to confirm heading names. Errors if the heading isn't found; rejects read-only `.canvas`/`.base`. |
 | `kb_delete` | Delete from disk + index. Irreversible. Confirm the path is correct before calling. |
 | `kb_polish` | AI copy-edit. Returns both `original` and `polished` — **you decide** whether to apply the changes with a follow-up edit. The server doesn't write the polished text anywhere. |
-| `kb_index` | Force a full reindex + embedding rebuild. Most operations auto-index; only call this after bulk external edits or imports. |
+| `kb_index` | Force a full reindex + embedding rebuild. Most operations auto-index; only call this after bulk external edits or imports. The result carries `unparseable` and `unreadable` (both always present, `[]` when empty): a note that would not PARSE has had its index row dropped and is gone from search until it is fixed, one that would not OPEN keeps its row and is still answering searches from what was indexed before. |
 
 > Note: `move`/`rename` (the wikilink-rewriting vault mutation) is intentionally **CLI-only**: it is the highest-blast-radius write surface (it rewrites links across every note), so it stays behind `2nb move`/`2nb rename` with their mandatory `--dry-run` preview rather than an MCP tool.
 
