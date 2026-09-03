@@ -5,22 +5,32 @@ import Testing
 /// every model, including one that carries a catalog recommendation. It used to
 /// be prefilled with that recommendation, so Save with no edit wrote the
 /// built-in value into the user catalog as a calibration the user never chose.
-@Test("The picker's threshold field starts empty even for a model with a recommendation")
+///
+/// This asserts on DetailInputs.initial, the value resetDetailInputs actually
+/// applies, so it pins the RESET rather than a constant: the previous helper
+/// ignored its argument and returned "", which no change to the reset could have
+/// falsified. The probe-selection assertion is what makes that real, since it
+/// varies with the model.
+@Test("The picker's detail reset starts the threshold empty and picks the probe by model type")
 @MainActor
-func thresholdFieldStartsEmpty() {
+func detailResetStartsThresholdEmpty() {
     let recommended = catalogModelFixture(recommendedSimilarityThreshold: 0.25)
     let none = catalogModelFixture(recommendedSimilarityThreshold: nil)
+    let generation = catalogModelFixture(recommendedSimilarityThreshold: nil, modelType: "generation")
 
-    #expect(ModelCatalogPickerView.initialThresholdText(for: recommended) == "")
-    #expect(ModelCatalogPickerView.initialThresholdText(for: none) == "")
+    #expect(ModelCatalogPickerView.DetailInputs.initial(for: recommended).thresholdText == "")
+    #expect(ModelCatalogPickerView.DetailInputs.initial(for: none).thresholdText == "")
+
+    #expect(ModelCatalogPickerView.DetailInputs.initial(for: recommended).benchmarkProbeSelection == "embed")
+    #expect(ModelCatalogPickerView.DetailInputs.initial(for: generation).benchmarkProbeSelection == "generate")
 }
 
-private func catalogModelFixture(recommendedSimilarityThreshold: Double?) -> CatalogModelInfo {
+private func catalogModelFixture(recommendedSimilarityThreshold: Double?, modelType: String = "embedding") -> CatalogModelInfo {
     CatalogModelInfo(
         modelID: "amazon.nova-2-multimodal-embeddings-v1:0",
         name: "Nova 2 Multimodal Embeddings",
         provider: "bedrock",
-        modelType: "embedding",
+        modelType: modelType,
         vendor: nil,
         vendorDisplay: nil,
         family: nil,
