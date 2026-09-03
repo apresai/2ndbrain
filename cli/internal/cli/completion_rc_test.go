@@ -71,6 +71,16 @@ func TestCompletionInstall_RCFlagRedirectsTheBlock(t *testing.T) {
 	if !strings.Contains(out, rc) {
 		t.Errorf("the command did not say which file it changed:\n%s", out)
 	}
+	// And the follow-up line names the same file. It used to say `source
+	// ~/.zshrc` regardless, which is the wrong file for anyone using --rc or
+	// ZDOTDIR: sourcing it leaves the shell without completions and the user
+	// without a reason why.
+	if !strings.Contains(out, "source "+rc) {
+		t.Errorf("the success line tells the user to source the wrong file:\n%s", out)
+	}
+	if strings.Contains(out, "source ~/.zshrc") {
+		t.Errorf("the success line still hard-codes ~/.zshrc:\n%s", out)
+	}
 
 	// The default target must be left alone entirely.
 	if _, err := os.Stat(filepath.Join(home, ".zshrc")); !os.IsNotExist(err) {

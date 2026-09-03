@@ -154,7 +154,10 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 		printCompletionSnippet(cmd.ErrOrStderr(), dir)
 	} else if added {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Updated %s with completion init block.\n", zshrcPath)
-		fmt.Fprintln(cmd.ErrOrStderr(), "Restart your shell or run: source ~/.zshrc")
+		// Name the file that was actually edited. The literal ~/.zshrc was wrong
+		// for anyone using --rc or ZDOTDIR, and sourcing the wrong file leaves
+		// the shell without completions and the user without a reason why.
+		fmt.Fprintf(cmd.ErrOrStderr(), "Restart your shell or run: source %s\n", zshrcPath)
 	} else {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Shell config %s already has completion block — no changes made.\n", zshrcPath)
 	}
