@@ -171,3 +171,66 @@ func TestContract_EmptyListingsUnderYAMLAndCSV(t *testing.T) {
 		})
 	}
 }
+
+// The one documented EXCEPTION to the rule above, pinned here because the rule
+// is stated in four places and a reader will believe it. The listings are a
+// bare array, so `[]` is the empty value of their shape in every format.
+// `search` is not a listing: its payload is an ENVELOPE OBJECT, and only
+// `--json` carries it. So a zero-hit search writes its full
+// {mode, warnings, results} document under --json, and NOTHING AT ALL on
+// stdout under yaml, csv, tsv and text (the hint goes to stderr, exit 0), which
+// is deliberate: a literal `[]` in a csv or tsv stream is the corruption those
+// formats exist to avoid, and the envelope has no bare-array form to emit.
+// raw/md are refused up front like any other row set.
+func TestContract_SearchZeroHitsCarriesTheEnvelopeUnderJSONOnly(t *testing.T) {
+	_, root := newContractVault(t)
+	md := "---\nid: d1\ntitle: Only Note\ntype: note\nstatus: draft\n---\nDistinctiveword body.\n"
+	if err := os.WriteFile(filepath.Join(root, "only.md"), []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v\n%s", err, out)
+	}
+
+	// --json: the whole envelope, results included.
+	out, err := runCLIArgs(t, root, "search", "zzzznomatchtoken", "--json")
+	if err != nil {
+		t.Fatalf("search --json: %v\n%s", err, out)
+	}
+	var env struct {
+		Mode     *string   `json:"mode"`
+		Warnings *[]string `json:"warnings"`
+		Results  *[]any    `json:"results"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("search --json on zero hits is not the envelope: %v\n%s", err, out)
+	}
+	if env.Mode == nil || env.Warnings == nil || env.Results == nil {
+		t.Errorf("every envelope key must be present and non-null: %s", out)
+	}
+
+	// Every other renderable format: nothing on stdout.
+	for _, format := range []string{"yaml", "csv", "tsv", "text"} {
+		t.Run(format, func(t *testing.T) {
+			out, err := runCLIArgs(t, root, "search", "zzzznomatchtoken", "--format", format)
+			if err != nil {
+				t.Fatalf("search --format %s: %v\n%s", format, err, out)
+			}
+			if len(out) != 0 {
+				t.Errorf("a zero-hit search must write nothing on stdout under %s, got %q", format, out)
+			}
+		})
+	}
+
+	// raw/md: refused, exactly as they are on a search that DID match.
+	for _, format := range []string{"raw", "md"} {
+		out, err := runCLIArgs(t, root, "search", "zzzznomatchtoken", "--format", format)
+		if err == nil {
+			t.Errorf("search --format %s should be refused: %s", format, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "document body") {
+			t.Errorf("search --format %s refusal should point at the missing body, got: %v", format, err)
+		}
+	}
+}
