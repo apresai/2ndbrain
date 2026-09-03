@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -489,6 +490,157 @@ func TestContract_Move_AbsoluteDestRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "absolute") {
 		t.Errorf("error should mention absolute path: %v", err)
 	}
+}
+
+// The guard used to check the FILENAME while the docs promised it checked the
+// "name": a bare link that names the moved note by its TITLE or an ALIAS was
+// invisible to it, because every step of discovery matched the on-disk basename
+// byte for byte. Such a link resolves to nothing (the resolver finds two
+// candidates and refuses), so it is not a backlink either, and the move
+// completed silently with skipped_ambiguous empty and refused false. After the
+// move the surviving note was the only one with that title, so the link
+// silently began pointing at a DIFFERENT note than the author meant.
+//
+// Both cases here name the moved note only through a resolver tier: a shared
+// title, and a shared alias.
+func TestContract_Move_AmbiguousResolverOnlyLink(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		linkTarget string
+		writeNotes func(t *testing.T, root string)
+	}{
+		{
+			name:       "shared title",
+			linkTarget: "Dup",
+			writeNotes: func(t *testing.T, root string) {
+				// Two notes whose FILENAMES the link never mentions: `2nb create`
+				// slugs the path and keeps the title verbatim, so this is what a
+				// vault with two notes called "Dup" actually looks like.
+				writeNote(t, root, "one/dup.md", "Dup", "first dup")
+				writeNote(t, root, "two/dup.md", "Dup", "second dup")
+			},
+		},
+		{
+			name:       "shared alias",
+			linkTarget: "Duplicate",
+			writeNotes: func(t *testing.T, root string) {
+				writeAliasNote(t, root, "one/dup.md", "Dup One", "Duplicate", "first dup")
+				writeAliasNote(t, root, "two/other.md", "Dup Two", "Duplicate", "second dup")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, root := newContractVault(t)
+			tc.writeNotes(t, root)
+			writeNote(t, root, "ref.md", "Ref", "see [["+tc.linkTarget+"]] here.")
+			if out, err := runCLIArgs(t, root, "index"); err != nil {
+				t.Fatalf("index: %v\n%s", err, out)
+			}
+
+			// The link must really be unresolved: that is the state that made it
+			// invisible to both Backlinks and LinksByRawName.
+			out, err := runCLIArgs(t, root, "unresolved", "--json")
+			if err != nil {
+				t.Fatalf("unresolved: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), tc.linkTarget) {
+				t.Fatalf("fixture is wrong: [[%s]] should be an unresolved link:\n%s", tc.linkTarget, out)
+			}
+
+			// Dry-run reports the ambiguity.
+			out, err = runCLIArgs(t, root, "move", "one/dup.md", "one/renamed.md", "--dry-run", "--json")
+			if err != nil {
+				t.Fatalf("dry-run move: %v (out=%s)", err, out)
+			}
+			var res moveResult
+			if err := json.Unmarshal(out, &res); err != nil {
+				t.Fatalf("decode: %v (out=%s)", err, out)
+			}
+			if len(res.SkippedAmbiguous) == 0 {
+				t.Fatalf("dry-run should report [[%s]] as ambiguous: %+v", tc.linkTarget, res)
+			}
+			if got := res.SkippedAmbiguous[0]; got.Path != "ref.md" || got.Target != tc.linkTarget {
+				t.Errorf("skipped_ambiguous[0] = %+v, want ref.md -> %s", got, tc.linkTarget)
+			}
+
+			// The real move is refused, and nothing on disk changed.
+			before := vaultDigest(t, root)
+			out, err = runCLIArgs(t, root, "move", "one/dup.md", "one/renamed.md", "--json")
+			if err == nil {
+				t.Fatalf("non-force move should be refused on ambiguity (out=%s)", out)
+			}
+			if !strings.Contains(err.Error(), "ambiguous") {
+				t.Errorf("refusal should mention ambiguity: %v", err)
+			}
+			if jerr := json.NewDecoder(bytes.NewReader(out)).Decode(&res); jerr != nil {
+				t.Fatalf("move --json output is not JSON: %v\n%s", jerr, out)
+			}
+			if !res.Refused {
+				t.Errorf("JSON does not carry refused: true: %s", out)
+			}
+			if vaultDigest(t, root) != before {
+				t.Error("a refused move changed files on disk")
+			}
+
+			// --force proceeds and leaves the ambiguous link alone: it is the one
+			// link a rewrite cannot attribute.
+			if out, err := runCLIArgs(t, root, "move", "one/dup.md", "one/renamed.md", "--force", "--json"); err != nil {
+				t.Fatalf("force move: %v (out=%s)", err, out)
+			}
+			if body := readBody(t, root, "ref.md"); !strings.Contains(body, "[["+tc.linkTarget+"]]") {
+				t.Errorf("ambiguous [[%s]] should be left untouched under --force: %q", tc.linkTarget, body)
+			}
+			if _, serr := os.Stat(filepath.Join(root, "one", "renamed.md")); serr != nil {
+				t.Errorf("--force should still complete the move: %v", serr)
+			}
+		})
+	}
+}
+
+// The guard must stay silent when the name is unique: a title nothing else
+// shares is not ambiguous, and a move naming it must not start being refused.
+func TestContract_Move_UniqueTitleLinkStillMoves(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "one/solo.md", "Solo Title", "only note")
+	writeNote(t, root, "ref.md", "Ref", "see [[Solo Title]] here.")
+	if out, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v\n%s", err, out)
+	}
+
+	out, err := runCLIArgs(t, root, "move", "one/solo.md", "one/renamed.md", "--json")
+	if err != nil {
+		t.Fatalf("move: %v (out=%s)", err, out)
+	}
+	var res moveResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode: %v (out=%s)", err, out)
+	}
+	if len(res.SkippedAmbiguous) != 0 {
+		t.Errorf("a unique title must not read as ambiguous: %+v", res.SkippedAmbiguous)
+	}
+	if res.Refused {
+		t.Errorf("move was refused on a unique name: %s", out)
+	}
+	if _, serr := os.Stat(filepath.Join(root, "one", "renamed.md")); serr != nil {
+		t.Errorf("destination missing: %v", serr)
+	}
+}
+
+// writeAliasNote writes a note carrying one frontmatter alias, for the alias
+// resolution tier. writeNote's frontmatter has no aliases key.
+func writeAliasNote(t *testing.T, root, relPath, title, alias, body string) string {
+	t.Helper()
+	abs := filepath.Join(root, relPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", relPath, err)
+	}
+	idSlug := strings.NewReplacer("/", "-", " ", "-", ".", "-").Replace(strings.TrimSuffix(relPath, ".md"))
+	content := "---\nid: id-" + idSlug + "\ntitle: " + title +
+		"\ntype: note\nstatus: draft\ntags: []\naliases:\n  - " + alias + "\n---\n\n" + body + "\n"
+	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", relPath, err)
+	}
+	return abs
 }
 
 // Ambiguity: two docs named "dup" in different folders. A bare [[dup]] link can't

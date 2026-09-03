@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -32,7 +34,11 @@ OTHER notes' bodies. Use --dry-run first to preview the rename, the per-note lin
 that would be rewritten, and any links it would skip as ambiguous. Without
 --force, a move is refused when the pre-scan finds a blocking ambiguity (a bare
 [[name]] link whose name matches more than one note, so we can't be sure it
-points at the one being moved).
+points at the one being moved). "Name" means whatever the resolver accepts: a
+filename, a path suffix, a frontmatter title, or an alias. Two notes sharing a
+TITLE make a bare link to that title ambiguous even though their filenames
+differ, and that link is reported and blocks the move exactly like a filename
+collision does.
 
 Links inside fenced or inline code are never touched. The #heading / #^block /
 |alias suffix and any leading "!" embed marker on a wikilink are preserved; only
@@ -191,6 +197,23 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 		return fmt.Errorf("check ambiguity: %w", err)
 	}
 
+	// Everything above is byte-exact on the on-disk NAME: LinksByRawName matches
+	// a link's raw target against the moved note's path, its "/"-suffixes and its
+	// basename, and basenameIsAmbiguous counts basename collisions. The resolver
+	// the rest of 2nb uses also resolves by TITLE and by ALIAS (store/resolve.go
+	// tiers C and D), and `2nb create` slugs the filename while keeping the title
+	// verbatim, so two notes both titled "Dup" are one/dup.md and two/dup.md and
+	// a [[Dup]] link names neither filename. That link resolves to nothing (the
+	// title tier finds two ids and refuses), so it is invisible to Backlinks AND
+	// to LinksByRawName: the guard reported no ambiguity at all, the move went
+	// through with or without --force, and [[Dup]] silently began pointing at the
+	// OTHER note. Ask the resolver the same question the guard is asking, so
+	// "ambiguous" means here what it means everywhere else.
+	resolverAmbiguous, err := resolverAmbiguousRefs(v, srcRel)
+	if err != nil {
+		return fmt.Errorf("check ambiguity: %w", err)
+	}
+
 	result := moveResult{Rewritten: []moveRewrite{}, SkippedAmbiguous: []moveAmbiguous{}, Failed: []moveFailure{}, DryRun: moveDryRun}
 	result.Moved.From = srcRel
 	result.Moved.To = dstRel
@@ -207,6 +230,7 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 		newBody string
 	}
 	var pending []pendingWrite
+	seenAmbiguous := map[string]bool{}
 	for _, refPath := range refPaths {
 		refAbs := v.AbsPath(refPath)
 		refDoc, perr := document.ParseFile(refAbs)
@@ -225,6 +249,7 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 			rewritten, count = document.RewriteWikiLinksPathOnly(refDoc.Body, srcRel, dstRel)
 			if bare := bareNameOccurrences(refDoc.Body, srcRel); bare > 0 {
 				base := document.Basename(srcRel)
+				seenAmbiguous[ambiguityKey(refPath, base)] = true
 				result.SkippedAmbiguous = append(result.SkippedAmbiguous, moveAmbiguous{
 					Path:   refPath,
 					Target: base,
@@ -245,6 +270,18 @@ func moveImpl(cmd *cobra.Command, src, dst string) error {
 		}
 		result.Rewritten = append(result.Rewritten, moveRewrite{Path: refPath, Count: count})
 		pending = append(pending, pendingWrite{abs: refAbs, doc: refDoc, path: refPath, newBody: rewritten})
+	}
+
+	// Fold in the resolver-found ambiguities the byte-exact pass could not see.
+	// A note whose link IS byte-exact is reported once, by whichever pass got
+	// there first: the two describe the same link with different spellings of
+	// the target ("dup" from the on-disk basename, "dup.md" or "Dup" from the
+	// link's own text), which is what ambiguityKey normalizes away.
+	for _, a := range resolverAmbiguous {
+		if seenAmbiguous[ambiguityKey(a.Path, a.Target)] {
+			continue
+		}
+		result.SkippedAmbiguous = append(result.SkippedAmbiguous, a)
 	}
 
 	// (g) Refuse a real (non-force) move when the pre-scan found blocking
@@ -395,6 +432,99 @@ func basenameIsAmbiguous(v *vault.Vault, srcRel string) (bool, error) {
 		}
 	}
 	return matches > 1, rows.Err()
+}
+
+// ambiguityKey identifies one ambiguous link for de-duplication across the two
+// discovery passes. They spell the same target differently: the byte-exact pass
+// reports the moved note's ON-DISK basename ("dup"), the resolver pass reports
+// the link's own text ("dup.md", or a title like "Dup"). Slashes and the ".md"
+// extension are normalized away, matching store.normalizeRawName (unexported
+// there, and this is the only caller that needs it). Case is deliberately NOT
+// folded: [[dup]] and [[Dup]] are two different links and both deserve a line.
+func ambiguityKey(path, target string) string {
+	t := strings.ReplaceAll(target, "\\", "/")
+	t = strings.TrimPrefix(t, "/")
+	t = strings.TrimSuffix(t, ".md")
+	return path + "\x00" + t
+}
+
+// unresolvedLinksExcept returns every unresolved link in the vault (source path
+// and raw target) other than those in the document at skipPath.
+func unresolvedLinksExcept(v *vault.Vault, skipPath string) ([]moveAmbiguous, error) {
+	rows, err := v.DB.Conn().Query(`
+		SELECT d.path, l.target_raw
+		FROM links l
+		JOIN documents d ON d.id = l.source_id
+		WHERE l.target_id IS NULL
+		ORDER BY d.path, l.target_raw
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query unresolved links: %w", err)
+	}
+	defer rows.Close()
+
+	var links []moveAmbiguous
+	for rows.Next() {
+		var lk moveAmbiguous
+		if err := rows.Scan(&lk.Path, &lk.Target); err != nil {
+			return nil, fmt.Errorf("scan unresolved link: %w", err)
+		}
+		if lk.Path == skipPath {
+			continue
+		}
+		links = append(links, lk)
+	}
+	return links, rows.Err()
+}
+
+// resolverAmbiguousRefs reports the referencing notes whose link to the moved
+// note is ambiguous TO THE RESOLVER, which is what "ambiguous" means everywhere
+// else in 2nb: a name resolves by exact path, then by unique basename/suffix,
+// then by TITLE, then by ALIAS (store.Resolver). A link naming the moved note
+// by a title or alias it shares with another note is exactly as unsafe to
+// rewrite as one naming a colliding basename, and the byte-exact scan in
+// moveImpl cannot see it, because the link text never mentions the filename.
+//
+// Only UNRESOLVED links are examined: a link that resolved is unambiguous by
+// construction (the resolver refuses to resolve an ambiguous one), and those
+// are already covered by Backlinks. When the vault has none, the whole vault
+// walk is skipped, which is the ordinary case.
+func resolverAmbiguousRefs(v *vault.Vault, srcRel string) ([]moveAmbiguous, error) {
+	links, err := unresolvedLinksExcept(v, srcRel)
+	if err != nil {
+		return nil, err
+	}
+	if len(links) == 0 {
+		return nil, nil
+	}
+
+	// The same live-filesystem index lint and the repair tools build, so this
+	// guard and they can never disagree about which names are ambiguous.
+	docs, aliasIndex, werr := vault.CollectLiveDocs(v.Root)
+	if werr != nil {
+		return nil, fmt.Errorf("walk for resolver index: %w", werr)
+	}
+	resolver := store.NewResolver(docs, aliasIndex)
+
+	var out []moveAmbiguous
+	for _, lk := range links {
+		var amb *store.AmbiguousTargetError
+		if _, rerr := resolver.Resolve(lk.Target); !errors.As(rerr, &amb) {
+			continue
+		}
+		if !slices.Contains(amb.Candidates, srcRel) {
+			// Ambiguous between other notes entirely: not this move's problem,
+			// and rewriting it was never on the table.
+			continue
+		}
+		out = append(out, moveAmbiguous{
+			Path:   lk.Path,
+			Target: lk.Target,
+			Reason: fmt.Sprintf("link [[%s]] is ambiguous: it names %d notes (%s), one of which is the one being moved",
+				lk.Target, len(amb.Candidates), strings.Join(amb.Candidates, ", ")),
+		})
+	}
+	return out, nil
 }
 
 // bareNameOccurrences counts the bare-basename wikilinks in body that name
