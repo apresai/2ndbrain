@@ -593,6 +593,17 @@ func catalogCompatibility(m ModelInfo) (bool, string) {
 // clobber self-heals on the next `verify --discover` instead of shadowing
 // its own cure — live incident 2026-08-21, xai.grok-4.6), and the CLI probe
 // save path (adoptCandidateRouting).
+// builtinDeclares reports whether the builtin catalog ships a row for this
+// model, i.e. whether anything but the user file can supply its facts.
+func builtinDeclares(provider, id string) bool {
+	for _, m := range BuiltinCatalog() {
+		if m.Provider == provider && m.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func AdoptRoutingHints(entry *ModelInfo, from ModelInfo) {
 	// Plane is adopted first and on the same fill-only-empty rule. It is part
 	// of the row's identity, so a save path that carried the strategy but not
@@ -607,7 +618,19 @@ func AdoptRoutingHints(entry *ModelInfo, from ModelInfo) {
 	if entry.Endpoint == "" && from.Endpoint != "" {
 		entry.Endpoint = from.Endpoint
 	}
-	if entry.ContextLen == 0 && from.ContextLen != 0 {
+	// ContextLen is a FACT, not routing, and it is adopted only for a model the
+	// builtin catalog has never declared.
+	//
+	// `from` is a row from the MERGED catalog at every call site, so on a
+	// builtin model this wrote the builtin's own context length into the raw
+	// user file, with no provenance, on every `models verify`, every `discover
+	// --validate` and every promote save. The read side hides it, but the file
+	// accumulates exactly the mirror per-fact provenance exists to stop, and
+	// preserveUserFacts cannot undo it: that helper only ever SETS fields.
+	//
+	// A model no builtin declares has no other source for the value, so there
+	// the discovery hint is still where its context length comes from.
+	if entry.ContextLen == 0 && from.ContextLen != 0 && !builtinDeclares(entry.Provider, entry.ID) {
 		entry.ContextLen = from.ContextLen
 	}
 	// Region is adopted for EVERY plane, not just mantle.

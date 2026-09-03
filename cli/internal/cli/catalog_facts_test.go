@@ -478,3 +478,98 @@ func TestAuthoredFactPrefersTheVaultScope(t *testing.T) {
 		t.Errorf("models list context_length = %d, want the vault row's 2222", got.ContextLen)
 	}
 }
+
+// saveVerifyVerdict runs the sequence `models verify` and `discover --validate`
+// run, candidate row and all, so the test exercises the real order rather than
+// a reconstruction of it.
+func saveVerifyVerdict(t *testing.T, scope ai.UserCatalogScope, vaultRoot string, candidate ai.ModelInfo, result *ai.TestProbeResult) {
+	t.Helper()
+	entry := catalogEntryFromTestResult(context.Background(), ai.AIConfig{Provider: "bedrock"}, vaultRoot, result)
+	entry.Enabled = preserveScopeEnabled(scope, vaultRoot, entry.Provider, entry.ID)
+	preserveRoutingFields(scope, vaultRoot, &entry)
+	adoptCandidateRouting(&entry, candidate)
+	preserveUserFacts(scope, vaultRoot, &entry)
+	preserveUserThreshold(scope, vaultRoot, &entry)
+	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+		t.Fatalf("save verify verdict: %v", err)
+	}
+}
+
+// Go reviewer G1 (HIGH): the probe save calls adoptCandidateRouting with a row
+// from the MERGED catalog, and AdoptRoutingHints filled ContextLen from it with
+// no provenance gate. So the builtin's own context length was written into the
+// raw user file, unlisted, on every verify, every discover --validate and every
+// promote. The read side hides it; the file accumulates the mirror. Nothing
+// downstream can undo it either, because preserveUserFacts only ever SETS.
+func TestVerifySaveNeverWritesABuiltinContextLength(t *testing.T) {
+	_, root := newContractVault(t)
+	builtin := findBuiltinModel("bedrock", novaEmbeddingID)
+	if builtin == nil || builtin.ContextLen == 0 {
+		t.Fatalf("the builtin %s row no longer declares a context length", novaEmbeddingID)
+	}
+
+	// The candidate `models verify` iterates is a merged row, so it carries the
+	// builtin's facts.
+	candidate := *builtin
+	candidate.Plane, candidate.Region = ai.PlaneClassic, "us-east-1"
+
+	saveVerifyVerdict(t, ai.ScopeVault, root, candidate, &ai.TestProbeResult{
+		ModelID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+		OK: true, Detail: "dims=1024",
+	})
+
+	stored, ok := ai.UserCatalogEntry(ai.ScopeVault, root, ai.RouteKey{
+		Provider: "bedrock", ID: novaEmbeddingID, Plane: ai.PlaneClassic, Region: "us-east-1",
+	})
+	if !ok {
+		t.Fatal("the verify save wrote no row for the probed route")
+	}
+	if stored.ContextLen != 0 {
+		t.Errorf("stored context_length = %d, want it absent: the builtin's own value was mirrored into the user file", stored.ContextLen)
+	}
+	if stored.Name != "" || stored.Dimensions != 0 {
+		t.Errorf("other builtin facts were mirrored too: name=%q dimensions=%d", stored.Name, stored.Dimensions)
+	}
+	// The merged view still shows the builtin's value, which is the point of
+	// not persisting it.
+	if got := mergedFact(t, root, novaEmbeddingID); got.ContextLen != builtin.ContextLen {
+		t.Errorf("models list context_length = %d, want the builtin's %d", got.ContextLen, builtin.ContextLen)
+	}
+}
+
+// The gate is scoped to models the builtin catalog declares. A DISCOVERED model
+// it has never seen has no other source for its context length, so the
+// discovery hint is still adopted and persisted.
+func TestVerifySaveKeepsADiscoveredModelsContextLength(t *testing.T) {
+	_, root := newContractVault(t)
+	const id = "vendor.discovered-only"
+	if findBuiltinModel("bedrock", id) != nil {
+		t.Fatalf("%s is in the builtin catalog; pick an id that is not", id)
+	}
+
+	candidate := ai.ModelInfo{
+		ID: id, Provider: "bedrock", Type: "generation",
+		Plane: ai.PlaneMantle, Region: "us-west-2",
+		InvokeStrategy: ai.StrategyBedrockMantleResponses,
+		ContextLen:     128000,
+	}
+	saveVerifyVerdict(t, ai.ScopeVault, root, candidate, &ai.TestProbeResult{
+		ModelID: id, Provider: "bedrock", Type: "generation",
+		Plane: ai.PlaneMantle, Region: "us-west-2",
+		OK: true, Detail: "ok",
+	})
+
+	stored, ok := ai.UserCatalogEntry(ai.ScopeVault, root, ai.RouteKey{
+		Provider: "bedrock", ID: id, Plane: ai.PlaneMantle, Region: "us-west-2",
+	})
+	if !ok {
+		t.Fatal("the verify save wrote no row for the probed route")
+	}
+	if stored.ContextLen != 128000 {
+		t.Errorf("stored context_length = %d, want the discovery hint's 128000: nothing else knows it", stored.ContextLen)
+	}
+	if stored.InvokeStrategy != ai.StrategyBedrockMantleResponses {
+		t.Errorf("the routing hint itself stopped being adopted: invoke_strategy = %q", stored.InvokeStrategy)
+	}
+}
