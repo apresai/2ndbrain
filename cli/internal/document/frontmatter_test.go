@@ -257,3 +257,78 @@ func TestUpdateDocumentFrontmatterAST_EmptyBlock(t *testing.T) {
 		t.Errorf("body = %q, want %q (unchanged)", gotBody, body)
 	}
 }
+
+// TestParseFrontmatter_DoubledDelimiterKeepsRealFrontmatter is the regression
+// the empty-block rule introduced: a note written as "---\n---\nreal: value\n---\n"
+// carries real metadata behind a doubled opening delimiter, and reading the
+// block as empty moved that metadata into the body, silently. A doubled
+// delimiter is ambiguous, so the reading that cannot lose data wins.
+func TestParseFrontmatter_DoubledDelimiterKeepsRealFrontmatter(t *testing.T) {
+	meta, body, err := ParseFrontmatter([]byte("---\n---\nreal: value\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["real"] != "value" {
+		t.Errorf("meta = %v, want real: value preserved as metadata, not moved into the body", meta)
+	}
+	if body != "body\n" {
+		t.Errorf("body = %q, want %q", body, "body\n")
+	}
+}
+
+func TestParseFrontmatter_DoubledDelimiterKeepsRealFrontmatterCRLF(t *testing.T) {
+	meta, body, err := ParseFrontmatter([]byte("---\r\n---\r\nreal: value\r\n---\r\nbody\r\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["real"] != "value" {
+		t.Errorf("meta = %v, want real: value", meta)
+	}
+	if body != "body\r\n" {
+		t.Errorf("body = %q, want %q", body, "body\r\n")
+	}
+}
+
+// TestParseFrontmatter_DoubledDelimiterAmbiguityIsPinned records the cost of the
+// rule above rather than leaving it accidental. A markdown heading is a YAML
+// comment, so the region below parses as a mapping and is therefore read as
+// frontmatter. That is the behavior 2nb had before the empty-block rule existed;
+// it is pinned here so a future change to it is a decision, not a surprise.
+func TestParseFrontmatter_DoubledDelimiterAmbiguityIsPinned(t *testing.T) {
+	meta, body, err := ParseFrontmatter([]byte("---\n---\n# H\n\nkey: value\n---\nmore\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["key"] != "value" {
+		t.Errorf("meta = %v, want key: value (a heading is a YAML comment, so this region is a mapping)", meta)
+	}
+	if body != "more\n" {
+		t.Errorf("body = %q, want %q", body, "more\n")
+	}
+}
+
+// TestUpdateDocumentFrontmatterAST_DoubledDelimiterKeepsRealFrontmatter: the
+// write side follows the read side, so a meta edit does not drop the metadata
+// the read side just recognized.
+func TestUpdateDocumentFrontmatterAST_DoubledDelimiterKeepsRealFrontmatter(t *testing.T) {
+	original := []byte("---\n---\nreal: value\n---\nbody\n")
+	meta, body, err := ParseFrontmatter(original)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	meta["added"] = "yes"
+	out, err := UpdateDocumentFrontmatterAST(original, meta, body)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	gotMeta, gotBody, err := ParseFrontmatter(out)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	if gotMeta["real"] != "value" || gotMeta["added"] != "yes" {
+		t.Errorf("meta = %v, want both the existing and the added key", gotMeta)
+	}
+	if gotBody != body {
+		t.Errorf("body = %q, want %q (unchanged)", gotBody, body)
+	}
+}

@@ -43,6 +43,34 @@ func emptyFrontmatterBlock(rest string) (body string, ok bool) {
 	return "", false
 }
 
+// legacyDoubledDelimiterFrontmatter re-reads a doubled opening delimiter the way
+// the parser did before the empty-block rule: everything up to the NEXT closing
+// delimiter is the YAML region, and its leading "---" is a document start marker
+// that YAML accepts. It wins only when that region yields a NON-EMPTY mapping;
+// a parse error or an empty result means the block really is empty.
+//
+// The inherited cost, unchanged from before the empty-block rule: a body whose
+// text happens to parse as a mapping is read as frontmatter. A markdown heading
+// is a YAML comment, so "---\n---\n# H\n\nkey: value\n---\nmore" reads
+// {key: value} as metadata. That is the ambiguity of a doubled delimiter, not a
+// new behavior, and losing real metadata is the worse of the two failures.
+func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, bool) {
+	idx := strings.Index(rest, "\n---\n")
+	closeLen := len("\n---\n")
+	if idx == -1 {
+		idx = strings.Index(rest, "\r\n---\r\n")
+		closeLen = len("\r\n---\r\n")
+	}
+	if idx == -1 {
+		return nil, "", false
+	}
+	meta := make(map[string]any)
+	if err := yaml.Unmarshal([]byte(rest[:idx]), &meta); err != nil || len(meta) == 0 {
+		return nil, "", false
+	}
+	return meta, rest[idx+closeLen:], true
+}
+
 func ParseFrontmatter(content []byte) (meta map[string]any, body string, err error) {
 	s := string(content)
 
@@ -61,8 +89,19 @@ func ParseFrontmatter(content []byte) (meta map[string]any, body string, err err
 	}
 
 	rest := s[openLen:]
-	if body, ok := emptyFrontmatterBlock(rest); ok {
-		return map[string]any{}, body, nil
+	if emptyBody, ok := emptyFrontmatterBlock(rest); ok {
+		// A doubled delimiter is genuinely ambiguous, so prefer the reading that
+		// cannot LOSE data. "---\n---\nreal: value\n---\nbody" is either an
+		// empty block followed by prose that happens to look like YAML, or a
+		// mapping whose region opens with a stray document marker. Before the
+		// empty-block rule existed the second reading always won (the search
+		// below found the THIRD delimiter and YAML accepted the leading "---" as
+		// a document start), so taking the first reading unconditionally moved a
+		// note's real metadata into its body.
+		if meta, legacyBody, ok := legacyDoubledDelimiterFrontmatter(rest); ok {
+			return meta, legacyBody, nil
+		}
+		return map[string]any{}, emptyBody, nil
 	}
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
@@ -167,9 +206,13 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 	rest := s[openLen:]
 	// An empty frontmatter block carries no YAML to preserve surgically, and
 	// the closing-delimiter search below would otherwise match a "---" in the
-	// body and treat body prose as the region to edit.
+	// body and treat body prose as the region to edit. A doubled delimiter that
+	// still reads as real frontmatter (see legacyDoubledDelimiterFrontmatter)
+	// does have a region to preserve, so it falls through to the surgical path.
 	if _, ok := emptyFrontmatterBlock(rest); ok {
-		return SerializeDocument(updatedMeta, body)
+		if _, _, legacy := legacyDoubledDelimiterFrontmatter(rest); !legacy {
+			return SerializeDocument(updatedMeta, body)
+		}
 	}
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
