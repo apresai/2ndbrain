@@ -68,11 +68,11 @@ func emptyFrontmatterBlock(rest string) (body string, ok bool) {
 // still rewrites such a note. Both the plain colon case
 // ("---\n---\nStatus: draft\n---\nbody") and the heading case
 // ("---\n---\n# H\n\nkey: value\n---\nmore", where the heading is a YAML
-// comment) land there. Only the blank line distinguishes them from real
-// properties, and a note can reach that shape without one: SerializeFrontmatter
-// emits "---\n---\n" for an empty map with no blank line after it. The trade is
-// deliberate, because losing real metadata is the worse of the two failures, and
-// it is pinned by test rather than left accidental.
+// comment) land there. That residual is now reachable ONLY by a note a human
+// hand-wrote that way: SerializeDocument guarantees a blank line after an empty
+// block, so 2nb no longer manufactures the shape it would then misread. The
+// trade is deliberate, because losing real metadata is the worse of the two
+// failures, and it is pinned by test rather than left accidental.
 func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, bool) {
 	var afterOpen int
 	switch {
@@ -215,6 +215,22 @@ func SerializeDocument(meta map[string]any, body string) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(fm)
 	if body != "" {
+		// An EMPTY frontmatter block is closed by a delimiter identical to the
+		// one that opened it, so what the parser meets is a doubled fence, and
+		// the blank line after it is how it knows the block really is empty
+		// (see legacyDoubledDelimiterFrontmatter). Write no blank line and 2nb
+		// produces a note it then MISREADS: an empty map with the body
+		// "Status: draft\n\n---\n\nAction items\n" was written as
+		// "---\n---\nStatus: draft\n\n---\n\nAction items\n" and read straight
+		// back as {Status: draft} with that line gone from the body. Exactly one
+		// newline, and only when the body does not already begin with one, so a
+		// body that is already spaced is emitted byte for byte and no blank line
+		// is ever doubled. A non-empty block needs nothing: its closing
+		// delimiter is unambiguous. SerializeFrontmatter's own return is
+		// deliberately unchanged, since it promises the block and not the note.
+		if len(meta) == 0 && !strings.HasPrefix(body, "\n") && !strings.HasPrefix(body, "\r\n") {
+			buf.WriteString("\n")
+		}
 		buf.WriteString(body)
 	}
 	return buf.Bytes(), nil
