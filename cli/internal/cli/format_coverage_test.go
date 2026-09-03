@@ -306,3 +306,53 @@ func TestContract_RowSetCommandsRefuseRawOnZeroRows(t *testing.T) {
 		})
 	}
 }
+
+// git diff is the one report command whose output IS a body, so it inverts the
+// rule: raw/md/text emit the diff, json wraps it in a record, and the row-set
+// formats have nothing to render and are refused by name. Before this they were
+// silently handed the diff text, which is exactly the "silently ignored" shape
+// the rest of this file exists to stop.
+func TestContract_GitDiffIsBodyShaped(t *testing.T) {
+	root, _ := newFormatCoverageVault(t)
+	if err := os.WriteFile(filepath.Join(root, "doc.md"),
+		[]byte("---\ntitle: Doc\ntype: note\nstatus: draft\n---\nintro text CHANGED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, format := range []string{"raw", "md", "text"} {
+		out, err := runCLIArgs(t, root, "git", "diff", "doc.md", "--format", format)
+		if err != nil {
+			t.Errorf("git diff --format %s: %v\n%s", format, err, out)
+			continue
+		}
+		if !strings.Contains(string(out), "CHANGED") {
+			t.Errorf("git diff --format %s did not emit the diff:\n%s", format, out)
+		}
+	}
+
+	out, err := runCLIArgs(t, root, "git", "diff", "doc.md", "--format", "json")
+	if err != nil {
+		t.Fatalf("git diff --format json: %v\n%s", err, out)
+	}
+	var rec struct {
+		Path string `json:"path"`
+		Diff string `json:"diff"`
+	}
+	if err := json.Unmarshal(jsonPortion(out), &rec); err != nil {
+		t.Fatalf("git diff --format json is not parseable: %v\n%s", err, out)
+	}
+	if rec.Path != "doc.md" || !strings.Contains(rec.Diff, "CHANGED") {
+		t.Errorf("git diff --json record = %+v, want doc.md with the diff", rec)
+	}
+
+	for _, format := range []string{"csv", "tsv", "yaml"} {
+		out, err := runCLIArgs(t, root, "git", "diff", "doc.md", "--format", format)
+		if err == nil {
+			t.Errorf("git diff --format %s was accepted; a diff is not a row set:\n%s", format, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "row set") {
+			t.Errorf("git diff --format %s refusal should say a diff is not a row set, got: %v", format, err)
+		}
+	}
+}

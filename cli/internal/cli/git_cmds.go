@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -127,14 +126,18 @@ func runGitDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git diff: %w", err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		result := map[string]string{"path": args[0], "diff": diff}
-		data, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	// git diff is the one report command whose output IS a body, so raw, md and
+	// text emit the diff and json emits a record around it. A diff is not a row
+	// set, so csv, tsv and yaml have nothing to render and are refused by name
+	// rather than silently handed the diff text, which is what "an explicit
+	// --format is always honored" has to mean here.
+	format := getFormat(cmd)
+	switch format {
+	case output.FormatCSV, output.FormatTSV, output.FormatYAML:
+		return exitWithError(ExitValidation, fmt.Sprintf(
+			"error: a diff is a document body, not a row set; --format %s has nothing to render (use --json for a record, or raw/md/text for the diff itself)", format))
+	case output.FormatJSON:
+		return writeOut(cmd, format, map[string]string{"path": args[0], "diff": diff})
 	}
 
 	if diff == "" {
