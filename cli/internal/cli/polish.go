@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -385,6 +386,11 @@ func emitUndoResult(cmd *cobra.Command, rel string, reverted bool) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "%s is already at its pre-polish version; nothing to undo\n", rel)
 	}
+	// Durable record: every other write surface logs its outcome, and an undo is
+	// the one that RESTORES a file, so "did the undo run, and did it revert
+	// anything?" has to be answerable from cli.log rather than from a terminal
+	// line that a piped or plugin-driven caller never sees.
+	slog.Info("polish undo", "path", rel, "reverted", reverted, "format", string(getFormat(cmd)))
 	if done, err := emitStructured(cmd, PolishUndoResult{Path: rel, Reverted: reverted}); done {
 		return err
 	}
