@@ -114,12 +114,16 @@ func runExport(cmd *cobra.Command, args []string) error {
 	// Generate CLAUDE.md-compatible output. Built into a buffer rather than
 	// printed as we go, so the json record can carry the same bytes the body
 	// formats emit.
-	var b strings.Builder
+	//
+	// The per-note sections are built FIRST, because the header states a count
+	// only the loop can know. It used to state len(docs), the number of notes
+	// the QUERY matched, while a note whose file cannot be parsed is skipped
+	// with a warning: a vault with one unreadable note announced "3 documents
+	// included" over a bundle holding 2. The --json `docs` field would have
+	// disagreed with the header of the bundle sitting next to it in the same
+	// record.
+	var sections strings.Builder
 	included := 0
-	fmt.Fprintln(&b, "# Knowledge Base Context")
-	fmt.Fprintln(&b)
-	fmt.Fprintf(&b, "Generated from 2ndbrain vault. %d documents included.\n\n", len(docs))
-
 	for _, d := range docs {
 		absPath := v.AbsPath(d.path)
 		doc, err := document.ParseFile(absPath)
@@ -129,13 +133,19 @@ func runExport(cmd *cobra.Command, args []string) error {
 		}
 		included++
 
-		fmt.Fprintf(&b, "## %s\n\n", d.title)
-		fmt.Fprintf(&b, "**Type**: %s | **Status**: %s | **Path**: `%s`\n\n", d.docType, d.status, d.path)
-		fmt.Fprintln(&b, strings.TrimSpace(doc.Body))
-		fmt.Fprintln(&b)
-		fmt.Fprintln(&b, "---")
-		fmt.Fprintln(&b)
+		fmt.Fprintf(&sections, "## %s\n\n", d.title)
+		fmt.Fprintf(&sections, "**Type**: %s | **Status**: %s | **Path**: `%s`\n\n", d.docType, d.status, d.path)
+		fmt.Fprintln(&sections, strings.TrimSpace(doc.Body))
+		fmt.Fprintln(&sections)
+		fmt.Fprintln(&sections, "---")
+		fmt.Fprintln(&sections)
 	}
+
+	var b strings.Builder
+	fmt.Fprintln(&b, "# Knowledge Base Context")
+	fmt.Fprintln(&b)
+	fmt.Fprintf(&b, "Generated from 2ndbrain vault. %d documents included.\n\n", included)
+	b.WriteString(sections.String())
 
 	bundle := b.String()
 	if format == output.FormatJSON {

@@ -145,6 +145,11 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 		}
 	}
 	deleteForce = false
+	// export-context's filters are package state too: a test that passes
+	// --types to prove the no-matching-documents path left that filter set for
+	// every later export-context in the binary, which then bundled nothing.
+	exportTypes, exportStatus = "", ""
+	exportLimit = 50
 	initPath = ""
 	importObsidianTarget = ""
 	indexDocFlag, indexForceReembed = "", false

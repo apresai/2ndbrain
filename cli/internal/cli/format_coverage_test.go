@@ -486,6 +486,71 @@ func TestContract_ExportContextIsBodyShaped(t *testing.T) {
 	}
 }
 
+// The bundle's own header states how many documents it contains, and it stated
+// the number the QUERY matched. A note whose file cannot be parsed is skipped
+// with a warning, so a vault with one unreadable note announced one more
+// document than the bundle held, and the `--json` record then carried that
+// header inside `bundle` while `docs` reported the real number: two counts of
+// the same thing, disagreeing, in one record.
+//
+// The fixture indexes three good notes and then corrupts one on disk, which is
+// how this happens for real: the index row survives, the file no longer parses.
+func TestContract_ExportContextCountsIncludedNotes(t *testing.T) {
+	_, root := newContractVault(t)
+	for _, name := range []string{"good-one.md", "good-two.md", "broken.md"} {
+		if err := os.WriteFile(filepath.Join(root, name),
+			[]byte("---\ntitle: "+name+"\ntype: note\nstatus: draft\n---\nbody of "+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v\n%s", err, out)
+	}
+	// Unterminated quoted scalar: valid enough to have been indexed a moment
+	// ago, invalid YAML now.
+	if err := os.WriteFile(filepath.Join(root, "broken.md"),
+		[]byte("---\ntitle: \"unterminated\ntype: note\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIArgs(t, root, "export-context", "--format", "json")
+	if err != nil {
+		t.Fatalf("export-context --json: %v\n%s", err, out)
+	}
+	var rec struct {
+		Bundle string `json:"bundle"`
+		Docs   int    `json:"docs"`
+		Chars  int    `json:"chars"`
+	}
+	if err := json.Unmarshal(jsonPortion(out), &rec); err != nil {
+		t.Fatalf("not parseable: %v\n%s", err, out)
+	}
+	if rec.Docs != 2 {
+		t.Errorf("docs = %d, want 2 (three matched, one could not be parsed): %s", rec.Docs, rec.Bundle)
+	}
+	if !strings.Contains(rec.Bundle, "2 documents included") {
+		t.Errorf("the bundle header disagrees with the docs count:\n%s", rec.Bundle)
+	}
+	if strings.Contains(rec.Bundle, "3 documents included") {
+		t.Errorf("the header still counts the notes the query matched:\n%s", rec.Bundle)
+	}
+	if strings.Contains(rec.Bundle, "broken.md") {
+		t.Errorf("the unparseable note was counted into the bundle:\n%s", rec.Bundle)
+	}
+	if rec.Chars != len(rec.Bundle) {
+		t.Errorf("chars = %d, want %d", rec.Chars, len(rec.Bundle))
+	}
+
+	// The body form carries the same header, since both render one bundle.
+	body, err := runCLIArgs(t, root, "export-context", "--format", "raw")
+	if err != nil {
+		t.Fatalf("export-context --format raw: %v\n%s", err, body)
+	}
+	if !strings.Contains(string(body), "2 documents included") {
+		t.Errorf("the body form's header disagrees:\n%s", body)
+	}
+}
+
 // The up-front guard in runPolish is the only raw/md gate on either polish
 // path. It has to fire before any provider work, so this must hold on a machine
 // with no credentials at all: polish is a paid generation call, and --undo
