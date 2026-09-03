@@ -49,17 +49,54 @@ func emptyFrontmatterBlock(rest string) (body string, ok bool) {
 // that YAML accepts. It wins only when that region yields a NON-EMPTY mapping;
 // a parse error or an empty result means the block really is empty.
 //
-// The inherited cost, unchanged from before the empty-block rule: a body whose
-// text happens to parse as a mapping is read as frontmatter. A markdown heading
-// is a YAML comment, so "---\n---\n# H\n\nkey: value\n---\nmore" reads
-// {key: value} as metadata. That is the ambiguity of a doubled delimiter, not a
-// new behavior, and losing real metadata is the worse of the two failures.
+// A BLANK line right after the second "---" ends the reading before it starts.
+// Frontmatter is contiguous from its opening fence, so a note that opens with an
+// empty block and then leaves a blank line has body from there on, whatever the
+// body happens to look like. Without that rule the reading reached past the
+// blank line and swallowed prose: "---\n---\n\nStatus: draft\n\n---\n\nRest\n"
+// read "Status: draft" as a property, and because UpdateDocumentFrontmatterAST
+// consults this same function, `2nb meta --set` and `2nb tag add` then REWROTE
+// the file, lifting those lines out of the visible body and into a frontmatter
+// block on disk. A frontmatter-only command must never touch the body.
+//
+// What survives the rule is the genuine doubled fence, where properties follow
+// the second delimiter immediately, closed by a newline "---" or by end of file
+// (the same two closers the main parser accepts, in LF and in CRLF).
+//
+// The inherited cost, unchanged: a body that starts on the very next line and
+// happens to parse as a mapping is read as frontmatter. A markdown heading is a
+// YAML comment, so "---\n---\n# H\n\nkey: value\n---\nmore" reads {key: value}
+// as metadata. That is the ambiguity of a doubled delimiter with no blank line
+// after it, and losing real metadata is the worse of the two failures.
 func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, bool) {
+	var afterOpen int
+	switch {
+	case strings.HasPrefix(rest, "---\r\n"):
+		afterOpen = len("---\r\n")
+	case strings.HasPrefix(rest, "---\n"):
+		afterOpen = len("---\n")
+	default:
+		// A second delimiter at end of file: an empty block, nothing behind it.
+		return nil, "", false
+	}
+	if next := rest[afterOpen:]; next == "" ||
+		strings.HasPrefix(next, "\n") || strings.HasPrefix(next, "\r\n") {
+		return nil, "", false
+	}
+
 	idx := strings.Index(rest, "\n---\n")
 	closeLen := len("\n---\n")
 	if idx == -1 {
 		idx = strings.Index(rest, "\r\n---\r\n")
 		closeLen = len("\r\n---\r\n")
+	}
+	// End-of-file closers, CRLF first: "\r\n---" also ends with "\n---", and
+	// taking the LF reading there would leave a stray "\r" on the YAML region.
+	if idx == -1 && strings.HasSuffix(rest, "\r\n---") {
+		idx, closeLen = len(rest)-len("\r\n---"), len("\r\n---")
+	}
+	if idx == -1 && strings.HasSuffix(rest, "\n---") {
+		idx, closeLen = len(rest)-len("\n---"), len("\n---")
 	}
 	if idx == -1 {
 		return nil, "", false

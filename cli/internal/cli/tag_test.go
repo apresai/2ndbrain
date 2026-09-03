@@ -170,3 +170,54 @@ func TestTag_ReadOnlyRejected(t *testing.T) {
 		t.Fatalf("tag add on a .canvas: want exit %d, got %d (err=%v)", ExitValidation, ExitCode(err), err)
 	}
 }
+
+// TestTagAdd_LeavesAnEmptyPropertiesBlockBodyOnDisk is the write-surface proof
+// behind the frontmatter boundary rule. A note that opens with an empty
+// properties block, then a blank line, then a colon-bearing line and a
+// horizontal rule, had those body lines read as properties. `tag add` rewrites
+// the file, so it hoisted them out of the visible body and into a properties
+// block on disk, mangling the value on the way. A frontmatter-only command may
+// never touch the body.
+func TestTagAdd_LeavesAnEmptyPropertiesBlockBodyOnDisk(t *testing.T) {
+	_, root := newContractVault(t)
+	const original = "---\n---\n\nStatus: draft\n\n---\n\nRest of the note\n"
+	notePath := filepath.Join(root, "empty-props.md")
+	if err := os.WriteFile(notePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	if _, err := runCLIArgs(t, root, "tag", "add", "empty-props.md", "alpha"); err != nil {
+		t.Fatalf("tag add: %v", err)
+	}
+
+	after, err := os.ReadFile(notePath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	got := string(after)
+	if !strings.Contains(got, "\nStatus: draft\n") {
+		t.Errorf("the note on disk lost its body line 'Status: draft':\n%s", got)
+	}
+	if !strings.Contains(got, "Rest of the note") {
+		t.Errorf("the note on disk lost the rest of its body:\n%s", got)
+	}
+	// The body line must still be BODY, i.e. below the closing delimiter of the
+	// properties block that tag add wrote.
+	if !strings.HasPrefix(got, "---\n") {
+		t.Fatalf("the rewritten note does not open with a properties block:\n%s", got)
+	}
+	closeIdx := strings.Index(got[len("---\n"):], "\n---\n")
+	if closeIdx == -1 {
+		t.Fatalf("the rewritten note has no closing delimiter:\n%s", got)
+	}
+	props := got[:len("---\n")+closeIdx+len("\n---\n")]
+	if strings.Contains(props, "Status") {
+		t.Errorf("body text was hoisted into the properties block:\n%s", props)
+	}
+	if !strings.Contains(props, "alpha") {
+		t.Errorf("the tag that was actually asked for is missing:\n%s", props)
+	}
+}
