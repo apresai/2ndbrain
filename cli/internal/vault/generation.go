@@ -156,12 +156,18 @@ func PriorEmbedGeneration(db *store.DB) int {
 // forever (the embed pass skips them), so counting them would leave the stamp
 // unwritten and nag a re-embed on any vault holding a blank note.
 //
+// embedShortfall is every document that needed embedding this run and did not
+// get it: failed calls plus notes the pass could not open. A note that could not
+// be opened keeps its previous vector, which a force-reembed's invalidation does
+// not clear, so it would otherwise be invisible to the "all embedded" check and
+// let a partial run claim the whole vault is at the current embed generation.
+//
 // embeddingCountBefore and priorEmbedGen must be captured BEFORE the embed pass.
-func StampAfterIndex(db *store.DB, cliVersion string, forceReembed bool, embedFailures, embeddingCountBefore, priorEmbedGen int) error {
+func StampAfterIndex(db *store.DB, cliVersion string, forceReembed bool, embedShortfall, embeddingCountBefore, priorEmbedGen int) error {
 	_, _, embeddableUnembedded, err := db.EmbeddingCounts()
 	allEmbedded := err == nil && embeddableUnembedded == 0
 	embedCurrent := forceReembed || priorEmbedGen >= EmbedGeneration || embeddingCountBefore == 0
-	if embedFailures == 0 && allEmbedded && embedCurrent {
+	if embedShortfall == 0 && allEmbedded && embedCurrent {
 		return StampEmbedGeneration(db, cliVersion)
 	}
 	return StampIndexGeneration(db, cliVersion)

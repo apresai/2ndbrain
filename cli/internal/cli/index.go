@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -75,10 +76,15 @@ type embeddingRunStats struct {
 	Attempted int
 	Embedded  int
 	// Failed counts embedding CALLS that failed. A note that could not be
-	// parsed is in Unparseable instead: no request was made for it.
+	// parsed is in Unparseable instead, and one that could not be opened is in
+	// Unreadable: no request was made for either.
 	Failed int
-	// Unparseable names the notes the pass could not read.
+	// Unparseable names the notes whose content would not parse.
 	Unparseable []vault.UnparseableDoc
+	// Unreadable names the notes the pass could not open. They keep whatever
+	// embedding they already had, so the run is incomplete without being a
+	// reason to throw away every embedding it just paid for.
+	Unreadable []vault.UnparseableDoc
 	// Retries is how many provider retries the pass rode out, read from the
 	// context's counter so every caller records it the same way.
 	Retries int
@@ -180,12 +186,20 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	priorEmbedGen := vault.PriorEmbedGeneration(v.DB)
 
 	var embedStats embeddingRunStats
+	// Set when the run has work left but nothing to undo: it is reported
+	// through the normal summary and returned at the end, so the exit code is
+	// non-zero without the report being skipped.
+	var deferredErr error
 	if indexForceReembed {
 		embedStats, err = forceReembedDocuments(ctx, v, cfg)
 		if err != nil {
-			recordMetric(v, indexOperation(true, startTime, *stats, embedStats, cfg, err))
-			slog.Error("force-reembed failed", "error", err)
-			return err
+			if !errors.Is(err, errReembedUnreadable) {
+				recordMetric(v, indexOperation(true, startTime, *stats, embedStats, cfg, err))
+				slog.Error("force-reembed failed", "error", err)
+				return err
+			}
+			deferredErr = err
+			slog.Warn("force-reembed left notes unembedded", "error", err, "embedded", embedStats.Embedded, "unreadable", len(embedStats.Unreadable))
 		}
 	} else if es, eerr := embedDocuments(ctx, v, cfg, withEmbedProgress); eerr != nil {
 		slog.Debug("embedding skipped", "reason", eerr.Error())
@@ -207,7 +221,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	recordMetric(v, indexOperation(indexForceReembed, startTime, *stats, embedStats, cfg, nil))
+	recordMetric(v, indexOperation(indexForceReembed, startTime, *stats, embedStats, cfg, deferredErr))
 
 	// Stamp which indexing/embedding LOGIC generation this build achieved, so a
 	// future 2nb that changes that logic can detect this vault is stale and prompt
@@ -215,7 +229,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	// never fail the index over it. StampAfterIndex advances the embed generation
 	// only when all stored embeddings are current-gen (a full re-embed, or a fresh/
 	// already-current vault with everything embedded).
-	if serr := vault.StampAfterIndex(v.DB, Version, indexForceReembed, embedStats.Failed, embeddingCountBefore, priorEmbedGen); serr != nil {
+	// The shortfall is every document that needed embedding and did not get it:
+	// failed calls PLUS notes the pass could not open. An unreadable note keeps
+	// its OLD vector, which InvalidateAllEmbeddings does not clear, so counting
+	// only Failed would let a force-reembed stamp the vault as fully current-gen
+	// while one note's vector is still from the previous generation.
+	if serr := vault.StampAfterIndex(v.DB, Version, indexForceReembed, embedStats.Failed+len(embedStats.Unreadable), embeddingCountBefore, priorEmbedGen); serr != nil {
 		slog.Warn("stamp index generation failed", "err", serr)
 	}
 
@@ -224,11 +243,14 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	// only the walk's list while the human summary printed whichever list the
 	// code path happened to hold.
 	unparseable := mergeUnparseable(stats.Unparseable, embedStats.Unparseable)
-	unreadable := mergeUnparseable(stats.Unreadable)
+	// Both phases meet the same unopenable note: the walk keeps its row and
+	// names it, then the embed pass tries to re-read it and names it again. One
+	// note to fix is one entry.
+	unreadable := mergeUnparseable(stats.Unreadable, embedStats.Unreadable)
 
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, IndexResult{
+		if werr := output.Write(os.Stdout, format, IndexResult{
 			FilesScanned:   stats.FilesScanned,
 			DocsIndexed:    stats.DocsIndexed,
 			ChunksCreated:  stats.ChunksCreated,
@@ -241,7 +263,10 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			EmbedRetries:   embedStats.Retries,
 			Unparseable:    unparseable,
 			Unreadable:     unreadable,
-		})
+		}); werr != nil {
+			return werr
+		}
+		return deferredErr
 	}
 
 	if !flagPorcelain {
@@ -256,7 +281,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(os.Stderr, "  2nb ask \"your question\"")
 		}
 	}
-	return nil
+	return deferredErr
 }
 
 func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err error) {
@@ -349,6 +374,14 @@ func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.Embeddi
 	return embedder, nil
 }
 
+// errReembedUnreadable marks a force-reembed that embedded every note it could
+// open but could not open all of them. It is the one incomplete outcome that
+// must NOT roll the vault back: the notes it did embed were paid for, and the
+// unreadable ones keep the embedding they already had. runIndex recognizes it,
+// prints the full summary, and returns it so the exit code still says the run
+// has work left.
+var errReembedUnreadable = errors.New("force-reembed incomplete")
+
 func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
 	embedder, err := validateEmbeddingProvider(ctx, cfg)
 	if err != nil {
@@ -376,17 +409,25 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder, withEmbedProgress)
 	// Reporting is the caller's: it is the only place that knows BOTH phases'
 	// lists, and one merged summary is the whole point.
-	// Neither a skipped (empty) note nor an unparseable one is embeddable, so
-	// "complete" means every remaining document embedded. Without subtracting
-	// them a vault with one blank note, or one note with bad frontmatter,
-	// reports force-reembed as incomplete and throws away every embedding it
-	// just paid for: that is exactly what happened three times in a row on a
-	// 314-note vault where a single note had an empty frontmatter block.
-	embeddable := stats.Attempted - stats.Skipped - len(stats.Unparseable)
+	// A note that is skipped (empty), unparseable, or unreadable is not
+	// embeddable this run, so "complete" means every remaining document
+	// embedded. Without subtracting them a vault with one blank note, one note
+	// with bad frontmatter, or one note the run could not open reports
+	// force-reembed as incomplete and throws away every embedding it just paid
+	// for: that is exactly what happened three times in a row on a 314-note
+	// vault where a single note had an empty frontmatter block.
+	embeddable := stats.Attempted - stats.Skipped - len(stats.Unparseable) - len(stats.Unreadable)
 	if err == nil && (stats.Failed > 0 || stats.Embedded < embeddable) {
 		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, embeddable, stats.Failed)
 	}
 	if err == nil {
+		if len(stats.Unreadable) > 0 {
+			// Every note that could be opened was embedded. Keeping those
+			// embeddings and naming what is left to do beats rolling a whole
+			// vault back over a permission bit, so this error travels WITHOUT a
+			// restore: the caller still prints the summary and exits non-zero.
+			return stats, fmt.Errorf("%w: %d note(s) could not be read", errReembedUnreadable, len(stats.Unreadable))
+		}
 		return stats, nil
 	}
 
@@ -497,6 +538,8 @@ func embedProgressOpts(p embedProgress) vault.EmbedOpts {
 			switch ev.Kind {
 			case vault.EmbedParseFailed:
 				fmt.Fprintf(os.Stderr, "  skip %s: %v\n", ev.Path, ev.Err)
+			case vault.EmbedReadFailed:
+				fmt.Fprintf(os.Stderr, "  skip %s: could not read it (%v)\n", ev.Path, ev.Err)
 			case vault.EmbedFailed:
 				fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", ev.Path, ev.Err)
 			case vault.EmbedSkipped:
@@ -536,6 +579,7 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		Embedded:    es.Embedded,
 		Failed:      es.Failed,
 		Unparseable: es.Unparseable,
+		Unreadable:  es.Unreadable,
 		Skipped:     es.Skipped,
 		DurationMs:  es.DurationMs,
 		TotalChars:  es.TotalChars,
