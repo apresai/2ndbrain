@@ -28,6 +28,27 @@ type UnparseableDoc struct {
 	Err  string `json:"error"`
 }
 
+// MergeUnparseable concatenates per-phase lists, keeping the FIRST entry for
+// each path, and never returns nil so a JSON key is always present. A note can
+// be reported by the walk and again by the embed pass (the walk keeps an
+// unreadable note's row, the embed pass then tries to re-read it), and listing
+// it twice would overstate how many notes need fixing. It lives here rather
+// than in the CLI so the MCP kb_index result cannot drift from index --json.
+func MergeUnparseable(lists ...[]UnparseableDoc) []UnparseableDoc {
+	out := []UnparseableDoc{}
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, d := range list {
+			if seen[d.Path] {
+				continue
+			}
+			seen[d.Path] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 type IndexStats struct {
 	FilesScanned  int `json:"files_scanned"`
 	DocsIndexed   int `json:"docs_indexed"`

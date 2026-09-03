@@ -172,10 +172,14 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 	embeddedChars := 0
 	embeddingFailed := 0
 	embeddingCancelled := false
-	// Notes neither pass could read. A parse failure no longer counts as an
-	// embedding failure (nothing was sent), so without reporting it here the
-	// signal would vanish from this tool's result entirely.
-	unparseable := append([]vault.UnparseableDoc{}, stats.Unparseable...)
+	// Two lists, because they mean different things to the agent holding the
+	// result. A note that would not PARSE has had its row dropped and is gone
+	// from search until it is fixed; a note that would not OPEN keeps its row
+	// and is still answering searches from what was indexed before. Neither
+	// counts as an embedding failure (nothing was sent for either), so without
+	// reporting them here the signal would vanish from this tool entirely.
+	walkUnparseable, walkUnreadable := stats.Unparseable, stats.Unreadable
+	var embedUnparseable, embedUnreadable []vault.UnparseableDoc
 	cfg := h.vault.Config.AI
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if embErr == nil && embedder.Available(ctx) {
@@ -187,7 +191,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 			embeddedChars = es.TotalChars
 			embeddingFailed = es.Failed
 			embeddingCancelled = es.Cancelled
-			unparseable = append(unparseable, es.Unparseable...)
+			embedUnparseable, embedUnreadable = es.Unparseable, es.Unreadable
 			// Surface a non-clean result the way the CLI path does: a client
 			// disconnect mid-index (Cancelled) or per-doc embed failures would
 			// otherwise be invisible — embeddings_updated would just be smaller
@@ -223,7 +227,8 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 		"embeddings_updated":  embedded,
 		"embeddings_failed":   embeddingFailed,
 		"embedding_cancelled": embeddingCancelled,
-		"unparseable":         unparseable,
+		"unparseable":         vault.MergeUnparseable(walkUnparseable, embedUnparseable),
+		"unreadable":          vault.MergeUnparseable(walkUnreadable, embedUnreadable),
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")

@@ -36,7 +36,7 @@ func TestForceReembedJSONListsAnEmbedPhaseUnparseableNote(t *testing.T) {
 	}
 	// The walk never ran here, so the ONLY source of this note is the embed
 	// pass. Merging is what puts it in the envelope.
-	merged := mergeUnparseable(nil, stats.Unparseable)
+	merged := vault.MergeUnparseable(nil, stats.Unparseable)
 	if len(merged) != 1 || merged[0].Path != broken.Path {
 		t.Fatalf("merged unparseable = %+v, want the embed-phase note %s", merged, broken.Path)
 	}
@@ -47,7 +47,7 @@ func TestForceReembedJSONListsAnEmbedPhaseUnparseableNote(t *testing.T) {
 func TestMergeUnparseableDedupesByPath(t *testing.T) {
 	walk := []vault.UnparseableDoc{{Path: "a.md", Err: "from the walk"}}
 	embed := []vault.UnparseableDoc{{Path: "a.md", Err: "from the embed pass"}, {Path: "b.md", Err: "second"}}
-	got := mergeUnparseable(walk, embed)
+	got := vault.MergeUnparseable(walk, embed)
 	if len(got) != 2 {
 		t.Fatalf("merged = %+v, want 2 entries", got)
 	}
@@ -57,8 +57,8 @@ func TestMergeUnparseableDedupesByPath(t *testing.T) {
 	if got[1].Path != "b.md" {
 		t.Errorf("merged[1] = %+v, want b.md", got[1])
 	}
-	if mergeUnparseable() == nil {
-		t.Error("mergeUnparseable with nothing must return an empty slice, never nil: the JSON key is always present")
+	if vault.MergeUnparseable() == nil {
+		t.Error("MergeUnparseable with nothing must return an empty slice, never nil: the JSON key is always present")
 	}
 }
 

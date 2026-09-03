@@ -242,11 +242,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	// discovered by the walk or by the embed pass, and until now the JSON carried
 	// only the walk's list while the human summary printed whichever list the
 	// code path happened to hold.
-	unparseable := mergeUnparseable(stats.Unparseable, embedStats.Unparseable)
+	unparseable := vault.MergeUnparseable(stats.Unparseable, embedStats.Unparseable)
 	// Both phases meet the same unopenable note: the walk keeps its row and
 	// names it, then the embed pass tries to re-read it and names it again. One
 	// note to fix is one entry.
-	unreadable := mergeUnparseable(stats.Unreadable, embedStats.Unreadable)
+	unreadable := vault.MergeUnparseable(stats.Unreadable, embedStats.Unreadable)
 
 	format := getFormat(cmd)
 	if format != "" {
@@ -445,25 +445,6 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 // it defers to -v. Five is enough to recognize a pattern (one folder, one
 // template set) without turning a 300-note vault's output into a wall.
 const unparseableSummaryLimit = 5
-
-// mergeUnparseable concatenates per-phase lists, keeping the FIRST entry for
-// each path. A note can be reported by the walk and again by the embed pass
-// (the walk drops its row, a later phase re-reads it), and listing it twice
-// would overstate how many notes need fixing.
-func mergeUnparseable(lists ...[]vault.UnparseableDoc) []vault.UnparseableDoc {
-	out := []vault.UnparseableDoc{}
-	seen := map[string]bool{}
-	for _, list := range lists {
-		for _, d := range list {
-			if seen[d.Path] {
-				continue
-			}
-			seen[d.Path] = true
-			out = append(out, d)
-		}
-	}
-	return out
-}
 
 // reportUnparseable prints the count and the notes to fix. It names up to
 // unparseableSummaryLimit paths and points at -v ONLY when it actually elided

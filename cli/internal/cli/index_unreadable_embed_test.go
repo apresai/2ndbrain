@@ -52,11 +52,35 @@ func TestForceReembedKeepsPaidEmbeddingsWhenANoteCannotBeRead(t *testing.T) {
 
 	cfg := ai.AIConfig{Provider: provider, EmbeddingModel: "fake-model"}
 	stats, err := forceReembedDocuments(context.Background(), v, cfg)
+
+	// The whole point, asserted first: the embeddings that were paid for
+	// survived. Rolling them back is the failure this round exists to end.
+	for _, keeper := range []struct {
+		title string
+		id    string
+	}{{"Keeper One", first.ID}, {"Keeper Two", second.ID}} {
+		vec, gerr := v.DB.GetEmbedding(keeper.id)
+		if gerr != nil || len(vec) == 0 {
+			t.Errorf("%s lost its embedding (err=%v, len=%d): the run rolled back over a note it could not open",
+				keeper.title, gerr, len(vec))
+			continue
+		}
+		var vecChunks int
+		if qerr := v.DB.Conn().QueryRow(
+			`SELECT COUNT(*) FROM vec_chunks WHERE chunk_id IN (SELECT id FROM chunks WHERE doc_id = ?)`, keeper.id,
+		).Scan(&vecChunks); qerr != nil {
+			t.Fatalf("count vec_chunks for %s: %v", keeper.title, qerr)
+		}
+		if vecChunks == 0 {
+			t.Errorf("%s has no chunk vectors after force-reembed; the vector leg would be empty for it", keeper.title)
+		}
+	}
+
 	if err == nil {
 		t.Fatal("force-reembed must not report success while a note it could not open is still unembedded")
 	}
 	if !errors.Is(err, errReembedUnreadable) {
-		t.Fatalf("err = %v, want errReembedUnreadable so the caller knows not to roll back", err)
+		t.Errorf("err = %v, want errReembedUnreadable so the caller knows not to roll back", err)
 	}
 	if len(stats.Unreadable) != 1 || stats.Unreadable[0].Path != locked.Path {
 		t.Fatalf("stats.Unreadable = %+v, want exactly %s", stats.Unreadable, locked.Path)
@@ -69,27 +93,6 @@ func TestForceReembedKeepsPaidEmbeddingsWhenANoteCannotBeRead(t *testing.T) {
 	}
 	if stats.Embedded != 2 {
 		t.Errorf("stats.Embedded = %d, want 2 (both readable notes)", stats.Embedded)
-	}
-
-	// The whole point: the embeddings that were paid for survived.
-	for _, keeper := range []struct {
-		title string
-		id    string
-	}{{"Keeper One", first.ID}, {"Keeper Two", second.ID}} {
-		vec, gerr := v.DB.GetEmbedding(keeper.id)
-		if gerr != nil || len(vec) == 0 {
-			t.Fatalf("%s lost its embedding (err=%v, len=%d): the run rolled back over a note it could not open",
-				keeper.title, gerr, len(vec))
-		}
-		var vecChunks int
-		if qerr := v.DB.Conn().QueryRow(
-			`SELECT COUNT(*) FROM vec_chunks WHERE chunk_id IN (SELECT id FROM chunks WHERE doc_id = ?)`, keeper.id,
-		).Scan(&vecChunks); qerr != nil {
-			t.Fatalf("count vec_chunks for %s: %v", keeper.title, qerr)
-		}
-		if vecChunks == 0 {
-			t.Errorf("%s has no chunk vectors after force-reembed; the vector leg would be empty for it", keeper.title)
-		}
 	}
 }
 
