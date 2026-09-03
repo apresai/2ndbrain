@@ -20,6 +20,17 @@ cd "$(dirname "$0")/.."   # pathspecs below are repo-relative; anchor like check
 # `2nb index`; the Reindex-Not-Needed trailer stays the escape hatch for
 # incidental edits. A Nova embed-format/purpose change remains a manual
 # release-checklist consideration (bedrock.go mixes embed + generation code).
+#
+# The two document/ files own the frontmatter/body BOUNDARY: frontmatter.go
+# decides where properties end and prose begins, and document.go's Parse turns
+# that into the Document the whole index is built from, while normalizeBody and
+# ComputeContentHash decide whether an existing row is even seen as stale. Move
+# the boundary and a note's indexed text changes without its bytes changing,
+# which is precisely the silent state this guard exists to catch: the 0.22.3
+# empty-properties-block fix changed the indexed body of every note opening with
+# a doubled delimiter and this script reported "no watched files changed".
+# document.go is broad (it also carries slugs and tag extraction), the same
+# trade-off docs.go already makes, and the trailer covers incidental edits.
 WATCHED_EMBED=(
   cli/internal/document/chunk.go
   cli/internal/embed/embed.go
@@ -27,6 +38,8 @@ WATCHED_EMBED=(
 WATCHED_INDEX=(
   cli/internal/store/docs.go
   cli/internal/store/resolve.go
+  cli/internal/document/frontmatter.go
+  cli/internal/document/document.go
 )
 GEN_FILE="cli/internal/vault/generation.go"
 

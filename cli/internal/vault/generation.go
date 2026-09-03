@@ -32,6 +32,15 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	     link ([x](My%20Note.md)) to a real note now resolves (target_id set),
 //	     so backlinks/lint/graph outcomes change for vaults holding encoded
 //	     links. Fix: 2nb index.
+//	  3  the frontmatter/body boundary moved for a note that opens with an
+//	     empty properties block. Such a note either failed to parse or had the
+//	     block's delimiters read as body text, so what got indexed differs from
+//	     what 0.22.2 indexed. The content hash is computed from the PARSED body
+//	     and every file is re-parsed on every run, so a plain reindex notices
+//	     the change and re-chunks and re-embeds exactly those notes.
+//	     Fix: 2nb index. Deliberately NOT an EmbedGeneration bump: charging
+//	     every user for a whole-vault re-embed to repair a handful of notes is
+//	     the wrong trade when content drift already repairs them.
 //
 // If you change the watched files (see `make check-index-generation`) but a
 // reindex is genuinely NOT needed, add a `Reindex-Not-Needed: <reason>` trailer
@@ -39,7 +48,7 @@ import "github.com/apresai/2ndbrain/internal/store"
 const (
 	// IndexGeneration bumps for index-only logic changes (FTS content, link/tag
 	// extraction) that do NOT alter chunk boundaries or embeddings. Fix: 2nb index.
-	IndexGeneration = 2
+	IndexGeneration = 3
 
 	// EmbedGeneration bumps for chunking OR embedding-production logic changes
 	// (chunk boundaries, purpose, pooling, normalization) at the SAME model and
