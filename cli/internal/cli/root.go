@@ -593,6 +593,70 @@ func getFormat(cmd *cobra.Command) output.Format {
 	return "" // default: pretty output; use --json for machine-readable
 }
 
+// emitStructured renders payload for any explicitly requested --format and
+// reports whether it handled the output. The default (empty) format is not
+// handled: the caller falls through to its own human printer.
+//
+// It replaces the `if getFormat(cmd) == output.FormatJSON { json.Marshal }`
+// shape that a dozen commands carried. That shape honored --json and silently
+// IGNORED csv, tsv and yaml, printing prose instead, and it printed prose for
+// raw and md too, where the whole point of those formats is that a value with
+// no document body must be refused rather than rendered as something else.
+// Routing every non-default format through output.Write is what the commands
+// that got this right (mcp doctor, metrics show, plugin status, update, skills
+// list, instructions) already do, and it keeps --copy working.
+//
+// JSON stays parse-compatible: output.Write indents where some of these sites
+// emitted compact JSON, and every consumer (the macOS app's JSONDecoder, the
+// Obsidian plugin's JSON.parse) parses rather than compares bytes.
+func emitStructured(cmd *cobra.Command, payload any) (handled bool, err error) {
+	format := getFormat(cmd)
+	if format == "" {
+		return false, nil
+	}
+	return true, writeOut(cmd, format, payload)
+}
+
+// refuseBodylessFormat rejects --format raw / --format md for a command whose
+// output is a report or a row set, not a document body.
+//
+// output.Write already refuses them, but only once it is REACHED, and callers
+// reach it late or not at all. search and list return early on zero rows, so
+// `search "nothing" --format raw` printed nothing and exited 0 while the same
+// command with one hit exited non-zero. suggest-links and polish go further:
+// they ask a provider for an embedding or a generation FIRST, so on a machine
+// with no credentials they failed on credentials rather than on the format they
+// cannot render, which is also how this broke the credential-free CI job.
+//
+// Calling it at the top of a handler makes the refusal depend on the command
+// alone: not on the row count, not on whether a provider happens to answer, and
+// never after paying for a call whose result cannot be rendered. csv, tsv,
+// paths and tree keep emitting the empty stream, which is the correct rendering
+// of zero rows.
+func refuseBodylessFormat(cmd *cobra.Command, command string) error {
+	switch getFormat(cmd) {
+	case output.FormatRaw, output.FormatMD:
+		return exitWithError(ExitValidation, fmt.Sprintf(
+			"error: --format raw/md emits a document body; %s does not produce one (use --json)", command))
+	}
+	return nil
+}
+
+// refuseNonJSONStream rejects an explicit --format on a command whose machine
+// output is a stream of JSON events, not one document. Such a command cannot go
+// through output.Write at all (there is no single value to render), so before
+// this it simply IGNORED csv, tsv, yaml, raw and md and printed its human lines,
+// which is the silent-wrong-shape failure --format exists to avoid.
+func refuseNonJSONStream(cmd *cobra.Command, command string) error {
+	format := getFormat(cmd)
+	if format == "" || format == output.FormatJSON {
+		return nil
+	}
+	return exitWithError(ExitValidation, fmt.Sprintf(
+		"error: %s emits a stream of JSON events, not a %s document; use --json (or drop --format for the human output)",
+		command, format))
+}
+
 // nonNilSlice returns s, or an empty slice when s is nil. Go marshals a nil
 // slice as JSON `null` and a non-nil empty slice as `[]`, and a machine
 // consumer doing `.results[]` or `.[]` errors on the former.

@@ -2,6 +2,7 @@ package search
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -250,13 +251,38 @@ func (e *Engine) bm25Search(opts Options) ([]Result, error) {
 }
 
 func (e *Engine) listByFilters(opts Options) ([]Result, error) {
+	// A blank query with a filter (`search "type:adr"`) enumerates documents,
+	// and it used to fill the shared 10-column scan with `'' as chunk_id, ''
+	// as heading_path, substr(d.frontmatter, 1, 200) as content`. So an
+	// enumerated row's "content" was the note's frontmatter JSON, not its
+	// prose, and every consumer that pins a result by chunk (the reranker's
+	// text backfill among them) had nothing to pin.
+	//
+	// `documents` carries no body column; the only body text in the index is
+	// chunks.content. Join the document's FIRST chunk: ordered by sort_order,
+	// then start_line, then id, because split sub-chunks share their parent's
+	// sort_order. It must be an OUTER join, since a body-less note has no
+	// chunks at all, and every joined column is COALESCEd because the scan
+	// targets are plain strings, not sql.NullString.
+	//
+	// The SQL lives here rather than in store/docs.go on purpose: docs.go is a
+	// watched file for the index-generation gate, and nothing stored changes
+	// here, so no reindex is needed.
 	query := `
 		SELECT
-			d.id, d.path, d.title, '' as chunk_id, '' as heading_path,
-			substr(d.frontmatter, 1, 200) as content,
+			d.id, d.path, d.title,
+			COALESCE(c.id, '') as chunk_id,
+			COALESCE(c.heading_path, '') as heading_path,
+			COALESCE(substr(c.content, 1, 200), '') as content,
 			0.0 as score,
 			d.doc_type, d.status, d.frontmatter
 		FROM documents d
+		LEFT JOIN chunks c ON c.id = (
+			SELECT c2.id FROM chunks c2
+			WHERE c2.doc_id = d.id
+			ORDER BY c2.sort_order, c2.start_line, c2.id
+			LIMIT 1
+		)
 	`
 
 	conditions, args := opts.filterConditions()
@@ -286,6 +312,7 @@ func (e *Engine) executeSearch(query string, args []any) ([]Result, error) {
 			&r.Content, &r.Score, &r.DocType, &r.Status, &fmJSON); err != nil {
 			return nil, fmt.Errorf("scan result: %w", err)
 		}
+		r.Frontmatter = decodeFrontmatter(fmJSON)
 		// Negate BM25 score (FTS5 returns negative, lower = better)
 		if r.Score < 0 {
 			r.Score = -r.Score
@@ -307,7 +334,23 @@ func (e *Engine) GetDocumentByID(id string) (Result, bool) {
 	if err != nil {
 		return Result{}, false
 	}
+	r.Frontmatter = decodeFrontmatter(fmJSON)
 	return r, true
+}
+
+// decodeFrontmatter turns a documents.frontmatter cell into the map every
+// Result carries. Both scan sites call it, so BM25, enumerated, and vector-only
+// rows agree about the field; it had been scanned into a local and thrown away
+// at both, which left Result.Frontmatter dead since the first commit and made
+// csv/tsv render every row's frontmatter column as the Go rendering of a nil
+// map. A malformed cell yields an empty map rather than an error, matching
+// store.GetDocumentByPath.
+func decodeFrontmatter(fmJSON string) map[string]any {
+	var out map[string]any
+	if err := json.Unmarshal([]byte(fmJSON), &out); err != nil {
+		return map[string]any{}
+	}
+	return out
 }
 
 // questionWords are words that indicate natural language input vs keyword search.

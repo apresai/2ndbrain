@@ -76,7 +76,35 @@ func init() {
 }
 
 func runMeta(cmd *cobra.Command, args []string) error {
-	v, err := openVaultAndSetActive()
+	// Validate the flag combination BEFORE opening anything: which opener this
+	// command needs is decided by the flags, so an ambiguous combination has to
+	// be refused first.
+	//
+	// --get is read-only and takes precedence, so combining it with
+	// --set/--remove would be ambiguous. Reject the combo.
+	if metaGet != "" && (len(metaSet) > 0 || len(metaRemove) > 0) {
+		return exitWithError(ExitValidation, "error: --get cannot be combined with --set or --remove")
+	}
+	// --set and --remove each rewrite the whole file via one Serialize() pass;
+	// running both in one invocation would mean two writes with overlapping
+	// intent. Keep one write path per invocation.
+	if len(metaSet) > 0 && len(metaRemove) > 0 {
+		return exitWithError(ExitValidation, "error: --set cannot be combined with --remove (run them as separate invocations)")
+	}
+
+	// Pick the opener from what this invocation actually does. --get and the
+	// bare view only READ frontmatter, so they take openVault(); only --set and
+	// --remove rewrite the file and need the write guard. Opening every meta
+	// invocation through the write path made `meta <p> --get title` and bare
+	// `meta <p>` refuse with "refusing to write" on any vault Obsidian does not
+	// know, which the app, the plugin, and the MCP server hit constantly since
+	// they all pin --vault. Same idiom as polish.go and tags.go.
+	writes := len(metaSet) > 0 || len(metaRemove) > 0
+	open := openVault
+	if writes {
+		open = openVaultAndSetActive
+	}
+	v, err := open()
 	if err != nil {
 		return err
 	}
@@ -93,20 +121,8 @@ func runMeta(cmd *cobra.Command, args []string) error {
 
 	doc.Path = v.RelPath(path)
 
-	// --get is read-only and takes precedence: it never opens the write path,
-	// so combining it with --set/--remove would be ambiguous. Reject the combo.
 	if metaGet != "" {
-		if len(metaSet) > 0 || len(metaRemove) > 0 {
-			return exitWithError(ExitValidation, "error: --get cannot be combined with --set or --remove")
-		}
 		return getMeta(cmd, doc)
-	}
-
-	// --set and --remove each rewrite the whole file via one Serialize() pass;
-	// running both in one invocation would mean two writes with overlapping
-	// intent. Keep one write path per invocation.
-	if len(metaSet) > 0 && len(metaRemove) > 0 {
-		return exitWithError(ExitValidation, "error: --set cannot be combined with --remove (run them as separate invocations)")
 	}
 
 	if len(metaRemove) > 0 {

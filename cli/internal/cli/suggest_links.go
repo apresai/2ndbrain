@@ -2,14 +2,12 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -66,6 +64,14 @@ type SuggestLinkResult struct {
 }
 
 func runSuggestLinks(cmd *cobra.Command, args []string) error {
+	// Before the provider work below. This command embeds the source note, a
+	// paid call, and asks the embedder whether it is ready, which FAILS on a
+	// machine with no credentials. So --format raw/md never reached the refusal
+	// and the command errored on credentials instead of on the format it cannot
+	// render. Refusing up front costs nothing and is what search and list do.
+	if err := refuseBodylessFormat(cmd, "suggest-links"); err != nil {
+		return err
+	}
 	v, err := openVault()
 	if err != nil {
 		return err
@@ -177,14 +183,8 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	format := getFormat(cmd)
-	if format == output.FormatJSON {
-		data, err := json.Marshal(results)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, results); done {
+		return err
 	}
 
 	if len(results) == 0 {

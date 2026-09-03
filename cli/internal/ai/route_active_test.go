@@ -12,6 +12,7 @@ import "testing"
 // model that is neither recommended nor active, so it silently stopped
 // covering the user's own configured model.
 func TestActiveSurvivesRetire(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	cfg := AIConfig{Provider: "bedrock", GenerationModel: "m"}
 
 	verified := []ModelInfo{

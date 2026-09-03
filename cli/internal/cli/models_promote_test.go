@@ -96,8 +96,14 @@ func TestPromotedEntry(t *testing.T) {
 		if entry.Notes != "fast model" {
 			t.Errorf("Notes = %q, want fast model", entry.Notes)
 		}
-		if entry.RecommendedSimilarityThreshold != 0.6 {
-			t.Errorf("Threshold = %g, want 0.6", entry.RecommendedSimilarityThreshold)
+		// The threshold is deliberately NOT an enrichment field. `base` is a row
+		// from the merged catalog, so copying it wrote the builtin catalog's own
+		// recommendation into the user file, where it read back as a calibration
+		// nobody took. Only the user's own value survives, and it is restored at
+		// the save site by preserveUserThreshold, which knows the target scope.
+		if entry.RecommendedSimilarityThreshold != 0 || entry.ThresholdSource != "" {
+			t.Errorf("Threshold = %g (source %q), want 0 and empty: promotion must not mirror a catalog threshold",
+				entry.RecommendedSimilarityThreshold, entry.ThresholdSource)
 		}
 		// Tier and TestedAt still come from promotion logic, not base
 		if entry.Tier != ai.TierUserVerified {

@@ -134,6 +134,7 @@ func TestRegistryUnavailableCauseWrapsAndClears(t *testing.T) {
 }
 
 func TestInitBedrockNotesUnroutedSlot(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")

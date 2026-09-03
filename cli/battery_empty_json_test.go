@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,17 +98,36 @@ func TestBattery_EmptyResultsStillEmitJSON(t *testing.T) {
 		}
 	})
 
-	// The fix is scoped to JSON on purpose. csv/tsv/raw render zero rows as an
+	// The fix is scoped to JSON on purpose. csv/tsv render zero rows as an
 	// empty stream, and a literal "[]" would CORRUPT a csv consumer, so those
 	// must keep emitting nothing.
-	t.Run("non-JSON machine formats still emit nothing", func(t *testing.T) {
-		for _, format := range []string{"csv", "tsv", "raw"} {
+	t.Run("delimited machine formats still emit nothing", func(t *testing.T) {
+		for _, format := range []string{"csv", "tsv"} {
 			out, code := runWithHome(t, home, "search", "zzzznomatchtoken", "--vault", vault, "--format", format)
 			if code != 0 {
 				t.Fatalf("search --format %s: exit %d: %s", format, code, out)
 			}
 			if out != "" {
 				t.Errorf("search --format %s on zero results wrote %q to stdout; want an empty stream", format, out)
+			}
+		}
+	})
+
+	// raw and md are different: a result set has no document body to emit, and
+	// output.Write already refuses them when it is reached. The zero-result
+	// early return meant it was NOT reached, so the same command was refused
+	// with one hit and silently exited 0 with none. The refusal has to depend on
+	// the command, not on the row count.
+	t.Run("raw and md are refused whether or not anything matched", func(t *testing.T) {
+		for _, query := range []string{"zzzznomatchtoken", "unrelated"} {
+			for _, format := range []string{"raw", "md"} {
+				out, code := runWithHome(t, home, "search", query, "--vault", vault, "--format", format)
+				if code == 0 {
+					t.Errorf("search %q --format %s exited 0; it should be refused: %q", query, format, out)
+				}
+				if !strings.Contains(out, "document body") {
+					t.Errorf("search %q --format %s refusal should name the missing document body: %q", query, format, out)
+				}
 			}
 		}
 	})

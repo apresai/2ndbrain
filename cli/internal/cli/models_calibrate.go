@@ -281,6 +281,11 @@ func saveCalibration(scope ai.UserCatalogScope, vaultRoot, provider, modelID str
 		}
 	}
 	entry.RecommendedSimilarityThreshold = threshold
+	// Stamp the provenance. This is one of only two paths allowed to write the
+	// field, and the stamp is what lets `ai status` and the resolver tell a
+	// measurement apart from a builtin recommendation some other save path
+	// copied into the user file.
+	entry.ThresholdSource = ai.ThresholdSourceUser
 	return ai.SaveUserCatalogEntry(scope, vaultRoot, entry)
 }
 

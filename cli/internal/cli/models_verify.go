@@ -250,6 +250,7 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
 		adoptCandidateRouting(&entry, m)
+		preserveUserThreshold(scope, v.Root, &entry)
 		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && humanMode {
 			fmt.Printf("[%d/%d] warning: save %s failed: %v\n", n, total, m.ID, saveErr)

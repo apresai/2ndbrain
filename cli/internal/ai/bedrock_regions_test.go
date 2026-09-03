@@ -351,6 +351,7 @@ func TestInvalidRequestRemediationMentionsRegion(t *testing.T) {
 // (its one caller sits behind the strategy gate) but shares the matching
 // rule, so it is pinned here alongside the other two.
 func TestCrossPlanePinsNeverBleed(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	root := t.TempDir()
 	if err := SaveUserCatalogEntry(ScopeVault, root, ModelInfo{
 		ID: "xai.grok-4.6", Provider: "bedrock", Type: "generation",

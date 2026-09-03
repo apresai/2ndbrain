@@ -169,9 +169,15 @@ func bedrockTokenFromFlags() (*string, error) {
 
 func writeBedrockStatus(cmd *cobra.Command) error {
 	st := currentBedrockStatus()
-	format := getFormat(cmd)
-	if format == output.FormatJSON || format == output.FormatYAML || flagPorcelain {
-		return output.Write(os.Stdout, format, st)
+	// --porcelain with no --format keeps its historical meaning here: emit the
+	// machine shape (output.Write renders the empty format as JSON).
+	if flagPorcelain && getFormat(cmd) == "" {
+		return output.Write(os.Stdout, "", st)
+	}
+	// Every explicitly requested format is honored, csv and tsv included; they
+	// used to fall through to the human block and print prose.
+	if done, err := emitStructured(cmd, st); done {
+		return err
 	}
 	fmt.Printf("Path:   %s\n", st.Path)
 	if st.Region != "" {

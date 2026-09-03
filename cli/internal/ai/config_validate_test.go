@@ -8,6 +8,7 @@ import (
 )
 
 func TestEmbeddingDimensionsFor(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	def := DefaultAIConfig()
 
 	// The default embedding model is in the builtin catalog with its dimension.
@@ -25,6 +26,7 @@ func TestEmbeddingDimensionsFor(t *testing.T) {
 }
 
 func TestEmbeddingDimensionsFor_UserCatalogOverride(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	// Isolate the global catalog so this test can't read the developer's real
 	// ~/.config/2nb/models.yaml (the vault-scoped entry below is what matters).
 	t.Setenv("HOME", t.TempDir())

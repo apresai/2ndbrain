@@ -29,15 +29,28 @@ Run the migration command with the `--dry-run` flag to preview the changes witho
 
 **Expected output:**
 ```
-[dry-run] Scanning legacy vault at: /path/to/my-vault
-[dry-run] Detected legacy database (schema v2)
-[dry-run] 120 files identified for path-based mapping
-[dry-run] Append ".2ndbrain/" to root .gitignore
-[dry-run] Safe to proceed. No files will be modified.
+[dry-run] Vault: /path/to/my-vault
+[dry-run] Legacy index database at schema v2, 120 documents indexed
+[dry-run] Would upgrade the index schema v2 to v4
+[dry-run] Would ensure ".2ndbrain/" is listed in the root .gitignore
+[dry-run] Your markdown is not modified.
+```
+
+A vault whose index is already at the current schema has nothing to migrate, and says so in
+both modes:
+
+```
+Vault: /path/to/my-vault
+Already at the current schema (v4); nothing to migrate. 120 documents indexed.
 ```
 
 ### 2. Execute Migration
-Run the command without the dry-run flag to apply the updates:
+Run the command without the dry-run flag to apply the updates. This step writes
+(it applies the schema migrations and adds `.2ndbrain/` to `.gitignore`), so it
+is gated like every other 2nb write: a vault Obsidian does not know is refused
+unless you add `--unconfigured`, and a working directory that is a vault only by
+walking up is refused. The `--dry-run` preview above needs neither, because it
+reads and reports without changing anything.
 
 ```bash
 2nb migrate --vault /path/to/my-vault
@@ -45,10 +58,10 @@ Run the command without the dry-run flag to apply the updates:
 
 **Expected output:**
 ```
-Scanning legacy vault at: /path/to/my-vault
-Upgrading database schema to the current version... Done
+Vault: /path/to/my-vault
+Upgraded the index schema v2 to v4
 Ensured ".2ndbrain/" is listed in the root .gitignore
-Migration complete. Run "2nb index" to rebuild the index and refresh embeddings.
+Your markdown was not modified. Run "2nb index" to rebuild the index and refresh embeddings.
 ```
 
 ---

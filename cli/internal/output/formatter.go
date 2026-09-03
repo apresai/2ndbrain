@@ -1,6 +1,7 @@
 package output
 
 import (
+	"encoding"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -167,6 +168,58 @@ func writeDelimited(w io.Writer, data any, comma rune) error {
 	return cw.Write([]string{string(b)})
 }
 
+// delimitedCell renders one struct field as a csv/tsv cell.
+//
+// Composite fields (a map, a slice, a struct, or a pointer/interface to one)
+// are emitted as compact JSON; scalars keep the %v rendering they have always
+// had. `%v` on a composite produced Go syntax that no consumer can parse and
+// that is not even stable: `search --format csv` printed every frontmatter cell
+// as `map[]`, and a populated one would have come out in Go map syntax with a
+// nondeterministic key order. The JSON encoder sorts map keys, so the same row
+// renders the same way every time. A value JSON cannot encode (a channel, a
+// func, a cyclic graph) falls back to %v rather than failing the whole render.
+func delimitedCell(field reflect.Value) string {
+	// A value that knows how to render itself as TEXT does so, before the
+	// composite branch can see it. time.Time is the case that bit: it is a
+	// struct, so it went through json.Marshal, which produces a QUOTED string,
+	// and the CSV writer then doubled those quotes, so `git activity --format
+	// csv` printed """2026-09-03T13:22:25+02:00""" for every date. MarshalText
+	// gives the same RFC3339 instant as plain text, which is one clean cell.
+	if tm, ok := field.Interface().(encoding.TextMarshaler); ok {
+		// A nil pointer implementing the interface would panic in MarshalText;
+		// %v renders it as <nil>, which is what every other nil cell does.
+		if field.Kind() != reflect.Ptr || !field.IsNil() {
+			if b, err := tm.MarshalText(); err == nil {
+				return string(b)
+			}
+		}
+	}
+	v := field
+	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return fmt.Sprintf("%v", field.Interface())
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Array, reflect.Struct:
+		// A byte string is TEXT, not a composite, so it renders as its text.
+		// It is carved out of the JSON branch because the encoder would base64
+		// it; falling through to %v instead was no better, since that prints
+		// Go's byte-number syntax ([112 108 97 …]), the very rendering the
+		// composite change removed everywhere else.
+		if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
+			return string(v.Bytes())
+		}
+		b, err := json.Marshal(field.Interface())
+		if err != nil {
+			return fmt.Sprintf("%v", field.Interface())
+		}
+		return string(b)
+	}
+	return fmt.Sprintf("%v", field.Interface())
+}
+
 func writeStructSliceCSV(cw *csv.Writer, v reflect.Value) error {
 	if v.Len() == 0 {
 		return nil
@@ -199,7 +252,7 @@ func writeStructSliceCSV(cw *csv.Writer, v reflect.Value) error {
 		}
 		record := make([]string, row.NumField())
 		for j := range row.NumField() {
-			record[j] = fmt.Sprintf("%v", row.Field(j).Interface())
+			record[j] = delimitedCell(row.Field(j))
 		}
 		if err := cw.Write(record); err != nil {
 			return err

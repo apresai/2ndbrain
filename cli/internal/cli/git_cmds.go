@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -84,13 +83,8 @@ func runGitActivity(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git log: %w", err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(changes)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, changes); done {
+		return err
 	}
 
 	if len(changes) == 0 {
@@ -132,14 +126,18 @@ func runGitDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git diff: %w", err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		result := map[string]string{"path": args[0], "diff": diff}
-		data, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	// git diff is the one report command whose output IS a body, so raw, md and
+	// text emit the diff and json emits a record around it. A diff is not a row
+	// set, so csv, tsv and yaml have nothing to render and are refused by name
+	// rather than silently handed the diff text, which is what "an explicit
+	// --format is always honored" has to mean here.
+	format := getFormat(cmd)
+	switch format {
+	case output.FormatCSV, output.FormatTSV, output.FormatYAML:
+		return exitWithError(ExitValidation, fmt.Sprintf(
+			"error: a diff is a document body, not a row set; --format %s has nothing to render (use --json for a record, or raw/md/text for the diff itself)", format))
+	case output.FormatJSON:
+		return writeOut(cmd, format, map[string]string{"path": args[0], "diff": diff})
 	}
 
 	if diff == "" {
@@ -166,13 +164,8 @@ func runGitShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git show %s: %w", args[0], err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(detail)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, detail); done {
+		return err
 	}
 
 	// Human output: header + stats + file list with counts.
@@ -218,13 +211,8 @@ func runGitStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git status: %w", err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(statuses)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, statuses); done {
+		return err
 	}
 
 	if len(statuses) == 0 {
@@ -241,9 +229,8 @@ func runGitStatus(cmd *cobra.Command, args []string) error {
 }
 
 func printNotAGitRepo(cmd *cobra.Command) error {
-	if getFormat(cmd) == output.FormatJSON {
-		fmt.Println(`{"git_repo": false}`)
-		return nil
+	if done, err := emitStructured(cmd, map[string]bool{"git_repo": false}); done {
+		return err
 	}
 	fmt.Println("Vault is not a git repository. Run `git init` to enable git integration.")
 	return nil

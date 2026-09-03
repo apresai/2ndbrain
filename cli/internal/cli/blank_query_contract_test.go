@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,37 @@ func TestContract_BlankQueryIsRefusedButInlineFiltersStillEnumerate(t *testing.T
 		}
 		if !strings.Contains(string(out), `"decision.md"`) || strings.Contains(string(out), `"scratch.md"`) {
 			t.Errorf("want only decision.md for type:adr, got:\n%s", out)
+		}
+
+		// The enumerated row must carry the note's BODY and a chunk id. It used
+		// to carry the frontmatter JSON as `content` with `chunk_id` empty, so
+		// an agent enumerating by filter got no text and nothing to pin.
+		var env struct {
+			Results []struct {
+				Content     string         `json:"content"`
+				ChunkID     string         `json:"chunk_id"`
+				HeadingPath string         `json:"heading_path"`
+				Frontmatter map[string]any `json:"frontmatter"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(out, &env); err != nil {
+			t.Fatalf("search JSON: %v\n%s", err, out)
+		}
+		if len(env.Results) != 1 {
+			t.Fatalf("want 1 enumerated row, got %d:\n%s", len(env.Results), out)
+		}
+		row := env.Results[0]
+		if !strings.Contains(row.Content, "we decided on tokens") {
+			t.Errorf("content = %q, want the note body", row.Content)
+		}
+		if strings.HasPrefix(strings.TrimSpace(row.Content), "{") {
+			t.Errorf("content is still frontmatter JSON: %q", row.Content)
+		}
+		if row.ChunkID == "" {
+			t.Error("chunk_id is empty on an enumerated row")
+		}
+		if row.Frontmatter["title"] != "Decision" {
+			t.Errorf("frontmatter = %v, want the note's frontmatter", row.Frontmatter)
 		}
 	})
 

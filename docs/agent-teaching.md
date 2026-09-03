@@ -60,6 +60,8 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 
    The other `--json` listings return a BARE ARRAY, not an envelope, and that array is `[]` rather than `null` when empty: `list`, `stale`, `tags`, `aliases`, `orphans`, `deadends`, `unresolved`, `backlinks`, `links` (and `related`'s nested `edges`). This is a CLI guarantee. The MCP tools are a separate surface with their own shapes: `kb_search` returns results directly rather than the CLI envelope, so do not assume `mode`/`warnings` there.
 
+4. **A search row carries the note's frontmatter, and an enumerated row carries its first chunk.** Every row has `doc_id`, `path`, `title`, `chunk_id`, `heading_path`, `content`, `score`, `type`, `status`, and `frontmatter` (the parsed frontmatter map, omitted when empty). `frontmatter` is additive as of 0.22.1 and appears on CLI `search` rows and MCP `kb_search` rows alike, so an agent can filter or cite on metadata without a second `kb_read`. The **enumerate-by-filter** form (a blank query plus a filter, `2nb search "type:adr"`) returns the same shape: before 0.22.1 those rows carried empty chunk fields and the note's frontmatter JSON in `content`, so enumerating gave you a JSON blob where you expected prose. A note with no body has no chunks and still enumerates, with `chunk_id`, `heading_path` and `content` empty.
+
    `ask` is different by design: when retrieval finds nothing it exits **non-zero** with an error on stderr rather than returning an envelope with an empty answer, so check the exit code first.
 
    The normalization is JSON-only: every other format renders exactly what it rendered in 0.21.0, deliberately, because a literal `[]` in a csv or tsv stream would corrupt a consumer. What that means varies by command and is not a guarantee worth relying on. `search` and `list` write nothing at all for zero rows in the non-JSON formats, while the bare-array listings write whatever `output.Write` makes of an empty slice. Use `--json` if you need a parseable empty result.
@@ -115,15 +117,43 @@ $ 2nb search "authentication" --json --limit 2
   "warnings": [],
   "results": [
     {
+      "doc_id": "8f1c...",
       "path": "use-jwt-for-auth.md",
       "title": "Use JWT for Auth",
+      "chunk_id": "3a7e...",
+      "heading_path": "# Use JWT for Auth",
+      "content": "...",
       "score": 0.0163,
       "vector_score": 0.72,
-      "content": "...",
       "type": "adr",
-      "status": "accepted"
+      "status": "accepted",
+      "frontmatter": {"title": "Use JWT for Auth", "type": "adr", "status": "accepted"}
     },
     ...
+  ]
+}
+```
+
+The enumerate-by-filter form returns the same row shape, with the document's first chunk:
+
+```bash
+$ 2nb search "type:adr" --json --limit 1
+{
+  "mode": "keyword",
+  "warnings": [],
+  "results": [
+    {
+      "doc_id": "8f1c...",
+      "path": "use-jwt-for-auth.md",
+      "title": "Use JWT for Auth",
+      "chunk_id": "3a7e...",
+      "heading_path": "# Use JWT for Auth",
+      "content": "We will issue short-lived JWTs ...",
+      "score": 0,
+      "type": "adr",
+      "status": "accepted",
+      "frontmatter": {"title": "Use JWT for Auth", "type": "adr", "status": "accepted"}
+    }
   ]
 }
 ```

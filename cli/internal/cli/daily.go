@@ -105,17 +105,81 @@ func init() {
 	rootCmd.AddCommand(dailyCmd)
 }
 
+// openDailyVault opens the vault for a daily-note READ, and escalates to the
+// write opener only when today's note is missing and therefore has to be
+// created.
+//
+// `daily`, `daily path`, and `daily read` are documented as create-if-missing,
+// so the create is the only write in them. Opening every one of them through
+// openVaultAndSetActive made `daily read` on an EXISTING note refuse with
+// "refusing to write" on any vault Obsidian does not know, even though it
+// touches nothing. The caller must Close the returned vault.
+//
+// The returned paths are always computed against the vault that is returned: the
+// read and write chains can resolve different roots (the write path refuses a
+// vault found only by walking up from the cwd), so everything is recomputed
+// after the reopen rather than carried across it.
+func openDailyVault(now time.Time) (v *vault.Vault, relPath, absPath string, exists bool, err error) {
+	v, err = openVault()
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	relPath, absPath, exists, err = resolveDailyNote(v, now)
+	if err != nil {
+		v.Close()
+		return nil, "", "", false, err
+	}
+	if exists {
+		return v, relPath, absPath, true, nil
+	}
+	// Creating is a write: reopen through the guard so an unconfigured target
+	// is refused exactly as `daily append` would be.
+	v.Close()
+	v, err = openVaultAndSetActive()
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	relPath, absPath, exists, err = resolveDailyNote(v, now)
+	if err != nil {
+		v.Close()
+		return nil, "", "", false, err
+	}
+	return v, relPath, absPath, exists, nil
+}
+
+// resolveDailyNote resolves today's daily-note path in v and reports whether the
+// file is already there. It creates nothing. The vault-escape guard matches
+// ensureDailyNote's, so a config whose folder/format escapes the vault is
+// refused before the path is ever used.
+func resolveDailyNote(v *vault.Vault, now time.Time) (relPath, absPath string, exists bool, err error) {
+	relPath, err = vault.DailyNotePath(v, now)
+	if err != nil {
+		return "", "", false, err
+	}
+	absPath = v.AbsPath(relPath)
+	if !v.ContainsPath(absPath) {
+		return "", "", false, fmt.Errorf("daily note path escapes the vault: %q", relPath)
+	}
+	if _, statErr := os.Stat(absPath); statErr == nil {
+		return relPath, absPath, true, nil
+	} else if !os.IsNotExist(statErr) {
+		return "", "", false, fmt.Errorf("stat daily note: %w", statErr)
+	}
+	return relPath, absPath, false, nil
+}
+
 // runDailyResolve resolves today's daily note path, creates the note if it is
 // missing, and prints the path. This is the bare `2nb daily` action.
 func runDailyResolve(cmd *cobra.Command, args []string) error {
-	v, err := openVaultAndSetActive()
+	now := time.Now()
+	v, _, _, _, err := openDailyVault(now)
 	if err != nil {
 		return err
 	}
 	defer v.Close()
 	setupFileLogging(v)
 
-	relPath, absPath, created, err := ensureDailyNote(v, time.Now())
+	relPath, absPath, created, err := ensureDailyNote(v, now)
 	if err != nil {
 		return err
 	}
@@ -144,15 +208,18 @@ func runDailyResolve(cmd *cobra.Command, args []string) error {
 // runDailyRead resolves today's daily note and prints its body. If the note
 // does not exist it is created first (so `daily read` always prints something
 // for today), matching the bare resolve action's create-on-demand behavior.
+// The write guard applies only when it has to create: reading a note that is
+// already there never needs --unconfigured.
 func runDailyRead(cmd *cobra.Command, args []string) error {
-	v, err := openVaultAndSetActive()
+	now := time.Now()
+	v, _, _, _, err := openDailyVault(now)
 	if err != nil {
 		return err
 	}
 	defer v.Close()
 	setupFileLogging(v)
 
-	relPath, absPath, _, err := ensureDailyNote(v, time.Now())
+	relPath, absPath, _, err := ensureDailyNote(v, now)
 	if err != nil {
 		return err
 	}

@@ -128,6 +128,7 @@ func TestWorkingSet_ActiveModelsAlwaysIncluded(t *testing.T) {
 // rules: an explicit disable and a static incompatibility both remove a
 // model that would otherwise qualify on its passing probe.
 func TestWorkingSet_DisabledAndIncompatibleExcluded(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	cfg := DefaultAIConfig()
 	now := time.Now().UTC().Format(time.RFC3339)
 	passing := ModelInfo{
@@ -184,6 +185,7 @@ func TestKnownVendorSlugs_StaticVocabularyWithoutCatalogRows(t *testing.T) {
 // non-working row must include `"working":false`. omitempty would drop it
 // and Swift working==nil would mean both "old CLI" and "not working".
 func TestWorkingSet_JSONIncludesFalseWorking(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	body, err := json.Marshal(ModelInfo{ID: "us.anthropic.claude-sonnet-5", Working: false})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

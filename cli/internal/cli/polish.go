@@ -2,15 +2,14 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/retrieve"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -74,6 +73,13 @@ type PolishUndoResult struct {
 }
 
 func runPolish(cmd *cobra.Command, args []string) error {
+	// A polish result is a report, not a body, and the run is a paid generation
+	// call. Refuse the formats that cannot render it before spending anything.
+	// This is the ONLY raw/md gate on either polish path, --undo included: it
+	// runs before the vault open, so nothing downstream ever sees those two.
+	if err := refuseBodylessFormat(cmd, "polish"); err != nil {
+		return err
+	}
 	if polishUndo {
 		if polishWrite || polishLinks || polishRepairLinks || polishSystemFlag != "" {
 			return exitWithError(ExitValidation, "error: --undo cannot be combined with --write, --links, --repair-links, or --system")
@@ -253,13 +259,8 @@ func runPolish(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", result.Warning)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, result); done {
+		return err
 	}
 
 	fmt.Printf("Polished %s in %dms using %s / %s\n", result.Path, result.DurationMs, result.Provider, result.Model)
@@ -343,7 +344,6 @@ func runPolishUndo(cmd *cobra.Command, args []string) error {
 		}
 	case polish.UndoNoop:
 		_ = polish.DeleteSnapshot(v, rel)
-		fmt.Fprintf(os.Stderr, "%s is already at its pre-polish version; nothing to undo\n", rel)
 		return emitUndoResult(cmd, rel, false)
 	}
 
@@ -351,7 +351,6 @@ func runPolishUndo(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	_ = polish.DeleteSnapshot(v, rel)
-	fmt.Fprintf(os.Stderr, "Reverted %s to its pre-polish version\n", rel)
 	return emitUndoResult(cmd, rel, true)
 }
 
@@ -378,10 +377,32 @@ func restorePolishOriginal(v *vault.Vault, absPath, rel string, content []byte) 
 	return nil
 }
 
+// emitUndoResult is the whole of `polish --undo`'s output, human line included,
+// so the two cannot drift apart.
+//
+// It used to honor --json only and print NOTHING for every other format, so
+// `polish --undo --format csv/yaml` exited 0 with an empty stdout: the caller
+// could not tell a successful revert from a format the command ignored. csv,
+// tsv and yaml render the verdict now.
+//
+// raw and md never arrive here. runPolish refuses them up front, before the
+// vault is even opened, so this function does not gate them and must not be
+// read as if it did.
 func emitUndoResult(cmd *cobra.Command, rel string, reverted bool) error {
-	if getFormat(cmd) == output.FormatJSON {
-		data, _ := json.Marshal(PolishUndoResult{Path: rel, Reverted: reverted})
-		fmt.Println(string(data))
+	// The human line goes to stderr, as it always has, so a machine format's
+	// document on stdout stays clean.
+	if reverted {
+		fmt.Fprintf(os.Stderr, "Reverted %s to its pre-polish version\n", rel)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s is already at its pre-polish version; nothing to undo\n", rel)
+	}
+	// Durable record: every other write surface logs its outcome, and an undo is
+	// the one that RESTORES a file, so "did the undo run, and did it revert
+	// anything?" has to be answerable from cli.log rather than from a terminal
+	// line that a piped or plugin-driven caller never sees.
+	slog.Info("polish undo", "path", rel, "reverted", reverted, "format", string(getFormat(cmd)))
+	if done, err := emitStructured(cmd, PolishUndoResult{Path: rel, Reverted: reverted}); done {
+		return err
 	}
 	return nil
 }

@@ -796,6 +796,7 @@ func TestMergeFields_RecommendedIsAddOnly(t *testing.T) {
 // SaveUserCatalogEntry replaces the whole entry, so a passing probe result
 // saved after a failure leaves no stale test_error_code in models.yaml.
 func TestSaveUserCatalogEntry_PassAfterFailClearsCode(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	root := t.TempDir()
 	failEntry := ModelInfo{
 		ID: "m1", Provider: "bedrock", Type: "generation",

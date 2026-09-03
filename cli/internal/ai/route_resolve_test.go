@@ -182,6 +182,7 @@ func TestResolveSlotRouteTemplateDoesNotCauseRefusal(t *testing.T) {
 // retiring templates must not weaken the refusal that genuinely matters, where
 // two REAL endpoints exist and the config names neither.
 func TestResolveSlotRouteTwoConcreteRoutesStillRefuse(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	rows := []ModelInfo{
 		{Provider: "bedrock", ID: "zz.c", Type: "generation", Plane: PlaneClassic, Region: "us-east-1"},
 		{Provider: "bedrock", ID: "zz.c", Type: "generation", Plane: PlaneClassic, Region: "us-west-2"},

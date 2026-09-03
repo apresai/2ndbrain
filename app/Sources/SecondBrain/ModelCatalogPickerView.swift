@@ -375,8 +375,8 @@ struct ModelCatalogPickerView: View {
                 if model.modelType == "embedding" {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Catalog recommendation for this model")
-                                .help("Saves this model's recommended similarity threshold to the user catalog. It feeds the automatic resolution chain when no vault override is set; the vault-level override lives under Advanced settings in the AI Hub.")
+                            Text("Your similarity threshold override")
+                                .help("Saves a similarity threshold you choose to the user catalog, stamped as yours. Leave it empty to use this model's built-in recommendation (shown to the right when it has one), or the global default otherwise. It feeds the automatic resolution chain when no vault override is set; the vault-level override lives under Advanced settings in the AI Hub.")
                             TextField("0.00-1.00", text: $thresholdText)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 100)
@@ -564,10 +564,36 @@ struct ModelCatalogPickerView: View {
         resetDetailInputs()
     }
 
+    /// The per-model detail inputs, as one value, so what the picker resets to
+    /// when the selection changes is a thing a test can hold rather than private
+    /// @State it cannot see.
+    struct DetailInputs: Equatable {
+        var thresholdText: String
+        var benchmarkProbeSelection: String
+
+        /// The similarity-threshold field starts EMPTY for every model, so
+        /// pressing Save can only ever mean "the user typed this number".
+        ///
+        /// It used to be prefilled with the model's catalog recommendation, so
+        /// Save with no edit wrote the built-in value into the user catalog
+        /// through `models add --similarity-threshold`, the one save path
+        /// allowed to author a calibration. That produced a calibration the user
+        /// never chose, and it then shadowed any later change to the built-in
+        /// value. The caption under the field already reports the effective
+        /// threshold and its source, so nothing is hidden by leaving it blank.
+        static func initial(for model: CatalogModelInfo) -> DetailInputs {
+            DetailInputs(
+                thresholdText: "",
+                benchmarkProbeSelection: model.modelType == "embedding" ? "embed" : "generate"
+            )
+        }
+    }
+
     private func resetDetailInputs() {
         guard let model = selectedModel else { return }
-        thresholdText = model.recommendedSimilarityThreshold.map { String(format: "%.2f", $0) } ?? ""
-        benchmarkProbeSelection = model.modelType == "embedding" ? "embed" : "generate"
+        let initial = DetailInputs.initial(for: model)
+        thresholdText = initial.thresholdText
+        benchmarkProbeSelection = initial.benchmarkProbeSelection
         costPreview = nil
         benchmarkEvents = []
         statusText = nil
