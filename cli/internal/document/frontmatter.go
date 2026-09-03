@@ -63,11 +63,16 @@ func emptyFrontmatterBlock(rest string) (body string, ok bool) {
 // the second delimiter immediately, closed by a newline "---" or by end of file
 // (the same two closers the main parser accepts, in LF and in CRLF).
 //
-// The inherited cost, unchanged: a body that starts on the very next line and
-// happens to parse as a mapping is read as frontmatter. A markdown heading is a
-// YAML comment, so "---\n---\n# H\n\nkey: value\n---\nmore" reads {key: value}
-// as metadata. That is the ambiguity of a doubled delimiter with no blank line
-// after it, and losing real metadata is the worse of the two failures.
+// The inherited cost, unchanged: a body that starts on the very NEXT line and
+// happens to parse as a mapping is still read as frontmatter, and the write path
+// still rewrites such a note. Both the plain colon case
+// ("---\n---\nStatus: draft\n---\nbody") and the heading case
+// ("---\n---\n# H\n\nkey: value\n---\nmore", where the heading is a YAML
+// comment) land there. Only the blank line distinguishes them from real
+// properties, and a note can reach that shape without one: SerializeFrontmatter
+// emits "---\n---\n" for an empty map with no blank line after it. The trade is
+// deliberate, because losing real metadata is the worse of the two failures, and
+// it is pinned by test rather than left accidental.
 func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, bool) {
 	var afterOpen int
 	switch {

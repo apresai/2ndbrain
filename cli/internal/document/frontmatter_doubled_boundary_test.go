@@ -123,3 +123,42 @@ func TestUpdateDocumentFrontmatterAST_BlankLineAfterEmptyBlockLeavesBodyAlone(t 
 		t.Errorf("meta = %v, want no Status key: that line is body text, not a property", gotMeta)
 	}
 }
+
+// TestParseFrontmatter_DoubledDelimiterAmbiguityIsWiderThanAHeading pins the
+// residual of the blank-line rule, so the next reader does not conclude the
+// colon case is fixed outright. It is fixed only when a blank line precedes it.
+// With content on the very NEXT line the doubled reading still wins, for a plain
+// colon line as much as for the heading case the sibling test pins, and the write
+// path still rewrites such a note.
+//
+// The shape is reachable without anyone typing it: SerializeFrontmatter emits
+// "---\n---\n" for an empty map, with no blank line after it. Losing real
+// metadata is the worse of the two failures, so the trade stands; changing it
+// belongs to a decision, not to a drive-by.
+func TestParseFrontmatter_DoubledDelimiterAmbiguityIsWiderThanAHeading(t *testing.T) {
+	const input = "---\n---\nStatus: draft\n---\nbody\n"
+	meta, body, err := ParseFrontmatter([]byte(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["Status"] != "draft" {
+		t.Errorf("meta = %v, want Status: draft: with no blank line the doubled reading still wins", meta)
+	}
+	if body != "body\n" {
+		t.Errorf("body = %q, want %q", body, "body\n")
+	}
+
+	// The write path follows the read path, which is the half that costs.
+	meta["tags"] = []any{"x"}
+	out, err := UpdateDocumentFrontmatterAST([]byte(input), meta, body)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	gotMeta, gotBody, err := ParseFrontmatter(out)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	if gotMeta["Status"] != "draft" || gotBody != "body\n" {
+		t.Errorf("round trip = %v / %q, want the same reading back", gotMeta, gotBody)
+	}
+}
