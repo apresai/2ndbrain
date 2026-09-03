@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -182,31 +183,37 @@ func (e *Engine) hydrateVectorOnly(results []Result) {
 			byDoc[id] = append(byDoc[id], i)
 		}
 	}
-	if len(byChunk) > 0 {
-		ids, placeholders := queryKeys(byChunk)
+	for _, batch := range batchKeys(byChunk, hydrateBatchSize) {
+		ids, placeholders := queryArgs(batch)
 		rows, err := e.db.Query(`
 			SELECT id, COALESCE(heading_path, ''), COALESCE(substr(content, 1, 200), '')
 			FROM chunks WHERE id IN (`+placeholders+`)`, ids...)
-		if err == nil {
-			for rows.Next() {
-				var id, heading, content string
-				if err := rows.Scan(&id, &heading, &content); err != nil {
-					break
-				}
-				i, ok := byChunk[id]
-				if !ok {
-					continue
-				}
-				results[i].Content = content
-				if results[i].HeadingPath == "" {
-					results[i].HeadingPath = heading
-				}
-			}
-			rows.Close()
+		if err != nil {
+			slog.Warn("hydrate vector-only rows: chunk lookup failed", "leg", "chunk", "ids", len(batch), "err", err)
+			continue
 		}
+		for rows.Next() {
+			var id, heading, content string
+			if err := rows.Scan(&id, &heading, &content); err != nil {
+				slog.Warn("hydrate vector-only rows: scan failed", "leg", "chunk", "ids", len(batch), "err", err)
+				break
+			}
+			i, ok := byChunk[id]
+			if !ok {
+				continue
+			}
+			results[i].Content = content
+			if results[i].HeadingPath == "" {
+				results[i].HeadingPath = heading
+			}
+		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("hydrate vector-only rows: row iteration failed", "leg", "chunk", "ids", len(batch), "err", err)
+		}
+		rows.Close()
 	}
-	if len(byDoc) > 0 {
-		ids, placeholders := queryKeys(byDoc)
+	for _, batch := range batchKeys(byDoc, hydrateBatchSize) {
+		ids, placeholders := queryArgs(batch)
 		rows, err := e.db.Query(`
 			SELECT d.id,
 			       COALESCE(c.id, ''),
@@ -220,38 +227,70 @@ func (e *Engine) hydrateVectorOnly(results []Result) {
 				LIMIT 1
 			)
 			WHERE d.id IN (`+placeholders+`)`, ids...)
-		if err == nil {
-			for rows.Next() {
-				var docID, chunkID, heading, content string
-				if err := rows.Scan(&docID, &chunkID, &heading, &content); err != nil {
-					break
+		if err != nil {
+			slog.Warn("hydrate vector-only rows: first-chunk lookup failed", "leg", "document", "ids", len(batch), "err", err)
+			continue
+		}
+		for rows.Next() {
+			var docID, chunkID, heading, content string
+			if err := rows.Scan(&docID, &chunkID, &heading, &content); err != nil {
+				slog.Warn("hydrate vector-only rows: scan failed", "leg", "document", "ids", len(batch), "err", err)
+				break
+			}
+			for _, i := range byDoc[docID] {
+				results[i].Content = content
+				if results[i].ChunkID == "" {
+					results[i].ChunkID = chunkID
 				}
-				for _, i := range byDoc[docID] {
-					results[i].Content = content
-					if results[i].ChunkID == "" {
-						results[i].ChunkID = chunkID
-					}
-					if results[i].HeadingPath == "" {
-						results[i].HeadingPath = heading
-					}
+				if results[i].HeadingPath == "" {
+					results[i].HeadingPath = heading
 				}
 			}
-			rows.Close()
 		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("hydrate vector-only rows: row iteration failed", "leg", "document", "ids", len(batch), "err", err)
+		}
+		rows.Close()
 	}
 }
 
-// queryKeys renders a map's keys as query arguments plus the matching `?,?`
-// placeholder list, so an IN clause is always parameterized and never built by
-// interpolating identifiers.
-func queryKeys[V any](m map[string]V) ([]any, string) {
-	args := make([]any, 0, len(m))
-	ph := make([]string, 0, len(m))
-	for k := range m {
-		args = append(args, k)
-		ph = append(ph, "?")
+// hydrateBatchSize bounds one IN clause. SQLite caps the number of bound
+// variables per statement (999 by default), and `--limit` is user-supplied, so
+// a large enough result set turned hydration into a query error rather than a
+// missing snippet. Batching keeps every row hydrated at any limit.
+const hydrateBatchSize = 500
+
+// batchKeys splits a map's keys into deterministic batches of at most size.
+// Sorted, so a failure is reproducible and a log line names a stable set.
+func batchKeys[V any](m map[string]V, size int) [][]string {
+	if len(m) == 0 {
+		return nil
 	}
-	return args, strings.Join(ph, ",")
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out [][]string
+	for start := 0; start < len(keys); start += size {
+		end := start + size
+		if end > len(keys) {
+			end = len(keys)
+		}
+		out = append(out, keys[start:end])
+	}
+	return out
+}
+
+// queryArgs renders one batch as query arguments plus its `?,?` placeholder
+// list, so an IN clause is always parameterized and never built by
+// interpolating identifiers.
+func queryArgs(keys []string) ([]any, string) {
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+	return args, strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
 }
 
 // hasFilters reports whether any structured filter is set.

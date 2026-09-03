@@ -1,6 +1,7 @@
 package search
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -169,4 +170,81 @@ func firstChunkPrefix(t *testing.T, db *store.DB, docID string, n int) string {
 		t.Fatalf("fixture produced no chunk text for %s", docID)
 	}
 	return content
+}
+
+// Go reviewer G4: the IN clause was built from every id at once. SQLite caps
+// bound variables per statement (999 by default) and `--limit` is user-supplied,
+// so a large enough result set turned hydration into a query error rather than a
+// missing snippet, and G8's swallowed error meant nothing said so. Both legs are
+// exercised, because they are separate queries.
+//
+// Limit has to exceed the batch size too: ReciprocalRankFusion truncates to
+// opts.Limit BEFORE hydration runs, so a default limit would leave 20 rows and
+// prove nothing about batching.
+func TestHybridSearch_HydrationBatchesBeyondTheVariableCap(t *testing.T) {
+	const docs = 600 // > hydrateBatchSize (500), and > SQLite's 999 cap when doubled
+
+	seed := func(t *testing.T, withVecChunks bool) []Result {
+		t.Helper()
+		db := setupSearchDB(t)
+		if withVecChunks {
+			if err := db.EnsureVecChunks(2); err != nil {
+				t.Fatalf("EnsureVecChunks: %v", err)
+			}
+		}
+		for i := 0; i < docs; i++ {
+			id := fmt.Sprintf("d-%03d", i)
+			insertTestDoc(t, db, id, id+".md", "Doc "+id, "note", "draft",
+				"# Orbital Mechanics\n\nDelta-v budgets and transfer windows for "+id+".\n")
+			if err := db.SetEmbedding(id, []float32{1, 0}, "t", "h"); err != nil {
+				t.Fatalf("SetEmbedding(%s): %v", id, err)
+			}
+			if !withVecChunks {
+				continue
+			}
+			if err := db.SetDocChunkVectors(id, []store.ChunkVector{{
+				ChunkID: firstChunkID(t, db, id), DocID: id, ContentHash: "h", Vector: []float32{1, 0},
+			}}, "t"); err != nil {
+				t.Fatalf("SetDocChunkVectors(%s): %v", id, err)
+			}
+		}
+		ids, vecs, err := db.AllEmbeddings()
+		if err != nil {
+			t.Fatalf("AllEmbeddings: %v", err)
+		}
+		engine := NewEngine(db.Conn())
+		_, vecOK, _ := engine.vecChunkSearchByDoc([]float32{1, 0}, 40, 0, len(vecs))
+		if vecOK != withVecChunks {
+			t.Fatalf("wanted the %s leg; vec0 available = %v", map[bool]string{true: "vec0", false: "brute-force"}[withVecChunks], vecOK)
+		}
+		// The BM25 word matches nothing, so every row is vector-only.
+		res, mode, err := engine.HybridSearch(Options{Query: "zzzznomatch", Limit: docs}, []float32{1, 0}, ids, vecs)
+		if err != nil {
+			t.Fatalf("HybridSearch: %v", err)
+		}
+		if mode != ModeHybrid {
+			t.Fatalf("mode = %q, want hybrid", mode)
+		}
+		return res
+	}
+
+	for _, tc := range []struct {
+		name          string
+		withVecChunks bool
+	}{
+		{"chunk leg (vec0)", true},
+		{"document leg (brute force)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := seed(t, tc.withVecChunks)
+			if len(res) != docs {
+				t.Fatalf("got %d results, want all %d (the limit must exceed the batch size for this to test anything)", len(res), docs)
+			}
+			for _, r := range res {
+				if r.Content == "" {
+					t.Fatalf("%s came back unhydrated: a batch past the variable cap was dropped", r.Path)
+				}
+			}
+		})
+	}
 }
