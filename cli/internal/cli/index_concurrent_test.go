@@ -62,7 +62,7 @@ func TestEmbedDocumentsWithProvider_ConcurrentAggregation(t *testing.T) {
 	cfg.EmbedConcurrency = 8 // force concurrency well above 1
 	emb := &concEmbedder{dims: 8}
 
-	stats, err := embedDocumentsWithProvider(context.Background(), v, cfg, emb)
+	stats, err := embedDocumentsWithProvider(context.Background(), v, cfg, emb, withEmbedProgress)
 	if err != nil {
 		t.Fatalf("embedDocumentsWithProvider: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestEmbedDocumentsWithProvider_ConcurrentFailureTally(t *testing.T) {
 	emb := &errEmbedder{dims: 8}
 
 	// The function itself returns nil; per-doc failures are tallied into Failed.
-	stats, err := embedDocumentsWithProvider(context.Background(), v, cfg, emb)
+	stats, err := embedDocumentsWithProvider(context.Background(), v, cfg, emb, withEmbedProgress)
 	if err != nil {
 		t.Fatalf("embedDocumentsWithProvider: %v", err)
 	}

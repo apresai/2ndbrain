@@ -162,7 +162,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			slog.Error("force-reembed failed", "error", err)
 			return err
 		}
-	} else if es, eerr := embedDocuments(ctx, v, cfg); eerr != nil {
+	} else if es, eerr := embedDocuments(ctx, v, cfg, withEmbedProgress); eerr != nil {
 		slog.Debug("embedding skipped", "reason", eerr.Error())
 		if !flagPorcelain {
 			// When no provider is configured at all, guide the user
@@ -258,9 +258,11 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 	cfg := v.Config.AI
 	embedded := false
 	// The high-frequency path: editors and the macOS app run this on every
-	// save, so a throttled account shows up here first.
+	// save, so a throttled account shows up here first. The pass runs SILENT
+	// here: the notice owns the terminal line, and for one document its own
+	// progress lines say nothing the notice does not.
 	ctx, stopNotice := slowCallNotice(ctx, "embedding note")
-	stats, embErr := embedDocuments(ctx, v, cfg)
+	stats, embErr := embedDocuments(ctx, v, cfg, withoutEmbedProgress)
 	stopNotice()
 	if embErr != nil {
 		slog.Debug("incremental embed skipped", "reason", embErr.Error())
@@ -325,7 +327,7 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 		fmt.Fprintf(os.Stderr, "  force-reembed: invalidated %d embeddings, re-embedding...\n", n)
 	}
 
-	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder)
+	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder, withEmbedProgress)
 	reportUnparseable(stats.Unparseable)
 	// Neither a skipped (empty) note nor an unparseable one is embeddable, so
 	// "complete" means every remaining document embedded. Without subtracting
@@ -363,27 +365,35 @@ func reportUnparseable(docs []vault.UnparseableDoc) {
 	}
 }
 
-func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
-	embedder, err := validateEmbeddingProvider(ctx, cfg)
-	if err != nil {
-		return embeddingRunStats{}, err
-	}
-	return embedDocumentsWithProvider(ctx, v, cfg, embedder)
-}
+// embedProgress selects whether the pass prints its per-document stderr
+// progress. It exists because that printer and the slow-call notice both write
+// to stderr WITHOUT a newline: run together they interleave on one line, and
+// the notice's erase then wipes whatever the printer left there. Only one of
+// them may own the terminal line at a time.
+type embedProgress bool
 
-// embedDocumentsWithProvider runs the shared concurrent embed pass
-// (vault.EmbedDocuments) and layers the CLI's stderr progress + cost estimate on
-// top. The worker-pool logic itself lives in internal/vault so the MCP kb_index
-// tool shares it; here we only translate the pass's events into the CLI's
-// !flagPorcelain output and convert the result into embeddingRunStats.
-func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, embedder ai.EmbeddingProvider) (embeddingRunStats, error) {
-	var onStart func(int, int)
-	var onEvent func(vault.EmbedEvent)
-	if !flagPorcelain {
-		onStart = func(count, concurrency int) {
+const (
+	// withEmbedProgress: the pass owns the line. Used where there is real
+	// per-document progress worth watching (a whole-vault index or reembed).
+	withEmbedProgress embedProgress = true
+	// withoutEmbedProgress: the caller owns the line. Used by `index --doc`,
+	// whose slow-call notice is the thing worth watching; for ONE document
+	// "embedding 1 documents (concurrency 4)" and "embedded 1/1" are noise
+	// anyway.
+	withoutEmbedProgress embedProgress = false
+)
+
+// embedProgressOpts builds the pass's callbacks. Nil callbacks mean a silent
+// pass, which is also what --porcelain gets.
+func embedProgressOpts(p embedProgress) vault.EmbedOpts {
+	if p == withoutEmbedProgress || flagPorcelain {
+		return vault.EmbedOpts{}
+	}
+	return vault.EmbedOpts{
+		OnStart: func(count, concurrency int) {
 			fmt.Fprintf(os.Stderr, "  embedding %d documents (concurrency %d)...\n", count, concurrency)
-		}
-		onEvent = func(ev vault.EmbedEvent) {
+		},
+		OnEvent: func(ev vault.EmbedEvent) {
 			switch ev.Kind {
 			case vault.EmbedParseFailed:
 				fmt.Fprintf(os.Stderr, "  skip %s: %v\n", ev.Path, ev.Err)
@@ -396,10 +406,27 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 				// non-deterministic under concurrency.
 				fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", ev.Done, ev.Total, ev.Path)
 			}
-		}
+		},
 	}
+}
 
-	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, vault.EmbedOpts{OnStart: onStart, OnEvent: onEvent})
+func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, progress embedProgress) (embeddingRunStats, error) {
+	embedder, err := validateEmbeddingProvider(ctx, cfg)
+	if err != nil {
+		return embeddingRunStats{}, err
+	}
+	return embedDocumentsWithProvider(ctx, v, cfg, embedder, progress)
+}
+
+// embedDocumentsWithProvider runs the shared concurrent embed pass
+// (vault.EmbedDocuments) and layers the CLI's stderr progress + cost estimate on
+// top. The worker-pool logic itself lives in internal/vault so the MCP kb_index
+// tool shares it; here we only translate the pass's events into the CLI's
+// !flagPorcelain output and convert the result into embeddingRunStats.
+func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, embedder ai.EmbeddingProvider, progress embedProgress) (embeddingRunStats, error) {
+	quiet := embedProgressOpts(progress).OnEvent == nil
+
+	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, embedProgressOpts(progress))
 	// Read the counter AFTER the pass: every worker reports into the one the
 	// caller attached to ctx, so this is the whole pass's retry total.
 	retries := ai.RetriesFrom(ctx)
@@ -419,14 +446,14 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 	}
 
 	if es.Attempted == 0 {
-		if !flagPorcelain {
+		if !flagPorcelain && !quiet {
 			fmt.Fprintln(os.Stderr, "  all embeddings up to date")
 		}
 		return stats, nil
 	}
 
 	// Show cost estimate for non-free providers (CLI-only UX, after the pass).
-	if !flagPorcelain && es.Embedded > 0 {
+	if !flagPorcelain && !quiet && es.Embedded > 0 {
 		var modelInfo ai.ModelInfo
 		if models, err := loadVerifiedModelCatalog(ctx, cfg, v.Root); err == nil {
 			modelInfo, _ = lookupModelInfo(models, cfg.Provider, es.Model)
@@ -446,7 +473,7 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		}
 	}
 
-	if !flagPorcelain && stats.Skipped > 0 {
+	if !flagPorcelain && !quiet && stats.Skipped > 0 {
 		fmt.Fprintf(os.Stderr, "  skipped %d empty document(s)\n", stats.Skipped)
 	}
 	return stats, nil

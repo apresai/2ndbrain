@@ -49,7 +49,7 @@ func TestEmbedDocumentsSkipsEmptyDocuments(t *testing.T) {
 	testutil.CreateAndIndex(t, v, "Real Note", "note", "This note has genuinely embeddable content.")
 
 	cfg := ai.AIConfig{Provider: "bedrock", EmbeddingModel: embedModel}
-	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder)
+	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder, withEmbedProgress)
 	if err != nil {
 		t.Fatalf("embedDocumentsWithProvider returned error (empty notes must not fail the run): %v", err)
 	}
