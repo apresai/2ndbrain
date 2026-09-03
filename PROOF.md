@@ -55,3 +55,34 @@ format_coverage_test.go:187: line is a Go struct dump, not text: "{/var/folders/
 format_coverage_test.go:187: line is a Go struct dump, not text: "{amazon.nova-2-... <nil> <nil> ... true}"   [models list]
 ```
 PASS at HEAD.
+
+---
+
+## Commit 2: `cli: the move ambiguity guard asks the resolver, so a title-named bare link is caught` (c7b1489)
+
+Reverted: `cli/internal/cli/move.go`
+
+### `TestContract_Move_AmbiguousResolverOnlyLink` (internal/cli), both subtests
+FAIL at dd70c88:
+```
+move_contract_test.go:560: dry-run should report [[Dup]] as ambiguous: {Moved:{From:one/dup.md To:one/renamed.md} Rewritten:[] SkippedAmbiguous:[] Failed:[] DryRun:true Refused:false MoveFailed:false}   [shared title]
+move_contract_test.go:560: dry-run should report [[Duplicate]] as ambiguous: {... SkippedAmbiguous:[] ... Refused:false ...}                                                                              [shared alias]
+```
+PASS at HEAD.
+
+### `TestContract_Move_UniqueTitleLinkStillMoves` (internal/cli)
+Regression guard, not a defect reproduction: it PASSES at dd70c88 and at HEAD.
+It exists so the widened guard cannot start refusing a unique name. Recorded
+here explicitly so its passing baseline is not mistaken for an unproven test.
+The same role is played by the pre-existing
+`TestContract_Move_RewritesReferencingNotes` (asserts `skipped_ambiguous`
+empty) and `TestContract_Move_AmbiguousBareLink` (the byte-exact case), both
+still green.
+
+### Live reproduction at dd70c88 (scratch vault, isolated HOME)
+```
+one/dup.md (title Dup), two/dup.md (title Dup), ref.md holding [[Dup]]
+$ 2nb move one/dup.md one/renamed.md --json
+{"moved":{...},"rewritten":[],"skipped_ambiguous":[],"failed":[],"dry_run":false,"refused":false,"move_failed":false}
+exit=0   # the file moved; [[Dup]] now resolves to two/dup.md
+```

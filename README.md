@@ -316,7 +316,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `mcp install [--client <name> \| --all]` / `mcp uninstall` | Write/remove the 2ndbrain MCP server entry in a client config (claude-code → `~/.claude.json`, warp → `~/.warp/.mcp.json`, agents → `~/.agents/.mcp.json`, claude-desktop → its JSON, codex → via `codex mcp add`). Backs up the file first and preserves your other servers |
 | `plugin status [--json]` | Installed Obsidian plugin version vs this CLI |
 | `plugin install` | Install or update the Obsidian plugin in the open vault from the latest release (alias: `plugin update`). Won't downgrade a newer installed plugin unless `--force` |
-| `export-context --types <types>` | Generate CLAUDE.md context bundle |
+| `export-context --types <types>` | Generate CLAUDE.md context bundle. The bundle is a document body: the default form and `--format raw`/`md`/`text` emit it, `--json` wraps it as `{bundle, docs, chars}`, and `--csv`/`--tsv`/`--yaml` are refused (a bundle is not a row set) |
 | `skills list` | List supported AI agents and install status |
 | `skills install <agent> [--all] [--user]` | Install skill file for an AI coding agent |
 | `skills uninstall <agent> [--all] [--user]` | Remove skill file for an AI coding agent |

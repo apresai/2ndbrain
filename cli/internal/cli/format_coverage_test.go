@@ -417,6 +417,75 @@ func TestContract_GitDiffIsBodyShaped(t *testing.T) {
 	}
 }
 
+// export-context is the second body-shaped report command, and it honored no
+// format at all: runExport never called getFormat, so `--json`, `--csv` and
+// `--yaml` each printed the markdown bundle and exited 0. `2nb export-context
+// --json | jq .` was a parse error on a command reporting success. It takes the
+// git diff shape now: raw/md/text emit the bundle, json wraps it in a record,
+// and the row-set formats are refused by name.
+func TestContract_ExportContextIsBodyShaped(t *testing.T) {
+	root, _ := newFormatCoverageVault(t)
+
+	for _, format := range []string{"raw", "md", "text"} {
+		out, err := runCLIArgs(t, root, "export-context", "--format", format)
+		if err != nil {
+			t.Errorf("export-context --format %s: %v\n%s", format, err, out)
+			continue
+		}
+		if !strings.Contains(string(out), "# Knowledge Base Context") {
+			t.Errorf("export-context --format %s did not emit the bundle:\n%s", format, out)
+		}
+	}
+
+	out, err := runCLIArgs(t, root, "export-context", "--format", "json")
+	if err != nil {
+		t.Fatalf("export-context --format json: %v\n%s", err, out)
+	}
+	var rec struct {
+		Bundle string `json:"bundle"`
+		Docs   int    `json:"docs"`
+		Chars  int    `json:"chars"`
+	}
+	if err := json.Unmarshal(jsonPortion(out), &rec); err != nil {
+		t.Fatalf("export-context --format json is not parseable: %v\n%s", err, out)
+	}
+	if !strings.Contains(rec.Bundle, "# Knowledge Base Context") {
+		t.Errorf("json record does not carry the bundle: %+v", rec)
+	}
+	if rec.Docs != 1 || rec.Chars != len(rec.Bundle) {
+		t.Errorf("json record counts = docs %d chars %d, want 1 and %d", rec.Docs, rec.Chars, len(rec.Bundle))
+	}
+
+	for _, format := range []string{"csv", "tsv", "yaml"} {
+		out, err := runCLIArgs(t, root, "export-context", "--format", format)
+		if err == nil {
+			t.Errorf("export-context --format %s was accepted; a bundle is not a row set:\n%s", format, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "row set") {
+			t.Errorf("export-context --format %s refusal should say a bundle is not a row set, got: %v", format, err)
+		}
+	}
+
+	// The refusal must not depend on there being any documents to bundle: it is
+	// a property of the command, and it runs before the vault is even opened.
+	out, err = runCLIArgs(t, root, "export-context", "--types", "nosuchtypexyz", "--format", "csv")
+	if err == nil {
+		t.Errorf("export-context --format csv with no matching docs was accepted:\n%s", out)
+	}
+	// A zero-document bundle is still a JSON record, not an empty stream.
+	out, err = runCLIArgs(t, root, "export-context", "--types", "nosuchtypexyz", "--json")
+	if err != nil {
+		t.Fatalf("export-context --json with no matching docs: %v\n%s", err, out)
+	}
+	if err := json.Unmarshal(jsonPortion(out), &rec); err != nil {
+		t.Fatalf("empty export-context --json is not parseable: %v\n%s", err, out)
+	}
+	if rec.Docs != 0 || rec.Bundle != "" {
+		t.Errorf("empty bundle record = %+v, want zero docs and an empty bundle", rec)
+	}
+}
+
 // The up-front guard in runPolish is the only raw/md gate on either polish
 // path. It has to fire before any provider work, so this must hold on a machine
 // with no credentials at all: polish is a paid generation call, and --undo
