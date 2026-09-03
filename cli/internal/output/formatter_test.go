@@ -433,3 +433,99 @@ func TestWriteDelimited_NilTextMarshalerPointer(t *testing.T) {
 		t.Errorf("nil *time.Time cell = %q, want <nil>", recs[1][0])
 	}
 }
+
+// yamlItem exercises the three things yaml.v3 got wrong on its own: a
+// multi-word json name, omitempty, and a numeric-looking STRING.
+type yamlItem struct {
+	ModifiedAt string            `json:"modified_at"`
+	DaysStale  int               `json:"days_stale,omitempty"`
+	ContextLen string            `json:"context_length,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+	Meta       map[string]string `json:"meta,omitempty"`
+}
+
+// The reported defect: --yaml invented its own key names. yaml.v3 lowercases a
+// bare Go field name, and every output struct here carries json tags only, so
+// `modified_at` came out as `modifiedat` and no consumer could read both views
+// with one schema.
+func TestWrite_YAMLUsesTheJSONFieldNames(t *testing.T) {
+	var buf bytes.Buffer
+	item := yamlItem{
+		ModifiedAt: "2026-09-03T00:00:00Z",
+		DaysStale:  7,
+		ContextLen: "8192",
+		Tags:       []string{"a", "b"},
+		Meta:       map[string]string{"k": "v"},
+	}
+	if err := Write(&buf, FormatYAML, item); err != nil {
+		t.Fatalf("Write(YAML): %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{"modified_at:", "days_stale:", "context_length:", "tags:", "meta:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing json field name %q in:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"modifiedat", "daysstale", "contextlen"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("yaml emitted the Go field name %q instead of the json one:\n%s", unwanted, out)
+		}
+	}
+	// Nested values stay BLOCK style: JSON parses as flow, which would put the
+	// brackets back.
+	if strings.Contains(out, "{") || strings.Contains(out, "[") {
+		t.Errorf("yaml output contains JSON brackets:\n%s", out)
+	}
+	// A json STRING that looks like a number must stay a string, or a consumer
+	// round-tripping the yaml gets a different type than the json view gave it.
+	if !strings.Contains(out, `context_length: "8192"`) {
+		t.Errorf("numeric-looking string was not quoted:\n%s", out)
+	}
+}
+
+// omitempty is part of the json contract, and yaml.v3 never saw it: --yaml
+// printed every zero field, so the two views disagreed about which keys exist.
+func TestWrite_YAMLHonorsOmitempty(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatYAML, yamlItem{ModifiedAt: "2026-09-03T00:00:00Z"}); err != nil {
+		t.Fatalf("Write(YAML): %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "modified_at:") {
+		t.Errorf("required field missing:\n%s", out)
+	}
+	for _, unwanted := range []string{"days_stale", "context_length", "tags", "meta"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("omitempty field %q was rendered:\n%s", unwanted, out)
+		}
+	}
+}
+
+// The degenerate payloads. An empty listing is a bare `[]` (every --json
+// listing returns one), and a nil payload parses to a node with no Kind, which
+// the yaml encoder refuses outright.
+func TestWrite_YAMLDegeneratePayloads(t *testing.T) {
+	cases := []struct {
+		name string
+		data any
+		want string
+	}{
+		{"empty slice", []yamlItem{}, "[]\n"},
+		{"nil slice", []yamlItem(nil), "null\n"},
+		{"nil", nil, "null\n"},
+		{"scalar string", "hello", "hello\n"},
+		{"scalar int", 42, "42\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := Write(&buf, FormatYAML, tc.data); err != nil {
+				t.Fatalf("Write(YAML, %v): %v", tc.data, err)
+			}
+			if buf.String() != tc.want {
+				t.Errorf("got %q, want %q", buf.String(), tc.want)
+			}
+		})
+	}
+}
