@@ -43,36 +43,78 @@ func emptyFrontmatterBlock(rest string) (body string, ok bool) {
 	return "", false
 }
 
+// isBlankLine reports whether one line of a frontmatter region is blank. Blank
+// means WHITESPACE-ONLY, not byte-empty: a line carrying a stray space or tab is
+// blank to the reader and to the editor that left it there, and treating it as
+// content is what let real body text be absorbed as properties. The trailing
+// "\r" of a CRLF line is stripped here rather than by normalizing the document,
+// so the body that comes back is always the original bytes.
+func isBlankLine(line string) bool {
+	return strings.Trim(strings.TrimSuffix(line, "\r"), " \t") == ""
+}
+
+// isContiguousKeyBlock reports whether the region between a doubled opening
+// fence and its closing fence is what frontmatter actually is: a CONTIGUOUS
+// block of keys. Leading blank lines are skipped (a note may open its properties
+// a line down), and after that the block must contain NO blank line at all,
+// interior or trailing.
+//
+// That single test is what tells the two competing shapes apart, and nothing
+// simpler does, because BOTH of them have a blank line right after the doubled
+// fence:
+//
+//	"---\n---\n\nStatus: draft\n\n---\n\nRest\n"              body, blank line before the fence
+//	"---\n---\n\ntitle: Real Note\ntags: [a, b]\n---\nBody\n"   properties, none
+//
+// Judging by the LEADING blank line alone got both wrong in turn: it absorbed
+// the first (whenever that blank line carried whitespace) and discarded the
+// second outright, moving a note's real title and tags into its body.
+func isContiguousKeyBlock(region string) bool {
+	lines := strings.Split(region, "\n")
+	first := 0
+	for first < len(lines) && isBlankLine(lines[first]) {
+		first++
+	}
+	if first == len(lines) {
+		return false // nothing but blank lines is not a key block
+	}
+	for _, line := range lines[first:] {
+		if isBlankLine(line) {
+			return false
+		}
+	}
+	return true
+}
+
 // legacyDoubledDelimiterFrontmatter re-reads a doubled opening delimiter the way
 // the parser did before the empty-block rule: everything up to the NEXT closing
 // delimiter is the YAML region, and its leading "---" is a document start marker
 // that YAML accepts. It wins only when that region yields a NON-EMPTY mapping;
 // a parse error or an empty result means the block really is empty.
 //
-// A BLANK line right after the second "---" ends the reading before it starts.
-// Frontmatter is contiguous from its opening fence, so a note that opens with an
-// empty block and then leaves a blank line has body from there on, whatever the
-// body happens to look like. Without that rule the reading reached past the
-// blank line and swallowed prose: "---\n---\n\nStatus: draft\n\n---\n\nRest\n"
-// read "Status: draft" as a property, and because UpdateDocumentFrontmatterAST
-// consults this same function, `2nb meta --set` and `2nb tag add` then REWROTE
-// the file, lifting those lines out of the visible body and into a frontmatter
-// block on disk. A frontmatter-only command must never touch the body.
+// The region between the two fences is real frontmatter only when it is a
+// contiguous key block (isContiguousKeyBlock) AND parses as a non-empty mapping.
+// Anything else means the block really is empty and the whole region is body.
+// The closing fence is found exactly as the main parser finds one: "\n---\n",
+// its CRLF form, or a "---" at end of file.
 //
-// What survives the rule is the genuine doubled fence, where properties follow
-// the second delimiter immediately, closed by a newline "---" or by end of file
-// (the same two closers the main parser accepts, in LF and in CRLF).
+// Both halves of that test cost real data when they were missing. Reading the
+// region as properties whenever it parsed absorbed body prose, and because
+// UpdateDocumentFrontmatterAST consults this same function, `2nb meta --set` and
+// `2nb tag add` then REWROTE the file, lifting those lines out of the visible
+// body and into a properties block on disk. Rejecting the region whenever a
+// blank line followed the fence did the mirror image: a note whose real title
+// and tags began one line down had them discarded into its body, and rewritten
+// there. A frontmatter-only command must never touch the body, in either
+// direction.
 //
-// The inherited cost, unchanged: a body that starts on the very NEXT line and
-// happens to parse as a mapping is still read as frontmatter, and the write path
-// still rewrites such a note. Both the plain colon case
-// ("---\n---\nStatus: draft\n---\nbody") and the heading case
-// ("---\n---\n# H\n\nkey: value\n---\nmore", where the heading is a YAML
-// comment) land there. That residual is now reachable ONLY by a note a human
-// hand-wrote that way: SerializeDocument guarantees a blank line after an empty
-// block, so 2nb no longer manufactures the shape it would then misread. The
-// trade is deliberate, because losing real metadata is the worse of the two
-// failures, and it is pinned by test rather than left accidental.
+// What is left is genuinely ambiguous and deliberately kept: a body whose first
+// non-blank stretch has no blank line in it and happens to parse as a mapping
+// ("---\n---\nStatus: draft\n---\nbody") is read as properties. Prose that runs
+// to more than one paragraph, or that ends a paragraph before the next "---",
+// is not, which covers the shapes notes actually take. Losing real metadata is
+// the worse of the two failures, so that is the side the tie falls on, and it is
+// pinned by test rather than left accidental.
 func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, bool) {
 	var afterOpen int
 	switch {
@@ -84,11 +126,6 @@ func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, boo
 		// A second delimiter at end of file: an empty block, nothing behind it.
 		return nil, "", false
 	}
-	if next := rest[afterOpen:]; next == "" ||
-		strings.HasPrefix(next, "\n") || strings.HasPrefix(next, "\r\n") {
-		return nil, "", false
-	}
-
 	idx := strings.Index(rest, "\n---\n")
 	closeLen := len("\n---\n")
 	if idx == -1 {
@@ -103,11 +140,22 @@ func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, boo
 	if idx == -1 && strings.HasSuffix(rest, "\n---") {
 		idx, closeLen = len(rest)-len("\n---"), len("\n---")
 	}
-	if idx == -1 {
+	// One guard for two cases: no closing fence at all (idx == -1), and a
+	// TRIPLED delimiter, where the fence found is the one already consumed and
+	// there is no region between them (slicing it would panic).
+	if idx < afterOpen {
+		return nil, "", false
+	}
+
+	// The ORIGINAL bytes, sliced. Nothing here normalizes line endings: the body
+	// returned is what was read, so a CRLF note keeps its CRLF through the write
+	// path that rewrites the whole file from it.
+	region := rest[afterOpen:idx]
+	if !isContiguousKeyBlock(region) {
 		return nil, "", false
 	}
 	meta := make(map[string]any)
-	if err := yaml.Unmarshal([]byte(rest[:idx]), &meta); err != nil || len(meta) == 0 {
+	if err := yaml.Unmarshal([]byte(region), &meta); err != nil || len(meta) == 0 {
 		return nil, "", false
 	}
 	return meta, rest[idx+closeLen:], true

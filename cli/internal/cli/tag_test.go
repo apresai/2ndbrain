@@ -171,53 +171,100 @@ func TestTag_ReadOnlyRejected(t *testing.T) {
 	}
 }
 
-// TestTagAdd_LeavesAnEmptyPropertiesBlockBodyOnDisk is the write-surface proof
-// behind the frontmatter boundary rule. A note that opens with an empty
-// properties block, then a blank line, then a colon-bearing line and a
-// horizontal rule, had those body lines read as properties. `tag add` rewrites
-// the file, so it hoisted them out of the visible body and into a properties
-// block on disk, mangling the value on the way. A frontmatter-only command may
-// never touch the body.
-func TestTagAdd_LeavesAnEmptyPropertiesBlockBodyOnDisk(t *testing.T) {
+// The write path is where the doubled-fence rule actually destroys data:
+// UpdateDocumentFrontmatterAST consults the same reading, so `tag add` rewrites
+// the file according to it. Both directions are tested, because every attempt at
+// this rule so far has fixed one by breaking the other.
+
+// TestTagAdd_LeavesBodyProseInTheBody: a note with an empty properties block, a
+// blank line (carrying a stray space, which is what an editor leaves), a
+// colon-bearing line and a horizontal rule had those body lines hoisted out of
+// the visible body and into a properties block on disk.
+func TestTagAdd_LeavesBodyProseInTheBody(t *testing.T) {
 	_, root := newContractVault(t)
-	const original = "---\n---\n\nStatus: draft\n\n---\n\nRest of the note\n"
-	notePath := filepath.Join(root, "empty-props.md")
+	const original = "---\n---\n \nStatus: draft\n\n---\n\nRest of the note\n"
+	notePath := filepath.Join(root, "prose-note.md")
 	if err := os.WriteFile(notePath, []byte(original), 0o644); err != nil {
 		t.Fatalf("write note: %v", err)
 	}
 	if _, err := runCLIArgs(t, root, "index"); err != nil {
 		t.Fatalf("index: %v", err)
 	}
-
-	if _, err := runCLIArgs(t, root, "tag", "add", "empty-props.md", "alpha"); err != nil {
+	if _, err := runCLIArgs(t, root, "tag", "add", "prose-note.md", "alpha"); err != nil {
 		t.Fatalf("tag add: %v", err)
 	}
 
-	after, err := os.ReadFile(notePath)
-	if err != nil {
-		t.Fatalf("read back: %v", err)
+	got := readNote(t, notePath)
+	for _, line := range []string{"Status: draft", "Rest of the note"} {
+		if !strings.Contains(got, line) {
+			t.Errorf("the note on disk lost its body line %q:\n%s", line, got)
+		}
 	}
-	got := string(after)
-	if !strings.Contains(got, "\nStatus: draft\n") {
-		t.Errorf("the note on disk lost its body line 'Status: draft':\n%s", got)
-	}
-	if !strings.Contains(got, "Rest of the note") {
-		t.Errorf("the note on disk lost the rest of its body:\n%s", got)
-	}
-	// The body line must still be BODY, i.e. below the closing delimiter of the
-	// properties block that tag add wrote.
-	if !strings.HasPrefix(got, "---\n") {
-		t.Fatalf("the rewritten note does not open with a properties block:\n%s", got)
-	}
-	closeIdx := strings.Index(got[len("---\n"):], "\n---\n")
-	if closeIdx == -1 {
-		t.Fatalf("the rewritten note has no closing delimiter:\n%s", got)
-	}
-	props := got[:len("---\n")+closeIdx+len("\n---\n")]
+	props := propertiesBlock(t, got)
 	if strings.Contains(props, "Status") {
 		t.Errorf("body text was hoisted into the properties block:\n%s", props)
 	}
 	if !strings.Contains(props, "alpha") {
 		t.Errorf("the tag that was actually asked for is missing:\n%s", props)
 	}
+}
+
+// TestTagAdd_KeepsRealPropertiesThatStartALineDown is the mirror image, and the
+// one a leading-blank-line rule breaks: a note whose real title and tags begin
+// one line below the doubled fence had them discarded into the body and rewritten
+// there, so `tag add` cost the user their metadata.
+func TestTagAdd_KeepsRealPropertiesThatStartALineDown(t *testing.T) {
+	_, root := newContractVault(t)
+	const original = "---\n---\n\ntitle: Real Note\ntags: [a, b]\n---\nBody content\n"
+	notePath := filepath.Join(root, "real-props.md")
+	if err := os.WriteFile(notePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "tag", "add", "real-props.md", "alpha"); err != nil {
+		t.Fatalf("tag add: %v", err)
+	}
+
+	got := readNote(t, notePath)
+	props := propertiesBlock(t, got)
+	if !strings.Contains(props, "title: Real Note") {
+		t.Errorf("the note's real title was discarded from its properties:\n%s", got)
+	}
+	for _, tag := range []string{"a", "b", "alpha"} {
+		if !strings.Contains(props, tag) {
+			t.Errorf("tag %q missing from the properties block:\n%s", tag, props)
+		}
+	}
+	body := got[len(props):]
+	if strings.Contains(body, "title: Real Note") {
+		t.Errorf("the note's properties were moved into its body:\n%s", got)
+	}
+	if !strings.Contains(body, "Body content") {
+		t.Errorf("the note lost its body:\n%s", got)
+	}
+}
+
+func readNote(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	return string(b)
+}
+
+// propertiesBlock returns the note's leading frontmatter block, delimiters
+// included, so a test can assert what is INSIDE it separately from the body.
+func propertiesBlock(t *testing.T, note string) string {
+	t.Helper()
+	if !strings.HasPrefix(note, "---\n") {
+		t.Fatalf("the rewritten note does not open with a properties block:\n%s", note)
+	}
+	closeIdx := strings.Index(note[len("---\n"):], "\n---\n")
+	if closeIdx == -1 {
+		t.Fatalf("the rewritten note has no closing delimiter:\n%s", note)
+	}
+	return note[:len("---\n")+closeIdx+len("\n---\n")]
 }

@@ -289,21 +289,28 @@ func TestParseFrontmatter_DoubledDelimiterKeepsRealFrontmatterCRLF(t *testing.T)
 	}
 }
 
-// TestParseFrontmatter_DoubledDelimiterAmbiguityIsPinned records the cost of the
-// rule above rather than leaving it accidental. A markdown heading is a YAML
-// comment, so the region below parses as a mapping and is therefore read as
-// frontmatter. That is the behavior 2nb had before the empty-block rule existed;
-// it is pinned here so a future change to it is a decision, not a surprise.
+// TestParseFrontmatter_DoubledDelimiterAmbiguityIsPinned pinned a COST when it
+// was written: a markdown heading is a YAML comment, so "# H\n\nkey: value"
+// parsed as a mapping and was read as frontmatter, which is what 2nb did before
+// the empty-block rule existed. It was pinned "so a future change to it is a
+// decision, not a surprise", and this is that decision.
+//
+// The contiguous-key-block rule retires the cost. Frontmatter is a contiguous
+// run of keys, and this region has a blank line in the middle of it, so it is
+// body: the heading, the colon line and the horizontal rule all stay where the
+// author put them. The test is kept, inverted, because the shape is still worth
+// pinning; what changed is that the honest answer is now available.
 func TestParseFrontmatter_DoubledDelimiterAmbiguityIsPinned(t *testing.T) {
-	meta, body, err := ParseFrontmatter([]byte("---\n---\n# H\n\nkey: value\n---\nmore\n"))
+	const input = "---\n---\n# H\n\nkey: value\n---\nmore\n"
+	meta, body, err := ParseFrontmatter([]byte(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if meta["key"] != "value" {
-		t.Errorf("meta = %v, want key: value (a heading is a YAML comment, so this region is a mapping)", meta)
+	if len(meta) != 0 {
+		t.Errorf("meta = %v, want empty: a blank line inside the region means it is not a key block", meta)
 	}
-	if body != "more\n" {
-		t.Errorf("body = %q, want %q", body, "more\n")
+	if want := input[len("---\n---\n"):]; body != want {
+		t.Errorf("body = %q, want %q byte for byte", body, want)
 	}
 }
 
