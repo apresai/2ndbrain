@@ -2,6 +2,7 @@ package output
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -246,5 +247,102 @@ func TestWrite_DefaultFormat(t *testing.T) {
 	}
 	if got.Value != item.Value {
 		t.Errorf("value: got %d, want %d", got.Value, item.Value)
+	}
+}
+
+// csv/tsv used to render every composite field with %v, so a map came out as Go
+// syntax: `search --format csv` printed `map[]` in the frontmatter column for
+// every row, and a populated map would have printed with a nondeterministic key
+// order. Composite cells are compact JSON now, which parses and is stable.
+func TestWriteDelimited_CompositeCellsAreJSON(t *testing.T) {
+	type row struct {
+		Path        string         `json:"path"`
+		Count       int            `json:"count"`
+		Tags        []string       `json:"tags"`
+		Frontmatter map[string]any `json:"frontmatter"`
+	}
+	rows := []row{{
+		Path:        "a.md",
+		Count:       3,
+		Tags:        []string{"x", "y"},
+		Frontmatter: map[string]any{"zeta": 1, "alpha": "one"},
+	}}
+
+	for _, tc := range []struct {
+		format Format
+		comma  rune
+	}{{FormatCSV, ','}, {FormatTSV, '\t'}} {
+		var buf bytes.Buffer
+		if err := Write(&buf, tc.format, rows); err != nil {
+			t.Fatalf("%s: %v", tc.format, err)
+		}
+		raw := buf.String()
+		if strings.Contains(raw, "map[") || strings.Contains(raw, "[x y]") {
+			t.Errorf("%s still renders composites as Go syntax:\n%s", tc.format, raw)
+		}
+
+		// Decode the delimited stream so the assertions are about CELL VALUES,
+		// not about the writer's quoting.
+		r := csv.NewReader(strings.NewReader(raw))
+		r.Comma = tc.comma
+		recs, err := r.ReadAll()
+		if err != nil {
+			t.Fatalf("%s is not parseable: %v\n%s", tc.format, err, raw)
+		}
+		if len(recs) != 2 {
+			t.Fatalf("%s: want a header and one row, got %d records", tc.format, len(recs))
+		}
+		cell := map[string]string{}
+		for i, h := range recs[0] {
+			cell[h] = recs[1][i]
+		}
+		// The JSON encoder sorts map keys, so this is byte-stable per row.
+		if cell["frontmatter"] != `{"alpha":"one","zeta":1}` {
+			t.Errorf("%s frontmatter cell = %q, want sorted-key JSON", tc.format, cell["frontmatter"])
+		}
+		if cell["tags"] != `["x","y"]` {
+			t.Errorf("%s tags cell = %q, want JSON", tc.format, cell["tags"])
+		}
+		// Scalars keep exactly the rendering they had.
+		if cell["path"] != "a.md" || cell["count"] != "3" {
+			t.Errorf("%s changed a scalar cell: path=%q count=%q", tc.format, cell["path"], cell["count"])
+		}
+	}
+}
+
+// An empty map is a real value, not a missing one: it must render as {} rather
+// than the `map[]` Go syntax that made the column unparseable. A nil map is JSON
+// null, so the column stays parseable for every row. A nil POINTER keeps its %v
+// rendering, since a pointer cell is not a composite value.
+func TestWriteDelimited_EmptyAndNilComposites(t *testing.T) {
+	type row struct {
+		Empty map[string]any `json:"empty"`
+		Nil   map[string]any `json:"nil_map"`
+		Ptr   *string        `json:"ptr"`
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatCSV, []row{{Empty: map[string]any{}}}); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.String()
+	if strings.Contains(raw, "map[") {
+		t.Errorf("csv still renders a map as Go syntax:\n%s", raw)
+	}
+	recs, err := csv.NewReader(strings.NewReader(raw)).ReadAll()
+	if err != nil {
+		t.Fatalf("csv is not parseable: %v\n%s", err, raw)
+	}
+	cell := map[string]string{}
+	for i, h := range recs[0] {
+		cell[h] = recs[1][i]
+	}
+	if cell["empty"] != "{}" {
+		t.Errorf("empty map cell = %q, want {}", cell["empty"])
+	}
+	if cell["nil_map"] != "null" {
+		t.Errorf("nil map cell = %q, want null so the column parses on every row", cell["nil_map"])
+	}
+	if cell["ptr"] != "<nil>" {
+		t.Errorf("nil pointer cell = %q, want the unchanged %%v rendering <nil>", cell["ptr"])
 	}
 }

@@ -2,6 +2,7 @@ package search
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/document"
@@ -92,7 +93,8 @@ func TestBM25Search_ScoreIsPositive(t *testing.T) {
 
 func TestListByFilters_EmptyQuery(t *testing.T) {
 	db := setupSearchDB(t)
-	insertTestDoc(t, db, "d1", "adr.md", "ADR One", "adr", "proposed", "# ADR\n")
+	insertTestDoc(t, db, "d1", "adr.md", "ADR One", "adr", "proposed",
+		"# Auth ADR\n\nWe will use short-lived tokens.\n")
 	insertTestDoc(t, db, "d2", "note.md", "Note One", "note", "draft", "# Note\n")
 
 	engine := NewEngine(db.Conn())
@@ -101,7 +103,90 @@ func TestListByFilters_EmptyQuery(t *testing.T) {
 		t.Fatalf("search: %v", err)
 	}
 	if len(results) != 1 {
-		t.Errorf("expected 1 result, got %d", len(results))
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	// An enumerated row used to be filled from the shared 10-column scan with
+	// empty chunk fields and the note's FRONTMATTER JSON as its content, so a
+	// caller could not tell what the note said or pin the row to a chunk.
+	r := results[0]
+	if r.Content == "" || strings.HasPrefix(strings.TrimSpace(r.Content), "{") {
+		t.Errorf("content = %q, want the note body, not frontmatter JSON", r.Content)
+	}
+	if !strings.Contains(r.Content, "short-lived tokens") {
+		t.Errorf("content = %q, want the first chunk's body text", r.Content)
+	}
+	if r.ChunkID == "" {
+		t.Error("chunk_id is empty; nothing can pin this row to a chunk")
+	}
+	if r.HeadingPath != "# Auth ADR" {
+		t.Errorf("heading_path = %q, want %q", r.HeadingPath, "# Auth ADR")
+	}
+	if r.Frontmatter["title"] != "ADR One" {
+		t.Errorf("frontmatter = %v, want the stored map with title ADR One", r.Frontmatter)
+	}
+}
+
+// Prose before the first heading is its own chunk, labelled "(preamble)".
+func TestListByFilters_PreambleChunk(t *testing.T) {
+	db := setupSearchDB(t)
+	insertTestDoc(t, db, "d1", "adr.md", "ADR One", "adr", "proposed",
+		"Opening prose with no heading above it.\n\n# Later Heading\n\nMore text.\n")
+
+	engine := NewEngine(db.Conn())
+	results, err := engine.Search(Options{Type: "adr", Limit: 10})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].HeadingPath != "(preamble)" {
+		t.Errorf("heading_path = %q, want (preamble)", results[0].HeadingPath)
+	}
+	if !strings.Contains(results[0].Content, "Opening prose") {
+		t.Errorf("content = %q, want the preamble text", results[0].Content)
+	}
+}
+
+// A body-less note has no chunks at all, so the join must be an OUTER one: the
+// note still enumerates, with empty chunk fields rather than a scan error.
+func TestListByFilters_BodylessNoteStillEnumerates(t *testing.T) {
+	db := setupSearchDB(t)
+	insertTestDoc(t, db, "d1", "empty.md", "Empty One", "adr", "proposed", "")
+
+	engine := NewEngine(db.Conn())
+	results, err := engine.Search(Options{Type: "adr", Limit: 10})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Content != "" || results[0].ChunkID != "" || results[0].HeadingPath != "" {
+		t.Errorf("body-less note = %+v, want empty chunk fields", results[0])
+	}
+	if results[0].Frontmatter["title"] != "Empty One" {
+		t.Errorf("frontmatter = %v, want the stored map", results[0].Frontmatter)
+	}
+}
+
+// BM25 rows go through the same scan, so they must carry frontmatter too.
+func TestBM25Search_PopulatesFrontmatter(t *testing.T) {
+	db := setupSearchDB(t)
+	insertTestDoc(t, db, "d1", "k8s.md", "Kubernetes", "note", "draft",
+		"# Kubernetes\n\nDeployment strategy for kubernetes clusters.\n")
+
+	engine := NewEngine(db.Conn())
+	results, err := engine.Search(Options{Query: "kubernetes", Limit: 10})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	if results[0].Frontmatter["title"] != "Kubernetes" {
+		t.Errorf("frontmatter = %v, want the stored map", results[0].Frontmatter)
 	}
 }
 
@@ -286,5 +371,22 @@ func TestVecChunkSearchByDoc_CoverageGate(t *testing.T) {
 	// No doc-level corpus to defer to (wantCoverage=0) -> table presence suffices.
 	if _, ok, err := engine.vecChunkSearchByDoc(q, 10, 0, 0); err != nil || !ok {
 		t.Fatalf("zero coverage target: ok=%v err=%v, want ok=true", ok, err)
+	}
+}
+
+// GetDocumentByID is the RRF lookup for a vector-only hit, so a row that never
+// touched BM25 must carry frontmatter too. It scanned the column into a local
+// and discarded it.
+func TestGetDocumentByID_PopulatesFrontmatter(t *testing.T) {
+	db := setupSearchDB(t)
+	insertTestDoc(t, db, "d1", "adr.md", "ADR One", "adr", "proposed", "# ADR\n\nBody.\n")
+
+	engine := NewEngine(db.Conn())
+	r, ok := engine.GetDocumentByID("d1")
+	if !ok {
+		t.Fatal("GetDocumentByID missed the document")
+	}
+	if r.Frontmatter["title"] != "ADR One" {
+		t.Errorf("frontmatter = %v, want the stored map with title ADR One", r.Frontmatter)
 	}
 }
