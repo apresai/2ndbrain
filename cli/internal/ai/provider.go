@@ -1,6 +1,9 @@
 package ai
 
-import "context"
+import (
+	"context"
+	"sort"
+)
 
 // KnownProviders is the canonical list of AI providers 2nb supports.
 // Used by shell completion, wizard defaults, and test assertions — when
@@ -280,14 +283,20 @@ type ModelInfo struct {
 	// a user row written before the stamp existed, whose value is ignored (see
 	// IsUserThreshold).
 	ThresholdSource string `json:"threshold_source,omitempty" yaml:"threshold_source,omitempty"`
-	// FactSource records who authored this row's MODEL FACTS: Name, Dimensions
-	// and ContextLen. The only value ever written is FactSourceUser, and only
-	// `models add --name/--dimensions/--context-length` writes it. Every other
-	// save path seeds its row from the MERGED catalog, so without this stamp a
-	// copied builtin fact was indistinguishable from a fact the user typed, and
-	// the copy then shadowed every later builtin correction. Empty on a builtin
-	// row and on any row a probe wrote.
-	FactSource string `json:"fact_source,omitempty" yaml:"fact_source,omitempty"`
+	// AuthoredFacts names the MODEL FACTS on this row that the user typed, from
+	// the closed set FactName / FactDimensions / FactContextLen, sorted and
+	// deduplicated. Only `models add --name/--dimensions/--context-length`
+	// appends to it, one entry per flag actually passed.
+	//
+	// Every other save path seeds its row from the MERGED catalog, so without
+	// this a copied builtin fact is indistinguishable from a fact the user
+	// typed and the copy then shadows every later builtin correction. The
+	// provenance is PER FACT because the three are independent: a row-level
+	// stamp made `models add --context-length` claim authorship of a name and a
+	// dimension count the user never typed, and let a row that typed only a
+	// context length donate its empty name to freshly discovered routes.
+	// Absent on a builtin row and on any row a probe wrote.
+	AuthoredFacts []string `json:"authored_facts,omitempty" yaml:"authored_facts,omitempty"`
 	// TestedAt is an ISO-8601 timestamp recorded when the model last passed
 	// `2nb models test`. Present only on user-catalog entries.
 	TestedAt string `json:"tested_at,omitempty" yaml:"tested_at,omitempty"`
@@ -403,10 +412,49 @@ func DefaultGenOpts() GenOpts {
 // which is the label ResolveSimilarityThresholdFull reports to a human.
 const ThresholdSourceUser = "user"
 
-// FactSourceUser is the only value ever written to ModelInfo.FactSource. It
-// marks a row whose Name, Dimensions and ContextLen the user typed, via
-// `models add --name/--dimensions/--context-length`.
-const FactSourceUser = "user"
+// The closed set of values ModelInfo.AuthoredFacts may hold: the three model
+// facts a user can type. They are spelled like the JSON/YAML keys of the
+// fields they name, so a row in models.yaml reads as its own explanation.
+const (
+	FactName       = "name"
+	FactDimensions = "dimensions"
+	FactContextLen = "context_length"
+)
+
+// AuthoredFactNames is the closed set in canonical order, for callers that
+// iterate all three (the merge, the add path, the inheritance donor).
+func AuthoredFactNames() []string { return []string{FactName, FactDimensions, FactContextLen} }
+
+// HasAuthoredFact reports whether the user typed this row's value for one
+// named fact. It is the single read-side question every fact rule asks.
+func HasAuthoredFact(m ModelInfo, fact string) bool {
+	for _, f := range m.AuthoredFacts {
+		if f == fact {
+			return true
+		}
+	}
+	return false
+}
+
+// WithAuthoredFacts returns the list plus the named facts, sorted and
+// deduplicated so a row's provenance is stable on disk and two rows written in
+// a different flag order compare equal.
+func WithAuthoredFacts(list []string, facts ...string) []string {
+	seen := make(map[string]bool, len(list)+len(facts))
+	out := make([]string, 0, len(list)+len(facts))
+	for _, f := range append(append([]string{}, list...), facts...) {
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
 // IsUserThreshold reports whether a RAW user-catalog row's
 // recommended_similarity_threshold is the user's own calibration rather than a

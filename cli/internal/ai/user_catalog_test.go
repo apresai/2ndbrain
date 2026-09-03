@@ -808,9 +808,9 @@ func TestMergeFields_CurationBelongsToTheBuiltin(t *testing.T) {
 // TestMergeFields_ModelFactsNeedTheStamp is the mirrored-facts rule: over the
 // builtin catalog, Name, Dimensions and ContextLen from a user row apply only
 // when the user typed them (`models add --name/--dimensions/--context-length`
-// stamps FactSourceUser). An unstamped copy came FROM the merged view via some
-// earlier probe save, and letting it win is how a context_length of 2048
-// outlived the builtin's own correction to 8192.
+// lists each one in AuthoredFacts). An unlisted copy came FROM the merged view
+// via some earlier probe save, and letting it win is how a context_length of
+// 2048 outlived the builtin's own correction to 8192.
 func TestMergeFields_ModelFactsNeedTheStamp(t *testing.T) {
 	builtin := ModelInfo{
 		ID: "amazon.nova-2-multimodal-embeddings-v1:0", Provider: "bedrock", Type: "embedding",
@@ -830,18 +830,20 @@ func TestMergeFields_ModelFactsNeedTheStamp(t *testing.T) {
 	if out.Name != "Amazon Nova Embeddings v2" {
 		t.Errorf("unstamped name won over the builtin: got %q", out.Name)
 	}
-	if out.FactSource != "" {
-		t.Errorf("an ignored overlay left a stamp behind: got %q", out.FactSource)
+	if len(out.AuthoredFacts) != 0 {
+		t.Errorf("an ignored overlay left provenance behind: got %v", out.AuthoredFacts)
 	}
 
 	stamped := unstamped
-	stamped.FactSource = FactSourceUser
+	stamped.AuthoredFacts = []string{FactContextLen, FactDimensions, FactName}
 	out = mergeFields(builtin, stamped, true)
 	if out.ContextLen != 2048 || out.Dimensions != 384 || out.Name != "Nova (stale copy)" {
 		t.Errorf("a stamped user row did not override the builtin facts: %+v", out)
 	}
-	if out.FactSource != FactSourceUser {
-		t.Errorf("the stamp did not travel with the facts: got %q", out.FactSource)
+	for _, fact := range AuthoredFactNames() {
+		if !HasAuthoredFact(out, fact) {
+			t.Errorf("provenance for %q did not travel with the facts: got %v", fact, out.AuthoredFacts)
+		}
 	}
 
 	// Between two user scopes neither side owns the facts, so the vault row
@@ -1014,5 +1016,98 @@ func TestKnownInvokeStrategies_AllAccounted(t *testing.T) {
 	}
 	if IsKnownInvokeStrategy("") || IsKnownInvokeStrategy("made_up_strategy") {
 		t.Error("IsKnownInvokeStrategy should reject empty and unknown values")
+	}
+}
+
+// Bugbot B3, reproduced end to end by the challenger: the vault-over-global
+// overlay used to take the vault row's facts unconditionally AND overwrite the
+// provenance with the vault row's empty one. The builtin overlay then ignored
+// the now-unlisted value, so a name the user really had typed globally reverted
+// to the builtin's. Provenance has to survive the user-user merge for the
+// builtin merge to honor it.
+func TestMergeFields_AuthoredGlobalFactSurvivesAnUnstampedVaultRow(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	global := ModelInfo{
+		ID: nova, Provider: "bedrock", Type: "embedding",
+		ContextLen: 4096, AuthoredFacts: []string{FactContextLen},
+	}
+	vault := ModelInfo{ID: nova, Provider: "bedrock", ContextLen: 2048}
+
+	merged := mergeFields(global, vault, false)
+	if merged.ContextLen != 4096 {
+		t.Errorf("an unlisted vault value overwrote the authored global one: got %d, want 4096", merged.ContextLen)
+	}
+	if !HasAuthoredFact(merged, FactContextLen) {
+		t.Errorf("the global row's provenance was lost in the user-user merge: %v", merged.AuthoredFacts)
+	}
+
+	// And the value then survives the builtin overlay, which is the half the
+	// user actually sees.
+	var builtin ModelInfo
+	for _, m := range BuiltinCatalog() {
+		if m.Provider == "bedrock" && m.ID == nova {
+			builtin = m
+		}
+	}
+	if got := mergeFields(builtin, merged, true).ContextLen; got != 4096 {
+		t.Errorf("after the builtin overlay the authored value is %d, want 4096", got)
+	}
+
+	// A vault row that DID author the fact still wins, as it always has.
+	vaultAuthored := ModelInfo{
+		ID: nova, Provider: "bedrock",
+		ContextLen: 2048, AuthoredFacts: []string{FactContextLen},
+	}
+	if got := mergeFields(global, vaultAuthored, false).ContextLen; got != 2048 {
+		t.Errorf("an authored vault value did not beat an authored global one: got %d, want 2048", got)
+	}
+
+	// A model no builtin declares has no owner to defer to, so an unlisted
+	// vault value keeps winning: the user files are all there is.
+	g2 := ModelInfo{ID: "made.up.model", Provider: "bedrock", Type: "generation", ContextLen: 4096}
+	v2 := ModelInfo{ID: "made.up.model", Provider: "bedrock", ContextLen: 2048}
+	if got := mergeFields(g2, v2, false).ContextLen; got != 2048 {
+		t.Errorf("vault-over-global regressed for an unlisted, unowned fact: got %d, want 2048", got)
+	}
+}
+
+// Bugbot B2: one stamp for three independent facts. A row that authored ONLY
+// its context length was swapped in as the donor for all three, so a freshly
+// discovered sibling route inherited that row's EMPTY name instead of the
+// builtin's.
+func TestMergeFields_ProvenanceIsPerFact(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	var builtin ModelInfo
+	for _, m := range BuiltinCatalog() {
+		if m.Provider == "bedrock" && m.ID == nova {
+			builtin = m
+		}
+	}
+	if builtin.Name == "" || builtin.ContextLen == 0 {
+		t.Fatalf("the builtin %s row no longer carries the facts this test watches", nova)
+	}
+
+	// Typed the context length; the name and dimensions on the row are a stale
+	// copy an older probe save took off the merged view.
+	top := ModelInfo{
+		ID: nova, Provider: "bedrock",
+		Name: "Nova (stale copy)", Dimensions: 384, ContextLen: 2048,
+		AuthoredFacts: []string{FactContextLen},
+	}
+	out := mergeFields(builtin, top, true)
+	if out.ContextLen != 2048 {
+		t.Errorf("the authored context length was ignored: got %d, want 2048", out.ContextLen)
+	}
+	if out.Name != builtin.Name {
+		t.Errorf("an unlisted name won on the strength of a listed context length: got %q, want %q", out.Name, builtin.Name)
+	}
+	if out.Dimensions != builtin.Dimensions {
+		t.Errorf("unlisted dimensions won: got %d, want %d", out.Dimensions, builtin.Dimensions)
+	}
+	if HasAuthoredFact(out, FactName) || HasAuthoredFact(out, FactDimensions) {
+		t.Errorf("provenance was granted to facts the user never typed: %v", out.AuthoredFacts)
+	}
+	if !HasAuthoredFact(out, FactContextLen) {
+		t.Errorf("the typed fact lost its provenance: %v", out.AuthoredFacts)
 	}
 }

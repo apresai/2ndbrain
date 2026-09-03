@@ -118,8 +118,11 @@ func TestModelsAddStampsTypedFactsAndAProbeSaveKeepsThem(t *testing.T) {
 		if m.ContextLen != 4096 {
 			t.Errorf("stored context_length = %d, want 4096", m.ContextLen)
 		}
-		if m.FactSource != ai.FactSourceUser {
-			t.Errorf("fact_source = %q, want %q: an unstamped fact is ignored by the merge", m.FactSource, ai.FactSourceUser)
+		if !ai.HasAuthoredFact(m, ai.FactContextLen) {
+			t.Errorf("authored_facts = %v, want it to list %q: an unlisted fact is ignored by the merge", m.AuthoredFacts, ai.FactContextLen)
+		}
+		if ai.HasAuthoredFact(m, ai.FactName) || ai.HasAuthoredFact(m, ai.FactDimensions) {
+			t.Errorf("authored_facts = %v: only the fact the user typed may be listed", m.AuthoredFacts)
 		}
 	}
 	if !stamped {
@@ -156,7 +159,7 @@ func TestProbeSaveKeepsAStampedFactOnTheProbedRoute(t *testing.T) {
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
 		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
 		Plane: ai.PlaneClassic, Region: "us-east-1",
-		ContextLen: 4096, FactSource: ai.FactSourceUser,
+		ContextLen: 4096, AuthoredFacts: []string{ai.FactContextLen},
 	}); err != nil {
 		t.Fatalf("seed stamped row: %v", err)
 	}
@@ -176,8 +179,8 @@ func TestProbeSaveKeepsAStampedFactOnTheProbedRoute(t *testing.T) {
 	if stored.ContextLen != 4096 {
 		t.Errorf("stored context_length = %d, want the stamped 4096", stored.ContextLen)
 	}
-	if stored.FactSource != ai.FactSourceUser {
-		t.Errorf("fact_source = %q, want %q: an unstamped survivor is ignored on the next read", stored.FactSource, ai.FactSourceUser)
+	if !ai.HasAuthoredFact(stored, ai.FactContextLen) {
+		t.Errorf("authored_facts = %v, want it to list %q: an unlisted survivor is ignored on the next read", stored.AuthoredFacts, ai.FactContextLen)
 	}
 	if stored.TestedAt == "" {
 		t.Error("the probe verdict itself was not recorded")
@@ -320,5 +323,158 @@ func TestModelsAddUpdatesAPreRouteRowInPlace(t *testing.T) {
 	}
 	if rows[0].ContextLen != 4096 {
 		t.Errorf("context_length = %d, want the value just added, 4096", rows[0].ContextLen)
+	}
+}
+
+// mergedFact reads one model fact as `models list` would print it, straight
+// from the command's own JSON.
+func mergedFact(t *testing.T, vaultRoot, modelID string) ai.ModelInfo {
+	t.Helper()
+	out, err := runCLIArgs(t, vaultRoot, "models", "list", "--json")
+	if err != nil {
+		t.Fatalf("models list --json: %v", err)
+	}
+	var rows []ai.ModelInfo
+	if err := json.Unmarshal(out, &rows); err != nil {
+		t.Fatalf("decode models list --json: %v\n%s", err, out)
+	}
+	for _, m := range rows {
+		if m.Provider == "bedrock" && m.ID == modelID {
+			return m
+		}
+	}
+	t.Fatalf("%s is absent from models list --json:\n%s", modelID, out)
+	return ai.ModelInfo{}
+}
+
+// Bugbot B1 (HIGH), reproduced by the challenger: one stamp for three facts
+// meant `models add --context-length` claimed authorship of whatever name and
+// dimensions the stored row happened to carry. Those came from an older probe
+// save that had copied them off the builtin, so the add froze a mirror the
+// merge could never self-heal again.
+func TestModelsAddAuthorsOnlyTheFactsTyped(t *testing.T) {
+	_, root := newContractVault(t)
+	resetModelsAddFlags(t)
+
+	builtin := findBuiltinModel("bedrock", novaEmbeddingID)
+	if builtin == nil || builtin.Name == "" || builtin.Dimensions == 0 {
+		t.Fatalf("the builtin %s row no longer carries the facts this test watches", novaEmbeddingID)
+	}
+
+	// The contaminated stored row: a stale name and dimensions an older save
+	// copied off the builtin, with no provenance.
+	if err := os.WriteFile(filepath.Join(root, ".2ndbrain", "models.yaml"), []byte(
+		"version: 1\nmodels:\n"+
+			"  - id: "+novaEmbeddingID+"\n    provider: bedrock\n    type: embedding\n"+
+			"    name: Nova (stale copy)\n    dimensions: 384\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLIArgs(t, root, "models", "add", novaEmbeddingID,
+		"--provider", "bedrock", "--type", "embedding",
+		"--context-length", "4096", "--scope", "vault"); err != nil {
+		t.Fatalf("models add: %v", err)
+	}
+
+	var found bool
+	for _, m := range ai.LoadUserCatalog(root) {
+		if m.ID != novaEmbeddingID {
+			continue
+		}
+		found = true
+		if !ai.HasAuthoredFact(m, ai.FactContextLen) {
+			t.Errorf("authored_facts = %v, want it to list the typed context_length", m.AuthoredFacts)
+		}
+		if ai.HasAuthoredFact(m, ai.FactName) || ai.HasAuthoredFact(m, ai.FactDimensions) {
+			t.Errorf("authored_facts = %v: the add claimed facts the user never typed", m.AuthoredFacts)
+		}
+		if m.Name != "" || m.Dimensions != 0 {
+			t.Errorf("the stale mirror survived the add: name=%q dimensions=%d", m.Name, m.Dimensions)
+		}
+	}
+	if !found {
+		t.Fatal("models add wrote no row for the model")
+	}
+
+	merged := mergedFact(t, root, novaEmbeddingID)
+	if merged.ContextLen != 4096 {
+		t.Errorf("models list context_length = %d, want the typed 4096", merged.ContextLen)
+	}
+	if merged.Name != builtin.Name {
+		t.Errorf("models list name = %q, want the builtin's %q back", merged.Name, builtin.Name)
+	}
+	if merged.Dimensions != builtin.Dimensions {
+		t.Errorf("models list dimensions = %d, want the builtin's %d back", merged.Dimensions, builtin.Dimensions)
+	}
+}
+
+// The clearing above is scoped to models the builtin catalog declares. For a
+// model it has never seen, the stored row is the only copy of its facts, so an
+// add that touches one fact must not wipe the other two.
+func TestModelsAddKeepsANonBuiltinModelsFactsThroughAddAndProbe(t *testing.T) {
+	_, root := newContractVault(t)
+	resetModelsAddFlags(t)
+	const id = "made.up.model"
+	if findBuiltinModel("bedrock", id) != nil {
+		t.Fatalf("%s is in the builtin catalog; pick an id that is not", id)
+	}
+
+	if _, err := runCLIArgs(t, root, "models", "add", id,
+		"--provider", "bedrock", "--type", "generation",
+		"--name", "My Model", "--scope", "vault"); err != nil {
+		t.Fatalf("models add --name: %v", err)
+	}
+	resetModelsAddFlags(t)
+	if _, err := runCLIArgs(t, root, "models", "add", id,
+		"--provider", "bedrock", "--type", "generation",
+		"--context-length", "9999", "--scope", "vault"); err != nil {
+		t.Fatalf("models add --context-length: %v", err)
+	}
+
+	for _, m := range ai.LoadUserCatalog(root) {
+		if m.ID != id {
+			continue
+		}
+		if m.Name != "My Model" {
+			t.Errorf("a later add wiped a non-builtin model's authored name: got %q", m.Name)
+		}
+		if m.ContextLen != 9999 {
+			t.Errorf("context_length = %d, want 9999", m.ContextLen)
+		}
+		if !ai.HasAuthoredFact(m, ai.FactName) || !ai.HasAuthoredFact(m, ai.FactContextLen) {
+			t.Errorf("authored_facts = %v, want both facts listed across the two adds", m.AuthoredFacts)
+		}
+	}
+
+	saveProbeVerdict(t, ai.ScopeVault, root, &ai.TestProbeResult{
+		ModelID: id, Provider: "bedrock", Type: "generation",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+		OK: true, Detail: "ok",
+	})
+	if got := mergedFact(t, root, id); got.Name != "My Model" {
+		t.Errorf("a probe save lost a non-builtin model's name: got %q", got.Name)
+	}
+}
+
+// The vault scope beats the global one for the same route, and the value it
+// wins with is the one that then donates to the model's other routes. The
+// scope question is settled by LoadUserCatalog before inheritance runs, which
+// is why the donor tie break below it never has to ask about scope.
+func TestAuthoredFactPrefersTheVaultScope(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := ai.SaveUserCatalogEntry(ai.ScopeGlobal, "", ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding", Plane: ai.PlaneClassic,
+		ContextLen: 1111, AuthoredFacts: []string{ai.FactContextLen},
+	}); err != nil {
+		t.Fatalf("seed global: %v", err)
+	}
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding", Plane: ai.PlaneClassic,
+		ContextLen: 2222, AuthoredFacts: []string{ai.FactContextLen},
+	}); err != nil {
+		t.Fatalf("seed vault: %v", err)
+	}
+	if got := mergedFact(t, root, novaEmbeddingID); got.ContextLen != 2222 {
+		t.Errorf("models list context_length = %d, want the vault row's 2222", got.ContextLen)
 	}
 }

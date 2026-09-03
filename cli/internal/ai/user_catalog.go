@@ -424,42 +424,66 @@ func hasUserPriceOverride(m ModelInfo) bool {
 // prices can apply without demoting a user-verified entry.
 //
 // baseIsBuiltin marks the overlay of the user file onto the BUILTIN catalog,
-// where three groups of fields belong to the builtin: the model facts (gated on
-// the FactSource stamp below), ConfigHint, and Recommended. In the other
+// where three groups of fields belong to the builtin: the model facts (decided
+// per field by takeTopFact below), ConfigHint, and Recommended. In the other
 // overlay, global user file under per-vault user file, neither side owns
-// anything, so the vault row wins on any value it sets, exactly as before.
+// anything outright, but an AUTHORED global fact still outranks an unlisted
+// vault mirror of it.
+// takeTopFact decides ONE model fact in an overlay: whether the overlay's value
+// replaces the base's, and whether the surviving value is the user's own.
+//
+// Over the BUILTIN catalog the overlay wins only when it lists the fact. An
+// unlisted value there is a copy some earlier save took off this very merged
+// view, and letting it win is what froze a stale context length past the
+// builtin's own correction.
+//
+// Between the two USER files neither side owns anything outright, so the vault
+// row wins as it always has, with one exception: when the GLOBAL row authored
+// the fact and the vault row did not, the global value and its listing survive.
+// Without that exception an unlisted vault mirror overwrote a name the user
+// really had typed globally AND cleared its provenance, so the later builtin
+// overlay then ignored the now-unlisted value and the user's own name reverted
+// to the builtin's.
+func takeTopFact(topSet, baseAuthored, topAuthored, baseIsBuiltin bool) (take, authored bool) {
+	if topAuthored && topSet {
+		return true, true
+	}
+	if baseIsBuiltin {
+		return false, false
+	}
+	if baseAuthored {
+		return false, true
+	}
+	return topSet, false
+}
+
 func mergeFields(base, top ModelInfo, baseIsBuiltin bool) ModelInfo {
 	out := base
-	// Name, Dimensions and ContextLen are MODEL FACTS. Over the builtin catalog
-	// a user row replaces them only when the user actually typed one, which
-	// `models add --name/--dimensions/--context-length` records as FactSourceUser.
-	// An unstamped copy is not authorship: every probe, promotion and benchmark
-	// save used to seed its row from this very merged view, so the copy came
-	// FROM the builtin and then outlived it. That is how a context_length of
-	// 2048 survived the builtin's correction to 8192, kept `models list`
-	// reporting the stale number, and (through inheritModelFacts) spread to
-	// every per-region row discovery had just found.
+	// Name, Dimensions and ContextLen are MODEL FACTS, and each carries its own
+	// provenance, because the three are independent: a single row-level stamp
+	// let `models add --context-length` claim a name the user never typed, and
+	// let a row that typed only a context length overwrite a name with nothing.
 	//
-	// The stamp travels with the facts, never on its own, for the same reason
-	// ThresholdSource does: it names who authored THESE values.
-	if !baseIsBuiltin || top.FactSource == FactSourceUser {
-		wrote := false
-		if top.Name != "" {
-			out.Name = top.Name
-			wrote = true
+	// out starts as a copy of base, so AuthoredFacts is rebuilt rather than
+	// appended to: the two rows share the backing array otherwise.
+	var authored []string
+	takeFact := func(fact string, topSet bool) bool {
+		take, isAuthored := takeTopFact(topSet, HasAuthoredFact(base, fact), HasAuthoredFact(top, fact), baseIsBuiltin)
+		if isAuthored {
+			authored = append(authored, fact)
 		}
-		if top.Dimensions != 0 {
-			out.Dimensions = top.Dimensions
-			wrote = true
-		}
-		if top.ContextLen != 0 {
-			out.ContextLen = top.ContextLen
-			wrote = true
-		}
-		if wrote {
-			out.FactSource = top.FactSource
-		}
+		return take
 	}
+	if takeFact(FactName, top.Name != "") {
+		out.Name = top.Name
+	}
+	if takeFact(FactDimensions, top.Dimensions != 0) {
+		out.Dimensions = top.Dimensions
+	}
+	if takeFact(FactContextLen, top.ContextLen != 0) {
+		out.ContextLen = top.ContextLen
+	}
+	out.AuthoredFacts = WithAuthoredFacts(nil, authored...)
 	// SupportedDimensions and Modalities stay builtin-only: no user-catalog
 	// writer sets them, so there has never been anything to overlay.
 	//

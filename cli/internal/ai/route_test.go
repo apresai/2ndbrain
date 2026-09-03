@@ -322,9 +322,9 @@ func TestInheritModelFacts_UnstampedRowCannotDonateFacts(t *testing.T) {
 		t.Errorf("non-fact fields stopped inheriting: notes = %q", rows[0].Notes)
 	}
 
-	// A row the user stamped IS allowed to donate: they typed the number.
+	// A row that LISTS the fact is allowed to donate it: they typed the number.
 	stamped := stale
-	stamped.FactSource = FactSourceUser
+	stamped.AuthoredFacts = []string{FactContextLen, FactDimensions, FactName}
 	rows2 := []ModelInfo{{Provider: "bedrock", ID: nova, Type: "embedding", Plane: PlaneClassic, Region: "us-west-2"}}
 	inheritModelFacts(rows2, []ModelInfo{stamped, builtinRow})
 	if rows2[0].ContextLen != 2048 {
@@ -339,5 +339,86 @@ func TestInheritModelFactsNeverOverwrites(t *testing.T) {
 	inheritModelFacts(rows, []ModelInfo{{Provider: "bedrock", ID: "m", Name: "Discovered", PriceIn: 1}})
 	if rows[0].Name != "Authored" || rows[0].PriceIn != 9 {
 		t.Errorf("inheritance overwrote authored facts: %+v", rows[0])
+	}
+}
+
+// The donor is chosen PER FACT. A row that authored only its context length
+// used to replace the builtin donor outright, so a freshly discovered sibling
+// route inherited that row's empty name and dimensions rather than the
+// builtin's declarations.
+func TestInheritModelFacts_DonorIsPerFact(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	var builtin ModelInfo
+	for _, m := range BuiltinCatalog() {
+		if m.Provider == "bedrock" && m.ID == nova {
+			builtin = m
+		}
+	}
+	if builtin.Name == "" || builtin.Dimensions == 0 {
+		t.Fatalf("the builtin %s row no longer carries the facts this test watches", nova)
+	}
+
+	// The user typed a context length and nothing else, so the row carries no
+	// name and no dimensions at all.
+	typed := ModelInfo{
+		Provider: "bedrock", ID: nova, Type: "embedding",
+		Plane: PlaneClassic, Region: "us-east-1",
+		ContextLen: 4096, AuthoredFacts: []string{FactContextLen},
+	}
+	rows := []ModelInfo{{Provider: "bedrock", ID: nova, Type: "embedding", Plane: PlaneClassic, Region: "us-west-2"}}
+	inheritModelFacts(rows, []ModelInfo{typed, builtin})
+
+	if rows[0].ContextLen != 4096 {
+		t.Errorf("the authored context length was not donated: got %d, want 4096", rows[0].ContextLen)
+	}
+	if rows[0].Name != builtin.Name {
+		t.Errorf("the discovered route inherited an empty name from a row that authored only a context length: got %q, want %q", rows[0].Name, builtin.Name)
+	}
+	if rows[0].Dimensions != builtin.Dimensions {
+		t.Errorf("dimensions came from the wrong donor: got %d, want %d", rows[0].Dimensions, builtin.Dimensions)
+	}
+}
+
+// Several ROUTES of one model can each author the same fact, so the donor has
+// to be chosen deterministically or the merged view changes run to run on
+// nothing but map order. Richest row first, then the lowest route key.
+func TestInheritModelFacts_DonorTieBreakIsDeterministic(t *testing.T) {
+	const id = "made.up.model"
+	lean := ModelInfo{
+		Provider: "bedrock", ID: id, Type: "generation",
+		Plane: PlaneClassic, Region: "us-west-2",
+		ContextLen: 1111, AuthoredFacts: []string{FactContextLen},
+	}
+	// Richer: carries a name and a price as well, so it outranks on score.
+	rich := ModelInfo{
+		Provider: "bedrock", ID: id, Type: "generation",
+		Plane: PlaneClassic, Region: "us-east-1",
+		Name: "Rich", PriceIn: 1, ContextLen: 2222, AuthoredFacts: []string{FactContextLen},
+	}
+	for _, order := range [][]ModelInfo{{lean, rich}, {rich, lean}} {
+		rows := []ModelInfo{{Provider: "bedrock", ID: id, Type: "generation", Plane: PlaneClassic, Region: "eu-central-1"}}
+		inheritModelFacts(rows, order)
+		if rows[0].ContextLen != 2222 {
+			t.Errorf("donor depends on input order: got %d, want the richest row's 2222", rows[0].ContextLen)
+		}
+	}
+
+	// Equal score: the lower route key wins, both ways round.
+	a := ModelInfo{
+		Provider: "bedrock", ID: id, Type: "generation",
+		Plane: PlaneClassic, Region: "us-east-1",
+		ContextLen: 10, AuthoredFacts: []string{FactContextLen},
+	}
+	b := ModelInfo{
+		Provider: "bedrock", ID: id, Type: "generation",
+		Plane: PlaneClassic, Region: "us-west-2",
+		ContextLen: 20, AuthoredFacts: []string{FactContextLen},
+	}
+	for _, order := range [][]ModelInfo{{a, b}, {b, a}} {
+		rows := []ModelInfo{{Provider: "bedrock", ID: id, Type: "generation", Plane: PlaneClassic, Region: "eu-central-1"}}
+		inheritModelFacts(rows, order)
+		if rows[0].ContextLen != 10 {
+			t.Errorf("tie break depends on input order: got %d, want the lowest route key's 10", rows[0].ContextLen)
+		}
 	}
 }

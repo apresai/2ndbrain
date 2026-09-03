@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -737,14 +738,11 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		// would then read back as the builtin's own recommendation.
 		entry.ThresholdSource = ai.ThresholdSourceUser
 	}
-	if factsTyped(cmd) {
-		// Same rule for the model facts: the flags are the only way a user can
-		// author a name, dimension or context length, so they are the only
-		// thing that stamps one. Without the stamp the value is
-		// indistinguishable from a copy some probe save took off the builtin,
-		// and the merge deliberately ignores those.
-		entry.FactSource = ai.FactSourceUser
-	}
+	// The flags are the only way a user can author a name, a dimension count or
+	// a context length, so exactly the flags PASSED HERE are recorded, one
+	// entry each. An unlisted value is indistinguishable from a copy some probe
+	// save took off the builtin, and the merge deliberately ignores those.
+	entry.AuthoredFacts = ai.WithAuthoredFacts(nil, typedFacts(cmd)...)
 	if existing, ok := findCurrentCatalogEntry(vaultRoot, addProvider, modelID); ok {
 		entry = mergeAddCatalogEntry(cmd, existing, entry, priceOverride)
 	} else if entry.Name == "" && findBuiltinModel(addProvider, modelID) == nil {
@@ -765,14 +763,25 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// factsTyped reports whether this `models add` invocation authored a model
-// FACT. Only these three flags can, so only they stamp ai.FactSourceUser; an
-// add that touches none of them leaves whatever stamp the stored row carried,
-// because mergeAddCatalogEntry starts from that row.
-func factsTyped(cmd *cobra.Command) bool {
-	return cmd.Flags().Changed("name") ||
-		cmd.Flags().Changed("dimensions") ||
-		cmd.Flags().Changed("context-length")
+// typedFacts names the model FACTS this `models add` invocation authored, one
+// per flag actually passed. Only these three flags can author a fact.
+//
+// Per flag rather than "did any fact flag appear", because the old row-level
+// answer let `models add --context-length` claim authorship of a name and a
+// dimension count the user never typed, freezing whatever an earlier probe save
+// had copied off the builtin into a value that could then never self-heal.
+func typedFacts(cmd *cobra.Command) []string {
+	var out []string
+	for flag, fact := range map[string]string{
+		"name":           ai.FactName,
+		"dimensions":     ai.FactDimensions,
+		"context-length": ai.FactContextLen,
+	} {
+		if cmd.Flags().Changed(flag) {
+			out = append(out, fact)
+		}
+	}
+	return out
 }
 
 func warnSuspiciousPerMillionPrice(cmd *cobra.Command, flagName string, value float64) {
@@ -834,9 +843,29 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 		// user row, so an earlier stamp survives untouched.
 		out.ThresholdSource = ai.ThresholdSourceUser
 	}
-	if factsTyped(cmd) {
-		out.FactSource = ai.FactSourceUser
+	// Record exactly the facts typed in THIS invocation, and, on a builtin
+	// model, clear any of the three that is neither typed now nor already
+	// listed: `out` starts from the raw stored row, so such a value can only be
+	// a mirror an older save copied off the builtin, and leaving it would let
+	// this add freeze it. A model no builtin declares keeps all three, because
+	// the stored row is their only copy.
+	typed := typedFacts(cmd)
+	if findBuiltinModel(patch.Provider, patch.ID) != nil {
+		for _, fact := range ai.AuthoredFactNames() {
+			if slices.Contains(typed, fact) || ai.HasAuthoredFact(out, fact) {
+				continue
+			}
+			switch fact {
+			case ai.FactName:
+				out.Name = ""
+			case ai.FactDimensions:
+				out.Dimensions = 0
+			case ai.FactContextLen:
+				out.ContextLen = 0
+			}
+		}
 	}
+	out.AuthoredFacts = ai.WithAuthoredFacts(out.AuthoredFacts, typed...)
 	if out.Tier == "" {
 		out.Tier = ai.TierUserVerified
 	}
@@ -1188,9 +1217,9 @@ func preserveUserThreshold(scope ai.UserCatalogScope, vaultRoot string, entry *a
 
 // preserveUserFacts carries, from the RAW stored user row for this route, the
 // things a probe save must not invent and cannot rebuild: the model facts the
-// user typed (stamped ai.FactSourceUser by `models add --name/--dimensions/
-// --context-length`), their price override, their notes, and the benchmark
-// summary already recorded against the route.
+// user typed (each listed in ai.AuthoredFacts by `models add
+// --name/--dimensions/--context-length`), their price override, their notes,
+// and the benchmark summary already recorded against the route.
 //
 // It is the fact-side twin of preserveUserThreshold, and exists for the same
 // reason: SaveUserCatalogEntry replaces WHOLESALE, so a field the probe row
@@ -1201,36 +1230,45 @@ func preserveUserThreshold(scope ai.UserCatalogScope, vaultRoot string, entry *a
 // sibling region is carried forward when the stored row is UNIQUE, and is never
 // grafted from one endpoint onto another when it is not.
 //
-// An UNSTAMPED stored fact is carried only for a model the builtin catalog has
-// never declared. For a BUILTIN model it is a copy an older save took off the
-// merged view, so letting it survive would re-freeze the very snapshot this
-// exists to clear: dropping it is the write-side half of the self-heal, and the
-// builtin supplies the value again on read. For a model no builtin declares
-// there is nothing to fall back to, so the stored row is the only copy and
-// dropping it would destroy a value the user cannot get back.
+// A fact is carried when the stored row LISTS it as authored, and, for a model
+// the builtin catalog has never declared, whether or not it is listed. On a
+// BUILTIN model an unlisted fact is a copy an older save took off the merged
+// view, so letting it survive would re-freeze the very snapshot this exists to
+// clear: dropping it is the write-side half of the self-heal, and the builtin
+// supplies the value again on read. For a model no builtin declares there is
+// nothing to fall back to, so the stored row is the only copy and dropping it
+// would destroy a value the user cannot get back.
+//
+// Per fact, because the three are independent: a row that authored only its
+// context length must not drag an unlisted stale name along with it.
 func preserveUserFacts(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
 	existing, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, entry.Route())
 	if !ok {
 		return
 	}
 	var carried []string
-	stamped := existing.FactSource == ai.FactSourceUser
-	if stamped || findBuiltinModel(entry.Provider, entry.ID) == nil {
-		if existing.Name != "" {
-			entry.Name = existing.Name
-			carried = append(carried, "name")
+	nonBuiltin := findBuiltinModel(entry.Provider, entry.ID) == nil
+	carryFact := func(fact string, set bool) bool {
+		if !set {
+			return false
 		}
-		if existing.Dimensions != 0 {
-			entry.Dimensions = existing.Dimensions
-			carried = append(carried, "dimensions")
+		if !nonBuiltin && !ai.HasAuthoredFact(existing, fact) {
+			return false
 		}
-		if existing.ContextLen != 0 {
-			entry.ContextLen = existing.ContextLen
-			carried = append(carried, "context_len")
+		carried = append(carried, fact)
+		if ai.HasAuthoredFact(existing, fact) {
+			entry.AuthoredFacts = ai.WithAuthoredFacts(entry.AuthoredFacts, fact)
 		}
-		if stamped && len(carried) > 0 {
-			entry.FactSource = ai.FactSourceUser
-		}
+		return true
+	}
+	if carryFact(ai.FactName, existing.Name != "") {
+		entry.Name = existing.Name
+	}
+	if carryFact(ai.FactDimensions, existing.Dimensions != 0) {
+		entry.Dimensions = existing.Dimensions
+	}
+	if carryFact(ai.FactContextLen, existing.ContextLen != 0) {
+		entry.ContextLen = existing.ContextLen
 	}
 	// Prices only when the user OVERRODE them. A vendor or builtin price is
 	// re-derived on read, and carrying it forward is the same mirroring.
