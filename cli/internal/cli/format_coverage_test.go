@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -686,5 +687,58 @@ func TestContract_SkillsDoctorTextNamesItsFields(t *testing.T) {
 	}
 	if !strings.Contains(text, "slug: ") {
 		t.Errorf("skills doctor --format text lost its promoted fields:\n%s", text)
+	}
+}
+
+// `--copy` on a machine format: the rendered output goes to stdout AND to the
+// clipboard, which is the combination `export-context --copy --json` needs (the
+// bundle is what a user wants to paste into an agent). Nothing covered it.
+//
+// Real clipboard, no stub: the test probes for pbcopy/pbpaste and skips when
+// the platform has no clipboard integration (CI runs on Linux, where --copy is
+// refused by name). It saves the current clipboard and puts it back, so running
+// the suite does not eat what you had copied.
+func TestContract_ExportContextCopiesItsRenderedJSON(t *testing.T) {
+	if err := clipboardSupported(runtime.GOOS); err != nil {
+		t.Skipf("no clipboard integration here: %v", err)
+	}
+	for _, bin := range []string{"pbcopy", "pbpaste"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not on PATH: %v", bin, err)
+		}
+	}
+	saved, perr := exec.Command("pbpaste").Output()
+	if perr != nil {
+		t.Skipf("cannot read the clipboard to restore it afterwards: %v", perr)
+	}
+	t.Cleanup(func() {
+		restore := exec.Command("pbcopy")
+		restore.Stdin = bytes.NewReader(saved)
+		_ = restore.Run()
+	})
+
+	root, _ := newFormatCoverageVault(t)
+	out, err := runCLIArgs(t, root, "export-context", "--copy", "--json")
+	if err != nil {
+		t.Fatalf("export-context --copy --json: %v\n%s", err, out)
+	}
+	stdout := jsonPortion(out)
+	var rec struct {
+		Bundle string `json:"bundle"`
+		Docs   int    `json:"docs"`
+	}
+	if err := json.Unmarshal(stdout, &rec); err != nil {
+		t.Fatalf("--copy must not disturb the JSON on stdout: %v\n%s", err, out)
+	}
+	if !strings.Contains(rec.Bundle, "# Knowledge Base Context") || rec.Docs != 1 {
+		t.Errorf("stdout record = %+v, want the bundle and one doc", rec)
+	}
+
+	pasted, err := exec.Command("pbpaste").Output()
+	if err != nil {
+		t.Fatalf("pbpaste: %v", err)
+	}
+	if strings.TrimSpace(string(pasted)) != strings.TrimSpace(string(stdout)) {
+		t.Errorf("the clipboard did not receive the rendered JSON:\n%s", pasted)
 	}
 }

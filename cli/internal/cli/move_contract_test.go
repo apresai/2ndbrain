@@ -766,3 +766,66 @@ func TestContract_Move_AmbiguousLinkReportedOncePerLink(t *testing.T) {
 	}
 	assertOne(t, "--force", res)
 }
+
+// ambiguityKey's contract, which nothing exercised: it is what lets the two
+// discovery passes recognize the same link spelled differently, so it must
+// normalize the FORM (a ".md" suffix, slashes) and must NOT fold case. Folding
+// case would merge [[dup]] and [[Dup]], which are two different links, and one
+// of them would silently lose its line in skipped_ambiguous.
+func TestAmbiguityKey_NormalizesFormNotCase(t *testing.T) {
+	same := [][2]string{
+		{"dup", "dup.md"},
+		{"dup", "/dup"},
+		{"one/dup", `one\dup`},
+		{"one/dup", "one/dup.md"},
+	}
+	for _, pair := range same {
+		if a, b := ambiguityKey("ref.md", pair[0]), ambiguityKey("ref.md", pair[1]); a != b {
+			t.Errorf("%q and %q are the same link spelled differently, got %q vs %q", pair[0], pair[1], a, b)
+		}
+	}
+
+	if ambiguityKey("ref.md", "dup") == ambiguityKey("ref.md", "Dup") {
+		t.Error("case must NOT be folded: [[dup]] and [[Dup]] are two links and both deserve a line")
+	}
+	if ambiguityKey("a.md", "dup") == ambiguityKey("b.md", "dup") {
+		t.Error("the same target in two notes must be two keys")
+	}
+}
+
+// rename delegates to the same moveImpl, so the resolver ambiguity guard
+// reaches it. Every other guard test goes through move; this is the one that
+// pins the wrapper, since `2nb rename` is the friendlier command and the one a
+// user is likelier to reach for.
+func TestContract_Rename_HonorsTheResolverAmbiguityGuard(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "one/dup.md", "Dup", "first dup")
+	writeNote(t, root, "two/dup.md", "Dup", "second dup")
+	writeNote(t, root, "ref.md", "Ref", "see [[Dup]] here.")
+	if out, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v\n%s", err, out)
+	}
+
+	out, err := runCLIArgs(t, root, "rename", "one/dup.md", "renamed", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("dry-run rename: %v (out=%s)", err, out)
+	}
+	var res moveResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode: %v (out=%s)", err, out)
+	}
+	if len(res.SkippedAmbiguous) != 1 || res.SkippedAmbiguous[0].Target != "Dup" {
+		t.Fatalf("rename --dry-run should report [[Dup]] once: %+v", res.SkippedAmbiguous)
+	}
+
+	out, err = runCLIArgs(t, root, "rename", "one/dup.md", "renamed")
+	if err == nil {
+		t.Fatalf("rename should be refused on ambiguity (out=%s)", out)
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("refusal should mention ambiguity: %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(root, "one", "dup.md")); serr != nil {
+		t.Errorf("a refused rename must leave the note where it was: %v", serr)
+	}
+}
