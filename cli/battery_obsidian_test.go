@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/store"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	_ "modernc.org/sqlite"
@@ -152,8 +154,9 @@ func dbMaxVersion(t *testing.T, path string) int {
 }
 
 // TestBattery_Migrate exercises `2nb migrate` end-to-end against a real legacy
-// v2 vault: the schema is upgraded to v3 and the source markdown is byte-for-byte
-// unchanged (the non-mutating guarantee).
+// v2 vault: the schema is upgraded to store.MaxSchemaVersion (v4 today, and the
+// assertion below tracks it) and the source markdown is byte-for-byte unchanged
+// (the non-mutating guarantee).
 func TestBattery_Migrate(t *testing.T) {
 	home := isolatedHome(t)
 	vaultDir := filepath.Join(home, "vault")
@@ -217,6 +220,76 @@ func TestBattery_MigrateDryRun(t *testing.T) {
 	}
 	if got := dbMaxVersion(t, idx); got != 2 {
 		t.Errorf("dry-run must not migrate; version = %d, want 2", got)
+	}
+}
+
+// A NATIVE vault has nothing to migrate. Every vault with an index.db used to be
+// announced as "Detected legacy database (schema vN)" plus "N files identified
+// for path-based mapping", and the real path printed "Upgrading database schema
+// vN to v3" while the current schema is v4. Nothing implements a path mapping:
+// the schema has been path-based since v1.
+func TestBattery_MigrateNativeVaultHasNothingToDo(t *testing.T) {
+	home := isolatedHome(t)
+	vaultDir := filepath.Join(home, "vault")
+	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
+		t.Fatalf("vault create: exit %d: %s", code, out)
+	}
+	idx := filepath.Join(vaultDir, ".2ndbrain", "index.db")
+	before := dbMaxVersion(t, idx)
+
+	for _, argv := range [][]string{
+		{"migrate", "--dry-run", "--vault", vaultDir},
+		{"migrate", "--vault", vaultDir},
+	} {
+		out, code := runWithHome(t, home, argv...)
+		if code != 0 {
+			t.Fatalf("%v: exit %d: %s", argv, code, out)
+		}
+		if !strings.Contains(out, "nothing to migrate") {
+			t.Errorf("%v on a native vault should say nothing to migrate, got: %s", argv, out)
+		}
+		if strings.Contains(out, "legacy") || strings.Contains(out, "Legacy") {
+			t.Errorf("%v called a native vault legacy: %s", argv, out)
+		}
+		if strings.Contains(out, "path-based mapping") {
+			t.Errorf("%v still claims a path-based mapping that nothing implements: %s", argv, out)
+		}
+	}
+
+	if got := dbMaxVersion(t, idx); got != before {
+		t.Errorf("migrate on a native vault changed the schema version: %d -> %d", before, got)
+	}
+}
+
+// The real path used to hardcode "Upgrading database schema v%d to v3" while
+// store.MaxSchemaVersion was already 4, so it named a target it did not produce.
+func TestBattery_MigrateNamesTheRealTargetVersion(t *testing.T) {
+	home := isolatedHome(t)
+	vaultDir := filepath.Join(home, "vault")
+	if out, code := runWithHome(t, home, "vault", "create", vaultDir); code != 0 {
+		t.Fatalf("vault create: exit %d: %s", code, out)
+	}
+	idx := filepath.Join(vaultDir, ".2ndbrain", "index.db")
+	os.Remove(idx + "-wal")
+	os.Remove(idx + "-shm")
+	if err := os.Remove(idx); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Index(t, idx)
+
+	want := fmt.Sprintf("v%d", store.MaxSchemaVersion)
+	out, code := runWithHome(t, home, "migrate", "--vault", vaultDir)
+	if code != 0 {
+		t.Fatalf("migrate: exit %d: %s", code, out)
+	}
+	if !strings.Contains(out, "v2") || !strings.Contains(out, want) {
+		t.Errorf("migrate should name v2 and the real target %s, got: %s", want, out)
+	}
+	if strings.Contains(out, "path-based mapping") {
+		t.Errorf("migrate still claims a path-based mapping that nothing implements: %s", out)
+	}
+	if got := dbMaxVersion(t, idx); got != store.MaxSchemaVersion {
+		t.Errorf("after migrate, schema version = %d, want %d", got, store.MaxSchemaVersion)
 	}
 }
 
