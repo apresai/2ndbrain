@@ -1,0 +1,187 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/apresai/2ndbrain/internal/vault"
+)
+
+// The unconfigured-write refusal exists to stop a mis-directed WRITE from
+// splitting a vault. It was firing on pure reads: `meta <p> --get title`, bare
+// `meta <p>`, and `daily read` on a note that already exists all opened through
+// openVaultAndSetActive. The app, the plugin, and the MCP server pin --vault on
+// every call, so users hit this constantly.
+//
+// 2NB_TEST must be EMPTY in these tests, or openWriteTarget's honor branch
+// short-circuits and the refusal can never fire.
+
+// newStrayVaultWithNote builds a vault Obsidian does not know (no .obsidian),
+// registers a DIFFERENT vault as the configured one, and writes one note.
+func newStrayVaultWithNote(t *testing.T, relPath, body string) string {
+	t.Helper()
+	clearWriteEnv(t, "")
+	t.Chdir(t.TempDir()) // the cwd is never the target
+
+	writeObsidianRegistryForTest(t, newResolveTestVault(t)) // a configured vault exists elsewhere
+	stray := newStrayVault(t)
+
+	abs := filepath.Join(stray, relPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	return stray
+}
+
+func mtimeOf(t *testing.T, path string) time.Time {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return fi.ModTime()
+}
+
+const readGateNote = "---\ntitle: Stray Note\ntype: note\nstatus: draft\n---\n\nBody text.\n"
+
+func TestReadGate_MetaViewsNeedNoUnconfigured(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote)
+	notePath := filepath.Join(stray, "n.md")
+	before := mtimeOf(t, notePath)
+
+	for _, argv := range [][]string{
+		{"meta", "n.md", "--get", "title"},
+		{"meta", "n.md"},
+	} {
+		out, err := runCLIArgs(t, stray, argv...)
+		if err != nil {
+			t.Fatalf("%v was refused on a vault Obsidian does not know: %v\n%s", argv, err, out)
+		}
+		if !strings.Contains(string(out), "Stray Note") {
+			t.Errorf("%v printed no frontmatter:\n%s", argv, out)
+		}
+	}
+
+	if after := mtimeOf(t, notePath); !after.Equal(before) {
+		t.Errorf("a meta read changed the note's mtime: %v -> %v", before, after)
+	}
+}
+
+func TestWriteGate_MetaSetAndRemoveStillRefused(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote)
+
+	for _, argv := range [][]string{
+		{"meta", "n.md", "--set", "status=active"},
+		{"meta", "n.md", "--remove", "status"},
+	} {
+		out, err := runCLIArgs(t, stray, argv...)
+		if err == nil {
+			t.Fatalf("%v was allowed on a vault Obsidian does not know:\n%s", argv, out)
+		}
+		if !strings.Contains(err.Error(), "unconfigured") {
+			t.Errorf("%v refusal should name the unconfigured vault, got: %v", argv, err)
+		}
+	}
+}
+
+// A flag combination that cannot run must be refused before the vault is opened,
+// so the error a user sees names the flags, not the vault.
+func TestReadGate_MetaFlagConflictIsRefusedBeforeTheOpen(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote)
+
+	_, err := runCLIArgs(t, stray, "meta", "n.md", "--get", "title", "--set", "status=active")
+	if err == nil {
+		t.Fatal("--get with --set was accepted")
+	}
+	if !strings.Contains(err.Error(), "--get cannot be combined") {
+		t.Errorf("refusal should name the flag conflict, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "unconfigured") {
+		t.Errorf("the flag conflict must be reported before the vault open, got: %v", err)
+	}
+}
+
+func TestReadGate_DailyOnAnExistingNoteNeedsNoUnconfigured(t *testing.T) {
+	stem := time.Now().Format("2006-01-02")
+	stray := newStrayVaultWithNote(t, stem+".md",
+		"---\ntitle: "+stem+"\ntype: note\nstatus: draft\n---\n\nToday's entry.\n")
+	notePath := filepath.Join(stray, stem+".md")
+	before := mtimeOf(t, notePath)
+
+	for _, argv := range [][]string{
+		{"daily"},
+		{"daily", "path"},
+		{"daily", "read"},
+	} {
+		out, err := runCLIArgs(t, stray, argv...)
+		if err != nil {
+			t.Fatalf("%v was refused on an existing daily note: %v\n%s", argv, err, out)
+		}
+	}
+
+	if after := mtimeOf(t, notePath); !after.Equal(before) {
+		t.Errorf("a daily read changed the note's mtime: %v -> %v", before, after)
+	}
+}
+
+// Creating today's note IS a write, so the guard still applies to it, and to
+// every daily body write.
+func TestWriteGate_DailyCreateAndAppendStillRefused(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote) // no daily note today
+	stem := time.Now().Format("2006-01-02")
+
+	for _, argv := range [][]string{
+		{"daily"},
+		{"daily", "read"},
+		{"daily", "append", "--text", "hello"},
+		{"daily", "prepend", "--text", "hello"},
+	} {
+		out, err := runCLIArgs(t, stray, argv...)
+		if err == nil {
+			t.Fatalf("%v created or wrote a daily note in a vault Obsidian does not know:\n%s", argv, out)
+		}
+		if !strings.Contains(err.Error(), "unconfigured") {
+			t.Errorf("%v refusal should name the unconfigured vault, got: %v", argv, err)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(stray, stem+".md")); !os.IsNotExist(err) {
+		t.Errorf("a refused daily invocation still created %s.md", stem)
+	}
+}
+
+// resolveDailyNote is the read half of the daily opener: it must resolve and
+// report existence without creating anything.
+func TestResolveDailyNoteCreatesNothing(t *testing.T) {
+	root := newResolveTestVault(t)
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer v.Close()
+
+	now := time.Now()
+	relPath, absPath, exists, err := resolveDailyNote(v, now)
+	if err != nil {
+		t.Fatalf("resolveDailyNote: %v", err)
+	}
+	if exists {
+		t.Fatalf("a fresh vault reported today's note as existing at %q", relPath)
+	}
+	if _, statErr := os.Stat(absPath); !os.IsNotExist(statErr) {
+		t.Errorf("resolveDailyNote created %s", absPath)
+	}
+
+	if err := os.WriteFile(absPath, []byte("# today\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, exists, err = resolveDailyNote(v, now); err != nil || !exists {
+		t.Errorf("resolveDailyNote missed an existing note: exists=%v err=%v", exists, err)
+	}
+}
