@@ -203,9 +203,13 @@ func delimitedCell(field reflect.Value) string {
 	}
 	switch v.Kind() {
 	case reflect.Map, reflect.Slice, reflect.Array, reflect.Struct:
-		// []byte is a byte string, not a composite; JSON would base64 it.
+		// A byte string is TEXT, not a composite, so it renders as its text.
+		// It is carved out of the JSON branch because the encoder would base64
+		// it; falling through to %v instead was no better, since that prints
+		// Go's byte-number syntax ([112 108 97 …]), the very rendering the
+		// composite change removed everywhere else.
 		if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
-			break
+			return string(v.Bytes())
 		}
 		b, err := json.Marshal(field.Interface())
 		if err != nil {

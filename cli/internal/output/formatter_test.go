@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -393,15 +392,18 @@ func TestWriteDelimited_TextMarshalerCellsAreUnquotedText(t *testing.T) {
 		if strings.Contains(cell["date"], `"`) {
 			t.Errorf("%s date cell still carries quote characters: %q", tc.format, cell["date"])
 		}
-		// The []byte carve-out (G7), pinned as it behaves: it keeps the JSON
-		// encoder from base64-ing the value, and the fallback is %v. No shipped
-		// struct rendered through csv/tsv has a []byte field, so this pins the
-		// carve-out rather than a user-visible rendering.
-		if cell["raw"] != fmt.Sprintf("%v", []byte("plain bytes")) {
-			t.Errorf("%s []byte cell = %q, want the unchanged %%v rendering", tc.format, cell["raw"])
+		// The []byte carve-out: a byte string is text and renders as its text.
+		// It is carved out of the JSON branch because the encoder would base64
+		// it, and it must not fall through to %v either, which prints Go's
+		// byte-number syntax.
+		if cell["raw"] != "plain bytes" {
+			t.Errorf("%s []byte cell = %q, want the bytes as text", tc.format, cell["raw"])
 		}
 		if strings.Contains(cell["raw"], "cGxhaW4") {
 			t.Errorf("%s base64-ed the []byte cell: %q", tc.format, cell["raw"])
+		}
+		if strings.HasPrefix(cell["raw"], "[") {
+			t.Errorf("%s rendered the []byte cell as Go slice syntax: %q", tc.format, cell["raw"])
 		}
 		// A map is still compact JSON with sorted keys.
 		if cell["meta"] != `{"a":1,"b":2}` {
