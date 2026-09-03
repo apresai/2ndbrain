@@ -19,6 +19,30 @@ func IsSensitiveKey(key string) bool {
 	return sensitiveKeys[strings.ToLower(key)]
 }
 
+// emptyFrontmatterBlock reports whether the region after the opening delimiter
+// begins with the CLOSING delimiter, i.e. the note opens with an empty
+// frontmatter block ("---\n---\n"), and returns the body that follows it.
+//
+// Obsidian writes that shape when every property is removed from a note, and
+// SerializeFrontmatter writes it for an empty map, so 2nb produces it itself.
+// Without this check the closing-delimiter search below runs straight past the
+// empty block and matches the next "---" in the BODY (a horizontal rule),
+// handing real prose to the YAML parser. The note then fails to parse on every
+// index, and one such note was enough to fail a whole force-reembed and roll
+// 313 good embeddings back.
+func emptyFrontmatterBlock(rest string) (body string, ok bool) {
+	switch {
+	case strings.HasPrefix(rest, "---\r\n"):
+		return rest[len("---\r\n"):], true
+	case strings.HasPrefix(rest, "---\n"):
+		return rest[len("---\n"):], true
+	case rest == "---":
+		// Closing delimiter at end of file, no trailing newline.
+		return "", true
+	}
+	return "", false
+}
+
 func ParseFrontmatter(content []byte) (meta map[string]any, body string, err error) {
 	s := string(content)
 
@@ -37,6 +61,9 @@ func ParseFrontmatter(content []byte) (meta map[string]any, body string, err err
 	}
 
 	rest := s[openLen:]
+	if body, ok := emptyFrontmatterBlock(rest); ok {
+		return map[string]any{}, body, nil
+	}
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
 		// Try CRLF with trailing newline
@@ -138,6 +165,12 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 	}
 
 	rest := s[openLen:]
+	// An empty frontmatter block carries no YAML to preserve surgically, and
+	// the closing-delimiter search below would otherwise match a "---" in the
+	// body and treat body prose as the region to edit.
+	if _, ok := emptyFrontmatterBlock(rest); ok {
+		return SerializeDocument(updatedMeta, body)
+	}
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
 		idx = strings.Index(rest, "\r\n---\r\n")
