@@ -210,7 +210,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 | `2nb orphans` | List documents nothing links to (no resolved inbound link) — candidates to wire into the graph |
 | `2nb deadends` | List documents that link to nothing real in the vault (no resolved outbound link; a note with only broken links still counts) |
 | `2nb unresolved` | List every broken wikilink across the whole vault (source doc + the raw `[[target]]` that resolves to no note). Vault-wide complement to the per-file view in `2nb links` |
-| `2nb graph` | Output the full link graph as JSON adjacency list |
+| `2nb graph <path>` | Output the link graph for ONE document as a JSON adjacency list, walked from that note outward (takes a path, like `related`/`backlinks`/`links`; there is no whole-vault form) |
 | `2nb suggest-links <path>` | Rank semantically related documents that would make good wikilink targets (excludes docs already linked) |
 | `2nb stale --since 7` | Docs not modified within N days (`--since` is an integer day count) |
 | `2nb outline <path>` | Heading tree of a document (heading path, level, line span). Same chunking as `read`; shared with the MCP `kb_structure` tool |
