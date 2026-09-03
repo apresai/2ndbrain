@@ -165,6 +165,121 @@ func TestResolveSimilarityThresholdFull_UserCatalogOverride(t *testing.T) {
 	}
 }
 
+// writeVaultCatalogYAML drops a literal models.yaml into a vault's sidecar.
+// The rows are written as TEXT on purpose: provenance is decided from what is
+// stored on disk, and a row written before ThresholdSource existed simply has
+// no threshold_source key, which no ModelInfo literal can express.
+func writeVaultCatalogYAML(t *testing.T, vaultRoot, body string) {
+	t.Helper()
+	dir := filepath.Join(vaultRoot, dotDirName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "models.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A user-catalog threshold is a CALIBRATION only when the user authored it.
+// Eight save paths seeded their row from the builtin-merged catalog, so the
+// builtin's own 0.25 got written into the user file and every vault on the
+// machine then reported "user calibration" for a number nobody measured.
+func TestResolveSimilarityThresholdFull_MirroredBuiltinIsNotACalibration(t *testing.T) {
+	setupHome(t)
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	cfg := AIConfig{Provider: "bedrock", EmbeddingModel: nova}
+
+	cases := []struct {
+		name       string
+		row        string
+		want       float64
+		wantSource ResolvedThresholdSource
+	}{
+		{
+			// The contaminated shape: unstamped, and exactly the builtin value.
+			name:       "unstamped mirror of the builtin reads as the model recommendation",
+			row:        "    recommended_similarity_threshold: 0.25\n",
+			want:       0.25,
+			wantSource: ThresholdSourceModel,
+		},
+		{
+			// Written before the stamp existed, but a real measurement: the
+			// value is not the builtin's, so it survives.
+			name:       "unstamped value that differs from the builtin is kept",
+			row:        "    recommended_similarity_threshold: 0.4\n",
+			want:       0.4,
+			wantSource: ThresholdSourceUserCalibration,
+		},
+		{
+			// `models calibrate --save` may legitimately land on the builtin
+			// number; the stamp is what keeps it a calibration.
+			name:       "stamped value equal to the builtin is still a calibration",
+			row:        "    recommended_similarity_threshold: 0.25\n    threshold_source: user\n",
+			want:       0.25,
+			wantSource: ThresholdSourceUserCalibration,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vaultRoot := t.TempDir()
+			writeVaultCatalogYAML(t, vaultRoot, "version: 1\nmodels:\n"+
+				"  - id: "+nova+"\n"+
+				"    provider: bedrock\n"+
+				"    type: embedding\n"+
+				tc.row)
+
+			got, source := cfg.ResolveSimilarityThresholdFull(vaultRoot)
+			if got != tc.want || source != tc.wantSource {
+				t.Errorf("ResolveSimilarityThresholdFull = (%v, %q), want (%v, %q)",
+					got, source, tc.want, tc.wantSource)
+			}
+		})
+	}
+}
+
+// IsUserThreshold is the single predicate both the resolver and the save paths
+// consult, so pin its edges directly.
+func TestIsUserThreshold(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	cases := []struct {
+		name string
+		m    ModelInfo
+		want bool
+	}{
+		{"zero threshold is never the user's", ModelInfo{Provider: "bedrock", ID: nova}, false},
+		{"stamped is the user's", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25, ThresholdSource: ThresholdSourceUser}, true},
+		{"unstamped mirror is not", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25}, false},
+		{"unstamped different value is", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.4}, true},
+		{"model with no builtin recommendation has nothing to mirror", ModelInfo{Provider: "bedrock", ID: "not-in-any-catalog", RecommendedSimilarityThreshold: 0.25}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsUserThreshold(tc.m); got != tc.want {
+				t.Errorf("IsUserThreshold = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The stamp names who authored ONE number, so it must move with that number
+// and never outlive it.
+func TestMergeFields_ThresholdSourceMovesWithTheValue(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	base := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25}
+	top := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.4, ThresholdSource: ThresholdSourceUser}
+	if out := mergeFields(base, top); out.ThresholdSource != ThresholdSourceUser {
+		t.Errorf("overlay stamp lost: ThresholdSource = %q, want %q", out.ThresholdSource, ThresholdSourceUser)
+	}
+
+	stamped := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.4, ThresholdSource: ThresholdSourceUser}
+	plain := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25}
+	out := mergeFields(stamped, plain)
+	if out.RecommendedSimilarityThreshold != 0.25 || out.ThresholdSource != "" {
+		t.Errorf("an unstamped overlay must replace both fields: got (%v, %q), want (0.25, \"\")",
+			out.RecommendedSimilarityThreshold, out.ThresholdSource)
+	}
+}
+
 func TestMergeFields_OverlaysThreshold(t *testing.T) {
 	base := ModelInfo{
 		Provider:                       "bedrock",

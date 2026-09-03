@@ -726,6 +726,13 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		warnSuspiciousPerMillionPrice(cmd, "price-in", addPriceIn)
 		warnSuspiciousPerMillionPrice(cmd, "price-out", addPriceOut)
 	}
+	if thresholdChanged {
+		// Stamp the provenance on the fresh-row path too. mergeAddCatalogEntry
+		// stamps the merge path, but a first `models add` for this model never
+		// reaches it, and an unstamped value that happened to equal the builtin
+		// would then read back as the builtin's own recommendation.
+		entry.ThresholdSource = ai.ThresholdSourceUser
+	}
 	if existing, ok := findCurrentCatalogEntry(vaultRoot, addProvider, modelID); ok {
 		entry = mergeAddCatalogEntry(cmd, existing, entry, priceOverride)
 	} else if entry.Name == "" {
@@ -796,6 +803,10 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 	}
 	if cmd.Flags().Changed("similarity-threshold") {
 		out.RecommendedSimilarityThreshold = patch.RecommendedSimilarityThreshold
+		// The user typed the number, so stamp it. A later `models add` without
+		// the flag leaves both fields alone: `out` starts from the raw stored
+		// user row, so an earlier stamp survives untouched.
+		out.ThresholdSource = ai.ThresholdSourceUser
 	}
 	if out.Tier == "" {
 		out.Tier = ai.TierUserVerified

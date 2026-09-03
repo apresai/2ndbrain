@@ -271,6 +271,15 @@ type ModelInfo struct {
 	// Absent legacy user-catalog entries with zero prices are treated as
 	// unpriced so live vendor pricing can recover automatically.
 	PriceOverride bool `json:"price_override,omitempty" yaml:"price_override,omitempty"`
+	// ThresholdSource records who authored RecommendedSimilarityThreshold on a
+	// user-catalog row. The only value ever written is ThresholdSourceUser, and
+	// only `models calibrate --save` and `models add --similarity-threshold`
+	// write it: every other save path seeds its row from the MERGED catalog, so
+	// without this stamp a copied builtin recommendation was indistinguishable
+	// from a measurement the user actually took. Empty on a builtin row, and on
+	// a user row written before the stamp existed (see IsUserThreshold, which
+	// tells those two apart by value).
+	ThresholdSource string `json:"threshold_source,omitempty" yaml:"threshold_source,omitempty"`
 	// TestedAt is an ISO-8601 timestamp recorded when the model last passed
 	// `2nb models test`. Present only on user-catalog entries.
 	TestedAt string `json:"tested_at,omitempty" yaml:"tested_at,omitempty"`
@@ -377,4 +386,41 @@ func DefaultGenOpts() GenOpts {
 		Temperature: Ptr(0.1),
 		MaxTokens:   1024,
 	}
+}
+
+// ThresholdSourceUser is the only value ever written to
+// ModelInfo.ThresholdSource. It marks a recommended_similarity_threshold the
+// user authored: `models calibrate --save` measured it, or `models add
+// --similarity-threshold` was told it. Distinct from ThresholdSourceUserCalibration,
+// which is the label ResolveSimilarityThresholdFull reports to a human.
+const ThresholdSourceUser = "user"
+
+// IsUserThreshold reports whether a RAW user-catalog row's
+// recommended_similarity_threshold is the user's own calibration rather than a
+// copy of the builtin recommendation.
+//
+// Provenance used to be decided by presence alone, and eight of the twelve
+// SaveUserCatalogEntry callers seed their row from the MERGED catalog (builtin
+// overlaid by the user file), so a single `models bench` run wrote the builtin's
+// own number into the user file and every vault on the machine then reported
+// its threshold as "user calibration". The frozen copy also shadowed any later
+// builtin change. Hence:
+//
+//   - stamped ThresholdSourceUser: the user authored it, always.
+//   - unstamped and EQUAL to the builtin recommendation: a mirror. Ignore it,
+//     so the resolver falls through to the builtin and self-heals every catalog
+//     already contaminated, with no migration.
+//   - unstamped and DIFFERENT from the builtin: a real calibration written
+//     before the stamp existed. Keep it.
+//
+// A model with no builtin recommendation has nothing to mirror, so any stored
+// value there is the user's.
+func IsUserThreshold(m ModelInfo) bool {
+	if m.RecommendedSimilarityThreshold <= 0 {
+		return false
+	}
+	if m.ThresholdSource == ThresholdSourceUser {
+		return true
+	}
+	return m.RecommendedSimilarityThreshold != RecommendedSimilarityThresholdFor(m.Provider, m.ID)
 }

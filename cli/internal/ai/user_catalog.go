@@ -459,8 +459,14 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 	// means "not set in the overlay" — preserve the builtin value. Users who
 	// want to reset to the global default can set ai.similarity_threshold on
 	// the vault config instead (explicit override beats catalog).
+	//
+	// ThresholdSource moves with the value, never on its own: it names who
+	// authored THIS number, so carrying a stamp onto a different threshold
+	// would credit the user with a value they never chose (and an unstamped
+	// overlay must be able to clear a stamp the base carried).
 	if top.RecommendedSimilarityThreshold > 0 {
 		out.RecommendedSimilarityThreshold = top.RecommendedSimilarityThreshold
+		out.ThresholdSource = top.ThresholdSource
 	}
 	if top.InvokeStrategy != "" {
 		out.InvokeStrategy = top.InvokeStrategy
