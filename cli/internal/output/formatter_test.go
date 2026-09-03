@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 type testItem struct {
@@ -344,5 +346,88 @@ func TestWriteDelimited_EmptyAndNilComposites(t *testing.T) {
 	}
 	if cell["ptr"] != "<nil>" {
 		t.Errorf("nil pointer cell = %q, want the unchanged %%v rendering <nil>", cell["ptr"])
+	}
+}
+
+// A time.Time is a struct, so it used to go through json.Marshal, which produces
+// a QUOTED string; the CSV writer then doubled those quotes and every date cell
+// came out as """2026-09-03T13:22:25Z""". Reproduced live on `2nb git activity
+// --format csv` and `2nb mcp status --format csv`. Anything implementing
+// encoding.TextMarshaler renders through MarshalText instead: one clean cell.
+func TestWriteDelimited_TextMarshalerCellsAreUnquotedText(t *testing.T) {
+	type row struct {
+		Hash string         `json:"hash"`
+		Date time.Time      `json:"date"`
+		Raw  []byte         `json:"raw"`
+		Meta map[string]any `json:"meta"`
+	}
+	when := time.Date(2026, 9, 3, 13, 22, 25, 0, time.UTC)
+	rows := []row{{Hash: "abc123", Date: when, Raw: []byte("plain bytes"), Meta: map[string]any{"b": 2, "a": 1}}}
+
+	for _, tc := range []struct {
+		format Format
+		comma  rune
+	}{{FormatCSV, ','}, {FormatTSV, '\t'}} {
+		var buf bytes.Buffer
+		if err := Write(&buf, tc.format, rows); err != nil {
+			t.Fatalf("%s: %v", tc.format, err)
+		}
+		raw := buf.String()
+		r := csv.NewReader(strings.NewReader(raw))
+		r.Comma = tc.comma
+		recs, err := r.ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("%s is not parseable (%v):\n%s", tc.format, err, raw)
+		}
+		cell := map[string]string{}
+		for i, h := range recs[0] {
+			cell[h] = recs[1][i]
+		}
+		// The decoded cell is the RFC3339 instant with no quote characters of its
+		// own. Before the fix it decoded to `"2026-09-03T13:22:25Z"`, quotes and
+		// all, because json.Marshal quoted it and the writer then escaped those
+		// quotes into the stream.
+		if cell["date"] != "2026-09-03T13:22:25Z" {
+			t.Errorf("%s date cell = %q, want unquoted RFC3339", tc.format, cell["date"])
+		}
+		if strings.Contains(cell["date"], `"`) {
+			t.Errorf("%s date cell still carries quote characters: %q", tc.format, cell["date"])
+		}
+		// The []byte carve-out (G7), pinned as it behaves: it keeps the JSON
+		// encoder from base64-ing the value, and the fallback is %v. No shipped
+		// struct rendered through csv/tsv has a []byte field, so this pins the
+		// carve-out rather than a user-visible rendering.
+		if cell["raw"] != fmt.Sprintf("%v", []byte("plain bytes")) {
+			t.Errorf("%s []byte cell = %q, want the unchanged %%v rendering", tc.format, cell["raw"])
+		}
+		if strings.Contains(cell["raw"], "cGxhaW4") {
+			t.Errorf("%s base64-ed the []byte cell: %q", tc.format, cell["raw"])
+		}
+		// A map is still compact JSON with sorted keys.
+		if cell["meta"] != `{"a":1,"b":2}` {
+			t.Errorf("%s map cell = %q, want sorted-key JSON", tc.format, cell["meta"])
+		}
+		if cell["hash"] != "abc123" {
+			t.Errorf("%s changed a scalar cell: %q", tc.format, cell["hash"])
+		}
+	}
+}
+
+// A nil pointer whose type implements TextMarshaler must not reach MarshalText
+// (that panics); it keeps the %v rendering every other nil cell has.
+func TestWriteDelimited_NilTextMarshalerPointer(t *testing.T) {
+	type row struct {
+		When *time.Time `json:"when"`
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatCSV, []row{{}}); err != nil {
+		t.Fatalf("csv: %v", err)
+	}
+	recs, err := csv.NewReader(strings.NewReader(buf.String())).ReadAll()
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("csv is not parseable (%v):\n%s", err, buf.String())
+	}
+	if recs[1][0] != "<nil>" {
+		t.Errorf("nil *time.Time cell = %q, want <nil>", recs[1][0])
 	}
 }

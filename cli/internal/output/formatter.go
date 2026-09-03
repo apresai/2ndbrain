@@ -1,6 +1,7 @@
 package output
 
 import (
+	"encoding"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -178,6 +179,21 @@ func writeDelimited(w io.Writer, data any, comma rune) error {
 // renders the same way every time. A value JSON cannot encode (a channel, a
 // func, a cyclic graph) falls back to %v rather than failing the whole render.
 func delimitedCell(field reflect.Value) string {
+	// A value that knows how to render itself as TEXT does so, before the
+	// composite branch can see it. time.Time is the case that bit: it is a
+	// struct, so it went through json.Marshal, which produces a QUOTED string,
+	// and the CSV writer then doubled those quotes, so `git activity --format
+	// csv` printed """2026-09-03T13:22:25+02:00""" for every date. MarshalText
+	// gives the same RFC3339 instant as plain text, which is one clean cell.
+	if tm, ok := field.Interface().(encoding.TextMarshaler); ok {
+		// A nil pointer implementing the interface would panic in MarshalText;
+		// %v renders it as <nil>, which is what every other nil cell does.
+		if field.Kind() != reflect.Ptr || !field.IsNil() {
+			if b, err := tm.MarshalText(); err == nil {
+				return string(b)
+			}
+		}
+	}
 	v := field
 	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
 		if v.IsNil() {
