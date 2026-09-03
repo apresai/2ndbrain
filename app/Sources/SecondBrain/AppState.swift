@@ -167,6 +167,13 @@ final class AppState {
     /// concurrent bench runs into the same bench.db.
     let benchRun = BenchRunModel()
     var indexError: String?
+    /// The most recent per-note reindex failure, from the watcher's
+    /// `index --doc`. Distinct from `indexError`, which belongs to a full index
+    /// run, so a broken note cannot erase the reason a whole rebuild failed (or
+    /// the other way round). Both call sites used to log.debug this and show
+    /// nothing, so a note whose frontmatter broke on save silently vanished from
+    /// search until the next full index reported it.
+    var lastIndexingProblem: IndexingProblem?
     var embeddingProgress: EmbeddingProgress?
     var indexProgress: IndexProgress?
     var showIndexProgress = false
@@ -1966,20 +1973,41 @@ final class AppState {
                 break
             }
 
-            do {
-                // Sequential: never two `index --doc` writing the DB at once.
-                for path in paths.sorted() {
-                    guard FileManager.default.fileExists(atPath: path) else { continue }
-                    let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+            // Sequential: never two `index --doc` writing the DB at once. The
+            // do/catch is PER PATH: one note that will not parse used to abort
+            // the rest of the batch, so a single broken file could leave a
+            // whole sync's worth of edits unindexed.
+            for path in paths.sorted() {
+                guard FileManager.default.fileExists(atPath: path) else { continue }
+                let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+                do {
                     _ = try await runCLI(["index", "--doc", rel, "--json", "--porcelain"], cwd: vault.rootURL)
+                    clearIndexingProblem(for: rel)
+                } catch {
+                    noteIndexingProblem(path: rel, message: error.localizedDescription)
                 }
-                // Reflect the new/updated embeddings in the Index card's count.
-                // Inside the loop so a path queued during this pass is still
-                // drained before we clear the in-flight flag.
-                await refreshAIStatus()
-            } catch {
-                log.debug("external reindex failed: \(error.localizedDescription)")
             }
+            // Reflect the new/updated embeddings in the Index card's count.
+            // Inside the loop so a path queued during this pass is still
+            // drained before we clear the in-flight flag.
+            await refreshAIStatus()
+        }
+    }
+
+    /// Records a per-note reindex failure. Logged at warning, not debug: a note
+    /// dropping out of the index is a user-visible outcome, and the previous
+    /// debug line meant nobody ever saw it.
+    func noteIndexingProblem(path: String, message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        log.warning("index --doc failed for \(path, privacy: .public): \(trimmed, privacy: .public)")
+        lastIndexingProblem = IndexingProblem(path: path, message: trimmed)
+    }
+
+    /// Clears the problem when THAT path indexes cleanly. Scoped to the path so
+    /// a different note succeeding cannot hide a failure the user has not fixed.
+    func clearIndexingProblem(for path: String) {
+        if lastIndexingProblem?.path == path {
+            lastIndexingProblem = nil
         }
     }
 
@@ -1999,8 +2027,9 @@ final class AppState {
                     ["index", "--doc", relPath, "--json", "--porcelain"],
                     cwd: vault.rootURL
                 )
+                self.clearIndexingProblem(for: relPath)
             } catch {
-                log.debug("incremental reindex failed for \(relPath): \(error.localizedDescription)")
+                self.noteIndexingProblem(path: relPath, message: error.localizedDescription)
             }
             self.reindexTasks.removeValue(forKey: relPath)
         }
@@ -4567,6 +4596,13 @@ struct OllamaReadiness: Codable {
 
 struct OllamaReport: Codable {
     let ollama: OllamaReadiness
+}
+
+/// One note the incremental reindex could not index, with the CLI's own reason.
+/// Equatable so a view can diff it and a test can compare it.
+struct IndexingProblem: Equatable {
+    let path: String
+    let message: String
 }
 
 enum CLIError: LocalizedError {
