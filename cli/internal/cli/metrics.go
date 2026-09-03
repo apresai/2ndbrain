@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -215,6 +216,11 @@ func printMetricsReport(r MetricsReport) {
 			}
 			fmt.Println()
 		}
+		if b.EmbedRetries > 0 {
+			// The number that separates "the model is slow" from "the account
+			// is throttled"; wall time alone cannot tell them apart.
+			fmt.Printf("  retries:     %d provider retries\n", b.EmbedRetries)
+		}
 		if !b.OK {
 			fmt.Printf("  status:      FAILED — %s\n", b.Error)
 		}
@@ -248,6 +254,9 @@ func printMetricsReport(r MetricsReport) {
 			}
 			if a.TokensIn > 0 || a.TokensOut > 0 {
 				line += fmt.Sprintf("  %d/%d tok", a.TokensIn, a.TokensOut)
+			}
+			if a.EmbedRetries > 0 {
+				line += fmt.Sprintf("  %d retries", a.EmbedRetries)
 			}
 			fmt.Println(line)
 		}
@@ -286,4 +295,34 @@ func metricsDurationF(ms float64) string {
 		s := (int(ms) % 60000) / 1000
 		return fmt.Sprintf("%dm%02ds", m, s)
 	}
+}
+
+// embedRetryAdvice returns the one-line concurrency advice, or "" when there is
+// nothing to say. It fires only when the LAST build actually rode out retries
+// AND the user has raised ai.embed_concurrency above the per-provider automatic
+// value: a throttled account at the automatic setting is the provider's quota,
+// not a setting the user chose, and telling them to lower a number they never
+// raised is noise.
+//
+// Best-effort throughout: the observatory is telemetry, and a missing or
+// unreadable metrics.db means no advice, never an error.
+func embedRetryAdvice(v *vault.Vault) string {
+	cfg := v.Config.AI
+	configured := cfg.EmbedConcurrency
+	automatic := ai.ProviderEmbedConcurrencyDefault(cfg.Provider)
+	if configured <= automatic {
+		return ""
+	}
+	mdb, err := openMetricsDB(v)
+	if err != nil {
+		return ""
+	}
+	defer mdb.Close()
+	last, err := mdb.LastByOp(metrics.OpIndex, metrics.OpReembed)
+	if err != nil || last == nil || last.EmbedRetries == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%d throttled retries in the last index (embed_concurrency is %d, automatic is %d); consider lowering ai.embed_concurrency",
+		last.EmbedRetries, configured, automatic)
 }

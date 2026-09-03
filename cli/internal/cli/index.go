@@ -54,6 +54,9 @@ type embeddingRunStats struct {
 	Failed int
 	// Unparseable names the notes the pass could not read.
 	Unparseable []vault.UnparseableDoc
+	// Retries is how many provider retries the pass rode out, read from the
+	// context's counter so every caller records it the same way.
+	Retries int
 	// Skipped counts documents with no embeddable text (empty or
 	// whitespace/comment-only bodies). These are not failures — there is
 	// simply nothing to embed — and embedding providers like Amazon Nova-2
@@ -83,6 +86,7 @@ func indexOperation(force bool, start time.Time, ix vault.IndexStats, es embeddi
 		Embedded:       es.Embedded,
 		EmbedSkipped:   es.Skipped,
 		EmbedFailed:    es.Failed,
+		EmbedRetries:   es.Retries,
 		EmbedMs:        es.DurationMs,
 		TotalChars:     es.TotalChars,
 		EmbeddingModel: es.Model,
@@ -139,7 +143,10 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	// Generate embeddings if a provider is available
 	initAIProviders(v)
-	ctx := context.Background()
+	// The bulk pass gets a counter but NO notice: its per-document progress
+	// printer already owns the terminal line, and the count is what the
+	// observatory needs.
+	ctx := ai.WithRetryCounter(context.Background(), &ai.RetryCounter{})
 	cfg := v.Config.AI
 
 	// Capture pre-embed state so the stamping below can tell whether the vault's
@@ -223,6 +230,7 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 			Embedded:       embedStats.Embedded,
 			EmbedSkipped:   embedStats.Skipped,
 			EmbedFailed:    embedStats.Failed,
+			EmbedRetries:   embedStats.Retries,
 			EmbedMs:        embedStats.DurationMs,
 			TotalChars:     embedStats.TotalChars,
 			EmbeddingModel: embedStats.Model,
@@ -392,7 +400,11 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 	}
 
 	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, vault.EmbedOpts{OnStart: onStart, OnEvent: onEvent})
+	// Read the counter AFTER the pass: every worker reports into the one the
+	// caller attached to ctx, so this is the whole pass's retry total.
+	retries := ai.RetriesFrom(ctx)
 	stats := embeddingRunStats{
+		Retries:     retries,
 		Attempted:   es.Attempted,
 		Embedded:    es.Embedded,
 		Failed:      es.Failed,

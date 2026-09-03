@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/retrieve"
@@ -138,6 +139,10 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 			ResultCount: len(results),
 			Mode:        string(mode),
 			InputTokens: inTok,
+			// ctx carries the counter slowCallNotice attached below; the
+			// closure reads the variable, so this is the query embedding's
+			// real retry count.
+			EmbedRetries: ai.RetriesFrom(ctx),
 		})
 	}()
 

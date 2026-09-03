@@ -206,6 +206,9 @@ type VaultStatus struct {
 	// index. Omitted entirely when there are none, so a typed consumer never
 	// has to decode a null.
 	ExcludedFolders []string `json:"excluded_folders,omitempty"`
+	// EmbedRetryAdvice is the concurrency hint when the last index rode out
+	// throttled retries at a user-raised ai.embed_concurrency. Empty otherwise.
+	EmbedRetryAdvice string `json:"embed_retry_advice,omitempty"`
 }
 
 // runVaultDefault handles `2nb vault` (no subcommand). With no args it
@@ -300,6 +303,7 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 
 	status := VaultStatus{
 		ExcludedFolders:     vault.ObsidianTemplateFolders(v.Root),
+		EmbedRetryAdvice:    embedRetryAdvice(v),
 		Path:                v.Root,
 		Name:                v.Config.Name,
 		Source:              string(source),
@@ -357,6 +361,9 @@ func printVaultStatus(s VaultStatus, nextLabel, nextHint string) {
 		// Say it out loud: "why is my template missing from search?" should be
 		// answerable from `2nb vault status` rather than from the source.
 		fmt.Printf("  Not indexed: %s  (Obsidian template folder)\n", strings.Join(s.ExcludedFolders, ", "))
+	}
+	if s.EmbedRetryAdvice != "" {
+		fmt.Printf("  Throttling:  %s\n", s.EmbedRetryAdvice)
 	}
 	portLabel := strings.ToUpper(strings.ReplaceAll(s.PortabilityStatus, "_", " "))
 	fmt.Printf("  Portability: %s\n", portLabel)

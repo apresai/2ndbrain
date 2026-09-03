@@ -37,8 +37,15 @@ const (
 // The counter is attached even when the notice is suppressed: --porcelain and
 // non-TTY callers still record retries into the metrics observatory.
 func slowCallNotice(ctx context.Context, what string) (context.Context, func()) {
-	counter := &ai.RetryCounter{}
-	ctx = ai.WithRetryCounter(ctx, counter)
+	// Reuse a counter the caller already attached rather than shadowing it: a
+	// command that wraps its whole run (so the metrics row records every retry)
+	// must still see the retries the notice observes, and a nested counter
+	// would leave the outer one reading zero.
+	counter := ai.RetryCounterFrom(ctx)
+	if counter == nil {
+		counter = &ai.RetryCounter{}
+		ctx = ai.WithRetryCounter(ctx, counter)
+	}
 	if !slowCallNoticeEnabled() {
 		return ctx, func() {}
 	}
