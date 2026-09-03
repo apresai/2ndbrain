@@ -146,7 +146,7 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, "Indexing vault...")
 	}
 
-	_, indexErr := vault.IndexVault(v, func(path string) {
+	indexStats, indexErr := vault.IndexVault(v, func(path string) {
 		if !flagPorcelain {
 			fmt.Fprintf(os.Stderr, "  %s\n", path)
 		}
@@ -154,6 +154,10 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 	if indexErr != nil {
 		return fmt.Errorf("index vault: %w", indexErr)
 	}
+	// An import is where a foreign vault's broken notes first surface, so the
+	// same summary `2nb index` prints belongs here rather than nowhere.
+	reportUnparseable(vault.MergeUnparseable(indexStats.Unparseable))
+	reportUnreadable(vault.MergeUnparseable(indexStats.Unreadable))
 
 	if !flagPorcelain {
 		fmt.Fprintf(os.Stderr, "Import complete: %d files processed, %d UUIDs generated, %d tags normalized\n",

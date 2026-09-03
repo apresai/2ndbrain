@@ -86,9 +86,16 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 	v.DB.Conn().QueryRow("SELECT COUNT(*) FROM documents").Scan(&count)
 	if count == 0 {
 		fmt.Fprintln(os.Stderr, "Vault hasn't been indexed yet — building index now...")
-		if _, err := vault.IndexVault(v, nil); err != nil {
+		stats, err := vault.IndexVault(v, nil)
+		if err != nil {
 			return fmt.Errorf("build index: %w", err)
 		}
+		// A skipped note has to be reported by whoever ran the index, not only
+		// by `2nb index`. This auto-index is many users' FIRST index, so a note
+		// missing from every search result afterwards is exactly the thing they
+		// need told here, once, on stderr.
+		reportUnparseable(vault.MergeUnparseable(stats.Unparseable))
+		reportUnreadable(vault.MergeUnparseable(stats.Unreadable))
 	}
 
 	query := strings.Join(args, " ")

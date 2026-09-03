@@ -146,6 +146,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	}
 	deleteForce = false
 	initPath = ""
+	importObsidianTarget = ""
 	indexDocFlag, indexForceReembed = "", false
 	// migrate's --dry-run is package state too: without this reset a preview in
 	// one test made every later migrate in the binary a preview.
