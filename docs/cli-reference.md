@@ -136,7 +136,9 @@ Hybrid BM25 plus semantic search. Filters: `--type --status --tag --limit`. `--t
 
 `--json` returns the envelope `{mode, warnings, results}`, not a bare array. All three keys are always present and never `null`; `mode` is `hybrid` or `keyword`, and `warnings` carries the `semantic search disabled: ` line when the vector channel is unusable. A query that matches nothing still returns the envelope with `results: []` (see "Global flags and output formats"), so a caller can always tell "nothing matched" apart from "semantic search is off". Full contract and the degraded-mode playbook: [agent-teaching.md](agent-teaching.md).
 
-**Row shape.** Every row carries `doc_id`, `path`, `title`, `chunk_id`, `heading_path`, `content`, `score`, `type`, `status`, and `frontmatter` (the note's parsed frontmatter map; omitted when it is empty). An **enumerate-by-filter** query, the documented blank-query-plus-filter form such as `search "type:adr"`, returns the same shape: its `content` is the first 200 characters of the note's FIRST chunk, with that chunk's `chunk_id` and `heading_path`. Before 0.22.1 those rows carried empty chunk fields and the note's frontmatter JSON as `content`. A note with no body has no chunks, so it still enumerates with those three fields empty.
+**Row shape.** Every row carries `doc_id`, `path`, `title`, `chunk_id`, `heading_path`, `content`, `score`, `type`, `status`, and `frontmatter` (the note's parsed frontmatter map; omitted when it is empty). An **enumerate-by-filter** query, the documented blank-query-plus-filter form such as `search "type:adr"`, returns the same shape: its `content` is the first 200 characters of the note's FIRST chunk, with that chunk's `chunk_id` and `heading_path`. Before 0.22.1 those rows carried empty chunk fields and the note's frontmatter JSON as `content`.
+
+A **vector-only** hit, one the keyword leg never returned, carries the same three fields, filled in after rank fusion so every consumer of the hybrid pipeline (the CLI, `ask`, MCP `kb_search`, the eval harness) sees them. `content` is the first 200 characters of the MATCHED chunk on the per-chunk vec0 path, and of the note's first chunk on the brute-force fallback, which scores whole-document embeddings and knows no chunk. Before 0.22.2 those rows came back with an empty `content`, so the results semantic search exists to find were the ones with nothing to read. A note with no body has no chunks, so it still comes back with those three fields empty.
 
 ### suggest-links
 
@@ -258,7 +260,7 @@ A broken target is canonicalized only when its normalized form (lower-cased, wit
 
 ### graph
 
-Output the link graph as a JSON adjacency list.
+`graph <path>` outputs the document's direct inbound and outbound links as a JSON adjacency list: ONE hop, a single query over the links table where the document is source or target (`graph.AdjacencyList`). Use `related <path> --depth N` to walk further. It takes a path, exactly like its `related` / `backlinks` / `links` siblings; there is no whole-vault form.
 
 ### outline
 
@@ -560,7 +562,11 @@ Emits a shell completion script (`zsh|bash|fish|powershell`). Shell completion d
 
 ### completion install
 
-Installs zsh completion idempotently into an existing completion dir referenced from `.zshrc` (or `~/.zsh/completions/_2nb`, or `--dir`). compinit runs unconditionally, and the command warns when multiple `2nb` binaries are on PATH.
+Installs zsh completion idempotently into an existing completion dir referenced from your zsh config (or `~/.zsh/completions/_2nb`, or `--dir`), then adds a managed `fpath` + `compinit` block to that config. compinit runs unconditionally, and the command warns when multiple `2nb` binaries are on PATH.
+
+The config file is `$ZDOTDIR/.zshrc` when `ZDOTDIR` is set, which is where zsh itself looks, otherwise `~/.zshrc`; `--rc <path>` overrides both. The same file is what the completion-directory search reads its candidates from, so redirecting it redirects both halves of the command. Before 0.22.2 the path was hard-coded to `~/.zshrc`, so a user with `ZDOTDIR` set got a file their shell never sources.
+
+The config is copied to `<rc>.2nb-backup` before its first change (a re-run that changes nothing writes no backup). `--no-rc` installs only the completion script and prints the two lines to add by hand, for anyone who manages their shell config themselves. `--dir` still updates the config, since the block is what puts that directory on `fpath`.
 
 ## Diagnostics & Updates
 
@@ -595,6 +601,8 @@ Global flags: `--format` (json/csv/tsv/yaml/raw/md/text; listings also accept `p
 `--format raw` (and `md`) emits a value's `Serialize()` output (or the raw string/bytes) with no JSON wrapping, for piping a document body verbatim; a value with no body (a search result list, a report) is refused with a pointer at `--json`, rather than printed as a Go struct dump. `tsv` is tab-separated CSV; `text` is best-effort plain text. An unknown `--format` value is refused and the valid set is listed; it used to fall through to JSON silently.
 
 **Every report command honors every format.** Fourteen commands used to check only for `--json` and fall through to their human printer otherwise, so `--csv`, `--tsv` and `--yaml` were silently ignored and `--format raw`/`md` printed prose instead of refusing: `mcp status`, `mcp configured`, `git status`, `git activity`, `git show`, `index --doc`, `polish`, `polish --undo`, `relink`, `unlink`, `repair-links`, `suggest-links`, `suggest-target`, and `config bedrock`. All of them route every explicit format through the shared writer now. A payload that is a list of rows renders in `csv`/`tsv` as a header plus one line per row; any other shape (a single status struct, a map) renders as one JSON-encoded record, which is what the writer has always done for such a shape, so `csv` is honored rather than dropped but is not a table. `search` and `list` refuse `raw`/`md` before opening the vault, so the refusal depends on the command rather than on whether the query matched anything, and a hybrid search never pays for a query embedding it cannot render. `git diff` is the mirror image, because its output IS a body: `raw`, `md` and `text` emit the diff, `--json` wraps it in a `{path, diff}` record, and `csv`, `tsv` and `yaml` are refused by name, since a diff is not a row set. Commands whose machine output is a STREAM of JSON events (`models bench`, `ai engine pull`, `ai engine rm`) cannot render as one document and refuse any non-JSON explicit format by name.
+
+`yaml` is the JSON view in YAML syntax: it uses the same field names, the same tags and the same `omitempty` rules, because the value is marshalled to JSON and re-read. Before 0.22.2 it went straight through yaml.v3, which lowercases a bare Go field name and honors no json `omitempty`, so `--yaml` emitted a third set of key names (`modifiedat`, `daysstale`, `sourcepath`, `targetraw`, `drifttarget`, `files`, `warnings`) that matched neither the json view nor anything documented, and printed every zero field. Two visible consequences: keys the json view omits are now absent from the yaml too, and `models list --yaml` shows the derived fields the json view computes (`vendor`, `family`, `active`, `reachable`, `compatible`, `working`). A json string that looks like a number stays quoted. This is the output formatter only; the persisted YAML files (`models.yaml`, `config.yaml`, `schemas.yaml`) keep their own on-disk key names.
 
 In `csv` and `tsv`, a cell holding a map, slice or struct (a row's `frontmatter`, a lint finding's `candidates`) is rendered as compact JSON with sorted keys, so the column parses and a given row renders identically every time. Scalars are unchanged. A value that implements `encoding.TextMarshaler` (`time.Time` does) renders through it, so a date cell is plain RFC3339 text rather than a JSON-quoted string the delimited writer would escape a second time.
 

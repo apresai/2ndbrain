@@ -261,6 +261,12 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	// so coverage reads cleanly against what can actually be embedded.
 	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.VaultEmbeddableDocs)
 	fmt.Printf("Search threshold: %g (%s)\n", status.SimilarityThreshold, status.SimilarityThresholdSource)
+	// A threshold 2nb decided to ignore has to be SAID, not silently dropped:
+	// the user set a number, search stopped using it, and nothing else in the
+	// output would tell them which file to look at.
+	if notice := unstampedThresholdNotice(v.Root, cfg.Provider, cfg.EmbeddingModel); notice != "" {
+		fmt.Print(notice)
+	}
 	if ma := status.ModelAccess; ma != nil && (ma.Verified > 0 || ma.AccessDenied > 0 || ma.OtherFailures > 0) {
 		fmt.Printf("Model access:     %d verified, %d access denied, %d other failures (last verified %s; run `2nb models verify` to refresh)\n",
 			ma.Verified, ma.AccessDenied, ma.OtherFailures, ma.LastVerifiedAt)
@@ -608,18 +614,52 @@ func ollamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 	return s
 }
 
+// unstampedThresholdNotice reports a recommended_similarity_threshold sitting in
+// a user catalog that 2nb no longer applies, or "" when there is none.
+//
+// Until 0.22.2 an unstamped value that differed from the builtin was treated as
+// a calibration written before provenance existed. That heuristic read a mirror
+// of a RETIRED builtin as a measurement, so a Nova row carrying 0.65 (2nb's own
+// recommendation until June 2026, now 2.6x the current 0.25) silently rejected
+// every semantic match. Only a stamp counts now, and the cost of that is that a
+// real pre-stamp calibration stops applying: this notice is what keeps that
+// from being invisible. It names the file, the value, and the two commands that
+// re-save it with provenance.
+//
+// Two lines rather than one, so neither wraps past a terminal width.
+func unstampedThresholdNotice(vaultRoot, provider, modelID string) string {
+	row, scope, ok := ai.UnstampedThresholdRow(vaultRoot, provider, modelID)
+	if !ok {
+		return ""
+	}
+	path, err := ai.CatalogPathForScope(scope, vaultRoot)
+	if err != nil {
+		path = string(scope) + " catalog"
+	}
+	slog.Info("ignored an unstamped similarity threshold",
+		"path", path, "provider", provider, "model", modelID,
+		"threshold", row.RecommendedSimilarityThreshold, "scope", string(scope))
+	return fmt.Sprintf(
+		"  note: recommended_similarity_threshold %g on the %s row in %s is ignored since 0.22.2:\n"+
+			"    it carries no threshold_source stamp, so it cannot be told apart from a copy of an\n"+
+			"    older built-in value. To keep it, run `2nb models calibrate --save`, or\n"+
+			"    `2nb models add %s --similarity-threshold %g`.\n",
+		row.RecommendedSimilarityThreshold, modelID, path, modelID, row.RecommendedSimilarityThreshold)
+}
+
 // thresholdCalibrationOrigin says where a resolved "user calibration" similarity
-// threshold physically lives, so `ai status` can name the file to edit. It also
-// distinguishes a stamped calibration from one written before the stamp existed,
-// which is read as a calibration only because its value differs from the
-// builtin recommendation (see ai.IsUserThreshold).
+// threshold physically lives, so `ai status` can name the file to edit. Only a
+// STAMPED row can resolve as a calibration (ai.IsUserThreshold), so there is one
+// message: the branch that described an unstamped pre-stamp value is gone with
+// the value-comparison heuristic that used to admit one. An unstamped row is
+// reported separately, by unstampedThresholdNotice, as a value 2nb ignored.
 func thresholdCalibrationOrigin(vaultRoot, provider, modelID string) string {
 	// The SAME lookup the resolver uses, deliberately. This used to call
 	// UserCatalogRouteToPreserve, which needs a UNIQUE stored row for the model,
 	// while the resolver takes the first matching row: with two stored routes
 	// the message said "no user-catalog row carries it" about a value the
 	// resolver was actively using.
-	row, scope, ok := ai.UserThresholdRow(vaultRoot, provider, modelID)
+	_, scope, ok := ai.UserThresholdRow(vaultRoot, provider, modelID)
 	if !ok {
 		return "no user-catalog row carries it; check ai.similarity_threshold in this vault's config.yaml."
 	}
@@ -627,8 +667,5 @@ func thresholdCalibrationOrigin(vaultRoot, provider, modelID string) string {
 	if err != nil {
 		path = string(scope) + " catalog"
 	}
-	if row.ThresholdSource == ai.ThresholdSourceUser {
-		return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s (saved by `2nb models calibrate --save` or `2nb models add`). Remove that key to fall back to the built-in value.", modelID, path)
-	}
-	return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s, written before 2nb stamped provenance, and it differs from the built-in value. Remove that key to fall back to the built-in value.", modelID, path)
+	return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s (saved by `2nb models calibrate --save` or `2nb models add`). Remove that key to fall back to the built-in value.", modelID, path)
 }

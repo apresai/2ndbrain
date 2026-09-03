@@ -651,23 +651,119 @@ func dropSupersededUnpinned(rows []ModelInfo, pinned PinnedRoutes) []ModelInfo {
 // discovered us.anthropic.claude-...@classic/us-west-2 row would otherwise
 // render nameless and unpriced, because the builtin catalog declares those
 // facts exactly once.
+// Name, Dimensions and ContextLen come from a NARROWER donor pool than the
+// rest, and PER FACT rather than per row: the builtin catalog's value for that
+// field, unless a user row lists that field in AuthoredFacts. An unstamped
+// row's copy of a fact is not authorship, it is a snapshot an old probe save
+// took from the merged view, and letting it donate spreads the snapshot: a
+// stale context_length on one probed region row was reaching every sibling
+// discovery had just found, which is precisely the reach the builtin's own
+// correction could not get.
+//
+// Per fact, not per row, because a row that authored only its context length
+// would otherwise be swapped in as the donor for all three and hand freshly
+// discovered routes its EMPTY name and dimensions instead of the builtin's.
+//
+// A model the builtin catalog has never declared has no owner to defer to, so
+// the general (richest) donor supplies its facts as before.
 func inheritModelFacts(rows []ModelInfo, source []ModelInfo) {
-	byModel := make(map[string]ModelInfo, len(source))
-	for _, s := range source {
-		k := catalogKey(s.Provider, s.ID)
-		// Prefer the most complete donor: a named, priced row beats a bare one.
-		if prev, ok := byModel[k]; ok && modelFactScore(prev) >= modelFactScore(s) {
-			continue
-		}
-		byModel[k] = s
-	}
+	byModel := bestDonorByModel(source)
+	builtins := bestDonorByModel(BuiltinCatalog())
+	authored := authoredFactDonors(source)
 	for i := range rows {
-		src, ok := byModel[catalogKey(rows[i].Provider, rows[i].ID)]
+		k := catalogKey(rows[i].Provider, rows[i].ID)
+		src, ok := byModel[k]
 		if !ok {
 			continue
 		}
-		fillModelFacts(&rows[i], src)
+		facts := factDonor{
+			name:       pickFactDonor(authored[factKey{k, FactName}], builtins, k, src),
+			dimensions: pickFactDonor(authored[factKey{k, FactDimensions}], builtins, k, src),
+			contextLen: pickFactDonor(authored[factKey{k, FactContextLen}], builtins, k, src),
+		}
+		fillModelFacts(&rows[i], src, facts)
 	}
+}
+
+// factKey identifies one (model, fact) pair, which is the granularity donor
+// selection works at now.
+type factKey struct {
+	model string
+	fact  string
+}
+
+// factDonor holds the row chosen to supply each of the three user-typeable
+// facts. They are usually the same row and need not be.
+type factDonor struct {
+	name       ModelInfo
+	dimensions ModelInfo
+	contextLen ModelInfo
+}
+
+// authoredFactDonors picks, for every (model, fact) a user row claims, the ONE
+// row that donates it.
+//
+// Several ROUTES of a model can each list the same fact, so the choice has to
+// be deterministic or the merged view changes between runs on nothing but map
+// order. Richest row first (modelFactScore), then the lowest route key. The
+// vault-versus-global question never reaches here: LoadUserCatalog resolves
+// that per route before inheritance runs, so a model has at most one user row
+// per route by this point.
+func authoredFactDonors(source []ModelInfo) map[factKey]ModelInfo {
+	out := map[factKey]ModelInfo{}
+	for _, s := range source {
+		k := catalogKey(s.Provider, s.ID)
+		for _, fact := range AuthoredFactNames() {
+			if !HasAuthoredFact(s, fact) {
+				continue
+			}
+			key := factKey{k, fact}
+			prev, seen := out[key]
+			if seen && !betterFactDonor(s, prev) {
+				continue
+			}
+			out[key] = s
+		}
+	}
+	return out
+}
+
+// betterFactDonor reports whether a outranks b as the donor of one fact:
+// richer row first, then the lower route key, so the result never depends on
+// map iteration order.
+func betterFactDonor(a, b ModelInfo) bool {
+	if sa, sb := modelFactScore(a), modelFactScore(b); sa != sb {
+		return sa > sb
+	}
+	return routeKey(a.Route()) < routeKey(b.Route())
+}
+
+// pickFactDonor resolves one fact's donor: the user row that authored it, else
+// the builtin declaration, else the richest row for the model (a model no
+// builtin declares has no other source).
+func pickFactDonor(authored ModelInfo, builtins map[string]ModelInfo, key string, fallback ModelInfo) ModelInfo {
+	if authored.ID != "" {
+		return authored
+	}
+	if b, ok := builtins[key]; ok {
+		return b
+	}
+	return fallback
+}
+
+// bestDonorByModel indexes rows by (provider, id), keeping the most complete
+// row per model so inheritance picks the richest donor rather than whichever
+// sorted first.
+func bestDonorByModel(source []ModelInfo) map[string]ModelInfo {
+	out := make(map[string]ModelInfo, len(source))
+	for _, s := range source {
+		k := catalogKey(s.Provider, s.ID)
+		if prev, ok := out[k]; ok && modelFactScore(prev) >= modelFactScore(s) {
+			continue
+		}
+		out[k] = s
+	}
+	return out
 }
 
 // modelFactScore counts how many model facts a row carries, so inheritance
@@ -689,18 +785,22 @@ func modelFactScore(m ModelInfo) int {
 // fillModelFacts copies the shared-across-routes properties, never the
 // per-route ones (Plane, Region, Endpoint, InvokeStrategy, Enabled, Tier, and
 // every Test*/Benchmark field stay owned by the individual route row).
-func fillModelFacts(dst *ModelInfo, src ModelInfo) {
+//
+// facts carries a donor PER user-typeable fact (Name, Dimensions, ContextLen);
+// src supplies everything else. See inheritModelFacts for why the pools differ
+// and why the three facts are chosen independently.
+func fillModelFacts(dst *ModelInfo, src ModelInfo, facts factDonor) {
 	if dst.Name == "" {
-		dst.Name = src.Name
+		dst.Name = facts.name.Name
 	}
 	if dst.Type == "" {
 		dst.Type = src.Type
 	}
 	if dst.ContextLen == 0 {
-		dst.ContextLen = src.ContextLen
+		dst.ContextLen = facts.contextLen.ContextLen
 	}
 	if dst.Dimensions == 0 {
-		dst.Dimensions = src.Dimensions
+		dst.Dimensions = facts.dimensions.Dimensions
 	}
 	if len(dst.SupportedDimensions) == 0 {
 		dst.SupportedDimensions = src.SupportedDimensions

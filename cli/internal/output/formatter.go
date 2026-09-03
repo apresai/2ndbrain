@@ -129,11 +129,57 @@ func writeJSON(w io.Writer, data any) error {
 	return enc.Encode(data)
 }
 
+// writeYAML renders the value with the SAME field names, tags and omitempty
+// rules the JSON view uses, by routing it through encoding/json first.
+//
+// yaml.v3 lowercases a bare Go field name (ModifiedAt becomes modifiedat) and
+// honors no `omitempty` it was not itself given. Every output struct in this
+// repo carries json tags only, so `--yaml` emitted a THIRD set of key names,
+// matching neither the documented json view nor anything else: modifiedat,
+// daysstale, sourcepath, driftjtarget. Marshalling to JSON and re-reading it
+// makes --yaml exactly the json view in YAML syntax, which is what a user
+// picking a serialization format expects, and it makes the derived fields the
+// json view computes (vendor, family, active, reachable, compatible, working)
+// appear there too.
+//
+// Node.Style is cleared recursively because JSON text parses as FLOW-style
+// nodes, which would re-emit the braces and brackets. Node.Tag is deliberately
+// KEPT: it is what preserves a JSON string "8192" as a quoted YAML string
+// rather than an int.
+//
+// This is the OUTPUT formatter only. The persisted YAML writers (the user model
+// catalog, vault config.yaml, schemas.yaml) are separate and untouched: their
+// key names are an on-disk format, not a rendering.
 func writeYAML(w io.Writer, data any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("render yaml: %w", err)
+	}
+	var node yaml.Node
+	if err := yaml.Unmarshal(raw, &node); err != nil {
+		return fmt.Errorf("render yaml: %w", err)
+	}
+	// A JSON `null` parses to a node with no Kind, which the encoder refuses.
+	// Nil payloads reach here (an unset pointer, an empty interface), so emit
+	// the document YAML would have emitted for them.
+	if node.Kind == 0 {
+		_, err := io.WriteString(w, "null\n")
+		return err
+	}
+	clearYAMLNodeStyle(&node)
 	enc := yaml.NewEncoder(w)
 	enc.SetIndent(2)
 	defer enc.Close()
-	return enc.Encode(data)
+	return enc.Encode(&node)
+}
+
+// clearYAMLNodeStyle drops the flow style JSON parsing leaves behind, so the
+// output is block YAML. It never touches Tag, which carries the scalar's type.
+func clearYAMLNodeStyle(n *yaml.Node) {
+	n.Style = 0
+	for _, c := range n.Content {
+		clearYAMLNodeStyle(c)
+	}
 }
 
 // writeDelimited renders a slice of structs as delimiter-separated values

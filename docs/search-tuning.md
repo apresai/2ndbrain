@@ -29,17 +29,38 @@ calibration nobody took and froze out any later change to the builtin value.
 `models bench` defaults to `--summary-scope global`, so one bench run in one
 vault flipped every vault on the machine.
 
-`ai.IsUserThreshold` is the predicate, and it self-heals contaminated catalogs at
-read time with no migration:
+`ai.IsUserThreshold` is the predicate, and since 0.22.2 it is stamp-only. It
+self-heals contaminated catalogs at read time with no migration:
 
 | row | verdict |
 |---|---|
 | stamped `threshold_source: user` | the user's calibration |
-| unstamped and EQUAL to the builtin recommendation | a mirror; ignored, so the resolver falls through to the builtin |
-| unstamped and DIFFERENT from the builtin | a real calibration written before the stamp existed; kept |
+| unstamped, whatever the value | ignored, so the resolver falls through to the builtin recommendation |
 
-`2nb ai status` names the file and row carrying a calibration when it warns about
-a high threshold, and says so plainly when the value is the builtin's own.
+The 0.22.1 rule kept an unstamped value that DIFFERED from the builtin, on the
+theory that a difference meant a real pre-stamp measurement. It does not. A real
+vault carried 0.65, which is the value 2nb itself recommended for Nova until
+June 2026: it differs from the current 0.25 only because the BUILTIN moved, and
+at 0.65 an asymmetric embedding rejects every real match, so search silently
+degraded to BM25 while `ai status` reported a measurement nobody took. A stamp
+is a stamp. The cost is that a genuine pre-stamp calibration also stops
+applying, which is why `2nb ai status` prints (and logs) a line naming the file,
+the value it ignored, and the two commands that re-save it with provenance. It
+also names the file and row carrying a calibration when it warns about a high
+threshold, and says so plainly when the value is the builtin's own.
+
+The same rule governs the model FACTS, PER FACT. A user-catalog row's `name`,
+`dimensions` and `context_length` override the builtin only where the row's
+`authored_facts` list names that field, which only `models add
+--name/--dimensions/--context-length` appends to, one entry per flag passed;
+`config_hint` and `recommended` are builtin-owned outright. One stamp for all
+three was unsound: `models add --context-length` claimed a name the user never
+typed, and a row that authored one fact donated its empty others to freshly
+discovered routes. An unlisted `context_length` copied off the builtin by an old
+probe save used to win forever, and `inheritModelFacts` spread it from one probed
+region row to every sibling discovery found. A probe save now drops an unlisted
+fact for a builtin model and keeps one for a model no builtin declares, where the
+stored row is the only copy.
 
 Different embedding models have very different baseline distributions. Builtin recommendations:
 Nova-2 `0.25` (measured on a real 151-doc vault under the asymmetric query purpose, see below),

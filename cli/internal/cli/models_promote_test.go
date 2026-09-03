@@ -54,7 +54,64 @@ func TestPromotedEntry(t *testing.T) {
 		}
 	})
 
-	t.Run("with base copies enrichment fields", func(t *testing.T) {
+	// A model the BUILTIN catalog declares owns its own facts. `base` is a row
+	// from the merged catalog, so copying its name, dimensions, context length,
+	// prices or notes into the user file freezes a snapshot that shadows every
+	// later builtin correction: that is how a stale context_length outlived the
+	// builtin's own value and spread to freshly discovered per-region rows. The
+	// builtin supplies all of it again on read, so leaving the row bare loses
+	// nothing.
+	t.Run("a builtin model carries nothing from the merged base", func(t *testing.T) {
+		builtin := findBuiltinModel("bedrock", novaEmbeddingID)
+		if builtin == nil {
+			t.Fatalf("%s is not in the builtin catalog; this test cannot detect mirroring without it", novaEmbeddingID)
+		}
+		if builtin.Name == "" || builtin.ContextLen == 0 || builtin.Dimensions == 0 || builtin.PriceIn == 0 {
+			t.Fatalf("the builtin %s row no longer carries the facts this test watches: %+v", novaEmbeddingID, builtin)
+		}
+		// A merged row: the builtin's facts, as every save path used to see them.
+		base := *builtin
+		embedResult := &ai.TestProbeResult{
+			ModelID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+			OK: true, Detail: "dims=1024", Latency: "123ms",
+		}
+
+		entry := promotedEntry(&base, embedResult)
+
+		if entry.Name != "" {
+			t.Errorf("Name = %q, want empty: the builtin owns it", entry.Name)
+		}
+		if entry.Dimensions != 0 {
+			t.Errorf("Dimensions = %d, want 0: the builtin owns it, and the probe detail must not backfill it either", entry.Dimensions)
+		}
+		if entry.ContextLen != 0 {
+			t.Errorf("ContextLen = %d, want 0: the builtin owns it", entry.ContextLen)
+		}
+		if entry.PriceIn != 0 || entry.PriceOut != 0 || entry.PriceRequest != 0 || entry.PriceSource != "" {
+			t.Errorf("prices carried from the merged base: in=%g out=%g req=%g source=%q",
+				entry.PriceIn, entry.PriceOut, entry.PriceRequest, entry.PriceSource)
+		}
+		if entry.Notes != "" {
+			t.Errorf("Notes = %q, want empty: the builtin owns it", entry.Notes)
+		}
+		if entry.Recommended || entry.ConfigHint != "" {
+			t.Errorf("curation carried from the merged base: recommended=%v config_hint=%q", entry.Recommended, entry.ConfigHint)
+		}
+		// Same rule the threshold has followed since 0.22.1.
+		if entry.RecommendedSimilarityThreshold != 0 || entry.ThresholdSource != "" {
+			t.Errorf("Threshold = %g (source %q), want 0 and empty",
+				entry.RecommendedSimilarityThreshold, entry.ThresholdSource)
+		}
+		// What the promotion itself establishes is still written.
+		if entry.Tier != ai.TierUserVerified || entry.TestedAt == "" {
+			t.Errorf("promotion fields lost: tier=%q tested_at=%q", entry.Tier, entry.TestedAt)
+		}
+	})
+
+	// A model NO builtin declares has no other source for these facts, so the
+	// probe's base row (discovery or the user's own row) is what keeps the
+	// saved row from being nameless and unpriced.
+	t.Run("a model outside the builtin catalog keeps its authored facts", func(t *testing.T) {
 		base := &ai.ModelInfo{
 			ID:                             "my-model",
 			Provider:                       "openrouter",
@@ -68,6 +125,9 @@ func TestPromotedEntry(t *testing.T) {
 			PriceSource:                    "vendor",
 			Notes:                          "fast model",
 			RecommendedSimilarityThreshold: 0.6,
+		}
+		if findBuiltinModel(base.Provider, base.ID) != nil {
+			t.Fatalf("%s/%s is in the builtin catalog; pick an id that is not", base.Provider, base.ID)
 		}
 
 		entry := promotedEntry(base, result)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -134,7 +135,162 @@ func (e *Engine) HybridSearch(opts Options, queryEmbedding []float32, docIDs []s
 
 	// Combine with RRF (engine implements DocLookup for vector-only results)
 	combined := ReciprocalRankFusion(bm25Results, vectorResults, opts.Limit, e, opts.BM25Weight, opts.VectorWeight)
+	// Hydrate HERE, right after fusion, so every caller of HybridSearch (the
+	// CLI search, ask, MCP kb_search, the eval harness) gets the same rows and
+	// no surface has to know that a vector-only row arrives without its text.
+	e.hydrateVectorOnly(combined)
 	return combined, ModeHybrid, nil
+}
+
+// hydrateVectorOnly fills the snippet fields on rows that came ONLY from the
+// vector leg, so a semantic hit carries its chunk's text exactly as a lexical
+// hit does.
+//
+// ReciprocalRankFusion builds such a row from GetDocumentByID, which selects
+// document metadata and no body at all, so `search --json` reported a hit with
+// an empty `content` and every consumer that shows a snippet (the CLI, the
+// macOS app, kb_search, the eval harness) showed nothing for exactly the
+// results semantic search exists to find.
+//
+// Two shapes, because the two vector legs differ. The per-chunk vec0 KNN knows
+// which chunk matched, so its row is filled from that chunk. The brute-force
+// leg scores whole-document embeddings and knows no chunk, so its row takes the
+// document's FIRST chunk, the same row listByFilters joins; that also gives it
+// a ChunkID, which is what lets retrieve.candidateTexts backfill full text for
+// the reranker on this leg too.
+//
+// Both cut the body with SQL substr, which counts CHARACTERS on a TEXT column,
+// so the 200-unit snippet is rune-safe and byte-identical to the enumerated
+// path's. store.ChunkContentByID is deliberately not reused: it returns up to
+// 6000 runes, and parity with a lexical row wants 200. The SQL lives here for
+// the same reason listByFilters' does: store/docs.go is watched by the
+// index-generation gate, and nothing stored changes here.
+//
+// A note with no body has no chunks, so both queries OUTER-join and such a row
+// keeps its empty Content rather than failing.
+func (e *Engine) hydrateVectorOnly(results []Result) {
+	byChunk := map[string]int{}
+	byDoc := map[string][]int{}
+	for i := range results {
+		if results[i].Content != "" {
+			continue
+		}
+		if id := results[i].ChunkID; id != "" {
+			byChunk[id] = i
+			continue
+		}
+		if id := results[i].DocID; id != "" {
+			byDoc[id] = append(byDoc[id], i)
+		}
+	}
+	for _, batch := range batchKeys(byChunk, hydrateBatchSize) {
+		ids, placeholders := queryArgs(batch)
+		rows, err := e.db.Query(`
+			SELECT id, COALESCE(heading_path, ''), COALESCE(substr(content, 1, 200), '')
+			FROM chunks WHERE id IN (`+placeholders+`)`, ids...)
+		if err != nil {
+			slog.Warn("hydrate vector-only rows: chunk lookup failed", "leg", "chunk", "ids", len(batch), "err", err)
+			continue
+		}
+		for rows.Next() {
+			var id, heading, content string
+			if err := rows.Scan(&id, &heading, &content); err != nil {
+				slog.Warn("hydrate vector-only rows: scan failed", "leg", "chunk", "ids", len(batch), "err", err)
+				break
+			}
+			i, ok := byChunk[id]
+			if !ok {
+				continue
+			}
+			results[i].Content = content
+			if results[i].HeadingPath == "" {
+				results[i].HeadingPath = heading
+			}
+		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("hydrate vector-only rows: row iteration failed", "leg", "chunk", "ids", len(batch), "err", err)
+		}
+		rows.Close()
+	}
+	for _, batch := range batchKeys(byDoc, hydrateBatchSize) {
+		ids, placeholders := queryArgs(batch)
+		rows, err := e.db.Query(`
+			SELECT d.id,
+			       COALESCE(c.id, ''),
+			       COALESCE(c.heading_path, ''),
+			       COALESCE(substr(c.content, 1, 200), '')
+			FROM documents d
+			LEFT JOIN chunks c ON c.id = (
+				SELECT c2.id FROM chunks c2
+				WHERE c2.doc_id = d.id
+				ORDER BY c2.sort_order, c2.start_line, c2.id
+				LIMIT 1
+			)
+			WHERE d.id IN (`+placeholders+`)`, ids...)
+		if err != nil {
+			slog.Warn("hydrate vector-only rows: first-chunk lookup failed", "leg", "document", "ids", len(batch), "err", err)
+			continue
+		}
+		for rows.Next() {
+			var docID, chunkID, heading, content string
+			if err := rows.Scan(&docID, &chunkID, &heading, &content); err != nil {
+				slog.Warn("hydrate vector-only rows: scan failed", "leg", "document", "ids", len(batch), "err", err)
+				break
+			}
+			for _, i := range byDoc[docID] {
+				results[i].Content = content
+				if results[i].ChunkID == "" {
+					results[i].ChunkID = chunkID
+				}
+				if results[i].HeadingPath == "" {
+					results[i].HeadingPath = heading
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("hydrate vector-only rows: row iteration failed", "leg", "document", "ids", len(batch), "err", err)
+		}
+		rows.Close()
+	}
+}
+
+// hydrateBatchSize bounds one IN clause. SQLite caps the number of bound
+// variables per statement (999 by default), and `--limit` is user-supplied, so
+// a large enough result set turned hydration into a query error rather than a
+// missing snippet. Batching keeps every row hydrated at any limit.
+const hydrateBatchSize = 500
+
+// batchKeys splits a map's keys into deterministic batches of at most size.
+// Sorted, so a failure is reproducible and a log line names a stable set.
+func batchKeys[V any](m map[string]V, size int) [][]string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out [][]string
+	for start := 0; start < len(keys); start += size {
+		end := start + size
+		if end > len(keys) {
+			end = len(keys)
+		}
+		out = append(out, keys[start:end])
+	}
+	return out
+}
+
+// queryArgs renders one batch as query arguments plus its `?,?` placeholder
+// list, so an IN clause is always parameterized and never built by
+// interpolating identifiers.
+func queryArgs(keys []string) ([]any, string) {
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+	return args, strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
 }
 
 // hasFilters reports whether any structured filter is set.

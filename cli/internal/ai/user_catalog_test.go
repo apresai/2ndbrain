@@ -210,7 +210,7 @@ func TestOverlay_AppendsNewEntries(t *testing.T) {
 	top := []ModelInfo{
 		{ID: "b", Provider: "bedrock"},
 	}
-	out := overlay(base, top)
+	out := overlay(base, top, true)
 	if len(out) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(out))
 	}
@@ -224,7 +224,7 @@ func TestOverlay_PreservesTierElevation(t *testing.T) {
 	top := []ModelInfo{
 		{ID: "x", Provider: "bedrock", Tier: TierUserVerified, PriceIn: 42},
 	}
-	out := overlay(base, top)
+	out := overlay(base, top, true)
 	if out[0].Tier != TierVerified {
 		t.Fatalf("expected TierVerified preserved, got %q", out[0].Tier)
 	}
@@ -253,7 +253,7 @@ func TestLoadUserCatalog_LayersOnBuiltinKeepsTier(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	merged := overlay(builtin, LoadUserCatalog(""))
+	merged := overlay(builtin, LoadUserCatalog(""), true)
 	var found *ModelInfo
 	for i := range merged {
 		if merged[i].Provider == target.Provider && merged[i].ID == target.ID {
@@ -284,7 +284,7 @@ func TestOverlay_ExplicitZeroPriceWinsWhenPriceSourceSet(t *testing.T) {
 	top := []ModelInfo{
 		{ID: "pricey", Provider: "bedrock", PriceIn: 0, PriceSource: "user", PriceOverride: true, Tier: TierUserVerified},
 	}
-	out := overlay(base, top)
+	out := overlay(base, top, true)
 	if out[0].PriceIn != 0 {
 		t.Fatalf("explicit zero-price override should win, got %v", out[0].PriceIn)
 	}
@@ -303,7 +303,7 @@ func TestOverlay_LegacyZeroPriceUserEntryDoesNotOverride(t *testing.T) {
 	top := []ModelInfo{
 		{ID: "pricey", Provider: "bedrock", PriceIn: 0, PriceSource: "user", Tier: TierUserVerified},
 	}
-	out := overlay(base, top)
+	out := overlay(base, top, true)
 	if out[0].PriceIn != 10.0 {
 		t.Fatalf("legacy zero-price user entry should not wipe builtin price, got %v", out[0].PriceIn)
 	}
@@ -583,7 +583,7 @@ func TestMergeFields_NewFieldsOverlay(t *testing.T) {
 		Enabled: &trueVal,
 	}
 
-	out := mergeFields(base, top)
+	out := mergeFields(base, top, true)
 	if out.InvokeStrategy != StrategyBedrockConverse {
 		t.Errorf("strategy: got %q", out.InvokeStrategy)
 	}
@@ -599,7 +599,7 @@ func TestMergeFields_NewFieldsOverlay(t *testing.T) {
 
 	// Empty-overlay case: base fields must be preserved.
 	noop := ModelInfo{ID: "m", Provider: "bedrock"}
-	out2 := mergeFields(base, noop)
+	out2 := mergeFields(base, noop, true)
 	if out2.InvokeStrategy != StrategyBedrockInvokeAnthropic {
 		t.Errorf("empty overlay wiped base strategy: got %q", out2.InvokeStrategy)
 	}
@@ -678,7 +678,7 @@ func TestMergeFields_RegionEndpointOverlay(t *testing.T) {
 		Region:   "us-west-2",
 		Endpoint: "https://bedrock-mantle.us-west-2.api.aws",
 	}
-	out := mergeFields(base, top)
+	out := mergeFields(base, top, true)
 	if out.Region != "us-west-2" {
 		t.Errorf("overlay region not applied: got %q", out.Region)
 	}
@@ -687,7 +687,7 @@ func TestMergeFields_RegionEndpointOverlay(t *testing.T) {
 	}
 
 	noop := ModelInfo{ID: "m", Provider: "bedrock"}
-	out2 := mergeFields(base, noop)
+	out2 := mergeFields(base, noop, true)
 	if out2.Region != "us-east-1" || out2.Endpoint != "https://bedrock-mantle.us-east-1.api.aws" {
 		t.Errorf("empty overlay wiped base pins: region=%q endpoint=%q", out2.Region, out2.Endpoint)
 	}
@@ -756,7 +756,7 @@ func TestMergeFields_TestErrorCodeMovesWithTestedAt(t *testing.T) {
 		TestError:     "invoke m: AccessDeniedException: not available",
 		TestErrorCode: string(TestErrAccessDenied),
 	}
-	out := mergeFields(base, failed)
+	out := mergeFields(base, failed, true)
 	if out.TestErrorCode != string(TestErrAccessDenied) {
 		t.Errorf("failing overlay didn't carry code: %+v", out)
 	}
@@ -766,7 +766,7 @@ func TestMergeFields_TestErrorCodeMovesWithTestedAt(t *testing.T) {
 		TestedAt:      "2026-07-02T00:00:00Z",
 		TestLatencyMs: 300,
 	}
-	out2 := mergeFields(out, passed)
+	out2 := mergeFields(out, passed, true)
 	if out2.TestError != "" || out2.TestErrorCode != "" {
 		t.Errorf("passing overlay didn't clear stale failure: error=%q code=%q", out2.TestError, out2.TestErrorCode)
 	}
@@ -775,20 +775,82 @@ func TestMergeFields_TestErrorCodeMovesWithTestedAt(t *testing.T) {
 	}
 }
 
-// TestMergeFields_RecommendedIsAddOnly verifies curation semantics: an
-// overlay can recommend a model, but a user-catalog entry (which omits the
-// field) never demotes a builtin recommendation.
-func TestMergeFields_RecommendedIsAddOnly(t *testing.T) {
-	base := ModelInfo{ID: "m", Provider: "bedrock", Type: "generation", Recommended: true}
+// TestMergeFields_CurationBelongsToTheBuiltin replaces the old add-only rule
+// (a user row could promote, never demote). Over the builtin catalog the
+// builtin's Recommended and ConfigHint now win outright, because `models
+// verify` used to copy the merged row's curation back into the user file: the
+// mirror could keep promoting a model the catalog had since demoted, and no
+// command could clear it. Between the two USER scopes the add-only rule is
+// still what the vault row gets.
+func TestMergeFields_CurationBelongsToTheBuiltin(t *testing.T) {
+	base := ModelInfo{ID: "m", Provider: "bedrock", Type: "generation", Recommended: true, ConfigHint: "builtin hint"}
 	top := ModelInfo{ID: "m", Provider: "bedrock", TestedAt: "2026-07-01T00:00:00Z"}
-	if out := mergeFields(base, top); !out.Recommended {
+	if out := mergeFields(base, top, true); !out.Recommended {
 		t.Error("user overlay without recommended demoted a builtin recommendation")
 	}
 
 	base2 := ModelInfo{ID: "m2", Provider: "bedrock", Type: "generation"}
-	top2 := ModelInfo{ID: "m2", Provider: "bedrock", Recommended: true}
-	if out := mergeFields(base2, top2); !out.Recommended {
-		t.Error("overlay with recommended=true did not promote")
+	top2 := ModelInfo{ID: "m2", Provider: "bedrock", Recommended: true, ConfigHint: "stale mirror"}
+	out := mergeFields(base2, top2, true)
+	if out.Recommended {
+		t.Error("an unstamped user row promoted a model the builtin catalog does not recommend")
+	}
+	if out.ConfigHint != "" {
+		t.Errorf("a user row overrode the builtin ConfigHint: got %q", out.ConfigHint)
+	}
+
+	// Between user scopes there is no builtin to defer to: the vault row wins.
+	if out := mergeFields(base2, top2, false); !out.Recommended || out.ConfigHint != "stale mirror" {
+		t.Errorf("vault-over-global overlay lost the vault row's curation: %+v", out)
+	}
+}
+
+// TestMergeFields_ModelFactsNeedTheStamp is the mirrored-facts rule: over the
+// builtin catalog, Name, Dimensions and ContextLen from a user row apply only
+// when the user typed them (`models add --name/--dimensions/--context-length`
+// lists each one in AuthoredFacts). An unlisted copy came FROM the merged view
+// via some earlier probe save, and letting it win is how a context_length of
+// 2048 outlived the builtin's own correction to 8192.
+func TestMergeFields_ModelFactsNeedTheStamp(t *testing.T) {
+	builtin := ModelInfo{
+		ID: "amazon.nova-2-multimodal-embeddings-v1:0", Provider: "bedrock", Type: "embedding",
+		Name: "Amazon Nova Embeddings v2", Dimensions: 1024, ContextLen: 8192,
+	}
+	unstamped := ModelInfo{
+		ID: builtin.ID, Provider: "bedrock",
+		Name: "Nova (stale copy)", Dimensions: 384, ContextLen: 2048,
+	}
+	out := mergeFields(builtin, unstamped, true)
+	if out.ContextLen != 8192 {
+		t.Errorf("unstamped context_length won over the builtin: got %d, want 8192", out.ContextLen)
+	}
+	if out.Dimensions != 1024 {
+		t.Errorf("unstamped dimensions won over the builtin: got %d, want 1024", out.Dimensions)
+	}
+	if out.Name != "Amazon Nova Embeddings v2" {
+		t.Errorf("unstamped name won over the builtin: got %q", out.Name)
+	}
+	if len(out.AuthoredFacts) != 0 {
+		t.Errorf("an ignored overlay left provenance behind: got %v", out.AuthoredFacts)
+	}
+
+	stamped := unstamped
+	stamped.AuthoredFacts = []string{FactContextLen, FactDimensions, FactName}
+	out = mergeFields(builtin, stamped, true)
+	if out.ContextLen != 2048 || out.Dimensions != 384 || out.Name != "Nova (stale copy)" {
+		t.Errorf("a stamped user row did not override the builtin facts: %+v", out)
+	}
+	for _, fact := range AuthoredFactNames() {
+		if !HasAuthoredFact(out, fact) {
+			t.Errorf("provenance for %q did not travel with the facts: got %v", fact, out.AuthoredFacts)
+		}
+	}
+
+	// Between two user scopes neither side owns the facts, so the vault row
+	// still wins on any non-zero value, and the stamp travels with them.
+	out = mergeFields(builtin, unstamped, false)
+	if out.ContextLen != 2048 {
+		t.Errorf("vault-over-global overlay dropped the vault context_length: got %d", out.ContextLen)
 	}
 }
 
@@ -954,5 +1016,98 @@ func TestKnownInvokeStrategies_AllAccounted(t *testing.T) {
 	}
 	if IsKnownInvokeStrategy("") || IsKnownInvokeStrategy("made_up_strategy") {
 		t.Error("IsKnownInvokeStrategy should reject empty and unknown values")
+	}
+}
+
+// Bugbot B3, reproduced end to end by the challenger: the vault-over-global
+// overlay used to take the vault row's facts unconditionally AND overwrite the
+// provenance with the vault row's empty one. The builtin overlay then ignored
+// the now-unlisted value, so a name the user really had typed globally reverted
+// to the builtin's. Provenance has to survive the user-user merge for the
+// builtin merge to honor it.
+func TestMergeFields_AuthoredGlobalFactSurvivesAnUnstampedVaultRow(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	global := ModelInfo{
+		ID: nova, Provider: "bedrock", Type: "embedding",
+		ContextLen: 4096, AuthoredFacts: []string{FactContextLen},
+	}
+	vault := ModelInfo{ID: nova, Provider: "bedrock", ContextLen: 2048}
+
+	merged := mergeFields(global, vault, false)
+	if merged.ContextLen != 4096 {
+		t.Errorf("an unlisted vault value overwrote the authored global one: got %d, want 4096", merged.ContextLen)
+	}
+	if !HasAuthoredFact(merged, FactContextLen) {
+		t.Errorf("the global row's provenance was lost in the user-user merge: %v", merged.AuthoredFacts)
+	}
+
+	// And the value then survives the builtin overlay, which is the half the
+	// user actually sees.
+	var builtin ModelInfo
+	for _, m := range BuiltinCatalog() {
+		if m.Provider == "bedrock" && m.ID == nova {
+			builtin = m
+		}
+	}
+	if got := mergeFields(builtin, merged, true).ContextLen; got != 4096 {
+		t.Errorf("after the builtin overlay the authored value is %d, want 4096", got)
+	}
+
+	// A vault row that DID author the fact still wins, as it always has.
+	vaultAuthored := ModelInfo{
+		ID: nova, Provider: "bedrock",
+		ContextLen: 2048, AuthoredFacts: []string{FactContextLen},
+	}
+	if got := mergeFields(global, vaultAuthored, false).ContextLen; got != 2048 {
+		t.Errorf("an authored vault value did not beat an authored global one: got %d, want 2048", got)
+	}
+
+	// A model no builtin declares has no owner to defer to, so an unlisted
+	// vault value keeps winning: the user files are all there is.
+	g2 := ModelInfo{ID: "made.up.model", Provider: "bedrock", Type: "generation", ContextLen: 4096}
+	v2 := ModelInfo{ID: "made.up.model", Provider: "bedrock", ContextLen: 2048}
+	if got := mergeFields(g2, v2, false).ContextLen; got != 2048 {
+		t.Errorf("vault-over-global regressed for an unlisted, unowned fact: got %d, want 2048", got)
+	}
+}
+
+// Bugbot B2: one stamp for three independent facts. A row that authored ONLY
+// its context length was swapped in as the donor for all three, so a freshly
+// discovered sibling route inherited that row's EMPTY name instead of the
+// builtin's.
+func TestMergeFields_ProvenanceIsPerFact(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	var builtin ModelInfo
+	for _, m := range BuiltinCatalog() {
+		if m.Provider == "bedrock" && m.ID == nova {
+			builtin = m
+		}
+	}
+	if builtin.Name == "" || builtin.ContextLen == 0 {
+		t.Fatalf("the builtin %s row no longer carries the facts this test watches", nova)
+	}
+
+	// Typed the context length; the name and dimensions on the row are a stale
+	// copy an older probe save took off the merged view.
+	top := ModelInfo{
+		ID: nova, Provider: "bedrock",
+		Name: "Nova (stale copy)", Dimensions: 384, ContextLen: 2048,
+		AuthoredFacts: []string{FactContextLen},
+	}
+	out := mergeFields(builtin, top, true)
+	if out.ContextLen != 2048 {
+		t.Errorf("the authored context length was ignored: got %d, want 2048", out.ContextLen)
+	}
+	if out.Name != builtin.Name {
+		t.Errorf("an unlisted name won on the strength of a listed context length: got %q, want %q", out.Name, builtin.Name)
+	}
+	if out.Dimensions != builtin.Dimensions {
+		t.Errorf("unlisted dimensions won: got %d, want %d", out.Dimensions, builtin.Dimensions)
+	}
+	if HasAuthoredFact(out, FactName) || HasAuthoredFact(out, FactDimensions) {
+		t.Errorf("provenance was granted to facts the user never typed: %v", out.AuthoredFacts)
+	}
+	if !HasAuthoredFact(out, FactContextLen) {
+		t.Errorf("the typed fact lost its provenance: %v", out.AuthoredFacts)
 	}
 }

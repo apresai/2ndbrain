@@ -59,7 +59,9 @@ func LoadUserCatalog(vaultRoot string) []ModelInfo {
 
 	merged := make([]ModelInfo, 0, len(global)+len(perVault))
 	merged = append(merged, global...)
-	merged = overlay(merged, perVault)
+	// Both sides are user files, so neither owns a fact the other must defer
+	// to: the per-vault row keeps winning on every value it sets.
+	merged = overlay(merged, perVault, false)
 	for i := range merged {
 		tagAsUserCatalog(&merged[i])
 	}
@@ -83,6 +85,18 @@ func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelI
 	if err != nil {
 		return err
 	}
+
+	// Canonicalize the INCOMING row the same way readCatalogForWrite has just
+	// canonicalized the stored ones. Doing it on one side only is how a save of
+	// a deliberately route-less row came to APPEND a twin instead of replacing:
+	// `models add` describes a MODEL, not an endpoint, so it writes no plane,
+	// while the stored row it means to update was upgraded to its builtin's
+	// plane on read. The route keys then missed, the model ended up with two
+	// template rows, and the user-user overlay merged the stale one's facts
+	// back over the fresh one.
+	canonical := []ModelInfo{entry}
+	canonicalizeUserRoutes(canonical, BuiltinCatalog())
+	entry = canonical[0]
 
 	// Replace the row for this exact ROUTE. Matching on (provider, id) would
 	// let a probe of one endpoint overwrite another endpoint's verdict, which
@@ -361,7 +375,14 @@ func writeCatalog(path string, cat UserCatalog) error {
 // overlay replaces entries in base with matching entries from overlay (by
 // provider+id) and appends any overlay entries that don't exist in base.
 // Returns a new slice; inputs are not mutated.
-func overlay(base, top []ModelInfo) []ModelInfo {
+//
+// baseIsBuiltin says whether `base` is the BUILTIN catalog. It is the caller's
+// answer to "does anything here own a fact the overlay cannot?", and it gates
+// the fields the builtin owns (see mergeFields). There are exactly two overlays:
+// the builtin under the user file (true), and the global user file under the
+// per-vault one (false), where neither side is authoritative and the vault row
+// keeps winning as it always has.
+func overlay(base, top []ModelInfo, baseIsBuiltin bool) []ModelInfo {
 	if len(top) == 0 {
 		return base
 	}
@@ -378,7 +399,7 @@ func overlay(base, top []ModelInfo) []ModelInfo {
 	for _, m := range top {
 		key := routeKey(m.Route())
 		if i, ok := index[key]; ok {
-			out[i] = mergeFields(out[i], m)
+			out[i] = mergeFields(out[i], m, baseIsBuiltin)
 		} else {
 			out = append(out, m)
 			index[key] = len(out) - 1
@@ -401,17 +422,71 @@ func hasUserPriceOverride(m ModelInfo) bool {
 // correctly overrides a non-zero builtin price. Tier is monotonically
 // elevated (verified beats user_verified beats unverified) so bundled
 // prices can apply without demoting a user-verified entry.
-func mergeFields(base, top ModelInfo) ModelInfo {
+//
+// baseIsBuiltin marks the overlay of the user file onto the BUILTIN catalog,
+// where three groups of fields belong to the builtin: the model facts (decided
+// per field by takeTopFact below), ConfigHint, and Recommended. In the other
+// overlay, global user file under per-vault user file, neither side owns
+// anything outright, but an AUTHORED global fact still outranks an unlisted
+// vault mirror of it.
+// takeTopFact decides ONE model fact in an overlay: whether the overlay's value
+// replaces the base's, and whether the surviving value is the user's own.
+//
+// Over the BUILTIN catalog the overlay wins only when it lists the fact. An
+// unlisted value there is a copy some earlier save took off this very merged
+// view, and letting it win is what froze a stale context length past the
+// builtin's own correction.
+//
+// Between the two USER files neither side owns anything outright, so the vault
+// row wins as it always has, with one exception: when the GLOBAL row authored
+// the fact and the vault row did not, the global value and its listing survive.
+// Without that exception an unlisted vault mirror overwrote a name the user
+// really had typed globally AND cleared its provenance, so the later builtin
+// overlay then ignored the now-unlisted value and the user's own name reverted
+// to the builtin's.
+func takeTopFact(topSet, baseAuthored, topAuthored, baseIsBuiltin bool) (take, authored bool) {
+	if topAuthored && topSet {
+		return true, true
+	}
+	if baseIsBuiltin {
+		return false, false
+	}
+	if baseAuthored {
+		return false, true
+	}
+	return topSet, false
+}
+
+func mergeFields(base, top ModelInfo, baseIsBuiltin bool) ModelInfo {
 	out := base
-	if top.Name != "" {
+	// Name, Dimensions and ContextLen are MODEL FACTS, and each carries its own
+	// provenance, because the three are independent: a single row-level stamp
+	// let `models add --context-length` claim a name the user never typed, and
+	// let a row that typed only a context length overwrite a name with nothing.
+	//
+	// out starts as a copy of base, so AuthoredFacts is rebuilt rather than
+	// appended to: the two rows share the backing array otherwise.
+	var authored []string
+	takeFact := func(fact string, topSet bool) bool {
+		take, isAuthored := takeTopFact(topSet, HasAuthoredFact(base, fact), HasAuthoredFact(top, fact), baseIsBuiltin)
+		if isAuthored {
+			authored = append(authored, fact)
+		}
+		return take
+	}
+	if takeFact(FactName, top.Name != "") {
 		out.Name = top.Name
 	}
-	if top.Dimensions != 0 {
+	if takeFact(FactDimensions, top.Dimensions != 0) {
 		out.Dimensions = top.Dimensions
 	}
-	if top.ContextLen != 0 {
+	if takeFact(FactContextLen, top.ContextLen != 0) {
 		out.ContextLen = top.ContextLen
 	}
+	out.AuthoredFacts = WithAuthoredFacts(nil, authored...)
+	// SupportedDimensions and Modalities stay builtin-only: no user-catalog
+	// writer sets them, so there has never been anything to overlay.
+	//
 	// When the overlay declares a price source, treat prices as intentional
 	// even if zero. Otherwise only non-zero overrides apply (protects builtin
 	// prices from overlays that haven't populated them).
@@ -440,7 +515,10 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 			out.PriceRequest = top.PriceRequest
 		}
 	}
-	if top.ConfigHint != "" {
+	// ConfigHint is GENERATED from (provider, type, id) by the builtin catalog.
+	// No flag writes it, so a copy in a user file is only ever a snapshot of an
+	// older builtin, and the builtin keeps it.
+	if top.ConfigHint != "" && !baseIsBuiltin {
 		out.ConfigHint = top.ConfigHint
 	}
 	if top.Notes != "" {
@@ -486,10 +564,12 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 		out.Enabled = &e
 	}
 	out.Tier = elevateTier(out.Tier, top.Tier)
-	// Curation is add-only: an overlay may recommend a model, but a user
-	// catalog entry (which omits the field) must never demote a builtin
-	// recommendation.
-	if top.Recommended {
+	// Curation belongs to the builtin catalog, which is the only place a model
+	// is recommended or demoted. `models verify` used to copy the merged row's
+	// Recommended back into the user file, so the mirror could keep promoting a
+	// model the catalog had since demoted, and no command could clear it.
+	// Between the two user scopes the old add-only rule still applies.
+	if top.Recommended && !baseIsBuiltin {
 		out.Recommended = true
 	}
 	if top.Local {
@@ -568,6 +648,37 @@ func UserThresholdRow(vaultRoot, provider, modelID string) (ModelInfo, UserCatal
 		}
 		for _, m := range userCatalogRows(scope, vaultRoot) {
 			if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && IsUserThreshold(m) {
+				return m, scope, true
+			}
+		}
+	}
+	return ModelInfo{}, "", false
+}
+
+// UnstampedThresholdRow finds a stored row that carries a positive
+// recommended_similarity_threshold WITHOUT the provenance stamp: a value 2nb
+// IGNORES, because it cannot tell a measurement from a copy of a builtin
+// recommendation that has since changed.
+//
+// It is the reporting twin of UserThresholdRow, and takes the same per-scope
+// view of RAW rows for the same reason: a vault row and a global row are
+// separate statements, and the merged view would hide one behind the other. The
+// vault scope is searched first so `ai status` names the file closest to the
+// user. Nothing consumes the value; it exists so a user whose threshold stopped
+// applying is told which key stopped applying and how to keep it.
+func UnstampedThresholdRow(vaultRoot, provider, modelID string) (ModelInfo, UserCatalogScope, bool) {
+	if provider == "" || modelID == "" {
+		return ModelInfo{}, "", false
+	}
+	for _, scope := range []UserCatalogScope{ScopeVault, ScopeGlobal} {
+		if scope == ScopeVault && vaultRoot == "" {
+			continue
+		}
+		for _, m := range userCatalogRows(scope, vaultRoot) {
+			if m.Type != "embedding" || m.Provider != provider || m.ID != modelID {
+				continue
+			}
+			if m.RecommendedSimilarityThreshold > 0 && m.ThresholdSource != ThresholdSourceUser {
 				return m, scope, true
 			}
 		}

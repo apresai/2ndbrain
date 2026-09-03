@@ -347,3 +347,49 @@ func TestContract_FailedRenameIsReportedAsFailed(t *testing.T) {
 		}
 	})
 }
+
+// H. `--yaml` is the json view in YAML syntax, so it uses the SAME field names.
+// yaml.v3 lowercases a bare Go field name and honors no json `omitempty`, and
+// every output struct here carries json tags only, so --yaml used to invent a
+// third set of key names that matched neither the documented json shape nor
+// anything a consumer could look up: `modifiedat`, `sourcepath`, `targetraw`.
+func TestContract_YAMLUsesTheJSONFieldNames(t *testing.T) {
+	_, root := newContractVault(t)
+	body := "---\ntitle: Doc\ntype: note\nstatus: draft\n---\nintro\n\nA broken [[no-such-note]] link.\n"
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	cases := []struct {
+		argv     []string
+		wantKeys []string
+		wantNot  []string
+	}{
+		// `list` rows carry modified_at / created_at.
+		{[]string{"list", "--format", "yaml"}, []string{"modified_at:"}, []string{"modifiedat", "createdat"}},
+		// `unresolved` rows carry source_path / target_raw.
+		{[]string{"unresolved", "--format", "yaml"}, []string{"source_path:", "target_raw:"}, []string{"sourcepath", "targetraw"}},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.argv, " "), func(t *testing.T) {
+			out, err := runCLIArgs(t, root, tc.argv...)
+			if err != nil {
+				t.Fatalf("%v: %v\n%s", tc.argv, err, out)
+			}
+			s := string(out)
+			for _, want := range tc.wantKeys {
+				if !strings.Contains(s, want) {
+					t.Errorf("missing json field name %q in:\n%s", want, s)
+				}
+			}
+			for _, unwanted := range tc.wantNot {
+				if strings.Contains(s, unwanted) {
+					t.Errorf("yaml emitted the Go field name %q instead of the json one:\n%s", unwanted, s)
+				}
+			}
+		})
+	}
+}

@@ -246,10 +246,14 @@ func runModelsVerify(cmd *cobra.Command, args []string) error {
 			return
 		}
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
-		entry.Recommended = m.Recommended // preserve curation on the saved entry
+		// Recommended is NOT written back: `m` is a merged row, so this copied
+		// the builtin's curation into the user file, where a stale mirror kept
+		// promoting a model the catalog had since demoted and no command could
+		// clear it. The builtin owns curation and reapplies it on every read.
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
 		adoptCandidateRouting(&entry, m)
+		preserveUserFacts(scope, v.Root, &entry)
 		preserveUserThreshold(scope, v.Root, &entry)
 		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr != nil && humanMode {
