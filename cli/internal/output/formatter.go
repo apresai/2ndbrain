@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -53,9 +54,37 @@ func Write(w io.Writer, format Format, data any) error {
 	}
 }
 
-// writeText renders a best-effort plain-text view: strings/[]byte/Serialize()
-// verbatim (like raw), a slice as one %v-rendered element per line, and any
-// other value via %v. Useful for human-readable piping where JSON is overkill.
+// writeText renders a plain-text view for READING. A document body is emitted
+// verbatim (a string, a []byte, or a value with Serialize(), so `read --format
+// text` and `git diff --format text` still print the body); every other value
+// renders as named lines.
+//
+// It used to render a slice element, and any non-slice value, with %v. %v on a
+// struct prints Go's own debug syntax, so the format that promises plain text
+// emitted a struct dump: `list --format text` printed
+// `{cb9316a1-... resources/x.md Title note draft 2026-...}` (positional, no
+// field names, unparseable), `folders --format text` printed `{resources 5}`,
+// `models list --format text` printed one such line per model, and `config show
+// --format text` printed a HEAP ADDRESS (`0x353ff8c07860`) for its nested
+// config pointer. A memory address is not output.
+//
+// The shapes, in order:
+//   - a slice of structs: one line per row, `name=value` pairs
+//   - a single struct: one `name: value` per line
+//   - a map: one `key: value` per line, keys sorted
+//   - a slice of scalars: one value per line (unchanged)
+//   - anything else: %v (unchanged)
+//
+// Names come from the json tag, so text, json and csv agree about what a field
+// is called. Values render through delimitedCell, so a pointer or interface is
+// dereferenced (`true`, not an address), a composite is compact JSON with
+// sorted keys, and a time is RFC3339. A nil pointer/interface/map/slice, and an
+// `,omitempty` field at its zero value, are OMITTED: that is what drops the
+// `<nil>` columns and the empty positional gaps a 30-field row was mostly made
+// of.
+//
+// text is for reading, not for cutting: a value containing a space is not
+// quoted and nothing is escaped. Use tsv (or json) to split fields.
 func writeText(w io.Writer, data any) error {
 	switch v := data.(type) {
 	case string:
@@ -73,20 +102,159 @@ func writeText(w io.Writer, data any) error {
 		_, err = w.Write(b)
 		return err
 	}
+
 	rv := reflect.ValueOf(data)
-	if rv.Kind() == reflect.Ptr {
+	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			break
+		}
 		rv = rv.Elem()
 	}
-	if rv.Kind() == reflect.Slice {
-		for i := 0; i < rv.Len(); i++ {
-			if _, err := fmt.Fprintf(w, "%v\n", rv.Index(i).Interface()); err != nil {
-				return err
-			}
-		}
-		return nil
+	switch {
+	case !rv.IsValid():
+		// A nil interface: %v is "<nil>", which is what it has always printed.
+	case rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array:
+		return writeTextRows(w, rv)
+	case isRowStruct(rv.Type()):
+		return writeTextPairs(w, structTextPairs(rv))
+	case rv.Kind() == reflect.Map:
+		return writeTextPairs(w, mapTextPairs(rv))
 	}
 	_, err := fmt.Fprintf(w, "%v\n", data)
 	return err
+}
+
+// textPair is one rendered field: its name and its already-formatted value.
+type textPair struct {
+	name  string
+	value string
+}
+
+// writeTextPairs writes one `name: value` per line (the single-struct and map
+// shapes).
+func writeTextPairs(w io.Writer, pairs []textPair) error {
+	for _, p := range pairs {
+		if _, err := fmt.Fprintf(w, "%s: %s\n", p.name, p.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeTextRows writes one line per slice element: `name=value` pairs for a
+// struct row, the value alone for a scalar.
+func writeTextRows(w io.Writer, rv reflect.Value) error {
+	elem := rv.Type().Elem()
+	for elem.Kind() == reflect.Ptr {
+		elem = elem.Elem()
+	}
+	rows := isRowStruct(elem)
+	for i := range rv.Len() {
+		item := rv.Index(i)
+		if rows {
+			for item.Kind() == reflect.Ptr && !item.IsNil() {
+				item = item.Elem()
+			}
+			if item.Kind() != reflect.Struct {
+				// A nil element in a slice of pointers keeps its %v form.
+				if _, err := fmt.Fprintf(w, "%v\n", item.Interface()); err != nil {
+					return err
+				}
+				continue
+			}
+			pairs := structTextPairs(item)
+			parts := make([]string, len(pairs))
+			for j, p := range pairs {
+				parts[j] = p.name + "=" + p.value
+			}
+			if _, err := fmt.Fprintln(w, strings.Join(parts, " ")); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintln(w, delimitedCell(item)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// textMarshalerType is encoding.TextMarshaler, used to tell a struct that
+// renders ITSELF as text (time.Time) from one that is a row of fields.
+var textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+
+// isRowStruct reports whether t is a struct the text renderer should expand
+// into named fields. A struct with its own text form is a scalar, not a row:
+// expanding time.Time into wall/ext/loc would be exactly the debug dump this
+// renderer exists to stop.
+func isRowStruct(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	return !t.Implements(textMarshalerType) && !reflect.PointerTo(t).Implements(textMarshalerType)
+}
+
+// structTextPairs renders a struct's exported fields, dropping the ones that
+// carry nothing: a nil pointer/interface/map/slice, and an `,omitempty` field
+// at its zero value (the same fields the json view omits).
+func structTextPairs(rv reflect.Value) []textPair {
+	specs := fieldSpecs(rv.Type())
+	pairs := make([]textPair, 0, len(specs))
+	for _, sp := range specs {
+		f := rv.Field(sp.index)
+		if isNilValue(f) {
+			continue
+		}
+		if sp.omitEmpty && isEmptyValue(f) {
+			continue
+		}
+		pairs = append(pairs, textPair{name: sp.name, value: delimitedCell(f)})
+	}
+	return pairs
+}
+
+// mapTextPairs renders a map's entries sorted by key, so the same map always
+// prints in the same order.
+func mapTextPairs(rv reflect.Value) []textPair {
+	keys := rv.MapKeys()
+	pairs := make([]textPair, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, textPair{
+			name:  fmt.Sprintf("%v", k.Interface()),
+			value: delimitedCell(rv.MapIndex(k)),
+		})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
+	return pairs
+}
+
+// isNilValue reports whether v is a nil reference of any kind.
+func isNilValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	}
+	return false
+}
+
+// isEmptyValue is encoding/json's own omitempty test, so the text view omits
+// exactly the fields the json view omits.
+func isEmptyValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return v.Len() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil()
+	}
+	return false
 }
 
 func writeRaw(w io.Writer, data any) error {
@@ -263,7 +431,61 @@ func delimitedCell(field reflect.Value) string {
 		}
 		return string(b)
 	}
-	return fmt.Sprintf("%v", field.Interface())
+	// v, not field: the loop above already dereferenced any pointer or
+	// interface, and %v on the POINTER prints a heap address. A `*bool` set to
+	// true rendered as `0x14000122a30` in csv, tsv and text alike (ModelInfo's
+	// `reachable` and `credentials` are the live ones). A nil pointer returned
+	// above with its `<nil>`, which is a real answer; an address never is.
+	return fmt.Sprintf("%v", v.Interface())
+}
+
+// fieldSpec is one struct field as the output formatters see it: where it sits
+// in the struct, the name its json tag gives it (the Go name when it has none),
+// and whether that tag carries omitempty.
+type fieldSpec struct {
+	index     int
+	name      string
+	omitEmpty bool
+}
+
+// fieldSpecs describes every EXPORTED field of a struct type, in declaration
+// order. Unexported fields are skipped because reflect refuses Interface() on
+// one, so rendering it panics; no output struct in this repo has any, which is
+// the only reason the previous NumField() loop never hit it.
+func fieldSpecs(t reflect.Type) []fieldSpec {
+	specs := make([]fieldSpec, 0, t.NumField())
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if f.PkgPath != "" {
+			continue
+		}
+		spec := fieldSpec{index: i, name: f.Name}
+		if tag := f.Tag.Get("json"); tag != "" && tag != "-" {
+			parts := strings.Split(tag, ",")
+			if parts[0] != "" {
+				spec.name = parts[0]
+			}
+			for _, opt := range parts[1:] {
+				if opt == "omitempty" {
+					spec.omitEmpty = true
+				}
+			}
+		}
+		specs = append(specs, spec)
+	}
+	return specs
+}
+
+// fieldNames is the csv/tsv header row for a struct type: one json field name
+// per exported field. Shared with the text renderer so the two views can never
+// disagree about what a column is called.
+func fieldNames(t reflect.Type) []string {
+	specs := fieldSpecs(t)
+	names := make([]string, len(specs))
+	for i, sp := range specs {
+		names[i] = sp.name
+	}
+	return names
 }
 
 func writeStructSliceCSV(cw *csv.Writer, v reflect.Value) error {
@@ -277,16 +499,8 @@ func writeStructSliceCSV(cw *csv.Writer, v reflect.Value) error {
 		first = first.Elem()
 	}
 	t := first.Type()
-	headers := make([]string, t.NumField())
-	for i := range t.NumField() {
-		tag := t.Field(i).Tag.Get("json")
-		if tag == "" || tag == "-" {
-			headers[i] = t.Field(i).Name
-		} else {
-			headers[i] = strings.Split(tag, ",")[0]
-		}
-	}
-	if err := cw.Write(headers); err != nil {
+	specs := fieldSpecs(t)
+	if err := cw.Write(fieldNames(t)); err != nil {
 		return err
 	}
 
@@ -296,9 +510,9 @@ func writeStructSliceCSV(cw *csv.Writer, v reflect.Value) error {
 		if row.Kind() == reflect.Ptr {
 			row = row.Elem()
 		}
-		record := make([]string, row.NumField())
-		for j := range row.NumField() {
-			record[j] = delimitedCell(row.Field(j))
+		record := make([]string, len(specs))
+		for j, sp := range specs {
+			record[j] = delimitedCell(row.Field(sp.index))
 		}
 		if err := cw.Write(record); err != nil {
 			return err

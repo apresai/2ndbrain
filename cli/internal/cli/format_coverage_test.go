@@ -147,6 +147,60 @@ func TestContract_ReportCommandsHonorEveryFormat(t *testing.T) {
 	}
 }
 
+// `--format text` promises plain text and delivered Go's %v rendering of the
+// payload: `list --format text` printed `{cb9316a1-... resources/x.md Title
+// note draft 2026-...}`, `folders` printed `{(root) 1}`, `models list` printed
+// one such line per model, and `config show` printed a HEAP ADDRESS for its
+// nested config pointer. A row renders as named pairs now, and a single struct
+// as named lines.
+//
+// The discriminator is that a line must not START with "{" (that is the struct
+// dump); a "{" INSIDE a value is the compact JSON of a composite cell, which is
+// what `config show`'s nested config legitimately renders as.
+func TestContract_TextFormatRendersReadableLines(t *testing.T) {
+	root, _ := newFormatCoverageVault(t)
+
+	cases := []struct {
+		name   string
+		argv   []string
+		want   []string
+		absent []string
+	}{
+		{"list", []string{"list"}, []string{"path=doc.md", "title=Doc", "type=note"}, []string{"0x", "{"}},
+		{"folders", []string{"folders"}, []string{"folder=(root)", "count=1"}, []string{"0x", "{"}},
+		{"config show", []string{"config", "show"}, []string{"vault_root: ", "vault_name: "}, []string{"0x"}},
+		{"models list", []string{"models", "list"}, []string{"id=", "provider="}, []string{"0x", "<nil>"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runCLIArgs(t, root, append(append([]string{}, tc.argv...), "--format", "text")...)
+			if err != nil {
+				t.Fatalf("--format text: %v\n%s", err, out)
+			}
+			text := string(out)
+			if strings.TrimSpace(text) == "" {
+				t.Fatalf("--format text produced nothing")
+			}
+			for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+				if strings.HasPrefix(line, "{") {
+					t.Errorf("line is a Go struct dump, not text: %q", line)
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing %q in:\n%s", want, text)
+				}
+			}
+			for _, unwanted := range tc.absent {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("output still carries %q:\n%s", unwanted, text)
+				}
+			}
+		})
+	}
+}
+
 // jsonPortion trims anything the command wrote to stderr ahead of its JSON
 // document; runCLIArgs captures stdout and stderr into one buffer.
 func jsonPortion(out []byte) []byte {

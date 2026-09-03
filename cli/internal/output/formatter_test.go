@@ -161,6 +161,124 @@ func TestWrite_Text(t *testing.T) {
 	})
 }
 
+// textRow carries the four shapes that made the old %v renderer unreadable: a
+// nil pointer, a time, a nested map, and an omitempty string left empty.
+type textRow struct {
+	Path      string         `json:"path"`
+	Reachable *bool          `json:"reachable"`
+	Modified  time.Time      `json:"modified"`
+	Meta      map[string]any `json:"meta"`
+	Note      string         `json:"note,omitempty"`
+	Count     int            `json:"count"`
+}
+
+// The reported defect: `--format text` printed Go's %v rendering of a struct.
+// `2nb list --format text` emitted `{cb9316a1-... resources/x.md Title note
+// draft 2026-...}`: no field names, positional, unparseable, and for a struct
+// holding a pointer (`config show`) a HEAP ADDRESS. A row renders as named
+// pairs now.
+func TestWrite_TextStructSliceIsNamedPairs(t *testing.T) {
+	yes := true
+	rows := []textRow{
+		{
+			Path:     "a.md",
+			Modified: time.Date(2026, 9, 3, 13, 22, 25, 0, time.UTC),
+			Meta:     map[string]any{"zeta": 1, "alpha": "one"},
+		},
+		{Path: "b.md", Reachable: &yes, Count: 2},
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatText, rows); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	out := buf.String()
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want one line per row, got %d:\n%s", len(lines), out)
+	}
+	// A line that STARTS with "{" is the Go struct dump; a "{" inside a value
+	// is the compact JSON of a composite cell, which is the intended shape.
+	for i, line := range lines {
+		if strings.HasPrefix(line, "{") {
+			t.Errorf("line %d is still a Go struct dump: %q", i, line)
+		}
+	}
+	if strings.Contains(out, "0x") {
+		t.Errorf("text output carries a heap address:\n%s", out)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Errorf("a nil field was rendered rather than omitted:\n%s", out)
+	}
+
+	// Row 1: names present, time as RFC3339, map as sorted-key JSON.
+	for _, want := range []string{"path=a.md", "modified=2026-09-03T13:22:25Z", `meta={"alpha":"one","zeta":1}`, "count=0"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("row 1 missing %q: %q", want, lines[0])
+		}
+	}
+	// A nil pointer and an omitempty zero are omitted; a plain zero is not
+	// (count=0 above), because the json view keeps it too.
+	if strings.Contains(lines[0], "reachable=") {
+		t.Errorf("nil pointer field was not omitted: %q", lines[0])
+	}
+	if strings.Contains(lines[0], "note=") {
+		t.Errorf("omitempty empty string was not omitted: %q", lines[0])
+	}
+	// Row 2: a non-nil pointer is its VALUE, which is the case that printed an
+	// address.
+	if !strings.Contains(lines[1], "reachable=true") {
+		t.Errorf("row 2 should render the pointed-to value: %q", lines[1])
+	}
+}
+
+// A single struct (the `config show` shape) renders one field per line, and a
+// nested pointer renders as its content rather than as its address.
+func TestWrite_TextSingleStructIsNamedLines(t *testing.T) {
+	type inner struct {
+		A string `json:"a"`
+		B int    `json:"b"`
+	}
+	type outer struct {
+		Name string `json:"name"`
+		Cfg  *inner `json:"cfg"`
+		Gone *inner `json:"gone"`
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatText, outer{Name: "vault", Cfg: &inner{A: "one", B: 2}}); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "0x") {
+		t.Fatalf("nested pointer rendered as a heap address:\n%s", out)
+	}
+	if !strings.Contains(out, "name: vault") {
+		t.Errorf("missing `name: vault`:\n%s", out)
+	}
+	if !strings.Contains(out, `cfg: {"a":"one","b":2}`) {
+		t.Errorf("nested struct should render as compact JSON:\n%s", out)
+	}
+	if strings.Contains(out, "gone:") {
+		t.Errorf("nil pointer field was not omitted:\n%s", out)
+	}
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if strings.HasPrefix(line, "{") {
+			t.Errorf("line is a Go struct dump: %q", line)
+		}
+	}
+}
+
+// A map renders sorted, so the same value always prints the same way (Go's %v
+// on a map has no ordering guarantee at all).
+func TestWrite_TextMapIsSorted(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatText, map[string]any{"zeta": 1, "alpha": "one", "mid": true}); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	if got, want := buf.String(), "alpha: one\nmid: true\nzeta: 1\n"; got != want {
+		t.Errorf("map text = %q, want %q", got, want)
+	}
+}
+
 func TestWrite_MD_IsRaw(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, FormatMD, "# Heading\n\nbody"); err != nil {
@@ -431,6 +549,41 @@ func TestWriteDelimited_NilTextMarshalerPointer(t *testing.T) {
 	}
 	if recs[1][0] != "<nil>" {
 		t.Errorf("nil *time.Time cell = %q, want <nil>", recs[1][0])
+	}
+}
+
+// A NON-nil pointer to a scalar rendered as a heap address: the fallback ran
+// %v on the pointer rather than on what it points at, so ModelInfo's
+// `reachable` and `credentials` columns came out as `0x14000122a30`. A nil
+// pointer keeps its `<nil>`, which is a real answer; an address never is.
+func TestWriteDelimited_PointerCellsRenderTheirValue(t *testing.T) {
+	type row struct {
+		Reachable *bool   `json:"reachable"`
+		Count     *int    `json:"count"`
+		Missing   *string `json:"missing"`
+	}
+	yes, n := true, 7
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatCSV, []row{{Reachable: &yes, Count: &n}}); err != nil {
+		t.Fatalf("csv: %v", err)
+	}
+	raw := buf.String()
+	if strings.Contains(raw, "0x") {
+		t.Fatalf("csv rendered a pointer as a heap address:\n%s", raw)
+	}
+	recs, err := csv.NewReader(strings.NewReader(raw)).ReadAll()
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("csv is not parseable (%v):\n%s", err, raw)
+	}
+	cell := map[string]string{}
+	for i, h := range recs[0] {
+		cell[h] = recs[1][i]
+	}
+	if cell["reachable"] != "true" || cell["count"] != "7" {
+		t.Errorf("pointer cells = reachable %q count %q, want true and 7", cell["reachable"], cell["count"])
+	}
+	if cell["missing"] != "<nil>" {
+		t.Errorf("nil pointer cell = %q, want <nil>", cell["missing"])
 	}
 }
 

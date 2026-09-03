@@ -206,7 +206,7 @@ The tables below are the overview; the full per-command reference (every flag, J
 
 Commands are organized into groups (`2nb --help` shows the full list).
 
-**Global flags:** `--json`, `--csv`, `--yaml`, `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--vault`, `--unconfigured` (permit a write to a vault Obsidian doesn't know, and without it such a write is refused; only actual writes are gated, so `meta --get`, bare `meta`, and `daily read` on a note that already exists never need it), `--copy` (also copy output to the clipboard), `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
+**Global flags:** `--json`, `--csv`, `--yaml`, `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`; `raw`/`md` emit a document body and are refused on a value that has none, `text` renders anything else as `name=value` lines for reading, `tsv` is the one to parse), `--porcelain`, `--vault`, `--unconfigured` (permit a write to a vault Obsidian doesn't know, and without it such a write is refused; only actual writes are gated, so `meta --get`, bare `meta`, and `daily read` on a note that already exists never need it), `--copy` (also copy output to the clipboard), `--verbose` (`-v` for debug logging to stderr and `.2ndbrain/logs/cli.log`)
 
 ### Getting Started
 
