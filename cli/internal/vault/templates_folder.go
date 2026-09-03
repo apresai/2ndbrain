@@ -98,13 +98,21 @@ func isUnderFolder(relPath, folder string) bool {
 	return rel == folder || strings.HasPrefix(rel, folder+"/")
 }
 
+// ExcludedFolderFor returns the excluded folder a vault-relative path sits in.
+// Callers that report the exclusion to a user need the folder's name: "not
+// indexed" is not actionable without knowing which setting caused it.
+func ExcludedFolderFor(relPath string, folders []string) (string, bool) {
+	for _, f := range folders {
+		if isUnderFolder(relPath, f) {
+			return f, true
+		}
+	}
+	return "", false
+}
+
 // IsExcludedFolderPath reports whether a vault-relative path sits in any of the
 // given excluded folders.
 func IsExcludedFolderPath(relPath string, folders []string) bool {
-	for _, f := range folders {
-		if isUnderFolder(relPath, f) {
-			return true
-		}
-	}
-	return false
+	_, ok := ExcludedFolderFor(relPath, folders)
+	return ok
 }

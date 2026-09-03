@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -145,6 +146,18 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 			doc := docs[i]
 			parsed, err := document.ParseFile(v.AbsPath(doc.Path))
 			if err != nil {
+				if errors.Is(err, document.ErrRead) {
+					// Could not READ it this run. That is a real failure of the
+					// pass (the document still needs embedding and did not get
+					// it), not a note to go fix: nothing is known about its
+					// contents, and a force-reembed must not call itself
+					// complete while a document it could not open is missing
+					// from the index.
+					results[i].failed = 1
+					slog.Warn("embedding failed: could not read note", "path", doc.Path, "err", err)
+					emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedFailed, Err: err})
+					return
+				}
 				// Not a failure of the embed call: nothing was sent. Report it
 				// so the note can be fixed, and let the rest of the pass count
 				// as complete.

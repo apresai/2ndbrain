@@ -119,7 +119,7 @@ func TestPurgeStale_ReturnsErrorOnClosedDB(t *testing.T) {
 		t.Fatalf("close db: %v", err)
 	}
 
-	err := purgeStale(v)
+	_, err := purgeStale(v, nil)
 	if err == nil {
 		t.Fatal("purgeStale on closed DB should return error")
 	}
@@ -150,7 +150,7 @@ func TestPurgeStale_RemovesMissingFiles(t *testing.T) {
 		t.Fatalf("remove file: %v", err)
 	}
 
-	if err := purgeStale(v); err != nil {
+	if _, err := purgeStale(v, nil); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 

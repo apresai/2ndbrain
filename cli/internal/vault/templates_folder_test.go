@@ -3,6 +3,7 @@ package vault
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -172,7 +173,13 @@ func TestIndexSingleFileRefusesATemplate(t *testing.T) {
 	writeObsidianJSON(t, root, []string{".obsidian", "templates.json"}, `{"folder":"templates"}`)
 	abs := writeNote(t, root, "templates/note.md", "---\ntitle: T\n---\n\nbody\n")
 
-	if err := IndexSingleFile(v, abs); err == nil {
+	err = IndexSingleFile(v, abs)
+	if err == nil {
 		t.Fatal("IndexSingleFile indexed a template; the per-save path must honor the same exclusion")
+	}
+	// Naming the folder is the actionable half: "not indexed" alone does not say
+	// which setting caused it.
+	if !strings.Contains(err.Error(), `"templates"`) {
+		t.Errorf("error = %v, want it to name the excluded folder", err)
 	}
 }
