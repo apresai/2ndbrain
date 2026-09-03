@@ -7,7 +7,7 @@
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `kb_info` | none | Vault overview: name, root, types/schemas, counts, AI readiness. Call first. |
-| `kb_search` | `query` (required), `type`, `status`, `tag`, `limit` | Hybrid BM25 plus vector search. Rank by `vector_score` (cosine), not `score` (RRF). |
+| `kb_search` | `query` (required), `type`, `status`, `tag`, `limit` | Hybrid BM25 plus vector search. Rank by `vector_score` (cosine), not `score` (RRF). Each row also carries `frontmatter`, the note's parsed frontmatter map (additive in 0.22.1; omitted when empty), so metadata is available without a second `kb_read`. |
 | `kb_ask` | `question` (required) | RAG answer plus source paths. Verify cites with `kb_read`. If no hits, drop to `kb_search`. |
 | `kb_read` | `path` (required), `chunk` | Read a vault-relative path, or one heading via `chunk`. |
 | `kb_list` | `type`, `status`, `tag`, `limit` | Enumerate docs by type/status/tag without content. No query. Follow with `kb_read`. |

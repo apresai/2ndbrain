@@ -58,13 +58,24 @@ If a file-synced vault carries a pre-flip saved calibration (for Nova, the old s
 query purpose collapsed the cosine scale (true-match cosine p50 is roughly `0.34`), so `0.65`
 now rejects every real match. See [search-tuning.md](search-tuning.md) for the full rationale.
 
+**A stale threshold can live in two files, and only one of them ports.** The per-vault
+`<vault>/.2ndbrain/models.yaml` travels with the vault; `~/.config/2nb/models.yaml` is
+machine-local and applies to EVERY vault on that machine, so a value there follows you around
+rather than following the vault. `2nb ai` names the file and row that carries the value it
+resolved, so start from what it prints.
+
 Fix it on the machine that inherited the stale value:
 
 ```bash
 2nb config set ai.similarity_threshold 0.25    # vault config wins over the saved calibration
 2nb models calibrate --save                     # re-derive a correct calibration, or
-#   remove the RecommendedSimilarityThreshold line from <vault>/.2ndbrain/models.yaml
+#   remove the recommended_similarity_threshold line from the row 2nb ai named
+#   (<vault>/.2ndbrain/models.yaml or ~/.config/2nb/models.yaml)
 ```
+
+A row that is UNSTAMPED and identical to the model's built-in recommendation is treated as a
+copy rather than a calibration and is ignored at read time, so a catalog contaminated by an
+older `2nb models bench` run needs no cleanup.
 
 ## Teaching an agent about 2nb on the new machine
 

@@ -13,9 +13,33 @@ Hybrid search drops vector hits below the active threshold. Resolution chain
 (`AIConfig.ResolveSimilarityThresholdFull`):
 
 1. Vault `ai.similarity_threshold` (if > 0)
-2. User catalog `RecommendedSimilarityThreshold` (`~/.config/2nb/models.yaml` or `.2ndbrain/models.yaml`)
+2. A USER-AUTHORED `recommended_similarity_threshold` in the user catalog
+   (`~/.config/2nb/models.yaml` or `.2ndbrain/models.yaml`)
 3. The active model's recommendation in `BuiltinCatalog()`
 4. `DefaultSimilarityThreshold` (`0.20`)
+
+### What counts as a user calibration (provenance)
+
+Rung 2 is not "any value present in the user file". `models calibrate --save` and
+`models add --similarity-threshold` are the only writers, and both stamp the row
+`threshold_source: user`. Every other save path (a probe, a benchmark, a
+promotion) seeds its row from the MERGED catalog, so before 0.22.1 they copied
+the BUILTIN recommendation into the user file, where it read back as a
+calibration nobody took and froze out any later change to the builtin value.
+`models bench` defaults to `--summary-scope global`, so one bench run in one
+vault flipped every vault on the machine.
+
+`ai.IsUserThreshold` is the predicate, and it self-heals contaminated catalogs at
+read time with no migration:
+
+| row | verdict |
+|---|---|
+| stamped `threshold_source: user` | the user's calibration |
+| unstamped and EQUAL to the builtin recommendation | a mirror; ignored, so the resolver falls through to the builtin |
+| unstamped and DIFFERENT from the builtin | a real calibration written before the stamp existed; kept |
+
+`2nb ai status` names the file and row carrying a calibration when it warns about
+a high threshold, and says so plainly when the value is the builtin's own.
 
 Different embedding models have very different baseline distributions. Builtin recommendations:
 Nova-2 `0.25` (measured on a real 151-doc vault under the asymmetric query purpose, see below),
@@ -51,7 +75,9 @@ Search results display `(rrf=X.XXX, cos=Y.YYY)` so semantic relevance is judgabl
 
 `2nb models calibrate` samples random doc pairs, computes the cosine distribution
 (p50/p90/p95/p99), and recommends `p95 + 0.01` rounded up. Default 500 samples; small vaults
-clamp to `n*(n-1)/2`. `--save` upserts a user-catalog entry carrying only the threshold.
+clamp to `n*(n-1)/2`. `--save` upserts a user-catalog entry carrying the threshold and its
+`threshold_source: user` stamp, which is what marks it as a measurement rather
+than a copy of the builtin recommendation.
 
 ## Hybrid Weighting
 

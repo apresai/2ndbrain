@@ -66,6 +66,8 @@ Replace a document's body, or just one heading's section content with `--section
 
 Resolve today's daily note from Obsidian's core daily-notes plugin config (`.obsidian/daily-notes.json`: folder, format, optional template). Bare `daily` resolves, creates the note if missing, and prints the vault-relative path. `daily path` is an explicit subcommand for the same resolve-and-print (it backs the obsidian-CLI `daily:path` form). `daily read` prints the note's body; `daily append` and `daily prepend` (`--text`, `--file`, or stdin) add to the body via the shared body-write path. A missing or disabled daily-notes plugin falls back to Obsidian defaults (root folder, `YYYY-MM-DD`); the command never hard-errors. The date format honors Moment's `[literal]` bracket-escaping.
 
+**The write gate applies only when the note has to be created.** `daily`, `daily path`, and `daily read` resolve through the read path when today's note already exists, so they need no `--unconfigured` on a vault Obsidian does not know. Creating today's note is a write and is gated, as are `daily append` and `daily prepend` unconditionally.
+
 ### meta
 
 View or update frontmatter with schema validation. Aliases: `frontmatter`, `fm`, `properties`.
@@ -75,6 +77,8 @@ View or update frontmatter with schema validation. Aliases: `frontmatter`, `fm`,
 - `--remove <key>` (repeatable) deletes a field in place, preserving comments and order. It refuses identity keys (id, path, title, type) and schema-required fields.
 
 Writes re-index the whole file (chunks, tags, links via `IndexSingleFile`), so a frontmatter tag change is reflected in `list --tag` immediately; re-embedding stays gated on the body content hash, so a metadata-only edit does not re-embed.
+
+**Only `--set` and `--remove` open the write path.** `--get` and the bare view are reads and need no `--unconfigured` on a vault Obsidian does not know. A flag combination that cannot run (`--get` with `--set`/`--remove`, or `--set` with `--remove`) is refused before the vault is opened, so the error names the flags rather than the vault.
 
 The obsolete positional form `meta set/get/remove <path> ...` is rewritten to the flag form by the argv preprocessor; a malformed variant it cannot rewrite errors with a copy-pasteable flag-form hint (exit `ExitValidation`) instead of Cobra's terse arg-count message.
 
@@ -131,6 +135,8 @@ Rebuild the index. `--doc <path>` indexes a single doc; `--force-reembed` invali
 Hybrid BM25 plus semantic search. Filters: `--type --status --tag --limit`. `--threshold` overrides the cosine cutoff; `--bm25-only` disables the vector channel.
 
 `--json` returns the envelope `{mode, warnings, results}`, not a bare array. All three keys are always present and never `null`; `mode` is `hybrid` or `keyword`, and `warnings` carries the `semantic search disabled: ` line when the vector channel is unusable. A query that matches nothing still returns the envelope with `results: []` (see "Global flags and output formats"), so a caller can always tell "nothing matched" apart from "semantic search is off". Full contract and the degraded-mode playbook: [agent-teaching.md](agent-teaching.md).
+
+**Row shape.** Every row carries `doc_id`, `path`, `title`, `chunk_id`, `heading_path`, `content`, `score`, `type`, `status`, and `frontmatter` (the note's parsed frontmatter map; omitted when it is empty). An **enumerate-by-filter** query, the documented blank-query-plus-filter form such as `search "type:adr"`, returns the same shape: its `content` is the first 200 characters of the note's FIRST chunk, with that chunk's `chunk_id` and `heading_path`. Before 0.22.1 those rows carried empty chunk fields and the note's frontmatter JSON as `content`. A note with no body has no chunks, so it still enumerates with those three fields empty.
 
 ### suggest-links
 
@@ -304,7 +310,9 @@ Export to Obsidian format: copies markdown, creates `.obsidian/` with a default 
 
 ### migrate
 
-Migrate a legacy 2ndbrain vault to the Obsidian-native format (the current index schema; v4 as of 0.19.x); `--dry-run` previews without modifying. Non-mutating: source markdown is never changed.
+Upgrade a legacy vault's index database to the current schema (`store.MaxSchemaVersion`, v4 today); `--dry-run` previews without modifying. Non-mutating: source markdown is never changed.
+
+Legacy means "behind the current schema". A vault already at the current schema reports "already at the current schema (vN); nothing to migrate" and exits 0 in both modes. Below it, the output names the real work: the schema upgrade to the current version, and adding `.2ndbrain/` to the root `.gitignore`. There is no path-based mapping step; the schema has been path-based since v1, so the 0.5.0 pivot was an indexer change. The vault is resolved the same way every other command resolves it (`--vault`, then `2NB_VAULT`, then the vault Obsidian has open, then the cwd).
 ## MCP & Agent Integration
 
 ### mcp-server
@@ -583,6 +591,10 @@ Checks whether a newer 2ndbrain release is available: compares the installed ver
 Global flags: `--format` (json/csv/tsv/yaml/raw/md/text; listings also accept `paths`/`tree`), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--unconfigured` (permit a write to a vault Obsidian doesn't know; without it such a write is refused), `--verbose` / `-v`, `--copy`.
 
 `--format raw` (and `md`) emits a value's `Serialize()` output (or the raw string/bytes) with no JSON wrapping, for piping a document body verbatim; a value with no body (a search result list, a report) is refused with a pointer at `--json`, rather than printed as a Go struct dump. `tsv` is tab-separated CSV; `text` is best-effort plain text. An unknown `--format` value is refused and the valid set is listed; it used to fall through to JSON silently.
+
+**Every report command honors every format.** A dozen commands used to check only for `--json` and fall through to their human printer otherwise, so `--csv`, `--tsv` and `--yaml` were silently ignored and `--format raw`/`md` printed prose instead of refusing: `mcp status`, `mcp configured`, `git status`, `git activity`, `git show`, `index --doc`, `polish`, `polish --undo`, `relink`, `unlink`, `repair-links`, `suggest-links`, `suggest-target`, and `config bedrock`. All of them route every explicit format through the shared writer now. A payload that is a list of rows renders in `csv`/`tsv` as a header plus one line per row; any other shape (a single status struct, a map) renders as one JSON-encoded record, which is what the writer has always done for such a shape, so `csv` is honored rather than dropped but is not a table. `search` and `list` refuse `raw`/`md` before opening the vault, so the refusal depends on the command rather than on whether the query matched anything, and a hybrid search never pays for a query embedding it cannot render. `git diff`'s output IS a body, so `raw` is correct there and is unchanged. Commands whose machine output is a STREAM of JSON events (`models bench`, `ai engine pull`, `ai engine rm`) cannot render as one document and refuse any non-JSON explicit format by name.
+
+In `csv` and `tsv`, a cell holding a map, slice or struct (a row's `frontmatter`, a lint finding's `candidates`) is rendered as compact JSON with sorted keys, so the column parses and a given row renders identically every time. Scalars are unchanged; a `time.Time` cell is RFC3339 rather than Go's `2026-09-03 08:04:20 +0000 UTC`.
 
 **An empty result is still a JSON document.** Every command that can legitimately return zero rows emits a parseable payload on stdout under `--json`: `search` returns its full `{mode, warnings, results}` envelope with `results: []`, and the bare-array listings (`list`, `stale`, `tags`, `aliases`, `orphans`, `deadends`, `unresolved`, `backlinks`, `links`, plus `related`'s nested `edges`) return `[]`, never `null` and never nothing. That holds for the bare form and `--porcelain` as well as `--json`, since the listings render JSON by default, and for `lint`'s nested `issues`. That matters most for `search`: `warnings` is where a vault reports that its semantic channel degraded to keyword-only, so a query matching nothing is exactly when a caller needs the envelope. Two deliberate exceptions: `ask` exits NON-ZERO with an error when retrieval finds nothing rather than answering emptily, so check the exit code before parsing; and the normalization is JSON-only, because a literal `[]` in a csv or tsv stream would corrupt a consumer. Human output is unaffected, with each command's empty-state hint on stderr.
 

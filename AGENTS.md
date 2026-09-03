@@ -117,7 +117,7 @@ Run `2nb --help` for the full list and `--help` on any command for flags. The co
 | Import/Export | `import-obsidian`, `export-obsidian`, `migrate` |
 | Configuration | `config` (`show`/`get` (`--effective`)/`set`/`set-key`/`bedrock`/`doctor`) |
 
-**Global flags:** `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`, `--copy`. Also accepts obsidian-CLI-style `key=value` args, boolean tokens (`total`/`append`/`overwrite`), and colon-commands; `file=` fuzzy-resolves by title/alias/suffix while `path=` is strict-exact. Full mapping in [docs/obsidian-cli-mapping.md](docs/obsidian-cli-mapping.md).
+**Global flags:** `--format` (json/csv/tsv/yaml/raw/md/text; listings also `paths`/`tree`), `--porcelain`, `--json`, `--csv`, `--yaml`, `--vault`, `--verbose`/`-v`, `--copy`. An explicit `--format` is always honored: report commands render csv/tsv/yaml and refuse `raw`/`md` when the value has no document body (`search` and `list` refuse them whether or not anything matched), and the JSON-event-stream commands (`models bench`, `ai engine pull`/`rm`) refuse any non-JSON format by name. In csv/tsv a composite cell (a search row's `frontmatter`, a lint finding's `candidates`) is compact JSON. Also accepts obsidian-CLI-style `key=value` args, boolean tokens (`total`/`append`/`overwrite`), and colon-commands; `file=` fuzzy-resolves by title/alias/suffix while `path=` is strict-exact. Full mapping in [docs/obsidian-cli-mapping.md](docs/obsidian-cli-mapping.md).
 
 **Parent-command defaults:** `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`, `2nb instructions` → `instructions configured`.
 
@@ -279,7 +279,7 @@ Tables: `documents`, `chunks`, `chunks_fts` (FTS5), `links`, `tags`, `aliases`, 
 - Converts UUID-based references to filename-based wikilinks
 - Optionally strips `id` and `type` fields (`--strip-ids`)
 
-`2nb migrate` upgrades a legacy 2ndbrain vault to the Obsidian-native format (schema v3); `--dry-run` previews without modifying. Source markdown is never changed.
+`2nb migrate` upgrades a legacy vault's index database to the current schema (v4 today, `store.MaxSchemaVersion`); `--dry-run` previews without modifying. A vault already at the current schema reports "nothing to migrate" and exits 0 in both modes. Source markdown is never changed, and there is no path-based mapping step: the schema has been path-based since v1.
 
 ## MCP Integration
 

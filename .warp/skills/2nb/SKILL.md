@@ -32,6 +32,8 @@ The current directory is **not** an implicit write target. If you run a write fr
 
 **Don't run `2nb vault create .`** to "make the current directory work" — that mints a second vault and is exactly how notes get split. To write somewhere other than your Obsidian vault, pass `--vault <path>`; to write to a folder Obsidian doesn't know (rare; the note won't show in Obsidian or your 2nb index), add `--unconfigured`.
 
+`--unconfigured` is needed only for an actual WRITE. Reads never ask for it: `2nb meta <path>` and `2nb meta <path> --get <key>` are reads, and `2nb daily`, `2nb daily path` and `2nb daily read` are reads whenever today's note already exists (creating it is the write, and so are `daily append` / `daily prepend`).
+
 ## Semantic-search playbook (the core loop)
 
 > In Claude Code: if the 2ndbrain MCP server is configured you will see `kb_*` tools. Prefer them. They cache the resolved similarity threshold and the loaded embeddings per session, so repeated calls skip a DB round-trip. With no MCP server, shell out to `2nb` instead. Every step below gives both.
@@ -188,7 +190,7 @@ Every command group has a useful default action when called without a subcommand
 
 ## CLI Commands
 
-All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`md`/`text`; listings add `paths`/`tree` and `--total`), `--porcelain`, `--vault <path>`, `--copy`, and `--verbose`. Prefer `--json` in scripts and agent pipelines. **You should not need to shell out to `--help` to use these commands.** The "[Copy-paste recipes](#copy-paste-recipes)" section gives the exact invocation for every common task, "[Flags by command](#flags-by-command)" lists the flags each command takes, and "[Worked JSON examples](#worked-json-examples)" show the output shapes. (`2nb <command> --help` and `2nb --help` still exist to confirm a detail, but build the command from the recipes first rather than invoking it, reading the help, and retrying.)
+All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`md`/`text`; listings add `paths`/`tree` and `--total`), `--porcelain`, `--vault <path>`, `--copy`, and `--verbose`. Prefer `--json` in scripts and agent pipelines. An explicit `--format` is always honored, never ignored: `raw`/`md` emit a document body and are REFUSED on a value that has none (a search result list, a report), including by `search` and `list` when nothing matched; in `csv`/`tsv` a composite cell such as `frontmatter` is compact JSON; and the JSON-event-stream commands (`models bench`, `ai engine pull`/`rm`) accept only `--json`. **You should not need to shell out to `--help` to use these commands.** The "[Copy-paste recipes](#copy-paste-recipes)" section gives the exact invocation for every common task, "[Flags by command](#flags-by-command)" lists the flags each command takes, and "[Worked JSON examples](#worked-json-examples)" show the output shapes. (`2nb <command> --help` and `2nb --help` still exist to confirm a detail, but build the command from the recipes first rather than invoking it, reading the help, and retrying.)
 
 **Obsidian-CLI compatibility.** `2nb` accepts `obsidian`-CLI-style invocations as a drop-in: `key=value` args (`file=`, `path=`, `content=`, `template=`, `query=`, `vault=`, `old=`/`new=`), boolean tokens (`total`, `append`, `overwrite`, `done`/`todo`), colon-commands (`daily:path`/`daily:append`, `property:set` → `meta`, `tags:rename`, `link:unresolved`), and aliases (`print` → `read`; `fm`/`frontmatter`/`properties` → `meta`; `files` → `list`; `search-content` → keyword search; `list-vaults`/`set-default-vault`/`add-vault` → the `vault` subcommands). `file=` resolves a note by exact path → basename/title/alias/shortest-unique suffix (fails loudly on ambiguity); `path=` is strict-exact. Out of scope (needs the running app): GUI panes, themes, plugins, Sync/Publish, workspace, dev-tools.
 
@@ -441,11 +443,16 @@ $ 2nb search "authentication" --json --limit 2
       "score": 0.0163,
       "vector_score": 0.72,
       "type": "adr",
-      "status": "accepted"
+      "status": "accepted",
+      "frontmatter": {"title": "Use JWT for Auth", "type": "adr", "status": "accepted"}
     }
   ]
 }
 ```
+
+`frontmatter` is the note's parsed frontmatter map, on every row (omitted only when it is empty), so you can filter or cite on metadata without a second `read`. The same key appears on MCP `kb_search` rows.
+
+An **enumerate-by-filter** query, a blank query plus a filter such as `2nb search "type:adr"`, returns the same row shape, with the document's FIRST chunk in `content`/`chunk_id`/`heading_path`. A note with no body has no chunks and still enumerates, with those three fields empty.
 
 Degraded state (provider swap without re-embed):
 
