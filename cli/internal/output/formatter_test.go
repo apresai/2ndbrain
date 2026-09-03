@@ -1152,3 +1152,170 @@ func TestFieldNames_MatchJSONThroughCollisionsAndUnexportedEmbeds(t *testing.T) 
 		}
 	})
 }
+
+// A TAGGED anonymous field whose type is an unexported struct. json emits it as
+// a nested OBJECT under the tag name; it used to VANISH from text and csv,
+// because the embed cannot be passed to Interface() and the whole field was
+// dropped rather than assembled from the leaves underneath it.
+type hidObjLeaf struct {
+	X  string `json:"x"`
+	Hi string `json:"hi"`
+}
+type TagObjOuter struct {
+	hidObjLeaf `json:"mid"`
+	OK         bool `json:"ok"`
+}
+
+// json renders an embed with no exported fields as `{}`, not as nothing.
+type hidObjEmpty struct{ notExported string }
+type TagObjEmptyOuter struct {
+	hidObjEmpty `json:"mid"`
+	OK          bool `json:"ok"`
+}
+
+// A tagged unexported POINTER embed.
+type hidObjPtr struct {
+	X string `json:"x"`
+}
+type TagObjPtrOuter struct {
+	*hidObjPtr `json:"mid"`
+	OK         bool `json:"ok"`
+}
+
+// A tagged unexported embed INSIDE another one: the object nests.
+type hidObjInner struct {
+	Deep string `json:"deep"`
+}
+type hidObjNest struct {
+	hidObjInner `json:"inner"`
+	Mid         string `json:"mid"`
+}
+type TagObjNestOuter struct {
+	hidObjNest `json:"outerMid"`
+	OK         bool `json:"ok"`
+}
+
+// A tagged unexported embed of NON-struct type: json drops it, and so must this.
+type hidObjInt int
+type TagObjNonStruct struct {
+	hidObjInt `json:"mid"`
+	OK        bool `json:"ok"`
+}
+
+// An unexported embed that renders ITSELF. Go promotes MarshalJSON to the OUTER
+// type, so json collapses the whole record to that one value.
+type hidObjMarshaler struct{ X string }
+
+func (hidObjMarshaler) MarshalJSON() ([]byte, error) { return []byte(`"I render myself"`), nil }
+
+type TagObjMarshalerOuter struct {
+	hidObjMarshaler `json:"mid"`
+	OK              bool `json:"ok"`
+}
+
+// A tagged unexported embed used to be dropped outright, so `--format text` and
+// csv silently lost a column the json view has. Dropping was defensible only
+// while the alternative was calling Interface() on the embed and panicking; it
+// is not, because the exported leaves BENEATH the embed are interfaceable, and
+// the untagged case already promotes exactly those leaves. A tag only decides
+// whether they land at the parent level or inside one cell.
+func TestFieldNames_TaggedUnexportedEmbedIsOneObjectCell(t *testing.T) {
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"a tagged unexported embed is a column", TagObjOuter{hidObjLeaf: hidObjLeaf{X: "val", Hi: "there"}, OK: true}, "mid,ok"},
+		{"no exported fields is still a column", TagObjEmptyOuter{OK: true}, "mid,ok"},
+		{"a tagged unexported POINTER embed", TagObjPtrOuter{hidObjPtr: &hidObjPtr{X: "v"}, OK: true}, "mid,ok"},
+		{"the object nests", TagObjNestOuter{hidObjNest: hidObjNest{hidObjInner: hidObjInner{Deep: "d"}, Mid: "m"}, OK: true}, "outerMid,ok"},
+		{"a NON-struct embed is dropped, as json drops it", TagObjNonStruct{hidObjInt: 7, OK: true}, "ok"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fieldNames(reflect.TypeOf(tc.value))
+			if strings.Join(got, ",") != tc.want {
+				t.Errorf("fieldNames = %v, want %v", got, strings.Split(tc.want, ","))
+			}
+			want := jsonKeys(t, tc.value)
+			gotSet := nameSet(got)
+			for k := range want {
+				if !gotSet[k] {
+					t.Errorf("json emits %q but the csv/text header does not", k)
+				}
+			}
+			for k := range gotSet {
+				if !want[k] {
+					t.Errorf("the csv/text header carries %q, which json does not emit", k)
+				}
+			}
+		})
+	}
+
+	// The CELL: one compact-JSON object holding the promoted leaves. Keys are
+	// sorted, because it is assembled as a map and every composite cell in this
+	// formatter marshals that way; json.Marshal would use declaration order.
+	t.Run("the cell is the nested object", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			value any
+			want  string
+		}{
+			{"leaves", TagObjOuter{hidObjLeaf: hidObjLeaf{X: "val", Hi: "there"}, OK: true}, "mid: {\"hi\":\"there\",\"x\":\"val\"}\nok: true\n"},
+			{"no exported fields", TagObjEmptyOuter{OK: true}, "mid: {}\nok: true\n"},
+			{"through a pointer", TagObjPtrOuter{hidObjPtr: &hidObjPtr{X: "v"}, OK: true}, "mid: {\"x\":\"v\"}\nok: true\n"},
+			// json writes `null` for a nil embed; an assembled object has no way
+			// to say null, and `{}` keeps the cell parseable.
+			{"a nil pointer embed is an empty object", TagObjPtrOuter{OK: true}, "mid: {}\nok: true\n"},
+			{"nested", TagObjNestOuter{hidObjNest: hidObjNest{hidObjInner: hidObjInner{Deep: "d"}, Mid: "m"}, OK: true},
+				"outerMid: {\"inner\":{\"deep\":\"d\"},\"mid\":\"m\"}\nok: true\n"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				if err := Write(&buf, FormatText, tc.value); err != nil {
+					t.Fatalf("Write(text): %v", err)
+				}
+				if got := buf.String(); got != tc.want {
+					t.Errorf("text =\n%q\nwant\n%q", got, tc.want)
+				}
+			})
+		}
+	})
+
+	// csv gets the same cell, quoted by the csv writer rather than escaped by hand.
+	t.Run("csv carries the object in one cell", func(t *testing.T) {
+		var buf bytes.Buffer
+		row := TagObjOuter{hidObjLeaf: hidObjLeaf{X: "val", Hi: "there"}, OK: true}
+		if err := Write(&buf, FormatCSV, []TagObjOuter{row}); err != nil {
+			t.Fatalf("Write(csv): %v", err)
+		}
+		recs, err := csv.NewReader(&buf).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("csv did not render a header and one row (%v): %v", err, recs)
+		}
+		if strings.Join(recs[0], ",") != "mid,ok" {
+			t.Errorf("header = %v, want the embed's tag as a column", recs[0])
+		}
+		if recs[1][0] != `{"hi":"there","x":"val"}` {
+			t.Errorf("cell = %q, want the nested object", recs[1][0])
+		}
+	})
+
+	// The ONE exception, pinned so it stays deliberate. Go promotes the embed's
+	// MarshalJSON to the OUTER type, so json collapses the entire record to that
+	// value and discards every sibling; a row-shaped format cannot represent
+	// that, and the embed's own value cannot be read, so the row renders without
+	// it. Nothing in internal/ has this shape.
+	t.Run("an embedded Marshaler is the exception", func(t *testing.T) {
+		raw, err := json.Marshal(TagObjMarshalerOuter{OK: true})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if string(raw) != `"I render myself"` {
+			t.Fatalf("json no longer collapses the record to the embed's value: %s", raw)
+		}
+		if got := fieldNames(reflect.TypeOf(TagObjMarshalerOuter{})); strings.Join(got, ",") != "ok" {
+			t.Errorf("fieldNames = %v, want the row's other fields with the unreadable embed dropped", got)
+		}
+	})
+}

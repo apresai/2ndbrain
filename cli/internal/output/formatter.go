@@ -202,17 +202,21 @@ func structTextPairs(rv reflect.Value) []textPair {
 	specs := fieldSpecs(rv.Type())
 	pairs := make([]textPair, 0, len(specs))
 	for _, sp := range specs {
-		f, ok := fieldByIndex(rv, sp.index)
+		f, ok := specValue(rv, sp)
 		if !ok {
 			// The field sits inside a nil embedded pointer: there is nothing to
 			// print, which is what a nil renders as anyway.
 			continue
 		}
-		if isNilValue(f) {
-			continue
-		}
-		if sp.omitEmpty && isEmptyValue(f) {
-			continue
+		// An assembled object is always printed: json emits a struct field
+		// whatever its contents, `omitempty` included.
+		if sp.object == nil {
+			if isNilValue(f) {
+				continue
+			}
+			if sp.omitEmpty && isEmptyValue(f) {
+				continue
+			}
 		}
 		pairs = append(pairs, textPair{name: sp.name, value: delimitedCell(f)})
 	}
@@ -477,11 +481,19 @@ func delimitedCell(field reflect.Value) string {
 //
 // tagged exists only for the collision rule: json breaks an equal-depth tie in
 // favor of the tagged field, and calls it a conflict when neither side wins.
+//
+// object, when non-nil, marks a field whose cell is ASSEMBLED rather than read:
+// an anonymous UNEXPORTED struct carrying a json name, which json emits as a
+// nested object. reflect refuses Interface() on the embed itself, so the cell is
+// built from these leaf specs (index paths from the same row root) instead. An
+// empty, non-nil slice is the embed with no exported fields, which json renders
+// as `{}`; nil means the field is read directly.
 type fieldSpec struct {
 	index     []int
 	name      string
 	tagged    bool
 	omitEmpty bool
+	object    []fieldSpec
 }
 
 // jsonMarshalerType is json.Marshaler, used to tell an embedded struct that
@@ -510,22 +522,29 @@ const maxFieldDepth = 8
 //     that name and stays one value.
 //   - On a name collision json's own rule applies, in dedupeFieldSpecs.
 //   - An unexported field does not exist for output, with one exception json
-//     also makes: an anonymous field of unexported STRUCT type is recursed into
-//     and its exported fields are promoted. reflect refuses Interface() on the
-//     embedded field itself, but not on the exported fields beneath it, because
-//     Value.Field does not propagate the embedded read-only flag. So the embed
-//     is never rendered as a value and its fields are rendered normally.
+//     also makes: an anonymous field of unexported STRUCT type. reflect refuses
+//     Interface() on the embedded field itself, but not on the exported fields
+//     beneath it, because Value.Field does not propagate the embedded read-only
+//     flag, so those leaves carry the value. With NO json name they are promoted
+//     to the parent level; WITH one they are assembled into a single object cell
+//     under that name, which is the nested object json emits. Either way the
+//     embed itself is never passed to Interface().
 //
-// One deliberate narrowing. An embedded type that renders itself is kept as ONE
-// value rather than flattened. isRowStruct already excludes every
-// encoding.TextMarshaler, and that is the branch time.Time takes, so the
-// jsonMarshalerType check below covers only what TextMarshaler misses: a
-// json.Marshaler that is NOT also a TextMarshaler. It is not what stops an
-// embedded time from exploding into wall/ext/loc, which cannot happen anyway:
-// those three are UNEXPORTED, so flattening time.Time yields no fields at all.
-// json renders such an embed as the WHOLE record, discarding its siblings,
-// which no row-shaped format can represent; this is the one place the two views
-// legitimately differ, and no output struct in this repo embeds a Marshaler.
+// One deliberate narrowing, and it is the ONE place these views differ from
+// json. An embedded type that renders itself is kept as ONE value rather than
+// flattened. isRowStruct already excludes every encoding.TextMarshaler, and that
+// is the branch time.Time takes, so the jsonMarshalerType check below covers
+// only what TextMarshaler misses: a json.Marshaler that is NOT also a
+// TextMarshaler. It is not what stops an embedded time from exploding into
+// wall/ext/loc, which cannot happen anyway: those three are UNEXPORTED, so
+// flattening time.Time yields no fields at all.
+//
+// The divergence is Go's method promotion, not a choice here: an anonymous
+// Marshaler promotes its marshal method to the OUTER type, so json collapses the
+// WHOLE record to that one value and discards every sibling field. A row-shaped
+// format cannot represent that, so the row is rendered instead, and an
+// UNEXPORTED such embed is dropped outright since its value cannot be read at
+// all. Nothing in internal/ has either shape.
 func fieldSpecs(t reflect.Type) []fieldSpec {
 	return dedupeFieldSpecs(appendFieldSpecs(nil, t, nil, 0))
 }
@@ -568,12 +587,33 @@ func appendFieldSpecs(specs []fieldSpec, t reflect.Type, prefix []int, depth int
 			continue
 		}
 		if unexported {
-			// An anonymous field that was NOT flattened has to be rendered as a
-			// value, and reflect refuses Interface() on an unexported field. So
-			// an unexported embed that names itself with a json tag, renders
-			// itself (Marshaler), or is not a struct at all is skipped. json
-			// emits the first two; nothing in this repo has either shape, and
-			// panicking on a Go-level restriction is the worse trade.
+			if spec.tagged && isFlattenable(f.Type) {
+				// A tagged unexported embed: json emits it as a nested OBJECT
+				// under the tag name. reflect refuses Interface() on the embed
+				// itself, so the cell is assembled from the exported leaves
+				// underneath it, which ARE interfaceable. Same leaves the
+				// untagged case promotes; the tag only decides whether they land
+				// at the parent level or inside one cell.
+				ft := f.Type
+				if ft.Kind() == reflect.Ptr {
+					ft = ft.Elem()
+				}
+				spec.object = dedupeFieldSpecs(appendFieldSpecs(nil, ft, spec.index, depth+1))
+				if spec.object == nil {
+					// Non-nil is what marks an object spec, and json renders an
+					// embed with no exported fields as `{}` rather than omitting
+					// the key.
+					spec.object = []fieldSpec{}
+				}
+				specs = append(specs, spec)
+				continue
+			}
+			// What is left has no readable value and no leaves to assemble: an
+			// unexported embed of NON-struct type (json drops it too), or one
+			// that renders ITSELF. A self-rendering embed promotes its
+			// MarshalJSON to the outer type, so json collapses the WHOLE record
+			// to that one value; a row-shaped format cannot represent that, and
+			// Interface() on the embed would panic, so the column is dropped.
 			continue
 		}
 		specs = append(specs, spec)
@@ -656,6 +696,48 @@ func dedupeFieldSpecs(specs []fieldSpec) []fieldSpec {
 // false rather than panicking the way reflect.Value.FieldByIndex would: text
 // then omits the field (it omits nils anyway) and csv writes an empty cell,
 // which keeps the column count right.
+// specValue resolves one fieldSpec against a row. A normal field is read at its
+// index path; an OBJECT spec is assembled, since its embed cannot be read. The
+// bool is false only when there is nothing to render, which is a field promoted
+// out of a nil embedded pointer.
+func specValue(root reflect.Value, sp fieldSpec) (reflect.Value, bool) {
+	if sp.object != nil {
+		return reflect.ValueOf(objectCell(root, sp.object)), true
+	}
+	return fieldByIndex(root, sp.index)
+}
+
+// objectCell builds the map a tagged unexported embed renders as: one entry per
+// exported leaf, keyed by the leaf's json name, nested where a leaf is itself
+// such an embed. delimitedCell then marshals it as one compact-JSON cell.
+//
+// Interface() is called ONLY on the leaves, never on the embed, which is the
+// whole reason this exists. The CanInterface guard makes that an enforced rule
+// rather than an assumption about which reflect flags propagate.
+//
+// Two cell-level differences from json.Marshal, both deliberate: a map marshals
+// with SORTED keys where json uses declaration order, and a leaf behind a nil
+// embedded pointer is omitted (json's own marshal omits it too, but a nil
+// TAGGED pointer embed renders `{}` here where json writes `null`).
+func objectCell(root reflect.Value, leaves []fieldSpec) map[string]any {
+	obj := make(map[string]any, len(leaves))
+	for _, leaf := range leaves {
+		if leaf.object != nil {
+			obj[leaf.name] = objectCell(root, leaf.object)
+			continue
+		}
+		v, ok := fieldByIndex(root, leaf.index)
+		if !ok || !v.CanInterface() {
+			continue
+		}
+		if leaf.omitEmpty && isEmptyValue(v) {
+			continue
+		}
+		obj[leaf.name] = v.Interface()
+	}
+	return obj
+}
+
 func fieldByIndex(rv reflect.Value, index []int) (reflect.Value, bool) {
 	for hop, i := range index {
 		if hop > 0 {
@@ -714,7 +796,7 @@ func writeStructSliceCSV(cw *csv.Writer, v reflect.Value, rowType reflect.Type) 
 		}
 		record := make([]string, len(specs))
 		for j, sp := range specs {
-			f, ok := fieldByIndex(row, sp.index)
+			f, ok := specValue(row, sp)
 			if !ok {
 				// A field promoted out of a nil embedded pointer: an empty cell,
 				// so the row still has one cell per header column.
