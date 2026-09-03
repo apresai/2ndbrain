@@ -102,22 +102,40 @@ func TestWrite_CSV(t *testing.T) {
 	}
 }
 
+// A zero-row listing is a csv document with a header and no data rows. It used
+// to fall through to the JSON-record fallback, which wrote the literal `[]`
+// (empty slice) or `null` (nil slice) as the one and only cell: a JSON value
+// inside a csv stream, which is the corruption the delimited formats exist to
+// avoid. Both spellings of "no rows" now render the same way.
 func TestWrite_CSV_EmptySlice(t *testing.T) {
-	var buf bytes.Buffer
-	items := []testItem{}
-
-	if err := Write(&buf, FormatCSV, items); err != nil {
-		t.Fatalf("Write(CSV, empty slice) returned error: %v", err)
-	}
-
-	// Empty slice hits the fallback JSON-line path; result must not be multi-line
-	// structural CSV (no header row written). The output should be non-panicking
-	// and reasonably short.
-	out := buf.String()
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	// Expect at most 1 line (the fallback JSON marshal of [])
-	if len(lines) > 1 {
-		t.Errorf("empty slice produced unexpected multi-line output: %q", out)
+	for _, tc := range []struct {
+		name  string
+		items []testItem
+	}{
+		{"empty slice", []testItem{}},
+		{"nil slice", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, format := range []Format{FormatCSV, FormatTSV} {
+				var buf bytes.Buffer
+				if err := Write(&buf, format, tc.items); err != nil {
+					t.Fatalf("Write(%s): %v", format, err)
+				}
+				out := buf.String()
+				for _, bad := range []string{"null", "[]"} {
+					if strings.Contains(out, bad) {
+						t.Errorf("%s emitted the JSON record %q into a delimited stream: %q", format, bad, out)
+					}
+				}
+				lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+				if len(lines) != 1 {
+					t.Fatalf("%s: want the header row alone, got %d lines: %q", format, len(lines), out)
+				}
+				if !strings.Contains(lines[0], "name") || !strings.Contains(lines[0], "value") {
+					t.Errorf("%s header does not carry the columns: %q", format, lines[0])
+				}
+			}
+		})
 	}
 }
 
@@ -658,6 +676,14 @@ func TestWrite_YAMLHonorsOmitempty(t *testing.T) {
 // The degenerate payloads. An empty listing is a bare `[]` (every --json
 // listing returns one), and a nil payload parses to a node with no Kind, which
 // the yaml encoder refuses outright.
+//
+// The nil-slice case flipped from `null` to `[]` in 0.22.3: a listing command
+// hands its slice straight to the writer, and a vault with no orphans has a NIL
+// slice, so `2nb orphans --yaml` printed `null` while `2nb orphans --json`
+// printed `[]` and `2nb tasks --yaml` printed `[]` (its slice is merely built
+// non-nil). An empty result is an empty collection in both views now. An
+// UNTYPED nil is still `null`: it is not a listing, it is the absence of a
+// value.
 func TestWrite_YAMLDegeneratePayloads(t *testing.T) {
 	cases := []struct {
 		name string
@@ -665,7 +691,8 @@ func TestWrite_YAMLDegeneratePayloads(t *testing.T) {
 		want string
 	}{
 		{"empty slice", []yamlItem{}, "[]\n"},
-		{"nil slice", []yamlItem(nil), "null\n"},
+		{"nil slice", []yamlItem(nil), "[]\n"},
+		{"nil map", map[string]string(nil), "{}\n"},
 		{"nil", nil, "null\n"},
 		{"scalar string", "hello", "hello\n"},
 		{"scalar int", 42, "42\n"},

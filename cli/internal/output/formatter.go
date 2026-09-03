@@ -319,6 +319,25 @@ func writeJSON(w io.Writer, data any) error {
 // catalog, vault config.yaml, schemas.yaml) are separate and untouched: their
 // key names are an on-disk format, not a rendering.
 func writeYAML(w io.Writer, data any) error {
+	// An empty listing is an empty COLLECTION, not null. Every `--json` listing
+	// returns `[]` on an empty vault, but yaml marshalled the same nil slice to
+	// JSON `null` on the way through and printed `null`, so `2nb orphans --yaml`
+	// and `2nb unresolved --yaml` disagreed with their own json view and with
+	// `2nb tasks --yaml`, whose slice merely happens to be built non-nil at its
+	// construction site. Normalized here rather than at the eight jsonSafeList
+	// call sites, so it reaches every command that renders a list.
+	switch rv := reflect.ValueOf(data); rv.Kind() {
+	case reflect.Slice:
+		if rv.IsNil() {
+			_, err := io.WriteString(w, "[]\n")
+			return err
+		}
+	case reflect.Map:
+		if rv.IsNil() {
+			_, err := io.WriteString(w, "{}\n")
+			return err
+		}
+	}
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("render yaml: %w", err)
@@ -363,14 +382,20 @@ func writeDelimited(w io.Writer, data any, comma rune) error {
 		v = v.Elem()
 	}
 
-	// Handle slices of structs
-	if v.Kind() == reflect.Slice && v.Len() > 0 {
-		elem := v.Index(0)
-		if elem.Kind() == reflect.Ptr {
+	// Handle slices of structs. The element TYPE decides, not the first element,
+	// so a zero-row slice is still a csv document. The old `v.Len() > 0` guard
+	// sent an empty listing to the JSON-record fallback below, which wrote the
+	// literal record `null` (a nil slice) or `[]` (an empty one) into a csv
+	// stream: `2nb orphans --format csv` on a vault with no orphans printed
+	// `null` and `2nb tasks --format csv` printed `[]`, which is the exact
+	// corruption csv is documented never to see.
+	if v.Kind() == reflect.Slice {
+		elem := v.Type().Elem()
+		for elem.Kind() == reflect.Ptr {
 			elem = elem.Elem()
 		}
 		if elem.Kind() == reflect.Struct {
-			return writeStructSliceCSV(cw, v)
+			return writeStructSliceCSV(cw, v, elem)
 		}
 	}
 
@@ -488,27 +513,31 @@ func fieldNames(t reflect.Type) []string {
 	return names
 }
 
-func writeStructSliceCSV(cw *csv.Writer, v reflect.Value) error {
-	if v.Len() == 0 {
-		return nil
-	}
-
-	// Write header from struct field names
-	first := v.Index(0)
-	if first.Kind() == reflect.Ptr {
-		first = first.Elem()
-	}
-	t := first.Type()
-	specs := fieldSpecs(t)
-	if err := cw.Write(fieldNames(t)); err != nil {
+// writeStructSliceCSV writes the header row and one record per element.
+// rowType is the slice's element type with pointers stripped, so a ZERO-ROW
+// slice still gets its header: an empty result then parses as a csv document
+// with the right columns and no rows, where writing nothing at all leaves a
+// consumer (pandas read_csv, csvkit) with no columns to bind, and where the
+// old behavior wrote a JSON record into the stream.
+func writeStructSliceCSV(cw *csv.Writer, v reflect.Value, rowType reflect.Type) error {
+	specs := fieldSpecs(rowType)
+	if err := cw.Write(fieldNames(rowType)); err != nil {
 		return err
 	}
 
 	// Write rows
 	for i := range v.Len() {
 		row := v.Index(i)
-		if row.Kind() == reflect.Ptr {
+		for row.Kind() == reflect.Ptr && !row.IsNil() {
 			row = row.Elem()
+		}
+		if row.Kind() != reflect.Struct {
+			// A nil pointer element has no fields to read; an empty record
+			// keeps the column count right (reading through it would panic).
+			if err := cw.Write(make([]string, len(specs))); err != nil {
+				return err
+			}
+			continue
 		}
 		record := make([]string, len(specs))
 		for j, sp := range specs {

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -136,11 +135,20 @@ func runList(cmd *cobra.Command, args []string) error {
 		default:
 			fmt.Fprintln(os.Stderr, "No documents yet. Create one with: 2nb create \"My Note\"")
 		}
-		// JSON still owes stdout an empty document (see search.go). csv/tsv/raw
-		// keep emitting nothing, which is the correct rendering of zero rows,
-		// and the human table returns early too: a bare header with no data
-		// under it reads as a broken listing.
-		if format == output.FormatJSON {
+		// An EXPLICIT format still renders: json and yaml owe stdout an empty
+		// collection (`2nb list --yaml` on an empty vault printed nothing at
+		// all, so the yaml consumer got zero bytes where the json one got
+		// `[]`), and csv/tsv render the header row with no data under it. raw
+		// and md cannot reach here: refuseBodylessFormat rejected them at the
+		// top of the handler.
+		//
+		// The DEFAULT (empty) format is deliberately excluded, even though
+		// output.RendersJSON treats it as JSON: the bare and --porcelain forms
+		// of this command print a human table, and printing `[]` on an empty
+		// vault while printing a table on a full one would be incoherent. The
+		// empty-state hint above is the human answer, and it goes to stderr so
+		// stdout stays clean for piping.
+		if format != "" {
 			return writeOut(cmd, format, nonNilSlice(items))
 		}
 		return nil
