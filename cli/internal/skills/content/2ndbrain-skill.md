@@ -245,7 +245,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 
 | Command | Purpose |
 |---------|---------|
-| `2nb index` | Rebuild the search index and regenerate embeddings for changed docs. A note whose frontmatter will not parse is named and skipped (its stale index row dropped) rather than failing the run; `--json` lists them under `unparseable`. Obsidian's template folders are not indexed |
+| `2nb index` | Rebuild the search index and regenerate embeddings for changed docs. A note whose frontmatter will not parse is named and skipped (its stale index row dropped) rather than failing the run; one that cannot be READ keeps its existing row. `--json` always carries both `unparseable` and `unreadable` (empty arrays when there is nothing to report, never absent) plus `embedded`/`embed_failed`/`embed_skipped`/`embed_retries`/`excluded_purged`. Obsidian's template folders are not indexed |
 | `2nb index --doc <path>` | Re-index + re-embed only one document (fast, skips unchanged hash). Unlike the whole-vault run this DOES exit non-zero on a parse error, so an editor save reports the broken note |
 | `2nb lint [glob]` | Validate schemas, check broken wikilinks (ignores wikilinks inside code spans) |
 | `2nb export-context --types <types>` | Generate a CLAUDE.md-compatible context bundle |
@@ -420,6 +420,7 @@ When semantic search falls back to BM25, the CLI prints a warning to stderr and 
 | `"semantic search disabled: embedder X not registered"` | Config names a provider that isn't compiled in | `2nb config show` — check `ai.provider` |
 | Search returns `mode: keyword` with no warnings | Vault has no embeddings yet | `2nb index` — BM25 works immediately, embeddings backfill during the run |
 | Search returns empty results | Usually a threshold issue, not a content gap | Try `2nb search "foo" --threshold 0.15` or `--bm25-only` |
+| A note you know exists is missing from `search` AND `list` | Its frontmatter stopped parsing, so `2nb index` dropped its row rather than serving a version that is no longer on disk | `2nb index --json` lists it under `unparseable` with the parser's reason; fix the frontmatter and reindex. A note that could not be READ (permissions, locked mid-save) is under `unreadable` instead and KEEPS its old index entry |
 | `kb_ask` returns "no relevant documents" | The top-ranked results all got threshold-filtered (see note above — `ask` and `search` share thresholds) | Drop to `kb_search` with the same query |
 | `"schema version N newer than supported"` on open | Vault opened by a newer `2nb` than the one installed | `brew upgrade apresai/tap/twonb` |
 

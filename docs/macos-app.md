@@ -10,7 +10,7 @@ The reference for the Swift macOS app in `app/`: the SecondBrain configuration a
 
 The macOS app is a configuration and companion dashboard, not an editor: Obsidian is the editor. It reads the same `.2ndbrain/index.db` the CLI writes (WAL mode) and shells out to `2nb` for all AI, index, lint, and git work. The `2nb` it runs is the bundled `Contents/Resources/2nb`, preferred by `CLIPath.resolve()`, falling back to Homebrew/PATH for non-bundled dev builds.
 
-An `FSEventsWatcher` on the vault keeps the index fresh: notes edited in Obsidian are incrementally re-indexed and re-embedded a moment after they settle (a debounced `2nb index --doc` via `scheduleExternalReindex`, skipping the app's own writes), and on bind a one-shot incremental `2nb index` (`syncOnBindIfStale`, gated on an on-disk-vs-indexed count delta) catches up notes added or removed while the app was closed, so embeddings stay current without a manual Sync.
+An `FSEventsWatcher` on the vault keeps the index fresh: notes edited in Obsidian are incrementally re-indexed and re-embedded a moment after they settle (a debounced `2nb index --doc` via `scheduleExternalReindex`, skipping the app's own writes; a note that fails to index is reported as `AppState.lastIndexingProblem` and shown beside the Index state, where it used to be swallowed into a debug log, and the batch drain catches per path so one broken note no longer aborts the rest of a sync), and on bind a one-shot incremental `2nb index` (`syncOnBindIfStale`, gated on an on-disk-vs-indexed count delta) catches up notes added or removed while the app was closed, so embeddings stay current without a manual Sync.
 
 ## Vault Binding
 
