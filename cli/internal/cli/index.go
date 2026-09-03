@@ -38,6 +38,31 @@ func init() {
 	rootCmd.AddCommand(indexCmd)
 }
 
+// IndexResult is the JSON summary of a whole-vault `2nb index`. It is the walk's
+// counters PLUS the embed pass's, because the two phases each discover their own
+// unparseable notes and a consumer reading only one of them sees a partial
+// truth: `index --force-reembed --json` never surfaced an embed-phase failure at
+// all, since the envelope was built from the walk's stats alone.
+//
+// Every list is always present and never null, and every counter is always
+// emitted, so an agent never has to tell "absent" apart from "zero".
+type IndexResult struct {
+	FilesScanned   int `json:"files_scanned"`
+	DocsIndexed    int `json:"docs_indexed"`
+	ChunksCreated  int `json:"chunks_created"`
+	LinksFound     int `json:"links_found"`
+	Errors         int `json:"errors"`
+	ExcludedPurged int `json:"excluded_purged"`
+	// Embed-phase counters, previously visible only in the human summary.
+	Embedded     int `json:"embedded"`
+	EmbedFailed  int `json:"embed_failed"`
+	EmbedSkipped int `json:"embed_skipped"`
+	EmbedRetries int `json:"embed_retries"`
+
+	Unparseable []vault.UnparseableDoc `json:"unparseable"`
+	Unreadable  []vault.UnparseableDoc `json:"unreadable"`
+}
+
 // IndexDocResult is the JSON summary returned by `2nb index --doc <path>`.
 // Editors use this to know whether a save triggered real re-embedding work.
 type IndexDocResult struct {
@@ -194,16 +219,37 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		slog.Warn("stamp index generation failed", "err", serr)
 	}
 
+	// One merged truth for both surfaces. A note that fails to parse can be
+	// discovered by the walk or by the embed pass, and until now the JSON carried
+	// only the walk's list while the human summary printed whichever list the
+	// code path happened to hold.
+	unparseable := mergeUnparseable(stats.Unparseable, embedStats.Unparseable)
+	unreadable := mergeUnparseable(stats.Unreadable)
+
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, stats)
+		return output.Write(os.Stdout, format, IndexResult{
+			FilesScanned:   stats.FilesScanned,
+			DocsIndexed:    stats.DocsIndexed,
+			ChunksCreated:  stats.ChunksCreated,
+			LinksFound:     stats.LinksFound,
+			Errors:         stats.Errors,
+			ExcludedPurged: stats.ExcludedPurged,
+			Embedded:       embedStats.Embedded,
+			EmbedFailed:    embedStats.Failed,
+			EmbedSkipped:   embedStats.Skipped,
+			EmbedRetries:   embedStats.Retries,
+			Unparseable:    unparseable,
+			Unreadable:     unreadable,
+		})
 	}
 
 	if !flagPorcelain {
 		// The "Indexed N files, N chunks, N links" line is a contract the macOS
 		// app parses; anything new goes beside it, on stderr, never inside it.
 		fmt.Printf("Indexed %d files, %d chunks, %d links\n", stats.DocsIndexed, stats.ChunksCreated, stats.LinksFound)
-		reportUnparseable(stats.Unparseable)
+		reportUnparseable(unparseable)
+		reportUnreadable(unreadable)
 		if stats.DocsIndexed > 0 {
 			fmt.Fprintln(os.Stderr, "\nReady to search:")
 			fmt.Fprintln(os.Stderr, "  2nb search \"your query\"")
@@ -328,7 +374,8 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	}
 
 	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder, withEmbedProgress)
-	reportUnparseable(stats.Unparseable)
+	// Reporting is the caller's: it is the only place that knows BOTH phases'
+	// lists, and one merged summary is the whole point.
 	// Neither a skipped (empty) note nor an unparseable one is embeddable, so
 	// "complete" means every remaining document embedded. Without subtracting
 	// them a vault with one blank note, or one note with bad frontmatter,
@@ -353,15 +400,68 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	return stats, err
 }
 
-// reportUnparseable prints one line per note the run could not read, naming the
-// note and the parser's own message so the fix is obvious. Silent under
-// --porcelain and when there is nothing to report.
+// unparseableSummaryLimit bounds how many paths the human summary names before
+// it defers to -v. Five is enough to recognize a pattern (one folder, one
+// template set) without turning a 300-note vault's output into a wall.
+const unparseableSummaryLimit = 5
+
+// mergeUnparseable concatenates per-phase lists, keeping the FIRST entry for
+// each path. A note can be reported by the walk and again by the embed pass
+// (the walk drops its row, a later phase re-reads it), and listing it twice
+// would overstate how many notes need fixing.
+func mergeUnparseable(lists ...[]vault.UnparseableDoc) []vault.UnparseableDoc {
+	out := []vault.UnparseableDoc{}
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, d := range list {
+			if seen[d.Path] {
+				continue
+			}
+			seen[d.Path] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// reportUnparseable prints the count and the notes to fix. It names up to
+// unparseableSummaryLimit paths and points at -v ONLY when it actually elided
+// some: the previous version printed the whole list and told the reader to run
+// -v to see it, which is a hint to run a command that shows them nothing new.
+// Silent under --porcelain and when there is nothing to report.
 func reportUnparseable(docs []vault.UnparseableDoc) {
 	if flagPorcelain || len(docs) == 0 {
 		return
 	}
-	for _, d := range docs {
-		fmt.Fprintf(os.Stderr, "  skipped %d unparseable: %s (%s)\n", len(docs), d.Path, d.Err)
+	fmt.Fprintf(os.Stderr, "  skipped %d unparseable note(s):\n", len(docs))
+	shown := docs
+	if !flagVerbose && len(shown) > unparseableSummaryLimit {
+		shown = shown[:unparseableSummaryLimit]
+	}
+	for _, d := range shown {
+		fmt.Fprintf(os.Stderr, "    %s (%s)\n", d.Path, d.Err)
+	}
+	if elided := len(docs) - len(shown); elided > 0 {
+		fmt.Fprintf(os.Stderr, "    ... and %d more (run with -v to list them all)\n", elided)
+	}
+}
+
+// reportUnreadable names the notes the run could not open. They keep whatever
+// index entry they already had, which is the part a reader needs to know.
+func reportUnreadable(docs []vault.UnparseableDoc) {
+	if flagPorcelain || len(docs) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  could not read %d note(s); their existing index entries were kept:\n", len(docs))
+	shown := docs
+	if !flagVerbose && len(shown) > unparseableSummaryLimit {
+		shown = shown[:unparseableSummaryLimit]
+	}
+	for _, d := range shown {
+		fmt.Fprintf(os.Stderr, "    %s (%s)\n", d.Path, d.Err)
+	}
+	if elided := len(docs) - len(shown); elided > 0 {
+		fmt.Fprintf(os.Stderr, "    ... and %d more (run with -v to list them all)\n", elided)
 	}
 }
 

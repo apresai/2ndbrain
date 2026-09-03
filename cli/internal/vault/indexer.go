@@ -144,13 +144,15 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 
 	// One summary per run. The paths are already at INFO above, so -v still
 	// names every file.
+	// Logged once per run, never printed here: the CLI owns the human summary
+	// (it is the only caller that knows the EMBED phase's list too, and two
+	// writers produced one line that told the reader to run -v beside a
+	// complete list of the same notes).
 	if n := len(stats.Unparseable); n > 0 {
 		slog.Warn("notes could not be parsed", "count", n)
-		fmt.Fprintf(os.Stderr, "warning: %d file(s) could not be parsed (run with -v to list them)\n", n)
 	}
 	if n := len(stats.Unreadable); n > 0 {
 		slog.Warn("notes could not be read", "count", n)
-		fmt.Fprintf(os.Stderr, "warning: %d file(s) could not be read; their existing index entries were kept\n", n)
 	}
 
 	// Resolve wikilinks now that all documents are indexed
