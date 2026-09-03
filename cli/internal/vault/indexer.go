@@ -42,6 +42,10 @@ type IndexStats struct {
 // IndexVault walks all markdown files and indexes them into the database.
 func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 	stats := &IndexStats{}
+	excluded := ObsidianTemplateFolders(v.Root)
+	if len(excluded) > 0 {
+		slog.Debug("excluding obsidian template folders from the index", "folders", excluded)
+	}
 
 	// Purge documents whose files no longer exist on disk. A failure here
 	// shouldn't abort the index (partial purge is better than no index),
@@ -59,6 +63,12 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 		if info.IsDir() {
 			base := filepath.Base(path)
 			if strings.HasPrefix(base, ".") || base == "node_modules" {
+				return filepath.SkipDir
+			}
+			// Obsidian's template folders are skipped whole, the same way
+			// .obsidian and .2ndbrain are: their contents are placeholder
+			// syntax, not notes.
+			if IsExcludedFolderPath(v.RelPath(path), excluded) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -82,12 +92,18 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 
 		if err := store.RetryBusy(func() error { return indexFile(v.DB, path, relPath) }); err != nil {
 			stats.Errors++
-			slog.Warn("index file failed", "path", relPath, "err", err)
-			fmt.Fprintf(os.Stderr, "warning: index %s: %v\n", relPath, err)
 			if errors.Is(err, ErrUnparseable) {
+				// Reported once per RUN below, not once per file: a vault with
+				// a handful of unreadable notes produced the same three
+				// warnings on every single index, which trains the reader to
+				// ignore the channel real failures also use.
+				slog.Info("index skipped an unparseable note", "path", relPath, "err", err)
 				stats.Unparseable = append(stats.Unparseable, UnparseableDoc{Path: relPath, Err: err.Error()})
 				dropUnparseableRow(v, relPath)
+				return nil
 			}
+			slog.Warn("index file failed", "path", relPath, "err", err)
+			fmt.Fprintf(os.Stderr, "warning: index %s: %v\n", relPath, err)
 			return nil
 		}
 
@@ -97,6 +113,13 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 
 	if err != nil {
 		return stats, fmt.Errorf("walk vault: %w", err)
+	}
+
+	// One summary per run. The paths are already at INFO above, so -v still
+	// names every file.
+	if n := len(stats.Unparseable); n > 0 {
+		slog.Warn("notes could not be parsed", "count", n)
+		fmt.Fprintf(os.Stderr, "warning: %d file(s) could not be parsed (run with -v to list them)\n", n)
 	}
 
 	// Resolve wikilinks now that all documents are indexed
@@ -123,6 +146,11 @@ func IndexSingleFile(v *Vault, absPath string) error {
 	relPath := v.RelPath(absPath)
 	if IsIgnored(relPath) {
 		return fmt.Errorf("path is ignored: %s", relPath)
+	}
+	// Same exclusion as the walk, so the macOS app's per-save reindex cannot
+	// put back what the full index deliberately leaves out.
+	if IsExcludedFolderPath(relPath, ObsidianTemplateFolders(v.Root)) {
+		return fmt.Errorf("path is in an Obsidian template folder, which is not indexed: %s", relPath)
 	}
 	if err := store.RetryBusy(func() error { return indexFile(v.DB, absPath, relPath) }); err != nil {
 		return fmt.Errorf("index file: %w", err)

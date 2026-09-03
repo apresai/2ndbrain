@@ -202,6 +202,10 @@ type VaultStatus struct {
 	PortabilityAction   string   `json:"portability_action"`
 	VaultEmbeddingDim   int      `json:"vault_embedding_dim"`
 	EmbeddingModels     []string `json:"vault_embedding_models"`
+	// ExcludedFolders names the Obsidian template folders left out of the
+	// index. Omitted entirely when there are none, so a typed consumer never
+	// has to decode a null.
+	ExcludedFolders []string `json:"excluded_folders,omitempty"`
 }
 
 // runVaultDefault handles `2nb vault` (no subcommand). With no args it
@@ -295,6 +299,7 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 	portStatus, portAction := derivePortability(cfg, embedder, knownReadiness(embedReady), vaultDim, vaultModels, docCount, embeddedCount, embeddableUnembedded, vault.CheckIndexFreshness(v.DB))
 
 	status := VaultStatus{
+		ExcludedFolders:     vault.ObsidianTemplateFolders(v.Root),
 		Path:                v.Root,
 		Name:                v.Config.Name,
 		Source:              string(source),
@@ -347,6 +352,11 @@ func printVaultStatus(s VaultStatus, nextLabel, nextHint string) {
 			model = "mixed: " + strings.Join(s.EmbeddingModels, ", ")
 		}
 		fmt.Printf("  As-embedded: %s (%dd)\n", model, s.VaultEmbeddingDim)
+	}
+	if len(s.ExcludedFolders) > 0 {
+		// Say it out loud: "why is my template missing from search?" should be
+		// answerable from `2nb vault status` rather than from the source.
+		fmt.Printf("  Not indexed: %s  (Obsidian template folder)\n", strings.Join(s.ExcludedFolders, ", "))
 	}
 	portLabel := strings.ToUpper(strings.ReplaceAll(s.PortabilityStatus, "_", " "))
 	fmt.Printf("  Portability: %s\n", portLabel)
