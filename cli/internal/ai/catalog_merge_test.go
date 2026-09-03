@@ -8,6 +8,7 @@ import (
 )
 
 func TestBuildModelList_VerifiedOnly(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	ctx := context.Background()
 	result, err := BuildModelList(ctx, MergedListOptions{
 		Config: DefaultAIConfig(),
@@ -37,6 +38,7 @@ func TestMergedModelListJSONIncludesWarnings(t *testing.T) {
 }
 
 func TestBuildModelList_ActiveMarking(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	ctx := context.Background()
 	cfg := DefaultAIConfig() // bedrock, haiku, nova embed
 	result, err := BuildModelList(ctx, MergedListOptions{Config: cfg})
@@ -147,6 +149,7 @@ func TestCatalogCompatibility_MantleStrategy(t *testing.T) {
 }
 
 func TestBuildModelList_Sorting(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	ctx := context.Background()
 	result, err := BuildModelList(ctx, MergedListOptions{
 		Config: DefaultAIConfig(),
@@ -344,6 +347,7 @@ func TestBuildModelList_EnabledOnly_False_IncludesAll(t *testing.T) {
 // disable silences every model from that provider, regardless of tier
 // or the per-model Enabled flag.
 func TestBuildModelList_DropsDisabledProvider(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	cfg := AIConfig{
 		Provider: "bedrock",
 		Bedrock:  BedrockConfig{Disabled: true},

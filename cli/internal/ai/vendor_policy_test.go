@@ -226,6 +226,7 @@ func TestApplyVendorPolicy_ActiveGuard(t *testing.T) {
 }
 
 func TestApplyVendorPolicy_RerankGuard(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	cfg := DefaultAIConfig()
 	cfg.Rerank.Enabled = true // active rerank slot resolves to the default Cohere model
 	policies := []ScopedVendorPolicy{{

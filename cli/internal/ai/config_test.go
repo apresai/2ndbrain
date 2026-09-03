@@ -36,6 +36,7 @@ func TestDefaultAIConfig(t *testing.T) {
 }
 
 func TestResolveSimilarityThreshold(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	tests := []struct {
 		name       string
 		cfg        AIConfig
@@ -116,6 +117,7 @@ func TestRecommendedSimilarityThresholdFor(t *testing.T) {
 }
 
 func TestResolveSimilarityThresholdFull_UserCatalogOverride(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	vault := t.TempDir()
 	dot := filepath.Join(vault, dotDirName)
 	if err := os.MkdirAll(dot, 0o755); err != nil {

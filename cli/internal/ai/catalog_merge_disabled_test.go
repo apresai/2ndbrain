@@ -12,6 +12,7 @@ import (
 // disabled providers' models so the wizard (the enablement surface) can offer
 // them.
 func TestBuildModelList_IncludeDisabledProviders(t *testing.T) {
+	setupHome(t) // the ai package has no TestMain: without this the test reads the developer's real ~/.config/2nb/models.yaml
 	ctx := context.Background()
 	cfg := DefaultAIConfig() // ollama + openrouter ship disabled
 
