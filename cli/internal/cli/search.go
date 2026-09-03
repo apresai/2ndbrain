@@ -141,6 +141,10 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		})
 	}()
 
+	// The query embedding is one provider call and can be the whole latency of
+	// a search on a throttled account (10.8s measured); say so rather than
+	// looking hung.
+	ctx, stopNotice := slowCallNotice(ctx, "embedding query")
 	res, rerr := retrieve.New(v).Retrieve(ctx, retrieve.Options{
 		Query:     strings.TrimSpace(query),
 		Type:      searchType,
@@ -150,6 +154,7 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 		BM25Only:  searchBM25Only,
 		Threshold: threshold,
 	})
+	stopNotice()
 	if rerr != nil {
 		return rerr
 	}

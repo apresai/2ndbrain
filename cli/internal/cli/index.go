@@ -249,7 +249,12 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 	ctx := context.Background()
 	cfg := v.Config.AI
 	embedded := false
-	if stats, embErr := embedDocuments(ctx, v, cfg); embErr != nil {
+	// The high-frequency path: editors and the macOS app run this on every
+	// save, so a throttled account shows up here first.
+	ctx, stopNotice := slowCallNotice(ctx, "embedding note")
+	stats, embErr := embedDocuments(ctx, v, cfg)
+	stopNotice()
+	if embErr != nil {
 		slog.Debug("incremental embed skipped", "reason", embErr.Error())
 	} else {
 		embedStats = stats

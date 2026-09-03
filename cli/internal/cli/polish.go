@@ -158,7 +158,9 @@ func runPolish(cmd *cobra.Command, args []string) error {
 	}
 
 	start := time.Now()
-	polished, err := generator.Generate(ctx, userMessage, opts)
+	gctx, stopNotice := slowCallNotice(ctx, "polishing note")
+	polished, err := generator.Generate(gctx, userMessage, opts)
+	stopNotice()
 	if err != nil {
 		return fmt.Errorf("polish generation failed: %w", err)
 	}

@@ -150,10 +150,12 @@ func (b *BedrockReranker) Rerank(ctx context.Context, query string, docs []strin
 		if !isBedrockRetryable(err) || attempt == maxBedrockAttempts {
 			return nil, fmt.Errorf("bedrock rerank %s: %w", b.model, err)
 		}
+		wait := bedrockRetryDelay(attempt)
+		noteBedrockRetry(ctx, "classic", attempt, maxBedrockAttempts, wait, err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(bedrockRetryDelay(attempt)):
+		case <-time.After(wait):
 		}
 	}
 

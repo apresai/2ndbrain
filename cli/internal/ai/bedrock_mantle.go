@@ -402,8 +402,10 @@ func (g *BedrockMantleGenerator) doMantleRequest(ctx context.Context, body []byt
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < mantleMaxAttempts-1 {
+			wait := retryBackoff(attempt) // 1s, 2s
+			noteMantleRetry(ctx, attempt+1, mantleMaxAttempts, wait, resp.StatusCode)
 			select {
-			case <-time.After(retryBackoff(attempt)): // 1s, 2s
+			case <-time.After(wait):
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()
