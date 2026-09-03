@@ -49,14 +49,18 @@ the value it ignored, and the two commands that re-save it with provenance. It
 also names the file and row carrying a calibration when it warns about a high
 threshold, and says so plainly when the value is the builtin's own.
 
-The same rule governs the model FACTS. A user-catalog row's `name`, `dimensions`
-and `context_length` override the builtin only when `fact_source: user` says the
-user typed them (`models add --name/--dimensions/--context-length`); `config_hint`
-and `recommended` are builtin-owned outright. An unstamped `context_length` copied
-off the builtin by an old probe save used to win forever, and `inheritModelFacts`
-spread it from one probed region row to every sibling discovery found. A probe
-save now drops an unstamped fact for a builtin model and keeps one for a model no
-builtin declares, where the stored row is the only copy.
+The same rule governs the model FACTS, PER FACT. A user-catalog row's `name`,
+`dimensions` and `context_length` override the builtin only where the row's
+`authored_facts` list names that field, which only `models add
+--name/--dimensions/--context-length` appends to, one entry per flag passed;
+`config_hint` and `recommended` are builtin-owned outright. One stamp for all
+three was unsound: `models add --context-length` claimed a name the user never
+typed, and a row that authored one fact donated its empty others to freshly
+discovered routes. An unlisted `context_length` copied off the builtin by an old
+probe save used to win forever, and `inheritModelFacts` spread it from one probed
+region row to every sibling discovery found. A probe save now drops an unlisted
+fact for a builtin model and keeps one for a model no builtin declares, where the
+stored row is the only copy.
 
 Different embedding models have very different baseline distributions. Builtin recommendations:
 Nova-2 `0.25` (measured on a real 151-doc vault under the asymmetric query purpose, see below),
