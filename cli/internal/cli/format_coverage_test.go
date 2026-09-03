@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -694,18 +696,35 @@ func TestContract_SkillsDoctorTextNamesItsFields(t *testing.T) {
 // clipboard, which is the combination `export-context --copy --json` needs (the
 // bundle is what a user wants to paste into an agent). Nothing covered it.
 //
-// Real clipboard, no stub: the test probes for pbcopy/pbpaste and skips when
-// the platform has no clipboard integration (CI runs on Linux, where --copy is
-// refused by name). It saves the current clipboard and puts it back, so running
-// the suite does not eat what you had copied.
+// Real clipboard, no stub, so the test is OPT-IN: it is skipped unless
+// 2NB_TEST_CLIPBOARD is set. It writes to the developer's own clipboard, and
+// the save/restore below can only carry a TEXT flavor, so a routine `make test`
+// must never run it. The gate costs no coverage: CI is Linux, where --copy is
+// refused by name and clipboardSupported skips this test anyway.
+//
+// Behind the gate, a flavor guard. pbpaste returns EMPTY at exit 0 for a
+// clipboard holding only an image, so the save looks like it succeeded and the
+// restore silently puts back nothing; the clobber happens at --copy time, where
+// no restore can help. clipboardHoldsText reads the flavor list first and skips
+// unless the clipboard is empty or has text to save.
+//
+// The residual the guard cannot close: a clipboard carrying BOTH a text and a
+// non-text flavor passes the check, and the pbcopy/pbpaste round trip puts back
+// only the text.
 func TestContract_ExportContextCopiesItsRenderedJSON(t *testing.T) {
 	if err := clipboardSupported(runtime.GOOS); err != nil {
 		t.Skipf("no clipboard integration here: %v", err)
+	}
+	if os.Getenv("2NB_TEST_CLIPBOARD") == "" {
+		t.Skip("opt-in: this test overwrites the real clipboard; set 2NB_TEST_CLIPBOARD=1 to run it")
 	}
 	for _, bin := range []string{"pbcopy", "pbpaste"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("%s is not on PATH: %v", bin, err)
 		}
+	}
+	if err := clipboardHoldsText(); err != nil {
+		t.Skipf("refusing a clipboard this test could not put back: %v", err)
 	}
 	saved, perr := exec.Command("pbpaste").Output()
 	if perr != nil {
@@ -741,4 +760,61 @@ func TestContract_ExportContextCopiesItsRenderedJSON(t *testing.T) {
 	if strings.TrimSpace(string(pasted)) != strings.TrimSpace(string(stdout)) {
 		t.Errorf("the clipboard did not receive the rendered JSON:\n%s", pasted)
 	}
+}
+
+// clipboardTextFlavors are the `clipboard info` class names whose content a
+// pbpaste save and a pbcopy restore can actually carry. They are AppleScript
+// class names, not UTIs. A flavor absent from this set is treated as non-text,
+// which is the fail-closed direction: the worst an unlisted text flavor costs
+// is a skipped test.
+var clipboardTextFlavors = map[string]bool{
+	"string":       true,
+	"text":         true,
+	"Unicode text": true,
+	"«class utf8»": true,
+	"«class ut16»": true,
+	"«class utxt»": true,
+	"«class TEXT»": true,
+	"«class ustr»": true,
+}
+
+// clipboardHoldsText reports whether the pasteboard is one this test may
+// overwrite: empty, or carrying at least one text flavor that the pbpaste save
+// can capture and the pbcopy restore can put back. `clipboard info` lists the
+// flavors and their sizes without touching the pasteboard, so the check itself
+// is read-only.
+//
+// It FAILS CLOSED. An osascript error, a non-zero exit, or output this cannot
+// parse is an error, never a pass, so "the clipboard is empty" and "osascript
+// failed" can never collapse into the same branch.
+func clipboardHoldsText() error {
+	out, err := exec.Command("osascript", "-e", "clipboard info").Output()
+	if err != nil {
+		return fmt.Errorf("clipboard info failed, so the flavors are unknown: %w", err)
+	}
+	info := strings.TrimSpace(string(out))
+	if info == "" {
+		// An empty clipboard has nothing to lose.
+		return nil
+	}
+	// Flat comma-separated flavor/size pairs, for example:
+	// «class utf8», 61, «class ut16», 124, string, 61, Unicode text, 122
+	fields := strings.Split(info, ",")
+	if len(fields)%2 != 0 {
+		return fmt.Errorf("cannot parse clipboard info %q", info)
+	}
+	text := false
+	for i := 0; i < len(fields); i += 2 {
+		flavor := strings.TrimSpace(fields[i])
+		if _, err := strconv.Atoi(strings.TrimSpace(fields[i+1])); err != nil {
+			return fmt.Errorf("cannot parse clipboard info %q", info)
+		}
+		if clipboardTextFlavors[flavor] {
+			text = true
+		}
+	}
+	if !text {
+		return fmt.Errorf("clipboard carries no text flavor that pbcopy could restore: %q", info)
+	}
+	return nil
 }
