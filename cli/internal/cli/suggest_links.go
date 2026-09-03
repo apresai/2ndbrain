@@ -2,14 +2,12 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -177,14 +175,8 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	format := getFormat(cmd)
-	if format == output.FormatJSON {
-		data, err := json.Marshal(results)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, results); done {
+		return err
 	}
 
 	if len(results) == 0 {

@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
 
 	mcppkg "github.com/apresai/2ndbrain/internal/mcp"
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -76,13 +74,8 @@ func runMCPConfigured(cmd *cobra.Command, args []string) error {
 		statuses = []mcppkg.ConfiguredStatus{mcppkg.ConfiguredFor(v, mcpConfiguredClient)}
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		out, err := json.MarshalIndent(statuses, "", "  ")
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(out))
-		return nil
+	if done, err := emitStructured(cmd, statuses); done {
+		return err
 	}
 
 	anyMissing := false
@@ -135,13 +128,8 @@ func runMCPStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("list mcp statuses: %w", err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		out, err := json.MarshalIndent(statuses, "", "  ")
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(out))
-		return nil
+	if done, err := emitStructured(cmd, statuses); done {
+		return err
 	}
 
 	if len(statuses) == 0 {

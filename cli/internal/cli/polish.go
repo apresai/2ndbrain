@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/retrieve"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -253,13 +251,8 @@ func runPolish(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", result.Warning)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, result); done {
+		return err
 	}
 
 	fmt.Printf("Polished %s in %dms using %s / %s\n", result.Path, result.DurationMs, result.Provider, result.Model)
@@ -343,7 +336,6 @@ func runPolishUndo(cmd *cobra.Command, args []string) error {
 		}
 	case polish.UndoNoop:
 		_ = polish.DeleteSnapshot(v, rel)
-		fmt.Fprintf(os.Stderr, "%s is already at its pre-polish version; nothing to undo\n", rel)
 		return emitUndoResult(cmd, rel, false)
 	}
 
@@ -351,7 +343,6 @@ func runPolishUndo(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	_ = polish.DeleteSnapshot(v, rel)
-	fmt.Fprintf(os.Stderr, "Reverted %s to its pre-polish version\n", rel)
 	return emitUndoResult(cmd, rel, true)
 }
 
@@ -378,10 +369,24 @@ func restorePolishOriginal(v *vault.Vault, absPath, rel string, content []byte) 
 	return nil
 }
 
+// emitUndoResult is the whole of `polish --undo`'s output, human line included,
+// so the two cannot drift apart.
+//
+// It used to honor --json only and print NOTHING for every other format, so
+// `polish --undo --format csv/yaml/raw/md` exited 0 with an empty stdout: the
+// caller could not tell a successful revert from a format the command ignored.
+// raw and md are now refused by output.Write (an undo verdict has no document
+// body), and csv, tsv and yaml render the verdict.
 func emitUndoResult(cmd *cobra.Command, rel string, reverted bool) error {
-	if getFormat(cmd) == output.FormatJSON {
-		data, _ := json.Marshal(PolishUndoResult{Path: rel, Reverted: reverted})
-		fmt.Println(string(data))
+	// The human line goes to stderr, as it always has, so a machine format's
+	// document on stdout stays clean.
+	if reverted {
+		fmt.Fprintf(os.Stderr, "Reverted %s to its pre-polish version\n", rel)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s is already at its pre-polish version; nothing to undo\n", rel)
+	}
+	if done, err := emitStructured(cmd, PolishUndoResult{Path: rel, Reverted: reverted}); done {
+		return err
 	}
 	return nil
 }

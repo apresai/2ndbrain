@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,7 +8,6 @@ import (
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
@@ -213,13 +211,8 @@ func emitLinkEditResult(cmd *cobra.Command, result PolishResult, warnings []stri
 		fmt.Fprintf(os.Stderr, "warning: %s\n", result.Warning)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, result); done {
+		return err
 	}
 
 	if n == 0 {

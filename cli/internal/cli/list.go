@@ -56,6 +56,11 @@ type ListItem struct {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
+	// Before the vault open, so the refusal never depends on how many rows the
+	// filters happened to match.
+	if err := refuseBodylessFormat(cmd, "list"); err != nil {
+		return err
+	}
 	v, err := openVault()
 	if err != nil {
 		return err

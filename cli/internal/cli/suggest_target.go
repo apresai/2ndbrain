@@ -13,7 +13,6 @@ import (
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
-	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/store"
@@ -172,21 +171,16 @@ func runSuggestTarget(cmd *cobra.Command, args []string) error {
 
 	recommendation := computeSuggestRecommendation(results, llmOutcome)
 
-	if getFormat(cmd) == output.FormatJSON {
-		var payload any = results
-		if suggestTargetVerdict {
-			payload = SuggestTargetEnvelope{
-				Recommendation: recommendation,
-				LLM:            llmOutcome,
-				Candidates:     results,
-			}
+	var payload any = results
+	if suggestTargetVerdict {
+		payload = SuggestTargetEnvelope{
+			Recommendation: recommendation,
+			LLM:            llmOutcome,
+			Candidates:     results,
 		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	}
+	if done, err := emitStructured(cmd, payload); done {
+		return err
 	}
 
 	if suggestTargetVerdict {

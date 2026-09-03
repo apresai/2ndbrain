@@ -297,6 +297,9 @@ type rmEvent struct {
 }
 
 func runAIEngineRm(cmd *cobra.Command, args []string) error {
+	if err := refuseNonJSONStream(cmd, "ai engine rm"); err != nil {
+		return err
+	}
 	jsonMode := getFormat(cmd) == output.FormatJSON
 	var results []rmEvent
 	var failed bool
@@ -331,6 +334,9 @@ func runAIEngineRm(cmd *cobra.Command, args []string) error {
 }
 
 func runAIEnginePull(cmd *cobra.Command, args []string) error {
+	if err := refuseNonJSONStream(cmd, "ai engine pull"); err != nil {
+		return err
+	}
 	ctx := context.Background()
 	jsonMode := getFormat(cmd) == output.FormatJSON
 	var enc *json.Encoder

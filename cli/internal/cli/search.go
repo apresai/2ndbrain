@@ -67,6 +67,12 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 	if strings.TrimSpace(strings.Join(args, " ")) == "" {
 		return fmt.Errorf("search needs a query; pass one, or use `2nb list` with filters to enumerate documents")
 	}
+	// Before anything with a side effect. A hybrid search embeds the query,
+	// which is a paid provider call, and there is no point paying for a result
+	// this format cannot render.
+	if err := refuseBodylessFormat(cmd, "search"); err != nil {
+		return err
+	}
 	v, err := openVault()
 	if err != nil {
 		return err

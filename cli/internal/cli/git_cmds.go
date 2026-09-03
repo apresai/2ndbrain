@@ -84,13 +84,8 @@ func runGitActivity(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git log: %w", err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(changes)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, changes); done {
+		return err
 	}
 
 	if len(changes) == 0 {
@@ -166,13 +161,8 @@ func runGitShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git show %s: %w", args[0], err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(detail)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, detail); done {
+		return err
 	}
 
 	// Human output: header + stats + file list with counts.
@@ -218,13 +208,8 @@ func runGitStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git status: %w", err)
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(statuses)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, statuses); done {
+		return err
 	}
 
 	if len(statuses) == 0 {
@@ -241,9 +226,8 @@ func runGitStatus(cmd *cobra.Command, args []string) error {
 }
 
 func printNotAGitRepo(cmd *cobra.Command) error {
-	if getFormat(cmd) == output.FormatJSON {
-		fmt.Println(`{"git_repo": false}`)
-		return nil
+	if done, err := emitStructured(cmd, map[string]bool{"git_repo": false}); done {
+		return err
 	}
 	fmt.Println("Vault is not a git repository. Run `git init` to enable git integration.")
 	return nil

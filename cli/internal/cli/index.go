@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -256,13 +255,8 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 		DurationMs: time.Since(start).Milliseconds(),
 	}
 
-	if getFormat(cmd) == output.FormatJSON {
-		data, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(data))
-		return nil
+	if done, err := emitStructured(cmd, result); done {
+		return err
 	}
 
 	if !flagPorcelain {

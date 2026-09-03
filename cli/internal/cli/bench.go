@@ -119,6 +119,12 @@ func benchVaultDocCount(db *sql.DB) (int, error) {
 }
 
 func runBench(cmd *cobra.Command, args []string) error {
+	// Before the vault and bench DB open: openVaultBenchDB backfills routes,
+	// which WRITES bench.db, and a run this format cannot render should change
+	// nothing.
+	if err := refuseNonJSONStream(cmd, "models bench"); err != nil {
+		return err
+	}
 	v, err := openVault()
 	if err != nil {
 		return err
