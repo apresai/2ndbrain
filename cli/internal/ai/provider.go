@@ -277,9 +277,17 @@ type ModelInfo struct {
 	// write it: every other save path seeds its row from the MERGED catalog, so
 	// without this stamp a copied builtin recommendation was indistinguishable
 	// from a measurement the user actually took. Empty on a builtin row, and on
-	// a user row written before the stamp existed (see IsUserThreshold, which
-	// tells those two apart by value).
+	// a user row written before the stamp existed, whose value is ignored (see
+	// IsUserThreshold).
 	ThresholdSource string `json:"threshold_source,omitempty" yaml:"threshold_source,omitempty"`
+	// FactSource records who authored this row's MODEL FACTS: Name, Dimensions
+	// and ContextLen. The only value ever written is FactSourceUser, and only
+	// `models add --name/--dimensions/--context-length` writes it. Every other
+	// save path seeds its row from the MERGED catalog, so without this stamp a
+	// copied builtin fact was indistinguishable from a fact the user typed, and
+	// the copy then shadowed every later builtin correction. Empty on a builtin
+	// row and on any row a probe wrote.
+	FactSource string `json:"fact_source,omitempty" yaml:"fact_source,omitempty"`
 	// TestedAt is an ISO-8601 timestamp recorded when the model last passed
 	// `2nb models test`. Present only on user-catalog entries.
 	TestedAt string `json:"tested_at,omitempty" yaml:"tested_at,omitempty"`
@@ -395,32 +403,30 @@ func DefaultGenOpts() GenOpts {
 // which is the label ResolveSimilarityThresholdFull reports to a human.
 const ThresholdSourceUser = "user"
 
+// FactSourceUser is the only value ever written to ModelInfo.FactSource. It
+// marks a row whose Name, Dimensions and ContextLen the user typed, via
+// `models add --name/--dimensions/--context-length`.
+const FactSourceUser = "user"
+
 // IsUserThreshold reports whether a RAW user-catalog row's
 // recommended_similarity_threshold is the user's own calibration rather than a
 // copy of the builtin recommendation.
 //
-// Provenance used to be decided by presence alone, and eight of the twelve
-// SaveUserCatalogEntry callers seed their row from the MERGED catalog (builtin
-// overlaid by the user file), so a single `models bench` run wrote the builtin's
-// own number into the user file and every vault on the machine then reported
-// its threshold as "user calibration". The frozen copy also shadowed any later
-// builtin change. Hence:
+// A stamp is a stamp: stamped ThresholdSourceUser is the user's, anything
+// unstamped is builtin-owned and ignored, so the resolver falls through to the
+// builtin recommendation and every already-contaminated catalog self-heals with
+// no migration.
 //
-//   - stamped ThresholdSourceUser: the user authored it, always.
-//   - unstamped and EQUAL to the builtin recommendation: a mirror. Ignore it,
-//     so the resolver falls through to the builtin and self-heals every catalog
-//     already contaminated, with no migration.
-//   - unstamped and DIFFERENT from the builtin: a real calibration written
-//     before the stamp existed. Keep it.
-//
-// A model with no builtin recommendation has nothing to mirror, so any stored
-// value there is the user's.
+// The comparison heuristic this replaces ("unstamped and different from the
+// builtin is a pre-stamp calibration") misfired on a real vault: the row
+// carried 0.65, which is the builtin value 2nb itself recommended for Nova
+// until June 2026, and because 0.65 no longer equals the current 0.25 it read
+// as a calibration 2.6x the recommendation. That threshold rejects every real
+// match on an asymmetric embedding, so search silently degraded to BM25 with
+// `ai status` reporting a measurement nobody took. A value the user really did
+// calibrate before the stamp existed is dropped in favor of the builtin
+// recommendation, which is the safe default, and `ai status` names the file and
+// value it ignored so the user can re-save it.
 func IsUserThreshold(m ModelInfo) bool {
-	if m.RecommendedSimilarityThreshold <= 0 {
-		return false
-	}
-	if m.ThresholdSource == ThresholdSourceUser {
-		return true
-	}
-	return m.RecommendedSimilarityThreshold != RecommendedSimilarityThresholdFor(m.Provider, m.ID)
+	return m.RecommendedSimilarityThreshold > 0 && m.ThresholdSource == ThresholdSourceUser
 }

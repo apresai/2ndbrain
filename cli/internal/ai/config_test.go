@@ -125,12 +125,14 @@ func TestResolveSimilarityThresholdFull_UserCatalogOverride(t *testing.T) {
 	}
 
 	// Calibration saved: user catalog overrides the builtin Nova-2 recommendation.
+	// The stamp is what makes it a calibration; an unstamped row is ignored.
 	entry := ModelInfo{
 		ID:                             "amazon.nova-2-multimodal-embeddings-v1:0",
 		Provider:                       "bedrock",
 		Type:                           "embedding",
 		Tier:                           TierUserVerified,
 		RecommendedSimilarityThreshold: 0.72,
+		ThresholdSource:                ThresholdSourceUser,
 	}
 	if err := SaveUserCatalogEntry(ScopeVault, vault, entry); err != nil {
 		t.Fatalf("save calibration: %v", err)
@@ -182,11 +184,15 @@ func writeVaultCatalogYAML(t *testing.T, vaultRoot, body string) {
 	}
 }
 
-// A user-catalog threshold is a CALIBRATION only when the user authored it.
+// A user-catalog threshold is a CALIBRATION only when it carries the stamp.
 // Eight save paths seeded their row from the builtin-merged catalog, so the
-// builtin's own 0.25 got written into the user file and every vault on the
-// machine then reported "user calibration" for a number nobody measured.
-func TestResolveSimilarityThresholdFull_MirroredBuiltinIsNotACalibration(t *testing.T) {
+// builtin's own number got written into the user file and every vault on the
+// machine then reported "user calibration" for a value nobody measured. The
+// value-comparison heuristic that used to rescue pre-stamp calibrations is
+// gone: it read a mirror of a RETIRED builtin (0.65, which 2nb itself
+// recommended for Nova until June 2026) as a calibration 2.6x the current
+// recommendation, which rejects every real match on an asymmetric embedding.
+func TestResolveSimilarityThresholdFull_OnlyAStampIsACalibration(t *testing.T) {
 	setupHome(t)
 	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
 	cfg := AIConfig{Provider: "bedrock", EmbeddingModel: nova}
@@ -205,12 +211,21 @@ func TestResolveSimilarityThresholdFull_MirroredBuiltinIsNotACalibration(t *test
 			wantSource: ThresholdSourceModel,
 		},
 		{
-			// Written before the stamp existed, but a real measurement: the
-			// value is not the builtin's, so it survives.
-			name:       "unstamped value that differs from the builtin is kept",
+			// The false positive the stamp-only rule exists to kill: 0.65 is a
+			// mirror of the builtin 2nb retired in June 2026, not a measurement.
+			name:       "unstamped mirror of a RETIRED builtin is ignored too",
+			row:        "    recommended_similarity_threshold: 0.65\n",
+			want:       0.25,
+			wantSource: ThresholdSourceModel,
+		},
+		{
+			// A real pre-stamp calibration is dropped as well. That is the
+			// deliberate trade: the builtin recommendation is the safe default,
+			// and `ai status` names the file and value it ignored.
+			name:       "unstamped value that differs from the builtin is ignored",
 			row:        "    recommended_similarity_threshold: 0.4\n",
-			want:       0.4,
-			wantSource: ThresholdSourceUserCalibration,
+			want:       0.25,
+			wantSource: ThresholdSourceModel,
 		},
 		{
 			// `models calibrate --save` may legitimately land on the builtin
@@ -251,8 +266,13 @@ func TestIsUserThreshold(t *testing.T) {
 		{"zero threshold is never the user's", ModelInfo{Provider: "bedrock", ID: nova}, false},
 		{"stamped is the user's", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25, ThresholdSource: ThresholdSourceUser}, true},
 		{"unstamped mirror is not", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25}, false},
-		{"unstamped different value is", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.4}, true},
-		{"model with no builtin recommendation has nothing to mirror", ModelInfo{Provider: "bedrock", ID: "not-in-any-catalog", RecommendedSimilarityThreshold: 0.25}, true},
+		{"unstamped different value is not either", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.4}, false},
+		// The reported false positive: 0.65 is the builtin 2nb recommended for
+		// Nova until June 2026, so comparing values called a stale mirror a
+		// calibration 2.6x the current recommendation.
+		{"unstamped mirror of a retired builtin is not", ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.65}, false},
+		{"an unstamped row for a model with no builtin recommendation is not the user's either", ModelInfo{Provider: "bedrock", ID: "not-in-any-catalog", RecommendedSimilarityThreshold: 0.25}, false},
+		{"stamped is the user's whatever the model", ModelInfo{Provider: "bedrock", ID: "not-in-any-catalog", RecommendedSimilarityThreshold: 0.25, ThresholdSource: ThresholdSourceUser}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -269,13 +289,13 @@ func TestMergeFields_ThresholdSourceMovesWithTheValue(t *testing.T) {
 	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
 	base := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25}
 	top := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.4, ThresholdSource: ThresholdSourceUser}
-	if out := mergeFields(base, top); out.ThresholdSource != ThresholdSourceUser {
+	if out := mergeFields(base, top, true); out.ThresholdSource != ThresholdSourceUser {
 		t.Errorf("overlay stamp lost: ThresholdSource = %q, want %q", out.ThresholdSource, ThresholdSourceUser)
 	}
 
 	stamped := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.4, ThresholdSource: ThresholdSourceUser}
 	plain := ModelInfo{Provider: "bedrock", ID: nova, RecommendedSimilarityThreshold: 0.25}
-	out := mergeFields(stamped, plain)
+	out := mergeFields(stamped, plain, true)
 	if out.RecommendedSimilarityThreshold != 0.25 || out.ThresholdSource != "" {
 		t.Errorf("an unstamped overlay must replace both fields: got (%v, %q), want (0.25, \"\")",
 			out.RecommendedSimilarityThreshold, out.ThresholdSource)
@@ -295,14 +315,14 @@ func TestMergeFields_OverlaysThreshold(t *testing.T) {
 		ID:                             "amazon.nova-2-multimodal-embeddings-v1:0",
 		RecommendedSimilarityThreshold: 0.72,
 	}
-	out := mergeFields(base, top)
+	out := mergeFields(base, top, true)
 	if out.RecommendedSimilarityThreshold != 0.72 {
 		t.Errorf("merged threshold = %v, want 0.72", out.RecommendedSimilarityThreshold)
 	}
 
 	// Overlay with zero preserves the base value.
 	top2 := ModelInfo{Provider: "bedrock", ID: "amazon.nova-2-multimodal-embeddings-v1:0"}
-	out2 := mergeFields(base, top2)
+	out2 := mergeFields(base, top2, true)
 	if out2.RecommendedSimilarityThreshold != 0.65 {
 		t.Errorf("zero overlay should not wipe base threshold: got %v, want 0.65", out2.RecommendedSimilarityThreshold)
 	}

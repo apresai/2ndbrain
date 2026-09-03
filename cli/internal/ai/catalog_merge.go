@@ -63,7 +63,10 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 
 	// Layer 2+3: overlay user catalog (global merged with per-vault).
 	if user := LoadUserCatalog(opts.VaultRoot); len(user) > 0 {
-		catalog = overlay(catalog, user)
+		// The base here IS the builtin catalog, so the builtin owns its model
+		// facts, its ConfigHint and its curation unless the user stamped
+		// otherwise (see mergeFields).
+		catalog = overlay(catalog, user, true)
 	}
 
 	// Mark active models based on current config.

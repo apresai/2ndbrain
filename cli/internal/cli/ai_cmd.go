@@ -609,17 +609,17 @@ func ollamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 }
 
 // thresholdCalibrationOrigin says where a resolved "user calibration" similarity
-// threshold physically lives, so `ai status` can name the file to edit. It also
-// distinguishes a stamped calibration from one written before the stamp existed,
-// which is read as a calibration only because its value differs from the
-// builtin recommendation (see ai.IsUserThreshold).
+// threshold physically lives, so `ai status` can name the file to edit. Only a
+// STAMPED row can resolve as a calibration (ai.IsUserThreshold), so there is one
+// message: the branch that described an unstamped pre-stamp value is gone with
+// the value-comparison heuristic that used to admit one.
 func thresholdCalibrationOrigin(vaultRoot, provider, modelID string) string {
 	// The SAME lookup the resolver uses, deliberately. This used to call
 	// UserCatalogRouteToPreserve, which needs a UNIQUE stored row for the model,
 	// while the resolver takes the first matching row: with two stored routes
 	// the message said "no user-catalog row carries it" about a value the
 	// resolver was actively using.
-	row, scope, ok := ai.UserThresholdRow(vaultRoot, provider, modelID)
+	_, scope, ok := ai.UserThresholdRow(vaultRoot, provider, modelID)
 	if !ok {
 		return "no user-catalog row carries it; check ai.similarity_threshold in this vault's config.yaml."
 	}
@@ -627,8 +627,5 @@ func thresholdCalibrationOrigin(vaultRoot, provider, modelID string) string {
 	if err != nil {
 		path = string(scope) + " catalog"
 	}
-	if row.ThresholdSource == ai.ThresholdSourceUser {
-		return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s (saved by `2nb models calibrate --save` or `2nb models add`). Remove that key to fall back to the built-in value.", modelID, path)
-	}
-	return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s, written before 2nb stamped provenance, and it differs from the built-in value. Remove that key to fall back to the built-in value.", modelID, path)
+	return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s (saved by `2nb models calibrate --save` or `2nb models add`). Remove that key to fall back to the built-in value.", modelID, path)
 }

@@ -59,7 +59,9 @@ func LoadUserCatalog(vaultRoot string) []ModelInfo {
 
 	merged := make([]ModelInfo, 0, len(global)+len(perVault))
 	merged = append(merged, global...)
-	merged = overlay(merged, perVault)
+	// Both sides are user files, so neither owns a fact the other must defer
+	// to: the per-vault row keeps winning on every value it sets.
+	merged = overlay(merged, perVault, false)
 	for i := range merged {
 		tagAsUserCatalog(&merged[i])
 	}
@@ -361,7 +363,14 @@ func writeCatalog(path string, cat UserCatalog) error {
 // overlay replaces entries in base with matching entries from overlay (by
 // provider+id) and appends any overlay entries that don't exist in base.
 // Returns a new slice; inputs are not mutated.
-func overlay(base, top []ModelInfo) []ModelInfo {
+//
+// baseIsBuiltin says whether `base` is the BUILTIN catalog. It is the caller's
+// answer to "does anything here own a fact the overlay cannot?", and it gates
+// the fields the builtin owns (see mergeFields). There are exactly two overlays:
+// the builtin under the user file (true), and the global user file under the
+// per-vault one (false), where neither side is authoritative and the vault row
+// keeps winning as it always has.
+func overlay(base, top []ModelInfo, baseIsBuiltin bool) []ModelInfo {
 	if len(top) == 0 {
 		return base
 	}
@@ -378,7 +387,7 @@ func overlay(base, top []ModelInfo) []ModelInfo {
 	for _, m := range top {
 		key := routeKey(m.Route())
 		if i, ok := index[key]; ok {
-			out[i] = mergeFields(out[i], m)
+			out[i] = mergeFields(out[i], m, baseIsBuiltin)
 		} else {
 			out = append(out, m)
 			index[key] = len(out) - 1
@@ -401,17 +410,47 @@ func hasUserPriceOverride(m ModelInfo) bool {
 // correctly overrides a non-zero builtin price. Tier is monotonically
 // elevated (verified beats user_verified beats unverified) so bundled
 // prices can apply without demoting a user-verified entry.
-func mergeFields(base, top ModelInfo) ModelInfo {
+//
+// baseIsBuiltin marks the overlay of the user file onto the BUILTIN catalog,
+// where three groups of fields belong to the builtin: the model facts (gated on
+// the FactSource stamp below), ConfigHint, and Recommended. In the other
+// overlay, global user file under per-vault user file, neither side owns
+// anything, so the vault row wins on any value it sets, exactly as before.
+func mergeFields(base, top ModelInfo, baseIsBuiltin bool) ModelInfo {
 	out := base
-	if top.Name != "" {
-		out.Name = top.Name
+	// Name, Dimensions and ContextLen are MODEL FACTS. Over the builtin catalog
+	// a user row replaces them only when the user actually typed one, which
+	// `models add --name/--dimensions/--context-length` records as FactSourceUser.
+	// An unstamped copy is not authorship: every probe, promotion and benchmark
+	// save used to seed its row from this very merged view, so the copy came
+	// FROM the builtin and then outlived it. That is how a context_length of
+	// 2048 survived the builtin's correction to 8192, kept `models list`
+	// reporting the stale number, and (through inheritModelFacts) spread to
+	// every per-region row discovery had just found.
+	//
+	// The stamp travels with the facts, never on its own, for the same reason
+	// ThresholdSource does: it names who authored THESE values.
+	if !baseIsBuiltin || top.FactSource == FactSourceUser {
+		wrote := false
+		if top.Name != "" {
+			out.Name = top.Name
+			wrote = true
+		}
+		if top.Dimensions != 0 {
+			out.Dimensions = top.Dimensions
+			wrote = true
+		}
+		if top.ContextLen != 0 {
+			out.ContextLen = top.ContextLen
+			wrote = true
+		}
+		if wrote {
+			out.FactSource = top.FactSource
+		}
 	}
-	if top.Dimensions != 0 {
-		out.Dimensions = top.Dimensions
-	}
-	if top.ContextLen != 0 {
-		out.ContextLen = top.ContextLen
-	}
+	// SupportedDimensions and Modalities stay builtin-only: no user-catalog
+	// writer sets them, so there has never been anything to overlay.
+	//
 	// When the overlay declares a price source, treat prices as intentional
 	// even if zero. Otherwise only non-zero overrides apply (protects builtin
 	// prices from overlays that haven't populated them).
@@ -440,7 +479,10 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 			out.PriceRequest = top.PriceRequest
 		}
 	}
-	if top.ConfigHint != "" {
+	// ConfigHint is GENERATED from (provider, type, id) by the builtin catalog.
+	// No flag writes it, so a copy in a user file is only ever a snapshot of an
+	// older builtin, and the builtin keeps it.
+	if top.ConfigHint != "" && !baseIsBuiltin {
 		out.ConfigHint = top.ConfigHint
 	}
 	if top.Notes != "" {
@@ -486,10 +528,12 @@ func mergeFields(base, top ModelInfo) ModelInfo {
 		out.Enabled = &e
 	}
 	out.Tier = elevateTier(out.Tier, top.Tier)
-	// Curation is add-only: an overlay may recommend a model, but a user
-	// catalog entry (which omits the field) must never demote a builtin
-	// recommendation.
-	if top.Recommended {
+	// Curation belongs to the builtin catalog, which is the only place a model
+	// is recommended or demoted. `models verify` used to copy the merged row's
+	// Recommended back into the user file, so the mirror could keep promoting a
+	// model the catalog had since demoted, and no command could clear it.
+	// Between the two user scopes the old add-only rule still applies.
+	if top.Recommended && !baseIsBuiltin {
 		out.Recommended = true
 	}
 	if top.Local {

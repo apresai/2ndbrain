@@ -278,6 +278,60 @@ func TestInheritModelFacts(t *testing.T) {
 	}
 }
 
+// TestInheritModelFacts_UnstampedRowCannotDonateFacts pins the narrower donor
+// pool for the three facts a user can type. A stale context_length on one
+// probed region row was reaching every sibling discovery had just found, which
+// is exactly the reach the builtin's own correction could not get.
+func TestInheritModelFacts_UnstampedRowCannotDonateFacts(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	// The contaminated row, as a probe save wrote it: a full copy of the merged
+	// view plus a verdict, so modelFactScore ranks it the richest donor.
+	stale := ModelInfo{
+		Provider: "bedrock", ID: nova, Type: "embedding", Plane: PlaneClassic, Region: "us-east-1",
+		Name: "Nova (stale copy)", ContextLen: 2048, Dimensions: 384,
+		SupportedDimensions: []int{256, 384, 1024, 3072},
+		Modalities:          []string{"text", "image", "video", "audio"},
+		PriceIn:             0.135, PriceOut: 0.001, PriceSource: "builtin", Notes: "probed",
+		TestedAt: "2026-08-01T00:00:00Z",
+	}
+	var builtinRow ModelInfo
+	for _, m := range BuiltinCatalog() {
+		if m.Provider == "bedrock" && m.ID == nova {
+			builtinRow = m
+			break
+		}
+	}
+	if builtinRow.ContextLen == 0 {
+		t.Fatalf("builtin catalog no longer declares a context length for %s", nova)
+	}
+	rows := []ModelInfo{{Provider: "bedrock", ID: nova, Type: "embedding", Plane: PlaneClassic, Region: "us-west-2"}}
+	inheritModelFacts(rows, []ModelInfo{stale, builtinRow})
+
+	if rows[0].ContextLen != builtinRow.ContextLen {
+		t.Errorf("a freshly discovered row inherited the stale context length: got %d, want %d",
+			rows[0].ContextLen, builtinRow.ContextLen)
+	}
+	if rows[0].Dimensions != builtinRow.Dimensions {
+		t.Errorf("stale dimensions donated: got %d, want %d", rows[0].Dimensions, builtinRow.Dimensions)
+	}
+	if rows[0].Name != builtinRow.Name {
+		t.Errorf("stale name donated: got %q, want %q", rows[0].Name, builtinRow.Name)
+	}
+	// Everything outside the three facts still comes from the richest donor.
+	if rows[0].Notes != "probed" {
+		t.Errorf("non-fact fields stopped inheriting: notes = %q", rows[0].Notes)
+	}
+
+	// A row the user stamped IS allowed to donate: they typed the number.
+	stamped := stale
+	stamped.FactSource = FactSourceUser
+	rows2 := []ModelInfo{{Provider: "bedrock", ID: nova, Type: "embedding", Plane: PlaneClassic, Region: "us-west-2"}}
+	inheritModelFacts(rows2, []ModelInfo{stamped, builtinRow})
+	if rows2[0].ContextLen != 2048 {
+		t.Errorf("a stamped row did not donate the user's context length: got %d, want 2048", rows2[0].ContextLen)
+	}
+}
+
 // TestInheritModelFactsNeverOverwrites pins the fill-only-empty discipline: an
 // authored value always wins, matching AdoptRoutingHints.
 func TestInheritModelFactsNeverOverwrites(t *testing.T) {

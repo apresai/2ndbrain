@@ -259,11 +259,23 @@ func TestThresholdCalibrationOrigin(t *testing.T) {
 		t.Errorf("origin %q does not say a stamped row was saved by calibrate or add", got)
 	}
 
-	// The vault catalog overlays the global one, so it wins. Unstamped here, so
-	// the message must say the value predates the stamp.
+	// An UNSTAMPED vault row is not a calibration at all, so it must not
+	// displace the stamped global one this message is about. (What 2nb ignored
+	// is reported separately; see the unstamped-threshold notice.)
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, vaultRoot, ai.ModelInfo{
 		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
 		RecommendedSimilarityThreshold: 0.7,
+	}); err != nil {
+		t.Fatalf("seed vault: %v", err)
+	}
+	if got := thresholdCalibrationOrigin(vaultRoot, "bedrock", novaEmbeddingID); !strings.Contains(got, globalPath) {
+		t.Errorf("an unstamped vault row displaced the stamped global calibration: %q", got)
+	}
+
+	// A STAMPED vault row does win: the vault catalog overlays the global one.
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, vaultRoot, ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		RecommendedSimilarityThreshold: 0.7, ThresholdSource: ai.ThresholdSourceUser,
 	}); err != nil {
 		t.Fatalf("seed vault: %v", err)
 	}
@@ -274,9 +286,6 @@ func TestThresholdCalibrationOrigin(t *testing.T) {
 	got = thresholdCalibrationOrigin(vaultRoot, "bedrock", novaEmbeddingID)
 	if !strings.Contains(got, vaultPath) {
 		t.Errorf("origin %q does not prefer the vault catalog %q", got, vaultPath)
-	}
-	if !strings.Contains(got, "before 2nb stamped provenance") {
-		t.Errorf("origin %q does not flag the unstamped pre-stamp value", got)
 	}
 }
 

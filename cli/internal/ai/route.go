@@ -651,23 +651,50 @@ func dropSupersededUnpinned(rows []ModelInfo, pinned PinnedRoutes) []ModelInfo {
 // discovered us.anthropic.claude-...@classic/us-west-2 row would otherwise
 // render nameless and unpriced, because the builtin catalog declares those
 // facts exactly once.
+// Name, Dimensions and ContextLen come from a NARROWER donor pool than the
+// rest: the builtin catalog, plus user rows stamped FactSourceUser. Those three
+// are the facts a user can type, and an unstamped row's copy of them is not
+// authorship, it is a snapshot an old probe save took from the merged view. Let
+// such a row donate and the snapshot spreads: a stale context_length on one
+// probed region row was reaching every sibling discovery had just found, which
+// is precisely the reach the builtin's own correction could not get. A model the
+// builtin catalog has never declared has no owner to defer to, so the general
+// donor still supplies its name and dimensions.
 func inheritModelFacts(rows []ModelInfo, source []ModelInfo) {
-	byModel := make(map[string]ModelInfo, len(source))
+	byModel := bestDonorByModel(source)
+	factDonors := bestDonorByModel(BuiltinCatalog())
 	for _, s := range source {
-		k := catalogKey(s.Provider, s.ID)
-		// Prefer the most complete donor: a named, priced row beats a bare one.
-		if prev, ok := byModel[k]; ok && modelFactScore(prev) >= modelFactScore(s) {
-			continue
+		if s.FactSource == FactSourceUser {
+			factDonors[catalogKey(s.Provider, s.ID)] = s
 		}
-		byModel[k] = s
 	}
 	for i := range rows {
-		src, ok := byModel[catalogKey(rows[i].Provider, rows[i].ID)]
+		k := catalogKey(rows[i].Provider, rows[i].ID)
+		src, ok := byModel[k]
 		if !ok {
 			continue
 		}
-		fillModelFacts(&rows[i], src)
+		facts, ok := factDonors[k]
+		if !ok {
+			facts = src
+		}
+		fillModelFacts(&rows[i], src, facts)
 	}
+}
+
+// bestDonorByModel indexes rows by (provider, id), keeping the most complete
+// row per model so inheritance picks the richest donor rather than whichever
+// sorted first.
+func bestDonorByModel(source []ModelInfo) map[string]ModelInfo {
+	out := make(map[string]ModelInfo, len(source))
+	for _, s := range source {
+		k := catalogKey(s.Provider, s.ID)
+		if prev, ok := out[k]; ok && modelFactScore(prev) >= modelFactScore(s) {
+			continue
+		}
+		out[k] = s
+	}
+	return out
 }
 
 // modelFactScore counts how many model facts a row carries, so inheritance
@@ -689,18 +716,22 @@ func modelFactScore(m ModelInfo) int {
 // fillModelFacts copies the shared-across-routes properties, never the
 // per-route ones (Plane, Region, Endpoint, InvokeStrategy, Enabled, Tier, and
 // every Test*/Benchmark field stay owned by the individual route row).
-func fillModelFacts(dst *ModelInfo, src ModelInfo) {
+//
+// facts is the donor for the three USER-TYPEABLE facts (Name, Dimensions,
+// ContextLen); src supplies everything else. See inheritModelFacts for why the
+// two pools differ.
+func fillModelFacts(dst *ModelInfo, src, facts ModelInfo) {
 	if dst.Name == "" {
-		dst.Name = src.Name
+		dst.Name = facts.Name
 	}
 	if dst.Type == "" {
 		dst.Type = src.Type
 	}
 	if dst.ContextLen == 0 {
-		dst.ContextLen = src.ContextLen
+		dst.ContextLen = facts.ContextLen
 	}
 	if dst.Dimensions == 0 {
-		dst.Dimensions = src.Dimensions
+		dst.Dimensions = facts.Dimensions
 	}
 	if len(dst.SupportedDimensions) == 0 {
 		dst.SupportedDimensions = src.SupportedDimensions
