@@ -44,10 +44,18 @@ func readIndexSchemaState(dbPath string) (version, docCount int, err error) {
 	defer conn.Close()
 
 	// MAX(version): the table can carry more than one row, and the migration
-	// level is the highest one, not whichever row comes back first.
-	if err := conn.QueryRow("SELECT MAX(version) FROM schema_version").Scan(&version); err != nil {
+	// level is the highest one, not whichever row comes back first. MAX over an
+	// EMPTY table is SQL NULL, which scanning into an int reports as the opaque
+	// driver message "converting NULL to int is unsupported"; say what is
+	// actually wrong instead.
+	var v sql.NullInt64
+	if err := conn.QueryRow("SELECT MAX(version) FROM schema_version").Scan(&v); err != nil {
 		return 0, 0, fmt.Errorf("read schema version from %s: %w", dbPath, err)
 	}
+	if !v.Valid {
+		return 0, 0, fmt.Errorf("%s has an empty schema_version table, so its schema level is unknown; delete %s and run `2nb index` to rebuild it (your markdown is the source of truth and is not affected)", dbPath, dbPath)
+	}
+	version = int(v.Int64)
 	if err := conn.QueryRow("SELECT COUNT(*) FROM documents").Scan(&docCount); err != nil {
 		return 0, 0, fmt.Errorf("count documents in %s: %w", dbPath, err)
 	}
@@ -132,8 +140,8 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// ladder, which is how ladders drift apart. The migration itself is the same
 	// one any read command performs when it opens that vault, so the check is
 	// about reporting the truth, not about preventing a novel mutation.
-	if canonicalVaultPath(v.Root) != canonicalVaultPath(root) {
-		return fmt.Errorf("refusing to report a migration of %s: the schema was checked on %s, which is a different vault; re-run with --vault %s", v.Root, root, root)
+	if err := migrateTargetMismatch(root, v.Root); err != nil {
+		return err
 	}
 
 	fmt.Printf("Vault: %s\n", v.Root)
@@ -142,4 +150,20 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Your markdown was not modified. Run \"2nb index\" to rebuild the index and refresh embeddings.\n")
 
 	return nil
+}
+
+// migrateTargetMismatch refuses when the vault the pre-check inspected is not
+// the vault the write opener resolved. Extracted so the branch can be tested at
+// all: as the two ladders are written today they agree on every rung (an
+// explicit --vault and 2NB_VAULT feed both, the Obsidian rung returns the same
+// path to each, and a walked-up cwd is refused by the write opener before it
+// can diverge), so no CLI invocation currently reaches it. It stays as an
+// assertion because the two ladders are separate code that can drift, and the
+// cost of drift here is a migration reported with another vault's schema
+// numbers.
+func migrateTargetMismatch(checkedRoot, writeRoot string) error {
+	if canonicalVaultPath(writeRoot) == canonicalVaultPath(checkedRoot) {
+		return nil
+	}
+	return fmt.Errorf("refusing to report a migration of %s: the schema was checked on %s, which is a different vault; re-run with --vault %s", writeRoot, checkedRoot, checkedRoot)
 }

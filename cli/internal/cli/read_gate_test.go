@@ -327,3 +327,70 @@ func TestReadGate_MigrateOnANativeVaultAnswersBeforeTheWriteGate(t *testing.T) {
 		t.Errorf("the no-op branch changed the schema: v%d -> v%d", before, got)
 	}
 }
+
+// MAX(version) over an EMPTY schema_version table is SQL NULL, and scanning
+// that into an int surfaced modernc's "converting NULL to int is unsupported",
+// which tells a user nothing about their vault or what to do next.
+func TestMigrate_EmptySchemaVersionTableIsExplained(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote)
+	idx := writeLegacyV2Index(t, stray)
+	db, err := sql.Open("sqlite", idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("DELETE FROM schema_version"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	_, err = runCLIArgs(t, stray, "migrate", "--dry-run")
+	if err == nil {
+		t.Fatal("migrate accepted an index with no schema level")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "converting NULL") {
+		t.Errorf("the driver error still reaches the user: %v", err)
+	}
+	if !strings.Contains(msg, "empty schema_version") || !strings.Contains(msg, idx) {
+		t.Errorf("message should name the empty table and the index file, got: %v", err)
+	}
+	if !strings.Contains(msg, "2nb index") {
+		t.Errorf("message should name the remedy, got: %v", err)
+	}
+}
+
+// migrate's two ladders can in principle resolve different vaults: the read
+// ladder walks up from the cwd for the pre-check, while the write ladder never
+// accepts a walked-up cwd and prefers the vault Obsidian points at. The mismatch
+// branch exists so a migration is never REPORTED with another vault's schema
+// numbers.
+//
+// It cannot be reached from the CLI as the two ladders are written today: an
+// explicit --vault and 2NB_VAULT feed both, the Obsidian rung hands the same
+// path to each (checked: with a registry marked open:false, ObsidianOpenVault
+// and ObsidianActiveVault both return the same root), and a walked-up cwd is refused
+// by the write opener before it can diverge. So the branch is tested where it
+// lives rather than through an invocation that cannot produce it.
+func TestMigrateTargetMismatch(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+
+	if err := migrateTargetMismatch(a, a); err != nil {
+		t.Errorf("same vault should be accepted, got: %v", err)
+	}
+	// Canonicalized, so a symlinked or non-cleaned spelling of one root is the
+	// same vault, not a mismatch.
+	if err := migrateTargetMismatch(a, filepath.Join(a, ".", "")); err != nil {
+		t.Errorf("a different spelling of one root should be accepted, got: %v", err)
+	}
+
+	err := migrateTargetMismatch(a, b)
+	if err == nil {
+		t.Fatal("two different vaults were accepted")
+	}
+	if !strings.Contains(err.Error(), a) || !strings.Contains(err.Error(), b) {
+		t.Errorf("the refusal should name both roots, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--vault "+a) {
+		t.Errorf("the refusal should point at the vault that was checked, got: %v", err)
+	}
+}
