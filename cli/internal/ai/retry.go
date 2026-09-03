@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,54 +27,73 @@ import (
 // slow-call notice) and the metrics observatory can report what actually
 // happened rather than guessing from wall time.
 
+// RetryState is one self-consistent view of a counter: a count, the cause of the
+// retry that produced it, and the attempt budget of the loop that recorded it.
+// The three always belong to the same retry, which is why it is one value rather
+// than three reads.
+type RetryState struct {
+	Count       int
+	Cause       string
+	MaxAttempts int
+}
+
 // RetryCounter accumulates provider retries for one logical operation. Safe for
 // concurrent use: the bulk embed pass runs many calls at once and they all
 // report into the counter their shared context carries.
+//
+// The state is kept as ONE immutable value behind a single atomic pointer, so a
+// reader can never see a count from one retry paired with the cause or the
+// attempt budget of another. Three independent atomics could: the mantle loop
+// allows three attempts and the classic loops five, so a reader interleaving
+// with a record could render "retry 3 of 5" for a call whose real budget was
+// three, which is the notice telling the user they have patience left that they
+// do not. Writes are serialized by mu (a read-modify-write of the count);
+// reads take no lock.
 type RetryCounter struct {
-	n     atomic.Int64
-	cause atomic.Value // string, the most recent retry's human cause
-	// max is the attempt budget of the loop that recorded the most recent
-	// retry. It is recorded rather than assumed because the planes do not
-	// agree: the classic loops allow maxBedrockAttempts, the mantle ones
-	// mantleMaxAttempts, and a notice that quotes the wrong one tells the user
-	// they have more patience left than they do.
-	max atomic.Int64
+	mu    sync.Mutex
+	state atomic.Pointer[RetryState]
+}
+
+// Snapshot returns the whole state at once. Prefer it wherever more than one
+// field is rendered together.
+func (c *RetryCounter) Snapshot() RetryState {
+	if c == nil {
+		return RetryState{}
+	}
+	if s := c.state.Load(); s != nil {
+		return *s
+	}
+	return RetryState{}
 }
 
 // Count returns how many retries have been recorded so far.
-func (c *RetryCounter) Count() int {
-	if c == nil {
-		return 0
-	}
-	return int(c.n.Load())
-}
+func (c *RetryCounter) Count() int { return c.Snapshot().Count }
 
 // Cause returns the most recent retry's human cause ("Bedrock throttled"), or
 // "" when nothing has retried.
-func (c *RetryCounter) Cause() string {
-	if c == nil {
-		return ""
-	}
-	s, _ := c.cause.Load().(string)
-	return s
-}
+func (c *RetryCounter) Cause() string { return c.Snapshot().Cause }
 
 // MaxAttempts returns the attempt budget of the loop that recorded the most
-// recent retry, or 0 when nothing has retried.
-func (c *RetryCounter) MaxAttempts() int {
-	if c == nil {
-		return 0
-	}
-	return int(c.max.Load())
-}
+// recent retry, or 0 when nothing has retried. It is recorded rather than
+// assumed because the planes do not agree: the classic loops allow
+// maxBedrockAttempts, the mantle ones mantleMaxAttempts.
+func (c *RetryCounter) MaxAttempts() int { return c.Snapshot().MaxAttempts }
 
-func (c *RetryCounter) record(cause string, max int) {
+// Record adds one retry with the cause and attempt budget of the loop that made
+// it. Callers are the provider retry loops; it is exported so a segregated test
+// helper package can drive a retry-counting call site without reaching a
+// provider, rather than the ai package carrying a test-only symbol.
+func (c *RetryCounter) Record(cause string, maxAttempts int) {
 	if c == nil {
 		return
 	}
-	c.n.Add(1)
-	c.cause.Store(cause)
-	c.max.Store(int64(max))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := RetryState{Count: 1, Cause: cause, MaxAttempts: maxAttempts}
+	if cur := c.state.Load(); cur != nil {
+		next.Count = cur.Count + 1
+	}
+	c.state.Store(&next)
 }
 
 type retryCounterKey struct{}
@@ -113,7 +133,7 @@ func noteBedrockRetry(ctx context.Context, plane string, attempt, max int, wait 
 		"cause", cause,
 		"err", err,
 	)
-	RetryCounterFrom(ctx).record("Bedrock "+cause, max)
+	RetryCounterFrom(ctx).Record("Bedrock "+cause, max)
 }
 
 // bedrockRetryCause names why a retryable Bedrock error is being retried, in
@@ -161,13 +181,5 @@ func noteMantleRetry(ctx context.Context, attempt, max int, wait time.Duration, 
 		"cause", "throttled",
 		"status", status,
 	)
-	RetryCounterFrom(ctx).record("Bedrock throttled", max)
-}
-
-// RecordRetryForTest records one retry against the context's counter, using the
-// production recording path. It exists so a test in another package can exercise
-// a retry-counting call site without reaching a provider: the alternative is an
-// HTTP mock, which the project forbids, or exporting the whole retry loop.
-func RecordRetryForTest(ctx context.Context, maxAttempts int) {
-	RetryCounterFrom(ctx).record("Bedrock throttled", maxAttempts)
+	RetryCounterFrom(ctx).Record("Bedrock throttled", max)
 }

@@ -100,8 +100,12 @@ func (s *slowCall) run() {
 			}
 			return
 		case <-timer.C:
+			// One snapshot, because the three fields are rendered as one
+			// sentence: reading them separately can pair a count with another
+			// retry's cause or attempt budget.
+			rs := s.counter.Snapshot()
 			fmt.Fprintf(s.out, "\r2nb: %s\033[K",
-				slowCallLine(s.what, time.Since(s.start), s.counter.Count(), s.counter.MaxAttempts(), s.counter.Cause()))
+				slowCallLine(s.what, time.Since(s.start), rs.Count, rs.MaxAttempts, rs.Cause))
 			printed = true
 			timer.Reset(s.tick)
 		}

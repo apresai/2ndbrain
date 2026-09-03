@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/ai/aitest"
 )
 
 // TestSlowCallStaysSilentBelowTheThreshold: a fast call must leave the terminal
@@ -76,7 +77,7 @@ func TestSlowCallLineQuotesTheLoopsOwnCap(t *testing.T) {
 func TestSlowCallReadsTheCapFromTheCounter(t *testing.T) {
 	counter := &ai.RetryCounter{}
 	ctx := ai.WithRetryCounter(t.Context(), counter)
-	ai.RecordRetryForTest(ctx, 3)
+	aitest.RecordRetry(ctx, 3)
 
 	var buf bytes.Buffer
 	s := newSlowCall("generating answer", &buf, 10*time.Millisecond, 5*time.Millisecond, counter)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/ai/aitest"
 	"github.com/apresai/2ndbrain/internal/metrics"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -27,8 +28,8 @@ func TestWrapMCPMetricCountsProviderRetries(t *testing.T) {
 			t.Error("no retry counter on the tool call's context")
 		}
 		// Two retries, each reporting the classic loop's five-attempt budget.
-		ai.RecordRetryForTest(ctx, 5)
-		ai.RecordRetryForTest(ctx, 5)
+		aitest.RecordRetry(ctx, 5)
+		aitest.RecordRetry(ctx, 5)
 		return nil, nil
 	})
 	if _, err := h(context.Background(), mcplib.CallToolRequest{}); err != nil {
@@ -57,7 +58,7 @@ func TestWrapMCPMetricGivesEachCallItsOwnCounter(t *testing.T) {
 	defer mdb.Close()
 
 	retryOnce := wrapMCPMetric(mdb, metrics.OpSearch, "v1", func(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		ai.RecordRetryForTest(ctx, 5)
+		aitest.RecordRetry(ctx, 5)
 		return nil, nil
 	})
 	retryNone := wrapMCPMetric(mdb, metrics.OpAsk, "v1", func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
