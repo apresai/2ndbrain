@@ -64,7 +64,7 @@ It is deliberately not "how to set up MCP" — see [`mcp-integration.md`](./mcp-
 
    `ask` is different by design: when retrieval finds nothing it exits **non-zero** with an error on stderr rather than returning an envelope with an empty answer, so check the exit code first.
 
-   The normalization is JSON-only: every other format renders exactly what it rendered in 0.21.0, deliberately, because a literal `[]` in a csv or tsv stream would corrupt a consumer. What that means varies by command and is not a guarantee worth relying on. `search` and `list` write nothing at all for zero rows in the non-JSON formats, while the bare-array listings write whatever `output.Write` makes of an empty slice. Use `--json` if you need a parseable empty result.
+   `--yaml` gives the same empty collection as `--json` from 0.22.3 (before that a nil slice printed `null`, so `orphans --yaml` and `orphans --json` disagreed), and `csv`/`tsv` give the HEADER ROW with no data rows, where before they printed the literal `null` or `[]` as the stream's only cell. One documented exception: `search` returns an EMPTY stream for `csv`/`tsv` on zero hits, because it returns early before the writer. `raw`/`md` are refused on any row set, matched or not. `--json` remains the format to reach for when you need a parseable empty result.
 
 ## Teaching improvements (Phase B — additions to `SKILL.md`)
 

@@ -61,7 +61,8 @@ sets; it is deliberately absent from `--help`.
 ### Output formats (`--format` / `format=`)
 
 `json`, `csv`, `tsv`, `yaml`, `raw`, `md` (markdown body, same as raw for a
-document), `text` (best-effort plain text). Listing commands (`list`/`files`,
+document), `text` (a document body verbatim, anything else as `name=value`
+lines for reading; not quoted or escaped, so parse `tsv` or `json` instead). Listing commands (`list`/`files`,
 `tasks`, `unresolved`) additionally accept `paths` (one vault-relative path per
 line) and `tree` (an indented directory hierarchy), plus `--total` to print only
 the count.
