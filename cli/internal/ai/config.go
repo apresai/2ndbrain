@@ -416,19 +416,12 @@ func RecommendedSimilarityThresholdFor(provider, modelID string) float64 {
 	return 0
 }
 
-// userCatalogSimilarityThreshold scans the user catalog (global + per-vault)
-// for an entry matching the active embedding model. Zero means "the user set
-// none", so callers fall through to the builtin catalog. A row that merely
-// mirrors the builtin recommendation is not the user setting one; see
-// IsUserThreshold.
+// userCatalogSimilarityThreshold returns the user's own threshold for the active
+// embedding model. Zero means "the user set none", so callers fall through to
+// the builtin catalog.
 func userCatalogSimilarityThreshold(vaultRoot, provider, modelID string) float64 {
-	if provider == "" || modelID == "" {
-		return 0
-	}
-	for _, m := range LoadUserCatalog(vaultRoot) {
-		if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && IsUserThreshold(m) {
-			return m.RecommendedSimilarityThreshold
-		}
+	if row, _, ok := UserThresholdRow(vaultRoot, provider, modelID); ok {
+		return row.RecommendedSimilarityThreshold
 	}
 	return 0
 }

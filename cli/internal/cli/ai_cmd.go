@@ -614,24 +614,21 @@ func ollamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 // which is read as a calibration only because its value differs from the
 // builtin recommendation (see ai.IsUserThreshold).
 func thresholdCalibrationOrigin(vaultRoot, provider, modelID string) string {
-	route := ai.RouteKey{Provider: provider, ID: modelID}
-	// Vault first: the per-vault catalog overlays the global one.
-	for _, scope := range []ai.UserCatalogScope{ai.ScopeVault, ai.ScopeGlobal} {
-		if scope == ai.ScopeVault && vaultRoot == "" {
-			continue
-		}
-		row, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, route)
-		if !ok || !ai.IsUserThreshold(row) {
-			continue
-		}
-		path, err := ai.CatalogPathForScope(scope, vaultRoot)
-		if err != nil {
-			continue
-		}
-		if row.ThresholdSource == ai.ThresholdSourceUser {
-			return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s (saved by `2nb models calibrate --save` or `2nb models add`). Remove that key to fall back to the built-in value.", modelID, path)
-		}
-		return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s, written before 2nb stamped provenance, and it differs from the built-in value. Remove that key to fall back to the built-in value.", modelID, path)
+	// The SAME lookup the resolver uses, deliberately. This used to call
+	// UserCatalogRouteToPreserve, which needs a UNIQUE stored row for the model,
+	// while the resolver takes the first matching row: with two stored routes
+	// the message said "no user-catalog row carries it" about a value the
+	// resolver was actively using.
+	row, scope, ok := ai.UserThresholdRow(vaultRoot, provider, modelID)
+	if !ok {
+		return "no user-catalog row carries it; check ai.similarity_threshold in this vault's config.yaml."
 	}
-	return "no user-catalog row carries it; check ai.similarity_threshold in this vault's config.yaml."
+	path, err := ai.CatalogPathForScope(scope, vaultRoot)
+	if err != nil {
+		path = string(scope) + " catalog"
+	}
+	if row.ThresholdSource == ai.ThresholdSourceUser {
+		return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s (saved by `2nb models calibrate --save` or `2nb models add`). Remove that key to fall back to the built-in value.", modelID, path)
+	}
+	return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s, written before 2nb stamped provenance, and it differs from the built-in value. Remove that key to fall back to the built-in value.", modelID, path)
 }

@@ -1129,7 +1129,12 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 //
 // The lookup is scope-local and route-tolerant (UserCatalogRouteToPreserve falls
 // back to a unique row for the model), so a calibration stored on a pre-route
-// row, or under a sibling region, is carried forward rather than erased.
+// row, or under a sibling region, is carried forward when the stored row is
+// unique, and is NEVER erased when it is not. With two stored routes the
+// fallback deliberately returns nothing rather than grafting one endpoint's
+// calibration onto another, and SaveUserCatalogEntry replaces only on an exact
+// route match, so the ambiguous case appends a row with no threshold and leaves
+// every calibrated row exactly as it was.
 func preserveUserThreshold(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
 	entry.RecommendedSimilarityThreshold, entry.ThresholdSource = 0, ""
 	existing, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, entry.Route())

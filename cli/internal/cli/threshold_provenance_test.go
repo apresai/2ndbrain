@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -275,5 +277,100 @@ func TestThresholdCalibrationOrigin(t *testing.T) {
 	}
 	if !strings.Contains(got, "before 2nb stamped provenance") {
 		t.Errorf("origin %q does not flag the unstamped pre-stamp value", got)
+	}
+}
+
+// The origin message and the resolved value come from one lookup, so they can
+// never disagree. With two stored routes the message used to say "no
+// user-catalog row carries it" about a value the resolver was using, because it
+// went through UserCatalogRouteToPreserve, which refuses on ambiguity.
+func TestThresholdCalibrationOriginAgreesWithTheResolver(t *testing.T) {
+	setupModelsAddHome(t)
+	vaultRoot := t.TempDir()
+	dot := filepath.Join(vaultRoot, ".2ndbrain")
+	if err := os.MkdirAll(dot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dot, "models.yaml"), []byte(
+		"version: 1\nmodels:\n"+
+			"  - id: "+novaEmbeddingID+"\n    provider: bedrock\n    type: embedding\n"+
+			"    plane: classic\n    region: us-east-1\n"+
+			"    recommended_similarity_threshold: 0.25\n"+
+			"  - id: "+novaEmbeddingID+"\n    provider: bedrock\n    type: embedding\n"+
+			"    plane: classic\n    region: us-west-2\n"+
+			"    recommended_similarity_threshold: 0.31\n    threshold_source: user\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := ai.AIConfig{Provider: "bedrock", EmbeddingModel: novaEmbeddingID}
+	got, source := cfg.ResolveSimilarityThresholdFull(vaultRoot)
+	if got != 0.31 || source != ai.ThresholdSourceUserCalibration {
+		t.Fatalf("resolver = (%v, %q), want (0.31, %q)", got, source, ai.ThresholdSourceUserCalibration)
+	}
+
+	origin := thresholdCalibrationOrigin(vaultRoot, "bedrock", novaEmbeddingID)
+	if strings.Contains(origin, "no user-catalog row") {
+		t.Errorf("the message denies a calibration the resolver is using: %q", origin)
+	}
+	if !strings.Contains(origin, filepath.Join(dot, "models.yaml")) {
+		t.Errorf("origin %q does not name the vault catalog that carries the value", origin)
+	}
+}
+
+// The ambiguous case must not be "fixed" by making the carry-forward
+// route-blind: that would copy one endpoint's calibration onto its siblings.
+// UserCatalogRouteToPreserve returns nothing for 2+ matching rows and
+// SaveUserCatalogEntry replaces only on an exact route match, so an ambiguous
+// save appends a row with no threshold and leaves the calibrated rows intact.
+func TestPreserveUserThresholdNeverErasesASiblingRoutesCalibration(t *testing.T) {
+	setupModelsAddHome(t)
+	cfg := ai.AIConfig{Provider: "bedrock", EmbeddingModel: novaEmbeddingID}
+
+	stamped := ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-west-2",
+		RecommendedSimilarityThreshold: 0.31, ThresholdSource: ai.ThresholdSourceUser,
+	}
+	plain := ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+	}
+	for _, e := range []ai.ModelInfo{stamped, plain} {
+		if err := ai.SaveUserCatalogEntry(ai.ScopeGlobal, "", e); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	// A bench save for a THIRD route, which the ambiguity guard cannot resolve.
+	summary := &ai.BenchmarkSummary{RanAt: "2026-09-03T00:00:00Z", AvgLatencyMs: 120}
+	third := ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-2",
+		RecommendedSimilarityThreshold: 0.25, // as copied off a merged row
+	}
+	preserveUserThreshold(ai.ScopeGlobal, "", &third)
+	third.Benchmark = summary
+	if err := ai.SaveUserCatalogEntry(ai.ScopeGlobal, "", third); err != nil {
+		t.Fatalf("save third route: %v", err)
+	}
+
+	got, ok := ai.UserCatalogEntry(ai.ScopeGlobal, "", stamped.Route())
+	if !ok {
+		t.Fatal("the calibrated row is gone")
+	}
+	if got.RecommendedSimilarityThreshold != 0.31 || got.ThresholdSource != ai.ThresholdSourceUser {
+		t.Errorf("calibrated sibling changed: %v (source %q), want 0.31 (%q)",
+			got.RecommendedSimilarityThreshold, got.ThresholdSource, ai.ThresholdSourceUser)
+	}
+	newRow, ok := ai.UserCatalogEntry(ai.ScopeGlobal, "", third.Route())
+	if !ok {
+		t.Fatal("the bench row was not written")
+	}
+	if newRow.RecommendedSimilarityThreshold != 0 || newRow.ThresholdSource != "" {
+		t.Errorf("the ambiguous save invented a threshold: %v (source %q)",
+			newRow.RecommendedSimilarityThreshold, newRow.ThresholdSource)
+	}
+	if v, source := cfg.ResolveSimilarityThresholdFull(t.TempDir()); v != 0.31 || source != ai.ThresholdSourceUserCalibration {
+		t.Errorf("resolver = (%v, %q), want (0.31, %q)", v, source, ai.ThresholdSourceUserCalibration)
 	}
 }

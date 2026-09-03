@@ -539,3 +539,56 @@ func tagAsUserCatalog(m *ModelInfo) {
 		m.PriceOverride = true
 	}
 }
+
+// UserThresholdRow finds the stored row that supplies the user's own similarity
+// threshold for (provider, modelID), and says which scope holds it. It is the
+// SINGLE lookup behind both the resolved value and the message that explains
+// where the value came from, so the two can never disagree.
+//
+// It scans RAW rows per scope, vault before global, never the merged view.
+// Merging is what made the two disagree: mergeFields lets any positive vault
+// value overwrite the global one, so an unstamped vault MIRROR of the builtin
+// (0.25 for Nova) replaced a stamped global calibration (0.30) and then failed
+// IsUserThreshold, and the resolver fell through to the builtin while the user's
+// real calibration sat in the global file, ignored. Provenance is a property of
+// a stored row, so it has to be judged on stored rows.
+//
+// Per-scope precedence still matches the documented overlay: a qualifying vault
+// row wins over a qualifying global one, because the vault scope is scanned
+// first. Within a scope the first qualifying row wins, which is also what
+// resolution does, so a model with several stored routes reports the row that is
+// actually in force rather than refusing on ambiguity.
+func UserThresholdRow(vaultRoot, provider, modelID string) (ModelInfo, UserCatalogScope, bool) {
+	if provider == "" || modelID == "" {
+		return ModelInfo{}, "", false
+	}
+	for _, scope := range []UserCatalogScope{ScopeVault, ScopeGlobal} {
+		if scope == ScopeVault && vaultRoot == "" {
+			continue
+		}
+		for _, m := range userCatalogRows(scope, vaultRoot) {
+			if m.Type == "embedding" && m.Provider == provider && m.ID == modelID && IsUserThreshold(m) {
+				return m, scope, true
+			}
+		}
+	}
+	return ModelInfo{}, "", false
+}
+
+// userCatalogRows returns one scope's stored rows verbatim: no builtin overlay,
+// no cross-scope merge. Missing or unreadable files are an empty slice, matching
+// every other read path, which never bricks the CLI on a bad catalog.
+func userCatalogRows(scope UserCatalogScope, vaultRoot string) []ModelInfo {
+	userCatalogMu.Lock()
+	defer userCatalogMu.Unlock()
+
+	path, err := catalogPathForScope(scope, vaultRoot)
+	if err != nil {
+		return nil
+	}
+	cat, err := readCatalogForWrite(path)
+	if err != nil {
+		return nil
+	}
+	return cat.Models
+}

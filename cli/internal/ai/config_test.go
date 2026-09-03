@@ -324,3 +324,84 @@ func TestEnvVarName(t *testing.T) {
 		}
 	}
 }
+
+// Provenance is a property of a STORED row, so it has to be judged per scope on
+// raw rows. Judging it on LoadUserCatalog's merged view lost real calibrations:
+// mergeFields lets any positive vault value overwrite the global one, so an
+// unstamped vault mirror of the builtin replaced a stamped global calibration
+// and then failed IsUserThreshold, and the resolver fell through to the builtin
+// while the user's real measurement sat in the global file, ignored.
+func TestUserThresholdRow_PerScopeOnRawRows(t *testing.T) {
+	const nova = "amazon.nova-2-multimodal-embeddings-v1:0"
+	cfg := AIConfig{Provider: "bedrock", EmbeddingModel: nova}
+
+	t.Run("an unstamped vault mirror does not hide a stamped global calibration", func(t *testing.T) {
+		setupHome(t)
+		vaultRoot := t.TempDir()
+		if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+			ID: nova, Provider: "bedrock", Type: "embedding",
+			RecommendedSimilarityThreshold: 0.30, ThresholdSource: ThresholdSourceUser,
+		}); err != nil {
+			t.Fatalf("seed global: %v", err)
+		}
+		writeVaultCatalogYAML(t, vaultRoot, "version: 1\nmodels:\n"+
+			"  - id: "+nova+"\n    provider: bedrock\n    type: embedding\n"+
+			"    recommended_similarity_threshold: 0.25\n")
+
+		got, source := cfg.ResolveSimilarityThresholdFull(vaultRoot)
+		if got != 0.30 || source != ThresholdSourceUserCalibration {
+			t.Errorf("ResolveSimilarityThresholdFull = (%v, %q), want (0.3, %q)", got, source, ThresholdSourceUserCalibration)
+		}
+		row, scope, ok := UserThresholdRow(vaultRoot, "bedrock", nova)
+		if !ok || scope != ScopeGlobal || row.RecommendedSimilarityThreshold != 0.30 {
+			t.Errorf("UserThresholdRow = (%v, %q, %v), want the stamped global 0.3", row.RecommendedSimilarityThreshold, scope, ok)
+		}
+	})
+
+	t.Run("a stamped vault value still beats a stamped global one", func(t *testing.T) {
+		setupHome(t)
+		vaultRoot := t.TempDir()
+		if err := SaveUserCatalogEntry(ScopeGlobal, "", ModelInfo{
+			ID: nova, Provider: "bedrock", Type: "embedding",
+			RecommendedSimilarityThreshold: 0.30, ThresholdSource: ThresholdSourceUser,
+		}); err != nil {
+			t.Fatalf("seed global: %v", err)
+		}
+		if err := SaveUserCatalogEntry(ScopeVault, vaultRoot, ModelInfo{
+			ID: nova, Provider: "bedrock", Type: "embedding",
+			RecommendedSimilarityThreshold: 0.42, ThresholdSource: ThresholdSourceUser,
+		}); err != nil {
+			t.Fatalf("seed vault: %v", err)
+		}
+
+		got, source := cfg.ResolveSimilarityThresholdFull(vaultRoot)
+		if got != 0.42 || source != ThresholdSourceUserCalibration {
+			t.Errorf("ResolveSimilarityThresholdFull = (%v, %q), want (0.42, %q)", got, source, ThresholdSourceUserCalibration)
+		}
+		if _, scope, _ := UserThresholdRow(vaultRoot, "bedrock", nova); scope != ScopeVault {
+			t.Errorf("scope = %q, want %q: the vault scope overlays the global one", scope, ScopeVault)
+		}
+	})
+
+	t.Run("two stored routes: the qualifying one is found, not refused as ambiguous", func(t *testing.T) {
+		setupHome(t)
+		vaultRoot := t.TempDir()
+		writeVaultCatalogYAML(t, vaultRoot, "version: 1\nmodels:\n"+
+			"  - id: "+nova+"\n    provider: bedrock\n    type: embedding\n"+
+			"    plane: classic\n    region: us-east-1\n"+
+			"    recommended_similarity_threshold: 0.25\n"+
+			"  - id: "+nova+"\n    provider: bedrock\n    type: embedding\n"+
+			"    plane: classic\n    region: us-west-2\n"+
+			"    recommended_similarity_threshold: 0.31\n    threshold_source: user\n")
+
+		got, source := cfg.ResolveSimilarityThresholdFull(vaultRoot)
+		if got != 0.31 || source != ThresholdSourceUserCalibration {
+			t.Errorf("ResolveSimilarityThresholdFull = (%v, %q), want (0.31, %q)", got, source, ThresholdSourceUserCalibration)
+		}
+		row, scope, ok := UserThresholdRow(vaultRoot, "bedrock", nova)
+		if !ok || scope != ScopeVault || row.RecommendedSimilarityThreshold != 0.31 {
+			t.Errorf("UserThresholdRow = (%v, %q, %v), want the stamped 0.31 in the vault scope",
+				row.RecommendedSimilarityThreshold, scope, ok)
+		}
+	})
+}
