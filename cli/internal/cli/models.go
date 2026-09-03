@@ -21,6 +21,7 @@ var (
 	modelsTypeFilt     string
 	modelsFreeOnly     bool
 	modelsDiscover     bool
+	modelsRefresh      bool
 	modelsCheckStatus  bool
 	modelsProvider     string
 	modelsPromote      bool
@@ -150,7 +151,8 @@ and applied to every route of that model, not just the named endpoint.`,
 func init() {
 	modelsListCmd.Flags().StringVar(&modelsTypeFilt, "type", "", "Filter by type: embed or generation")
 	modelsListCmd.Flags().BoolVar(&modelsFreeOnly, "free", false, "Show only free models")
-	modelsListCmd.Flags().BoolVar(&modelsDiscover, "discover", false, "Query vendor APIs for full model catalogs")
+	modelsListCmd.Flags().BoolVar(&modelsDiscover, "discover", false, "Include vendor-discovered models, served from the 24h discovery cache")
+	modelsListCmd.Flags().BoolVar(&modelsRefresh, "refresh", false, "With --discover, re-walk the vendor APIs instead of using the cache")
 	modelsListCmd.Flags().BoolVar(&modelsCheckStatus, "status", false, "Probe provider reachability and credentials")
 	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama")
 	modelsListCmd.Flags().BoolVar(&modelsPromote, "promote", false, "Test unverified discovered models and add those that pass (requires --discover)")
@@ -231,6 +233,9 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	if modelsPromote && !modelsDiscover {
 		return fmt.Errorf("--promote requires --discover")
 	}
+	if modelsRefresh && !modelsDiscover {
+		return fmt.Errorf("--refresh requires --discover")
+	}
 
 	v, err := openVault()
 	if err != nil {
@@ -245,6 +250,12 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 		CheckStatus: modelsCheckStatus,
 		VaultRoot:   v.Root,
 		EnabledOnly: modelsEnabledOnly,
+		// Serve the cached pool by default. A `models list --discover` used to
+		// re-walk both Bedrock planes across three regions on EVERY call, which
+		// is what made the macOS app's Models tab take about 11 seconds to
+		// reload a catalog that changes when AWS ships a model. --refresh is
+		// the deliberate re-walk.
+		DiscoverCached: !modelsRefresh,
 	})
 	if err != nil {
 		return err
@@ -277,6 +288,9 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 	// Pretty table output.
 	for _, warning := range merged.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	}
+	if modelsDiscover && !flagPorcelain {
+		fmt.Fprintln(os.Stderr, discoveryAgeNote(v.Config.AI, modelsRefresh))
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
@@ -1546,5 +1560,48 @@ func resolveCatalogScope(scope string) (ai.UserCatalogScope, string, error) {
 		return ai.ScopeVault, v.Root, nil
 	default:
 		return "", "", fmt.Errorf("--scope must be %q or %q, got %q", ai.ScopeGlobal, ai.ScopeVault, scope)
+	}
+}
+
+// discoveryAgeNote says where a --discover listing came from. A cached answer
+// arrives in milliseconds where a live walk of both Bedrock planes across three
+// regions takes seconds, so without this line a fast reply is indistinguishable
+// from a fresh one, and a stale pool is invisible.
+func discoveryAgeNote(cfg ai.AIConfig, refreshed bool) string {
+	if refreshed {
+		return "discovery: walked the vendor APIs live and re-warmed the cache"
+	}
+	ages := ai.DiscoveryCacheAges(cfg.Bedrock)
+	var oldest time.Duration
+	var found, stale bool
+	for _, a := range ages {
+		if !a.Exists {
+			continue
+		}
+		found = true
+		if a.Age() > oldest {
+			oldest = a.Age()
+		}
+		stale = stale || a.Stale
+	}
+	if !found {
+		return "discovery: nothing cached yet, so this walked the vendor APIs live"
+	}
+	suffix := "; pass --refresh to re-walk"
+	if stale {
+		suffix = "; at least one source is past its 24h TTL and was re-walked" + suffix
+	}
+	return fmt.Sprintf("discovery: served from the cache, oldest source %s old%s", humanAge(oldest), suffix)
+}
+
+// humanAge renders a cache age compactly: minutes under an hour, then hours.
+func humanAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "under a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 }

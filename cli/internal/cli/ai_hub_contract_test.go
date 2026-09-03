@@ -94,6 +94,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	policyClearProvider, policyClearScope = "", "vault"
 	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "vault"
 	modelsDiscover, modelsFreeOnly, modelsPromote = false, false, false
+	modelsRefresh = false
 	modelsCheckStatus, modelsEnabledOnly, modelsRecommended = false, false, false
 	modelsWorkingSet = false
 	modelsSort = ""
@@ -110,6 +111,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	discoverCostCap = 0.50
 	costProvider, costProbeKind = "", "test"
 	costAll = false
+	costRefresh = false
 	wizardScope, wizardProvider = "vault", ""
 	wizardSkipDiscover, wizardJSON, wizardSetActive = false, false, false
 	wizardCostCap = 0.50

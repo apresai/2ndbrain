@@ -153,7 +153,7 @@ func TestLiveDiscoveryUnionTwoRegions(t *testing.T) {
 		return n, routes, ids
 	}
 
-	single, _ := discoverVendorModels(ctx, cfg, true)
+	single, _ := discoverVendorModels(ctx, cfg, true, false)
 	n1, _, ids1 := countBedrock(single)
 	if n1 == 0 {
 		t.Skip("bedrock discovery returned nothing (control plane unreachable?)")
@@ -162,7 +162,7 @@ func TestLiveDiscoveryUnionTwoRegions(t *testing.T) {
 	if err := WriteBedrockFile(BedrockFile{Regions: []string{"us-west-2"}}); err != nil {
 		t.Fatal(err)
 	}
-	union, _ := discoverVendorModels(ctx, cfg, true)
+	union, _ := discoverVendorModels(ctx, cfg, true, false)
 	n2, routes, ids2 := countBedrock(union)
 	if n2 < n1 {
 		t.Fatalf("union (%d) lost rows vs single-region (%d)", n2, n1)
