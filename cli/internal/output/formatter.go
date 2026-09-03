@@ -201,7 +201,12 @@ func structTextPairs(rv reflect.Value) []textPair {
 	specs := fieldSpecs(rv.Type())
 	pairs := make([]textPair, 0, len(specs))
 	for _, sp := range specs {
-		f := rv.Field(sp.index)
+		f, ok := fieldByIndex(rv, sp.index)
+		if !ok {
+			// The field sits inside a nil embedded pointer: there is nothing to
+			// print, which is what a nil renders as anyway.
+			continue
+		}
 		if isNilValue(f) {
 			continue
 		}
@@ -464,31 +469,73 @@ func delimitedCell(field reflect.Value) string {
 	return fmt.Sprintf("%v", v.Interface())
 }
 
-// fieldSpec is one struct field as the output formatters see it: where it sits
-// in the struct, the name its json tag gives it (the Go name when it has none),
-// and whether that tag carries omitempty.
+// fieldSpec is one struct field as the output formatters see it: the index PATH
+// that reaches it (more than one hop when it was promoted out of an embedded
+// struct), the name its json tag gives it (the Go name when it has none), and
+// whether that tag carries omitempty.
 type fieldSpec struct {
-	index     int
+	index     []int
 	name      string
 	omitEmpty bool
 }
 
-// fieldSpecs describes every EXPORTED field of a struct type, in declaration
-// order. Unexported fields are skipped because reflect refuses Interface() on
-// one, so rendering it panics; no output struct in this repo has any, which is
-// the only reason the previous NumField() loop never hit it.
+// jsonMarshalerType is json.Marshaler, used to tell an embedded struct that
+// renders ITSELF as one value from one whose fields are promoted.
+var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+
+// maxFieldDepth bounds the embedded-struct recursion. Go's own rules make a
+// cycle through anonymous struct fields impossible (a type cannot embed itself),
+// so this is a belt-and-braces stop, not a correctness condition.
+const maxFieldDepth = 8
+
+// fieldSpecs describes every field of a struct type as encoding/json sees it,
+// in declaration order, so text and csv name a field the way json does.
+//
+// Three rules, all taken from encoding/json:
+//
+//   - `json:"-"` means the field does not exist for output. It used to fall
+//     through the `tag != "-"` guard and get emitted under its GO name, so a
+//     field deliberately hidden from the json view still reached text and csv.
+//   - An ANONYMOUS field of struct type (or pointer to struct) with no json NAME
+//     is flattened: its own fields are promoted to the parent level. json does
+//     this, the old single-index loop did not, so `doctor --format text` printed
+//     `SuiteStatus: {"latest":...}` as one JSON blob keyed by a Go type name
+//     that appears nowhere in the json view, and `skills doctor --format text`
+//     did the same with `Verification`. An embedded field WITH a json name keeps
+//     that name and stays one value.
+//   - On a name collision the SHALLOWER field wins, as it does in json.
+//
+// Two deliberate narrowings. An embedded type that renders itself (it
+// implements encoding.TextMarshaler or json.Marshaler, as time.Time does) is
+// kept as ONE value rather than flattened, so an embedded time never explodes
+// into wall/ext/loc. And an unexported field is still skipped, embedded structs
+// included: json promotes the exported fields of an embedded unexported struct,
+// but reflect refuses Interface() on the unexported field itself, and no output
+// struct in this repo has one.
 func fieldSpecs(t reflect.Type) []fieldSpec {
-	specs := make([]fieldSpec, 0, t.NumField())
+	return dedupeFieldSpecs(appendFieldSpecs(nil, t, nil, 0))
+}
+
+func appendFieldSpecs(specs []fieldSpec, t reflect.Type, prefix []int, depth int) []fieldSpec {
+	if depth >= maxFieldDepth {
+		return specs
+	}
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if f.PkgPath != "" {
 			continue
 		}
-		spec := fieldSpec{index: i, name: f.Name}
-		if tag := f.Tag.Get("json"); tag != "" && tag != "-" {
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		spec := fieldSpec{name: f.Name}
+		named := false
+		if tag != "" {
 			parts := strings.Split(tag, ",")
 			if parts[0] != "" {
 				spec.name = parts[0]
+				named = true
 			}
 			for _, opt := range parts[1:] {
 				if opt == "omitempty" {
@@ -496,9 +543,76 @@ func fieldSpecs(t reflect.Type) []fieldSpec {
 				}
 			}
 		}
+		spec.index = append(append(make([]int, 0, len(prefix)+1), prefix...), i)
+		if f.Anonymous && !named && isFlattenable(f.Type) {
+			ft := f.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			specs = appendFieldSpecs(specs, ft, spec.index, depth+1)
+			continue
+		}
 		specs = append(specs, spec)
 	}
 	return specs
+}
+
+// isFlattenable reports whether an anonymous field's fields are promoted: it
+// must be a struct (or pointer to one) that does not render itself.
+func isFlattenable(t reflect.Type) bool {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	if t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType) {
+		return false
+	}
+	return isRowStruct(t)
+}
+
+// dedupeFieldSpecs keeps one field per name, the shallowest (the first at that
+// depth), in declaration order. json resolves a promoted name against an
+// outer-level one the same way.
+func dedupeFieldSpecs(specs []fieldSpec) []fieldSpec {
+	best := make(map[string]int, len(specs))
+	for i, sp := range specs {
+		if j, seen := best[sp.name]; seen && len(specs[j].index) <= len(sp.index) {
+			continue
+		}
+		best[sp.name] = i
+	}
+	out := make([]fieldSpec, 0, len(specs))
+	for i, sp := range specs {
+		if best[sp.name] == i {
+			out = append(out, sp)
+		}
+	}
+	return out
+}
+
+// fieldByIndex walks a fieldSpec's index path to the value, dereferencing an
+// embedded POINTER on the way. A nil one has no field to read, so it reports
+// false rather than panicking the way reflect.Value.FieldByIndex would: text
+// then omits the field (it omits nils anyway) and csv writes an empty cell,
+// which keeps the column count right.
+func fieldByIndex(rv reflect.Value, index []int) (reflect.Value, bool) {
+	for hop, i := range index {
+		if hop > 0 {
+			for rv.Kind() == reflect.Ptr {
+				if rv.IsNil() {
+					return reflect.Value{}, false
+				}
+				rv = rv.Elem()
+			}
+		}
+		if rv.Kind() != reflect.Struct {
+			return reflect.Value{}, false
+		}
+		rv = rv.Field(i)
+	}
+	return rv, true
 }
 
 // fieldNames is the csv/tsv header row for a struct type: one json field name
@@ -541,7 +655,13 @@ func writeStructSliceCSV(cw *csv.Writer, v reflect.Value, rowType reflect.Type) 
 		}
 		record := make([]string, len(specs))
 		for j, sp := range specs {
-			record[j] = delimitedCell(row.Field(sp.index))
+			f, ok := fieldByIndex(row, sp.index)
+			if !ok {
+				// A field promoted out of a nil embedded pointer: an empty cell,
+				// so the row still has one cell per header column.
+				continue
+			}
+			record[j] = delimitedCell(f)
 		}
 		if err := cw.Write(record); err != nil {
 			return err

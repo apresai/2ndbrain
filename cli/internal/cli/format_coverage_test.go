@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"io"
@@ -10,6 +11,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/skills"
 )
 
 // A dozen report commands tested `getFormat(cmd) == output.FormatJSON` and fell
@@ -580,5 +584,107 @@ func TestContract_PolishRefusesBodylessFormatsUpFront(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The two reports a human is likeliest to point `--format text` at both embed
+// an anonymous struct: DoctorReport embeds SuiteStatus, SkillDoctorReport
+// embeds skills.Verification (which itself embeds InstallStatus). json FLATTENS
+// an untagged anonymous field, the formatter did not, so `2nb skills doctor
+// --format text` printed one `Verification: {"slug":...}` JSON blob keyed by a
+// Go type name that appears nowhere in the json view, and `2nb doctor --format
+// text` printed a `SuiteStatus:` blob the same way. The promise those formats
+// carry is that text, json and csv agree about what a field is called.
+//
+// Rendered through output.Write, which is the path both commands take, so no
+// model is called: `2nb doctor` probes the active models for real.
+func TestContract_EmbeddedReportsFlattenLikeJSON(t *testing.T) {
+	reports := []struct {
+		name    string
+		value   any
+		absent  []string
+		present []string
+	}{
+		{
+			name: "doctor",
+			value: DoctorReport{
+				SuiteStatus: SuiteStatus{Latest: "0.22.3", Checked: true, Detail: "d", InSync: true},
+				OK:          true,
+			},
+			absent:  []string{"SuiteStatus", "ProductState"},
+			present: []string{"latest", "checked", "in_sync", "ok"},
+		},
+		{
+			name: "skills doctor",
+			value: SkillDoctorReport{
+				Verification: skills.Verification{
+					InstallStatus: skills.InstallStatus{Slug: "claude-code", Name: "Claude Code"},
+					Installed:     true,
+				},
+				OK: true,
+			},
+			absent:  []string{"Verification", "InstallStatus"},
+			present: []string{"slug", "name", "installed", "ok"},
+		},
+	}
+
+	for _, rep := range reports {
+		t.Run(rep.name, func(t *testing.T) {
+			var textBuf bytes.Buffer
+			if err := output.Write(&textBuf, output.FormatText, rep.value); err != nil {
+				t.Fatalf("render text: %v", err)
+			}
+			text := textBuf.String()
+			for _, bad := range rep.absent {
+				if strings.Contains(text, bad+":") {
+					t.Errorf("--format text still nests a blob under the Go type name %q:\n%s", bad, text)
+				}
+			}
+			for _, want := range rep.present {
+				if !strings.Contains(text, want+": ") {
+					t.Errorf("--format text is missing the promoted field %q:\n%s", want, text)
+				}
+			}
+
+			// Every name text printed is a name json actually emits.
+			raw, err := json.Marshal(rep.value)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var keys map[string]any
+			if err := json.Unmarshal(raw, &keys); err != nil {
+				t.Fatalf("unmarshal %s: %v", raw, err)
+			}
+			for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+				name, _, ok := strings.Cut(line, ": ")
+				if !ok {
+					continue
+				}
+				if _, isJSONKey := keys[name]; !isJSONKey {
+					t.Errorf("--format text names a field %q that the json view does not have (keys: %s)", name, raw)
+				}
+			}
+		})
+	}
+}
+
+// The same defect end to end, through the command a user actually runs.
+// `skills doctor` calls no model, so this is credential-free; it exits non-zero
+// when the skill is not installed for the probed agent, which says nothing
+// about the rendering and is deliberately ignored.
+func TestContract_SkillsDoctorTextNamesItsFields(t *testing.T) {
+	_, root := newContractVault(t)
+	out, _ := runCLIArgs(t, root, "skills", "doctor", "--format", "text")
+	text := string(out)
+	if strings.TrimSpace(text) == "" {
+		t.Fatal("skills doctor --format text produced nothing")
+	}
+	for _, bad := range []string{"Verification:", "InstallStatus:"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("skills doctor --format text still prints a %s blob:\n%s", bad, text)
+		}
+	}
+	if !strings.Contains(text, "slug: ") {
+		t.Errorf("skills doctor --format text lost its promoted fields:\n%s", text)
 	}
 }

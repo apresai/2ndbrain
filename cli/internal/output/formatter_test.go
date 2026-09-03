@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -707,5 +708,197 @@ func TestWrite_YAMLDegeneratePayloads(t *testing.T) {
 				t.Errorf("got %q, want %q", buf.String(), tc.want)
 			}
 		})
+	}
+}
+
+// The embedded-struct shapes. These types are EXPORTED because an embedded
+// field takes its type's name: an unexported type would make the field
+// unexported, and every renderer here skips unexported fields.
+type EmbedLeaf struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type EmbedMiddle struct {
+	EmbedLeaf
+	Installed bool `json:"installed"`
+}
+
+// EmbedOuter is the shape DoctorReport and SkillDoctorReport have: an anonymous
+// struct carrying the fields callers have always seen at the top level, plus a
+// couple of additive ones. Hidden is `json:"-"`, Tagged is a NAMED struct field
+// (one value, never flattened).
+type EmbedOuter struct {
+	EmbedMiddle
+	OK     bool      `json:"ok"`
+	Hidden string    `json:"-"`
+	Tagged EmbedLeaf `json:"tagged"`
+}
+
+// An anonymous field WITH a json name is one key, not a flattening.
+type EmbedNamed struct {
+	EmbedLeaf `json:"leaf"`
+	OK        bool `json:"ok"`
+}
+
+// An embedded POINTER: json promotes its fields, and a nil one contributes
+// none. Reading through it must not panic.
+type EmbedPtr struct {
+	*EmbedLeaf
+	OK bool `json:"ok"`
+}
+
+// jsonKeys is the key set json.Marshal actually produces for a value, which is
+// the thing text and csv have to agree with.
+func jsonKeys(t *testing.T, v any) map[string]bool {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal %s: %v", raw, err)
+	}
+	keys := make(map[string]bool, len(m))
+	for k := range m {
+		keys[k] = true
+	}
+	return keys
+}
+
+func nameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
+}
+
+// The reported defect: fieldSpecs skipped only unexported fields, so an
+// ANONYMOUS embedded struct came out as a single cell keyed by its Go TYPE name
+// while json flattened it. `2nb skills doctor --format text` printed
+// `Verification: {"slug":...}` as one JSON blob, and `2nb doctor --format text`
+// printed a `SuiteStatus:` blob, on exactly the two commands a human is
+// likeliest to point --format text at. A `json:"-"` field was not skipped
+// either: it fell through the `tag != "-"` guard and was emitted under its Go
+// name, so text and csv showed a field json omits entirely.
+//
+// The guarantee is asserted against json.Marshal's own key set, so the three
+// views cannot drift apart again.
+func TestFieldNames_MatchJSONKeysThroughEmbedding(t *testing.T) {
+	// Every field non-zero: an omitempty field json legitimately omits would
+	// otherwise show up as a difference against the static csv header.
+	full := EmbedOuter{
+		EmbedMiddle: EmbedMiddle{
+			EmbedLeaf: EmbedLeaf{Slug: "claude-code", Name: "Claude Code"},
+			Installed: true,
+		},
+		OK:     true,
+		Hidden: "never rendered",
+		Tagged: EmbedLeaf{Slug: "inner", Name: "Inner"},
+	}
+
+	got := nameSet(fieldNames(reflect.TypeOf(full)))
+	want := jsonKeys(t, full)
+	for k := range want {
+		if !got[k] {
+			t.Errorf("json emits %q but the csv/text header does not", k)
+		}
+	}
+	for k := range got {
+		if !want[k] {
+			t.Errorf("the csv/text header carries %q, which json does not emit", k)
+		}
+	}
+	if got["EmbedMiddle"] || got["EmbedLeaf"] {
+		t.Errorf("an embedded struct is still a single cell keyed by its Go type name: %v", got)
+	}
+	if got["Hidden"] || got["-"] {
+		t.Errorf(`a json:"-" field reached the output: %v`, got)
+	}
+
+	// text: the promoted fields are top-level `name: value` lines.
+	var textBuf bytes.Buffer
+	if err := Write(&textBuf, FormatText, full); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	text := textBuf.String()
+	for _, want := range []string{"slug: claude-code", "name: Claude Code", "installed: true", "ok: true"} {
+		if !strings.Contains(text, want+"\n") {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	for _, bad := range []string{"EmbedMiddle:", "EmbedLeaf:", "Hidden:", "never rendered"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("text still carries %q:\n%s", bad, text)
+		}
+	}
+
+	// csv: one column per promoted field, in json's own order.
+	var csvBuf bytes.Buffer
+	if err := Write(&csvBuf, FormatCSV, []EmbedOuter{full}); err != nil {
+		t.Fatalf("Write(csv): %v", err)
+	}
+	recs, err := csv.NewReader(&csvBuf).ReadAll()
+	if err != nil {
+		t.Fatalf("csv is not parseable: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("want a header and one row, got %d records: %v", len(recs), recs)
+	}
+	wantHeader := []string{"slug", "name", "installed", "ok", "tagged"}
+	if strings.Join(recs[0], ",") != strings.Join(wantHeader, ",") {
+		t.Errorf("csv header = %v, want %v", recs[0], wantHeader)
+	}
+	if recs[1][0] != "claude-code" || recs[1][2] != "true" {
+		t.Errorf("csv row lost its promoted values: %v", recs[1])
+	}
+	if recs[1][4] != `{"slug":"inner","name":"Inner"}` {
+		t.Errorf("a NAMED struct field should stay one JSON cell, got %q", recs[1][4])
+	}
+}
+
+// An anonymous field carrying a json NAME is one key in json, so it stays one
+// cell here too.
+func TestFieldNames_NamedAnonymousFieldStaysOneKey(t *testing.T) {
+	v := EmbedNamed{EmbedLeaf: EmbedLeaf{Slug: "s", Name: "n"}, OK: true}
+	got := nameSet(fieldNames(reflect.TypeOf(v)))
+	want := jsonKeys(t, v)
+	if len(got) != len(want) || !got["leaf"] || !got["ok"] {
+		t.Errorf("header = %v, want the json keys %v", got, want)
+	}
+}
+
+// A nil embedded POINTER has no fields to read. reflect.Value.FieldByIndex
+// would panic walking through it; the renderers must not.
+func TestFieldSpecs_NilEmbeddedPointerRendersEmpty(t *testing.T) {
+	var textBuf bytes.Buffer
+	if err := Write(&textBuf, FormatText, EmbedPtr{OK: true}); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	if got := textBuf.String(); got != "ok: true\n" {
+		t.Errorf("text = %q, want only the field that exists", got)
+	}
+
+	var csvBuf bytes.Buffer
+	if err := Write(&csvBuf, FormatCSV, []EmbedPtr{{OK: true}}); err != nil {
+		t.Fatalf("Write(csv): %v", err)
+	}
+	recs, err := csv.NewReader(&csvBuf).ReadAll()
+	if err != nil {
+		t.Fatalf("csv is not parseable: %v", err)
+	}
+	if len(recs) != 2 || len(recs[1]) != len(recs[0]) {
+		t.Fatalf("want a header and one row of the same width, got %v", recs)
+	}
+	if strings.Join(recs[0], ",") != "slug,name,ok" {
+		t.Fatalf("csv header = %v, want the promoted fields plus ok", recs[0])
+	}
+	if recs[1][0] != "" || recs[1][1] != "" {
+		t.Errorf("a nil embedded pointer should leave empty cells, got %v", recs[1])
+	}
+	if recs[1][2] != "true" {
+		t.Errorf("the outer field is missing from the row: %v", recs[1])
 	}
 }
