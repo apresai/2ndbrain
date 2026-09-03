@@ -183,10 +183,15 @@ func TestContract_JSONEventStreamsRefuseOtherFormats(t *testing.T) {
 }
 
 // Bucket C: `polish --undo` honored --json only and printed NOTHING for every
-// other format, so csv/yaml/raw/md exited 0 with an empty stdout and the caller
-// could not tell a successful revert from an ignored format. emitUndoResult is
-// the whole of that command's output, so it is exercised directly: reaching it
+// other format, so csv/yaml exited 0 with an empty stdout and the caller could
+// not tell a successful revert from an ignored format. emitUndoResult is the
+// whole of that command's output, so it is exercised directly: reaching it
 // through the CLI needs a real polish snapshot, which needs a paid model call.
+//
+// raw and md are deliberately NOT here. runPolish refuses them up front on both
+// polish paths, so asserting them against emitUndoResult would pin a path no
+// invocation reaches; TestContract_PolishRefusesBodylessFormatsUpFront covers
+// the pair where it actually happens.
 func TestContract_PolishUndoReportsEveryFormat(t *testing.T) {
 	setFormat := func(t *testing.T, f string) {
 		t.Helper()
@@ -224,19 +229,6 @@ func TestContract_PolishUndoReportsEveryFormat(t *testing.T) {
 			}
 			if !strings.Contains(out, "doc.md") {
 				t.Errorf("--format %s did not name the note:\n%s", format, out)
-			}
-		})
-	}
-
-	for _, format := range []string{"raw", "md"} {
-		t.Run(format+" is refused", func(t *testing.T) {
-			setFormat(t, format)
-			err := emitUndoResult(polishCmd, "doc.md", true)
-			if err == nil {
-				t.Fatalf("--format %s was accepted; an undo verdict has no document body", format)
-			}
-			if !strings.Contains(err.Error(), "document body") {
-				t.Errorf("refusal should say a document body is expected, got: %v", err)
 			}
 		})
 	}
@@ -367,6 +359,38 @@ func TestContract_GitDiffIsBodyShaped(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "row set") {
 			t.Errorf("git diff --format %s refusal should say a diff is not a row set, got: %v", format, err)
+		}
+	}
+}
+
+// The up-front guard in runPolish is the only raw/md gate on either polish
+// path. It has to fire before any provider work, so this must hold on a machine
+// with no credentials at all: polish is a paid generation call, and --undo
+// opens the write path, neither of which should be reached to learn that the
+// format cannot render the result.
+func TestContract_PolishRefusesBodylessFormatsUpFront(t *testing.T) {
+	root, _ := newFormatCoverageVault(t)
+
+	for _, argv := range [][]string{
+		{"polish", "doc.md"},
+		{"polish", "doc.md", "--undo"},
+	} {
+		for _, format := range []string{"raw", "md"} {
+			out, err := runCLIArgs(t, root, append(append([]string{}, argv...), "--format", format)...)
+			if err == nil {
+				t.Errorf("%v --format %s was accepted; a polish result has no document body:\n%s", argv, format, out)
+				continue
+			}
+			if !strings.Contains(err.Error(), "document body") {
+				t.Errorf("%v --format %s refusal should name the missing document body, got: %v", argv, format, err)
+			}
+			// The refusal must be the FORMAT, not a provider or a snapshot: those
+			// are the errors this guard exists to run ahead of.
+			for _, leaked := range []string{"provider", "credential", "snapshot"} {
+				if strings.Contains(strings.ToLower(err.Error()), leaked) {
+					t.Errorf("%v --format %s reached %s work before refusing: %v", argv, format, leaked, err)
+				}
+			}
 		}
 	}
 }

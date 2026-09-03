@@ -376,7 +376,7 @@ struct ModelCatalogPickerView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Your similarity threshold override")
-                                .help("Saves a similarity threshold you choose to the user catalog, stamped as yours. Leave it empty to keep using the value shown to the right: this model's built-in recommendation, or the global default when it has none. It feeds the automatic resolution chain when no vault override is set; the vault-level override lives under Advanced settings in the AI Hub.")
+                                .help("Saves a similarity threshold you choose to the user catalog, stamped as yours. Leave it empty to use this model's built-in recommendation (shown to the right when it has one), or the global default otherwise. It feeds the automatic resolution chain when no vault override is set; the vault-level override lives under Advanced settings in the AI Hub.")
                             TextField("0.00-1.00", text: $thresholdText)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 100)

@@ -75,8 +75,8 @@ type PolishUndoResult struct {
 func runPolish(cmd *cobra.Command, args []string) error {
 	// A polish result is a report, not a body, and the run is a paid generation
 	// call. Refuse the formats that cannot render it before spending anything.
-	// --undo is covered too: emitUndoResult refuses the same pair, and doing it
-	// here as well keeps the refusal ahead of the vault open on both paths.
+	// This is the ONLY raw/md gate on either polish path, --undo included: it
+	// runs before the vault open, so nothing downstream ever sees those two.
 	if err := refuseBodylessFormat(cmd, "polish"); err != nil {
 		return err
 	}
@@ -381,10 +381,13 @@ func restorePolishOriginal(v *vault.Vault, absPath, rel string, content []byte) 
 // so the two cannot drift apart.
 //
 // It used to honor --json only and print NOTHING for every other format, so
-// `polish --undo --format csv/yaml/raw/md` exited 0 with an empty stdout: the
-// caller could not tell a successful revert from a format the command ignored.
-// raw and md are now refused by output.Write (an undo verdict has no document
-// body), and csv, tsv and yaml render the verdict.
+// `polish --undo --format csv/yaml` exited 0 with an empty stdout: the caller
+// could not tell a successful revert from a format the command ignored. csv,
+// tsv and yaml render the verdict now.
+//
+// raw and md never arrive here. runPolish refuses them up front, before the
+// vault is even opened, so this function does not gate them and must not be
+// read as if it did.
 func emitUndoResult(cmd *cobra.Command, rel string, reverted bool) error {
 	// The human line goes to stderr, as it always has, so a machine format's
 	// document on stdout stays clean.
