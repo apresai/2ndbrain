@@ -332,6 +332,10 @@ final class AppState {
 
     func openVault(at url: URL) {
         log.info("Opening vault at \(url.path)")
+        // A recorded problem names a path inside the vault being left behind, so
+        // carrying it across a switch shows a banner about a note the new vault
+        // does not even have.
+        lastIndexingProblem = nil
         let vm = VaultManager(rootURL: url)
         self.vault = vm
 
@@ -1038,6 +1042,7 @@ final class AppState {
                 indexProgress?.elapsed = elapsed
                 if result.exitCode == 0 {
                     indexProgress?.phase = .complete
+                    clearIndexingProblemAfterFullIndex()
                     log.info("Index rebuild completed in \(String(format: "%.1f", elapsed))s (exit 0)")
                 } else {
                     // Surface the actual CLI failure (last stderr line) rather
@@ -2009,6 +2014,17 @@ final class AppState {
         if lastIndexingProblem?.path == path {
             lastIndexingProblem = nil
         }
+    }
+
+    /// Clears the problem after a FULL index that exited cleanly. The
+    /// path-scoped clear above only ever fires from the single-note watcher, and
+    /// a whole-vault run reports no per-note paths, so a note repaired and then
+    /// picked up by Rebuild (or by the startup sync) left the banner up forever
+    /// naming a note that now indexes fine. A clean full index has just re-read
+    /// every note in the vault, which is the strongest evidence there is that
+    /// nothing is broken.
+    func clearIndexingProblemAfterFullIndex() {
+        lastIndexingProblem = nil
     }
 
     private func triggerIncrementalReindex(for url: URL) {

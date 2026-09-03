@@ -46,3 +46,32 @@ func indexingProblemReplacedByALaterFailure() {
     state.noteIndexingProblem(path: "notes/second.md", message: "second reason")
     #expect(state.lastIndexingProblem == IndexingProblem(path: "notes/second.md", message: "second reason"))
 }
+
+// The banner outlived its cause. `clearIndexingProblem(for:)` is path-scoped and
+// fires only from the single-note watcher, so a full rebuild (the Rebuild button
+// and the startup sync) never cleared it, and a vault switch carried a problem
+// naming a path from the vault just closed.
+
+@MainActor
+@Test("a clean full index clears a problem the single-note watcher recorded")
+func indexingProblemClearsAfterASuccessfulFullIndex() {
+    let state = AppState()
+    state.noteIndexingProblem(path: "notes/broken.md", message: "malformed YAML frontmatter")
+    state.clearIndexingProblemAfterFullIndex()
+    #expect(state.lastIndexingProblem == nil)
+}
+
+@MainActor
+@Test("switching vaults drops a problem naming a note in the vault left behind")
+func indexingProblemDoesNotSurviveAVaultSwitch() throws {
+    let state = AppState()
+    state.noteIndexingProblem(path: "notes/broken.md", message: "malformed YAML frontmatter")
+
+    let other = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-vault-switch-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: other) }
+
+    state.openVault(at: other)
+    #expect(state.lastIndexingProblem == nil)
+}
