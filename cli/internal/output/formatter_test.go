@@ -911,17 +911,37 @@ func TestFieldSpecs_NilEmbeddedPointerRendersEmpty(t *testing.T) {
 // collide, because those are two different names. So every pair below shares an
 // effective name deliberately.
 
+// A repeated json tag is EXACTLY what the collision cases are about, and `go
+// vet`'s structtag analyzer rejects one written in source ("struct field B
+// repeats json tag \"same\""). CI runs `go vet ./...`, so the shapes that
+// literally repeat a tag are built at RUNTIME instead, where vet cannot see
+// them. Only those; every other fixture below stays an ordinary declaration,
+// which is far easier to read. reflect.StructOf panics on an unexported field
+// name and synthesizes no methods, so every generated field is exported and
+// method-free.
+func taggedLeaf(field, tag string) reflect.Type {
+	return reflect.StructOf([]reflect.StructField{
+		{Name: field, Type: reflect.TypeOf(""), Tag: reflect.StructTag(`json:"` + tag + `"`)},
+	})
+}
+
+func anonField(name string, t reflect.Type) reflect.StructField {
+	return reflect.StructField{Name: name, Type: t, Anonymous: true}
+}
+
 // Equal depth, both tagged with the same name: json calls it a conflict.
-type ClashTagA struct {
-	A string `json:"same"`
-}
-type ClashTagB struct {
-	B string `json:"same"`
-}
-type ClashBothTagged struct {
-	ClashTagA
-	ClashTagB
-	OK bool `json:"ok"`
+var clashBothTaggedType = reflect.StructOf([]reflect.StructField{
+	anonField("ClashA", taggedLeaf("A", "same")),
+	anonField("ClashB", taggedLeaf("B", "same")),
+	{Name: "OK", Type: reflect.TypeOf(false), Tag: `json:"ok"`},
+})
+
+func clashBothTaggedValue() any {
+	v := reflect.New(clashBothTaggedType).Elem()
+	v.Field(0).Field(0).SetString("from A")
+	v.Field(1).Field(0).SetString("from B")
+	v.Field(2).SetBool(true)
+	return v.Interface()
 }
 
 // Equal depth, neither tagged, same Go name: also a conflict.
@@ -956,20 +976,26 @@ type ClashShallowWins struct {
 
 // A conflict at depth 2, then a winner at depth 1, then ANOTHER conflict at
 // depth 2. The depth-1 field must survive: a later deep pair must not revive a
-// conflict the shallow field already settled.
-type ClashOrdering struct {
-	ClashTagA
-	ClashTagB
-	Top string `json:"same"`
-	ClashTagC
-	ClashTagD
-	OK bool `json:"ok"`
-}
-type ClashTagC struct {
-	C string `json:"same"`
-}
-type ClashTagD struct {
-	D string `json:"same"`
+// conflict the shallow field already settled. Runtime-built for the same vet
+// reason as clashBothTaggedType.
+var clashOrderingType = reflect.StructOf([]reflect.StructField{
+	anonField("ClashA", taggedLeaf("A", "same")),
+	anonField("ClashB", taggedLeaf("B", "same")),
+	{Name: "Top", Type: reflect.TypeOf(""), Tag: `json:"same"`},
+	anonField("ClashC", taggedLeaf("C", "same")),
+	anonField("ClashD", taggedLeaf("D", "same")),
+	{Name: "OK", Type: reflect.TypeOf(false), Tag: `json:"ok"`},
+})
+
+func clashOrderingValue() any {
+	v := reflect.New(clashOrderingType).Elem()
+	v.Field(0).Field(0).SetString("deep A")
+	v.Field(1).Field(0).SetString("deep B")
+	v.Field(2).SetString("shallow")
+	v.Field(3).Field(0).SetString("deep C")
+	v.Field(4).Field(0).SetString("deep D")
+	v.Field(5).SetBool(true)
+	return v.Interface()
 }
 
 // An embedded UNEXPORTED struct. json promotes its exported fields; fieldSpecs
@@ -1035,11 +1061,11 @@ func TestFieldNames_MatchJSONThroughCollisionsAndUnexportedEmbeds(t *testing.T) 
 		value any
 		want  string // the expected header, json's key set in index order
 	}{
-		{"equal depth, both tagged: json drops the name", ClashBothTagged{OK: true}, "ok"},
+		{"equal depth, both tagged: json drops the name", clashBothTaggedValue(), "ok"},
 		{"equal depth, neither tagged: json drops the name", ClashNeitherTagged{OK: true}, "ok"},
 		{"equal depth, one tagged: the tagged field wins", ClashTagWins{ClashTagNamedN: ClashTagNamedN{Other: "tagged"}}, "N"},
 		{"shallower wins over deeper", ClashShallowWins{Top: "shallow"}, "same"},
-		{"a shallow winner survives a later deep conflict", ClashOrdering{Top: "shallow", OK: true}, "same,ok"},
+		{"a shallow winner survives a later deep conflict", clashOrderingValue(), "same,ok"},
 		{"an embedded unexported struct is promoted", HiddenOuter{hiddenLeaf: hiddenLeaf{Slug: "s"}, OK: true}, "slug,ok"},
 		{"promotion reaches through two unexported levels", HiddenL1{hiddenL2: hiddenL2{hiddenL3: hiddenL3{Deep: "d"}, Mid: "m"}, Top: "t"}, "deep,mid,top"},
 	}
