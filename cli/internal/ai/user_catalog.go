@@ -86,6 +86,18 @@ func SaveUserCatalogEntry(scope UserCatalogScope, vaultRoot string, entry ModelI
 		return err
 	}
 
+	// Canonicalize the INCOMING row the same way readCatalogForWrite has just
+	// canonicalized the stored ones. Doing it on one side only is how a save of
+	// a deliberately route-less row came to APPEND a twin instead of replacing:
+	// `models add` describes a MODEL, not an endpoint, so it writes no plane,
+	// while the stored row it means to update was upgraded to its builtin's
+	// plane on read. The route keys then missed, the model ended up with two
+	// template rows, and the user-user overlay merged the stale one's facts
+	// back over the fresh one.
+	canonical := []ModelInfo{entry}
+	canonicalizeUserRoutes(canonical, BuiltinCatalog())
+	entry = canonical[0]
+
 	// Replace the row for this exact ROUTE. Matching on (provider, id) would
 	// let a probe of one endpoint overwrite another endpoint's verdict, which
 	// is how a passing mantle row used to be clobbered by a classic save.

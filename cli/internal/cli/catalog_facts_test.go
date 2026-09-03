@@ -281,3 +281,44 @@ func TestUnstampedThresholdNoticeNamesTheFile(t *testing.T) {
 		t.Errorf("notice %q does not say how to keep the value", got)
 	}
 }
+
+// `models add` describes a MODEL, so it writes a route-less row. The stored row
+// it means to update has been upgraded to its builtin's plane on read
+// (canonicalizeUserRoutes), so before the save canonicalized the incoming row
+// too, the route keys missed and the add APPENDED a twin. The model then had two
+// template rows, and the user-user overlay merged the stale one's facts back
+// over the fresh one, so an edit appeared not to take.
+func TestModelsAddUpdatesAPreRouteRowInPlace(t *testing.T) {
+	_, root := newContractVault(t)
+	resetModelsAddFlags(t)
+
+	catalogPath := filepath.Join(root, ".2ndbrain", "models.yaml")
+	// A row written before routes existed: no plane, no region.
+	if err := os.WriteFile(catalogPath, []byte(
+		"version: 1\nmodels:\n"+
+			"  - id: "+novaEmbeddingID+"\n    provider: bedrock\n    type: embedding\n"+
+			"    context_length: 2048\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLIArgs(t, root, "models", "add", novaEmbeddingID,
+		"--provider", "bedrock", "--type", "embedding",
+		"--context-length", "4096", "--scope", "vault"); err != nil {
+		t.Fatalf("models add: %v", err)
+	}
+
+	data, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "- id: "+novaEmbeddingID); got != 1 {
+		t.Errorf("the add wrote %d rows for the model, want 1 (it appended a twin instead of updating):\n%s", got, data)
+	}
+	rows := ai.LoadUserCatalog(root)
+	if len(rows) != 1 {
+		t.Fatalf("merged user catalog holds %d rows, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].ContextLen != 4096 {
+		t.Errorf("context_length = %d, want the value just added, 4096", rows[0].ContextLen)
+	}
+}
