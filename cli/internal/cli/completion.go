@@ -74,20 +74,33 @@ var completionPowershellCmd = &cobra.Command{
 }
 
 var completionInstallDir string
+var completionInstallRC string
+var completionInstallNoRC bool
 
 var completionInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install zsh completion to ~/.zsh/completions/_2nb",
 	Long: `Writes the zsh completion script into ~/.zsh/completions/_2nb (or a
-directory you pass with --dir) and prints the .zshrc snippet needed to
-pick it up. Idempotent — re-running just overwrites the script.`,
+directory you pass with --dir) and adds an fpath + compinit block to your
+zsh config. Idempotent: re-running replaces the managed block in place.
+
+The config file is $ZDOTDIR/.zshrc when ZDOTDIR is set (which is where zsh
+itself looks), otherwise ~/.zshrc. Point it somewhere else with --rc. The
+file is copied to <rc>.2nb-backup before its first change.
+
+--no-rc writes only the completion script and prints the two lines to add
+by hand, for anyone who manages their shell config themselves.`,
 	Example: `  2nb completion install
-  2nb completion install --dir ~/.config/zsh/completions`,
+  2nb completion install --dir ~/.config/zsh/completions
+  2nb completion install --rc ~/.config/zsh/.zshrc
+  2nb completion install --no-rc`,
 	RunE: runCompletionInstall,
 }
 
 func init() {
 	completionInstallCmd.Flags().StringVar(&completionInstallDir, "dir", "", "Target directory (default: ~/.zsh/completions)")
+	completionInstallCmd.Flags().StringVar(&completionInstallRC, "rc", "", "Shell config to read and update (default: $ZDOTDIR/.zshrc, else ~/.zshrc)")
+	completionInstallCmd.Flags().BoolVar(&completionInstallNoRC, "no-rc", false, "Write only the completion script; print the snippet instead of editing any config")
 	completionCmd.AddCommand(completionZshCmd)
 	completionCmd.AddCommand(completionBashCmd)
 	completionCmd.AddCommand(completionFishCmd)
@@ -102,7 +115,12 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	zshrcPath := filepath.Join(home, ".zshrc")
+	// Resolve the config file FIRST. It is both the file that may be edited
+	// AND the file the completion-directory search reads its candidates from,
+	// so anything that redirects one has to redirect the other: reading
+	// ~/.zshrc and then writing $ZDOTDIR/.zshrc would put the block in a file
+	// whose completion directories were never consulted.
+	zshrcPath := resolveZshrcPath(completionInstallRC, home)
 	dir, err := resolveCompletionInstallDir(completionInstallDir, zshrcPath, home)
 	if err != nil {
 		return err
@@ -119,12 +137,21 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Installed zsh completion to %s\n", target)
 
+	// --dir still updates the config: the block is what puts THAT directory on
+	// fpath, so writing the script into a custom directory and saying nothing
+	// would install completions the shell never loads.
+	if completionInstallNoRC {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Left %s untouched (--no-rc). Add this to your shell config:\n", zshrcPath)
+		printCompletionSnippet(cmd.ErrOrStderr(), dir)
+		warnIfMultiple2nbOnPath(cmd.ErrOrStderr())
+		return nil
+	}
+
 	added, err := updateZshrc(zshrcPath, dir)
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not update %s: %v\n", zshrcPath, err)
-		fmt.Fprintln(cmd.ErrOrStderr(), "Add this to your ~/.zshrc manually:")
-		fmt.Fprintf(cmd.ErrOrStderr(), "  fpath=(%s $fpath)\n", dir)
-		fmt.Fprintln(cmd.ErrOrStderr(), "  autoload -Uz compinit && compinit -i")
+		fmt.Fprintln(cmd.ErrOrStderr(), "Add this to your shell config manually:")
+		printCompletionSnippet(cmd.ErrOrStderr(), dir)
 	} else if added {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Updated %s with completion init block.\n", zshrcPath)
 		fmt.Fprintln(cmd.ErrOrStderr(), "Restart your shell or run: source ~/.zshrc")
@@ -136,6 +163,33 @@ func runCompletionInstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// resolveZshrcPath picks the zsh config `completion install` reads and writes:
+// an explicit --rc, then $ZDOTDIR/.zshrc, then ~/.zshrc.
+//
+// ZDOTDIR is where zsh itself looks for .zshrc, so a user who sets it often has
+// no ~/.zshrc at all: writing one there created a file their shell never
+// sources, and the completion-directory search read candidates from a config
+// that was not theirs. --rc covers the rest (a non-standard layout, a shared
+// dotfiles repo) and is what lets a test point the whole command at a temp
+// directory instead of the developer's real config.
+func resolveZshrcPath(explicit, home string) string {
+	if explicit != "" {
+		return expandPath(explicit)
+	}
+	if zdotdir := strings.TrimSpace(os.Getenv("ZDOTDIR")); zdotdir != "" {
+		return filepath.Join(expandPath(zdotdir), ".zshrc")
+	}
+	return filepath.Join(home, ".zshrc")
+}
+
+// printCompletionSnippet writes the two lines a user would add by hand. One
+// function, because --no-rc and the could-not-write path must never disagree
+// about what the manual instructions are.
+func printCompletionSnippet(w io.Writer, completionDir string) {
+	fmt.Fprintf(w, "  fpath=(%s $fpath)\n", completionDir)
+	fmt.Fprintln(w, "  autoload -Uz compinit && compinit -i")
+}
+
 const zshrcBlockBegin = "# BEGIN 2nb completion managed block"
 const zshrcBlockEnd = "# END 2nb completion managed block"
 
@@ -144,6 +198,7 @@ func updateZshrc(zshrcPath, completionDir string) (added bool, err error) {
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("read %s: %w", zshrcPath, err)
 	}
+	existed := err == nil
 
 	existingStr := string(existing)
 
@@ -152,6 +207,17 @@ func updateZshrc(zshrcPath, completionDir string) (added bool, err error) {
 	updated := injectManagedZshrcBlock(withoutManaged, block)
 	if strings.TrimRight(existingStr, "\n") == strings.TrimRight(updated, "\n") {
 		return false, nil
+	}
+	// Back up before the FIRST change to a file that already existed. This is
+	// the one place 2nb edits a file it did not write, the insertion point is
+	// chosen heuristically (before an early-return guard, or before an existing
+	// compinit), and a shell config that will not parse is a shell that will
+	// not start. The no-op case returns above, so a re-run never overwrites a
+	// good backup with a copy of the already-modified file.
+	if existed {
+		if err := os.WriteFile(zshrcPath+".2nb-backup", existing, 0o600); err != nil {
+			return false, fmt.Errorf("back up %s: %w", zshrcPath, err)
+		}
 	}
 	if err = os.WriteFile(zshrcPath, []byte(updated), 0o644); err != nil {
 		return false, fmt.Errorf("write %s: %w", zshrcPath, err)
