@@ -335,6 +335,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 			// verdict with a false positive that even carried the mantle
 			// strategy. adoptCandidateRouting cannot correct it (fill-only-empty).
 			persistProbedRegion(&entry, result, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
+			preserveUserThreshold(scope, v.Root, &entry)
 			// Wholesale: a passing probe records a complete fresh verdict.
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
 				passed++
@@ -618,6 +619,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
+		preserveUserThreshold(scope, v.Root, &entry)
 		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
 			if getFormat(cmd) != "" {
@@ -1073,6 +1075,12 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 		entry.TestErrorCode = ""
 	} else if base != nil {
 		entry = *base
+		// The wholesale copy carries every field of a MERGED row, including the
+		// builtin's similarity-threshold recommendation. Drop it for the same
+		// reason promotedEntry does not copy it: a failing probe must never mint
+		// a calibration. preserveUserThreshold restores the user's own value at
+		// the save site.
+		entry.RecommendedSimilarityThreshold, entry.ThresholdSource = 0, ""
 		if entry.Tier == "" {
 			entry.Tier = ai.TierUnverified
 		}
@@ -1108,6 +1116,33 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 // rest now: they are the row's IDENTITY rather than a mutable pin, and
 // persistProbedRegion overwrites them from the probe result anyway, which is
 // the authoritative statement of which endpoint was actually called.
+// preserveUserThreshold is the one place the rule lives: a row written by a
+// probe, a benchmark, or a promotion carries the USER's similarity threshold or
+// none at all, never the builtin catalog's recommendation.
+//
+// Every such row is seeded from the merged catalog (builtin overlaid by the user
+// file), so before this the field rode along into the user file. `models bench`
+// defaults to --summary-scope global, so one bench run in one vault made every
+// vault on the machine report "(user calibration)" for a number nobody measured,
+// and the frozen copy shadowed any later builtin correction. `models calibrate
+// --save` and `models add --similarity-threshold` remain the only authors.
+//
+// The lookup is scope-local and route-tolerant (UserCatalogRouteToPreserve falls
+// back to a unique row for the model), so a calibration stored on a pre-route
+// row, or under a sibling region, is carried forward rather than erased.
+func preserveUserThreshold(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
+	entry.RecommendedSimilarityThreshold, entry.ThresholdSource = 0, ""
+	existing, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, entry.Route())
+	if !ok || !ai.IsUserThreshold(existing) {
+		return
+	}
+	entry.RecommendedSimilarityThreshold = existing.RecommendedSimilarityThreshold
+	entry.ThresholdSource = existing.ThresholdSource
+	slog.Debug("preserve user threshold: carried the stored calibration",
+		"provider", entry.Provider, "model", entry.ID, "scope", scope,
+		"threshold", entry.RecommendedSimilarityThreshold, "source", entry.ThresholdSource)
+}
+
 func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
 	// Resolve by route where the entry knows it, else by a UNIQUE row for the
 	// model. A probe result turned into a save often carries no plane yet, so
@@ -1287,7 +1322,13 @@ func promotedEntry(base *ai.ModelInfo, result *ai.TestProbeResult) ai.ModelInfo 
 		entry.PriceIn = base.PriceIn
 		entry.PriceOut = base.PriceOut
 		entry.PriceRequest = base.PriceRequest
-		entry.RecommendedSimilarityThreshold = base.RecommendedSimilarityThreshold
+		// RecommendedSimilarityThreshold is deliberately NOT carried. `base` is
+		// a row from the MERGED catalog, so copying the field wrote the builtin
+		// catalog's own recommendation into the user file, where it read back as
+		// a calibration the user never took and froze out any later builtin
+		// change. The user's own value, when there is one, is restored from the
+		// raw stored row by preserveUserThreshold at the save site, which knows
+		// the scope being written.
 		entry.Notes = base.Notes
 		if base.PriceSource != "" {
 			entry.PriceSource = base.PriceSource

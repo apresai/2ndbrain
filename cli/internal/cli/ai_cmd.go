@@ -272,8 +272,20 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	// degrading search to BM25-only. Flag it with the one-line fix.
 	if ai.IsAsymmetricEmbeddingModel(status.EmbeddingModel) && status.SimilarityThreshold > 0.45 {
 		fmt.Printf("  ⚠ threshold %g looks calibrated for the old symmetric embedding; semantic search\n"+
-			"    will reject real matches. Fix: `2nb config set ai.similarity_threshold 0.25` (or clear\n"+
-			"    the saved calibration so the built-in ~0.25 applies).\n", status.SimilarityThreshold)
+			"    will reject real matches. Fix: `2nb config set ai.similarity_threshold 0.25`.\n", status.SimilarityThreshold)
+		// Name the cause instead of guessing at it. The old text always said
+		// "or clear the saved calibration", which sent a user hunting for a
+		// calibration that does not exist whenever the value came from the
+		// builtin catalog or from vault config.
+		switch status.SimilarityThresholdSource {
+		case ai.ThresholdSourceUserCalibration:
+			fmt.Printf("    It is a saved calibration: %s\n",
+				thresholdCalibrationOrigin(v.Root, cfg.Provider, cfg.EmbeddingModel))
+		case ai.ThresholdSourceVaultConfig:
+			fmt.Printf("    It comes from ai.similarity_threshold in this vault's config.yaml.\n")
+		default:
+			fmt.Printf("    It is this model's built-in recommendation, so there is no calibration to clear.\n")
+		}
 	}
 
 	// Vault embedding state (portability) — the authoritative "is this
@@ -594,4 +606,32 @@ func ollamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 		s.Reason = "not running on " + endpoint
 	}
 	return s
+}
+
+// thresholdCalibrationOrigin says where a resolved "user calibration" similarity
+// threshold physically lives, so `ai status` can name the file to edit. It also
+// distinguishes a stamped calibration from one written before the stamp existed,
+// which is read as a calibration only because its value differs from the
+// builtin recommendation (see ai.IsUserThreshold).
+func thresholdCalibrationOrigin(vaultRoot, provider, modelID string) string {
+	route := ai.RouteKey{Provider: provider, ID: modelID}
+	// Vault first: the per-vault catalog overlays the global one.
+	for _, scope := range []ai.UserCatalogScope{ai.ScopeVault, ai.ScopeGlobal} {
+		if scope == ai.ScopeVault && vaultRoot == "" {
+			continue
+		}
+		row, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, route)
+		if !ok || !ai.IsUserThreshold(row) {
+			continue
+		}
+		path, err := ai.CatalogPathForScope(scope, vaultRoot)
+		if err != nil {
+			continue
+		}
+		if row.ThresholdSource == ai.ThresholdSourceUser {
+			return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s (saved by `2nb models calibrate --save` or `2nb models add`). Remove that key to fall back to the built-in value.", modelID, path)
+		}
+		return fmt.Sprintf("recommended_similarity_threshold on the %s row in %s, written before 2nb stamped provenance, and it differs from the built-in value. Remove that key to fall back to the built-in value.", modelID, path)
+	}
+	return "no user-catalog row carries it; check ai.similarity_threshold in this vault's config.yaml."
 }

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -103,7 +102,6 @@ func TestSaveBenchmarkSummaryCreatesCatalogEntry(t *testing.T) {
 	setupModelsAddHome(t)
 	summary := &ai.BenchmarkSummary{RanAt: "2026-04-25T00:00:00Z", AvgLatencyMs: 123, QualityScore: 0.5, VaultDocCount: 7}
 	if err := saveBenchmarkSummary(
-		context.Background(),
 		ai.DefaultAIConfig(),
 		ai.ScopeGlobal,
 		"",

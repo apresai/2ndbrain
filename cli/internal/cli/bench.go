@@ -267,7 +267,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := saveBenchmarkSummary(ctx, cfg, summaryScope, summaryRoot, t.provider, t.modelID, t.modelType, summary); err != nil {
+		if err := saveBenchmarkSummary(cfg, summaryScope, summaryRoot, t.provider, t.modelID, t.modelType, summary); err != nil {
 			return fmt.Errorf("save benchmark summary: %w", err)
 		}
 		if jsonMode {
@@ -418,14 +418,20 @@ func resolveBenchSummaryScope(vaultRoot, scope string) (ai.UserCatalogScope, str
 	}
 }
 
-func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCatalogScope, vaultRoot, provider, modelID, modelType string, summary *ai.BenchmarkSummary) error {
+func saveBenchmarkSummary(cfg ai.AIConfig, scope ai.UserCatalogScope, vaultRoot, provider, modelID, modelType string, summary *ai.BenchmarkSummary) error {
 	// Record the summary against the route that was BENCHMARKED. The probe
 	// picks its endpoint with ResolveMeasurementRoute, so looking the base row
 	// up route-blind filed the number on a sibling: measured
 	// @classic/us-west-2, recorded on @classic/us-east-1. models list --sort
 	// best is bench-informed, so the wrong row then ranks.
 	route := ai.ResolveMeasurementRoute(cfg, modelID, vaultRoot).Route
-	entry, ok := findModelInfoForRoute(ctx, cfg, vaultRoot, route)
+	// The base row is the RAW stored one for this route, the way calibrate
+	// --save reads its base. findModelInfoForRoute returns a row from the
+	// MERGED catalog, so every bench run copied the builtin's own facts into the
+	// user file: with --summary-scope defaulting to global, one run in one vault
+	// wrote the builtin similarity threshold into ~/.config/2nb/models.yaml and
+	// every vault on the machine then reported it as a user calibration.
+	entry, ok := ai.UserCatalogEntry(scope, vaultRoot, route)
 	if !ok {
 		entry = ai.ModelInfo{
 			ID:       modelID,
@@ -444,9 +450,11 @@ func saveBenchmarkSummary(ctx context.Context, cfg ai.AIConfig, scope ai.UserCat
 	if entry.Tier == "" {
 		entry.Tier = ai.TierUserVerified
 	}
-	// RMW: copy the existing route's row (findModelInfoForRoute), then stamp
-	// Benchmark. A site that constructed a fresh row here would erase the
-	// stored verdict, prices, and enabled pointer, the same as calibrate --save.
+	// RMW on the raw stored row for this route, then stamp Benchmark. A site
+	// that constructed a fresh row here would erase the stored verdict, prices,
+	// and enabled pointer; this is the same read calibrate --save does, so the
+	// two agree about what "the existing row" means.
+	preserveUserThreshold(scope, vaultRoot, &entry)
 	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 		return err
 	}
