@@ -245,8 +245,8 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 
 | Command | Purpose |
 |---------|---------|
-| `2nb index` | Rebuild the search index and regenerate embeddings for changed docs |
-| `2nb index --doc <path>` | Re-index + re-embed only one document (fast, skips unchanged hash) |
+| `2nb index` | Rebuild the search index and regenerate embeddings for changed docs. A note whose frontmatter will not parse is named and skipped (its stale index row dropped) rather than failing the run; `--json` lists them under `unparseable`. Obsidian's template folders are not indexed |
+| `2nb index --doc <path>` | Re-index + re-embed only one document (fast, skips unchanged hash). Unlike the whole-vault run this DOES exit non-zero on a parse error, so an editor save reports the broken note |
 | `2nb lint [glob]` | Validate schemas, check broken wikilinks (ignores wikilinks inside code spans) |
 | `2nb export-context --types <types>` | Generate a CLAUDE.md-compatible context bundle |
 

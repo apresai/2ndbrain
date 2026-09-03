@@ -193,6 +193,19 @@ degrades to retries rather than failures. Find an account's real ceiling with
 `2nb ai embed-probe`, which ramps concurrency over a discarded sample of vault chunks and
 recommends the lowest level at ≥90% of peak throughput before throttling.
 
+Those retries used to be completely silent, and the difference matters: on a throttled
+account a single-note reindex measured 10 to 14s, a two-document embed pass 53.6s, and one
+search's query embedding 10.8s, against 0.7s for the same call unthrottled. Since 0.22.3
+every retry logs one INFO line (attempt, budget, the wait about to be taken, the classified
+cause) on all four Bedrock retry loops; the count is recorded per operation in
+`metrics.db.embed_retries` and printed by `2nb metrics`; and a call still running after two
+seconds prints a self-erasing stderr line naming the wait and, once a retry has happened, the
+cause. `2nb vault status` and `2nb ai status` print
+"N throttled retries in the last index (embed_concurrency is C, automatic is A); consider
+lowering ai.embed_concurrency" when the last build rode out retries AND the configured
+concurrency is above the automatic value. Both conditions matter: at the automatic setting the
+throttling is the provider's quota, not a number the user chose.
+
 Both the CLI `index`/`--force-reembed` path and the MCP `kb_index` tool share this one pass (the
 worker pool was extracted into `vault.EmbedDocuments`), so an agent-driven reindex gets the same
 speedup and honors `ai.embed_concurrency`; the pass also cooperatively honors context
