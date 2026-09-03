@@ -156,3 +156,40 @@ func indexingProblemDoesNotSurviveAVaultSwitch() throws {
     state.openVault(at: other)
     #expect(state.lastIndexingProblem == nil)
 }
+
+// The external-reindex debounce is AppState-wide, not vault-scoped. A change
+// queued against the vault being closed would drain 1.5s later against the one
+// just opened, and `relativePath(for:)` falls back to `lastPathComponent` for a
+// path outside its root, so that drain could reindex a same-named note in the
+// wrong vault or record a problem naming a path the new vault does not have.
+
+@MainActor
+@Test("switching vaults drops a reindex queued against the vault being left")
+func vaultSwitchCancelsThePendingExternalReindex() throws {
+    let fm = FileManager.default
+    let first = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-debounce-a-\(UUID().uuidString)", isDirectory: true)
+    let second = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-debounce-b-\(UUID().uuidString)", isDirectory: true)
+    try fm.createDirectory(at: first, withIntermediateDirectories: true)
+    try fm.createDirectory(at: second, withIntermediateDirectories: true)
+    defer {
+        try? fm.removeItem(at: first)
+        try? fm.removeItem(at: second)
+    }
+    // A real file, because scheduleExternalReindex ignores a path that is gone.
+    let note = first.appendingPathComponent("note.md")
+    try "---\ntitle: Note\n---\n\nbody\n".write(to: note, atomically: true, encoding: .utf8)
+
+    let state = AppState()
+    state.openVault(at: first)
+    state.scheduleExternalReindex(path: note.path)
+    #expect(state.pendingExternalPaths.contains(note.path))
+    #expect(state.externalReindexTask != nil)
+
+    // Switch before the 1.5s debounce fires: no timing race, and the queue must
+    // not survive into the new vault.
+    state.openVault(at: second)
+    #expect(state.pendingExternalPaths.isEmpty)
+    #expect(state.externalReindexTask == nil)
+}

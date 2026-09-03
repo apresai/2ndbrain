@@ -127,8 +127,11 @@ final class AppState {
     // run two `2nb index --doc` at once (they would contend on the single
     // SQLite writer and spawn a parallel embed storm). A bulk change collapses
     // to a single full `2nb index`.
-    private var pendingExternalPaths: Set<String> = []
-    private var externalReindexTask: Task<Void, Never>?
+    // internal, not private, so IndexingProblemTests can drive the real
+    // schedule-then-switch path instead of waiting out the 1.5s debounce.
+    // @testable import keeps them inside the module regardless.
+    var pendingExternalPaths: Set<String> = []
+    var externalReindexTask: Task<Void, Never>?
     private var externalReindexInFlight = false
     private let externalReindexDebounce: Duration = .seconds(1.5)
     private let bulkExternalReindexThreshold = 8
@@ -397,6 +400,23 @@ final class AppState {
         // and models.yaml (catalog changes written by the CLI wizard or
         // enable/disable commands).
         fileWatcher?.stop()
+        // The debounce queue is AppState-wide, not vault-scoped, so a change
+        // queued against the vault being closed would drain 1.5s later against
+        // the one just opened. `relativePath(for:)` falls back to
+        // `lastPathComponent` for a path outside its root, so that drain could
+        // reindex a same-named note in the wrong vault, or record a problem
+        // naming a path the new vault does not have. Drop what is queued here,
+        // beside the watcher that queued it. A call already executing is pinned
+        // to the vault it was started with and correctly finishes there;
+        // cancellation is not cooperative inside runCLI, so this is a guarantee
+        // about what is QUEUED, not about what is already mid-flight.
+        externalReindexTask?.cancel()
+        externalReindexTask = nil
+        pendingExternalPaths.removeAll()
+        for task in reindexTasks.values {
+            task.cancel()
+        }
+        reindexTasks.removeAll()
         let watcher = FSEventsWatcher(
             path: url.path,
             filter: {
@@ -1940,7 +1960,7 @@ final class AppState {
     /// and deletes (a removed file can't be incrementally indexed; the next full
     /// Sync's purgeStale reconciles it). This is what makes externally-edited
     /// notes searchable/embedded without a manual Sync.
-    private func scheduleExternalReindex(path: String) {
+    func scheduleExternalReindex(path: String) {
         guard vault != nil else { return }
         if isRecentSelfWrite(path: path) { return }
         // A delete or rename-away leaves no file; `index --doc` would just error
