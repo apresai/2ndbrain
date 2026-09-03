@@ -618,19 +618,26 @@ func emitStructured(cmd *cobra.Command, payload any) (handled bool, err error) {
 }
 
 // refuseBodylessFormat rejects --format raw / --format md for a command whose
-// output is a row set, not a document body.
+// output is a report or a row set, not a document body.
 //
-// output.Write already refuses them, but only once it is REACHED: search and
-// list return early on zero rows, so `search "nothing" --format raw` printed
-// nothing and exited 0 while the same command with one hit exited non-zero.
-// Checking up front makes the refusal depend on the command, not on how many
-// rows the query happened to match. csv, tsv, paths and tree keep emitting the
-// empty stream, which is the correct rendering of zero rows.
+// output.Write already refuses them, but only once it is REACHED, and callers
+// reach it late or not at all. search and list return early on zero rows, so
+// `search "nothing" --format raw` printed nothing and exited 0 while the same
+// command with one hit exited non-zero. suggest-links and polish go further:
+// they ask a provider for an embedding or a generation FIRST, so on a machine
+// with no credentials they failed on credentials rather than on the format they
+// cannot render, which is also how this broke the credential-free CI job.
+//
+// Calling it at the top of a handler makes the refusal depend on the command
+// alone: not on the row count, not on whether a provider happens to answer, and
+// never after paying for a call whose result cannot be rendered. csv, tsv,
+// paths and tree keep emitting the empty stream, which is the correct rendering
+// of zero rows.
 func refuseBodylessFormat(cmd *cobra.Command, command string) error {
 	switch getFormat(cmd) {
 	case output.FormatRaw, output.FormatMD:
 		return exitWithError(ExitValidation, fmt.Sprintf(
-			"error: --format raw/md emits a document body; %s returns rows, which have none (use --json)", command))
+			"error: --format raw/md emits a document body; %s does not produce one (use --json)", command))
 	}
 	return nil
 }

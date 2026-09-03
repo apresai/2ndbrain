@@ -73,6 +73,13 @@ type PolishUndoResult struct {
 }
 
 func runPolish(cmd *cobra.Command, args []string) error {
+	// A polish result is a report, not a body, and the run is a paid generation
+	// call. Refuse the formats that cannot render it before spending anything.
+	// --undo is covered too: emitUndoResult refuses the same pair, and doing it
+	// here as well keeps the refusal ahead of the vault open on both paths.
+	if err := refuseBodylessFormat(cmd, "polish"); err != nil {
+		return err
+	}
 	if polishUndo {
 		if polishWrite || polishLinks || polishRepairLinks || polishSystemFlag != "" {
 			return exitWithError(ExitValidation, "error: --undo cannot be combined with --write, --links, --repair-links, or --system")

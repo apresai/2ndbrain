@@ -66,59 +66,33 @@ func TestContract_ReportCommandsHonorEveryFormat(t *testing.T) {
 		// something" guard into a real check that the STRUCTURED rendering ran
 		// rather than the human printer.
 		csvHeader string
+		// needsEmbedder marks a command that must reach a provider to produce
+		// rows at all. Its raw/md refusal is still unconditional (that is the
+		// point: the refusal must not depend on whether a provider answers),
+		// but the positive json/csv/yaml cases gate on the capability probe, so
+		// a credential-free runner SKIPS them instead of failing. Gating on the
+		// outcome rather than on an environment variable is the project rule.
+		needsEmbedder bool
 	}{
-		{"mcp status", []string{"mcp", "status"}, ""},
-		{"mcp configured", []string{"mcp", "configured"}, "client"},
-		{"git status", []string{"git", "status"}, ""},
-		{"git activity", []string{"git", "activity"}, "subject"},
-		{"git show", []string{"git", "show", headSHA}, ""},
-		{"suggest-links", []string{"suggest-links", "doc.md"}, ""},
-		{"suggest-target", []string{"suggest-target", "missing-note"}, ""},
-		{"repair-links", []string{"repair-links", "doc.md"}, ""},
-		{"relink", []string{"relink", "doc.md", "--from", "nope", "--to", "doc.md"}, ""},
-		{"unlink", []string{"unlink", "doc.md", "--target", "nope"}, ""},
-		{"index --doc", []string{"index", "--doc", "doc.md"}, ""},
-		{"config bedrock", []string{"config", "bedrock"}, ""},
+		{"mcp status", []string{"mcp", "status"}, "", false},
+		{"mcp configured", []string{"mcp", "configured"}, "client", false},
+		{"git status", []string{"git", "status"}, "", false},
+		{"git activity", []string{"git", "activity"}, "subject", false},
+		{"git show", []string{"git", "show", headSHA}, "", false},
+		{"suggest-links", []string{"suggest-links", "doc.md"}, "", true},
+		{"suggest-target", []string{"suggest-target", "missing-note"}, "", true},
+		{"repair-links", []string{"repair-links", "doc.md"}, "", false},
+		{"relink", []string{"relink", "doc.md", "--from", "nope", "--to", "doc.md"}, "", false},
+		{"unlink", []string{"unlink", "doc.md", "--target", "nope"}, "", false},
+		{"index --doc", []string{"index", "--doc", "doc.md"}, "", false},
+		{"config bedrock", []string{"config", "bedrock"}, "", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// json still parses.
-			out, err := runCLIArgs(t, root, append(append([]string{}, tc.argv...), "--format", "json")...)
-			if err != nil {
-				t.Fatalf("--format json: %v\n%s", err, out)
-			}
-			var any any
-			if err := json.Unmarshal(jsonPortion(out), &any); err != nil {
-				t.Errorf("--format json is not parseable: %v\n%s", err, out)
-			}
-
-			// csv and yaml must produce STRUCTURED output, not the human prose
-			// they used to fall through to.
-			for _, format := range []string{"csv", "yaml"} {
-				out, err := runCLIArgs(t, root, append(append([]string{}, tc.argv...), "--format", format)...)
-				if err != nil {
-					t.Errorf("--format %s: %v\n%s", format, err, out)
-					continue
-				}
-				if strings.TrimSpace(string(out)) == "" {
-					t.Errorf("--format %s produced nothing", format)
-				}
-				if format == "csv" && tc.csvHeader != "" {
-					recs, rerr := csv.NewReader(strings.NewReader(string(out))).ReadAll()
-					if rerr != nil || len(recs) == 0 {
-						t.Errorf("--format csv is not a csv document (%v):\n%s", rerr, out)
-						continue
-					}
-					if !slices.Contains(recs[0], tc.csvHeader) {
-						t.Errorf("--format csv header %v does not carry %q; the human printer ran instead of the writer:\n%s",
-							recs[0], tc.csvHeader, out)
-					}
-				}
-			}
-
-			// raw and md have no document body to emit here, so they must be
-			// refused rather than print prose and exit 0.
+			// raw and md FIRST, and unconditionally. These commands have no
+			// document body to emit, so the refusal must hold on any machine,
+			// including one with no provider credentials at all.
 			for _, format := range []string{"raw", "md"} {
 				out, err := runCLIArgs(t, root, append(append([]string{}, tc.argv...), "--format", format)...)
 				if err == nil {
@@ -129,6 +103,46 @@ func TestContract_ReportCommandsHonorEveryFormat(t *testing.T) {
 					t.Errorf("--format %s refusal should say a document body is expected, got: %v", format, err)
 				}
 			}
+
+			// The positive cases run the command for real, so a command that
+			// needs a provider to produce rows skips when none answers.
+			t.Run("structured formats render", func(t *testing.T) {
+				if tc.needsEmbedder {
+					requireEmbeddings(t, root)
+				}
+				out, err := runCLIArgs(t, root, append(append([]string{}, tc.argv...), "--format", "json")...)
+				if err != nil {
+					t.Fatalf("--format json: %v\n%s", err, out)
+				}
+				var any any
+				if err := json.Unmarshal(jsonPortion(out), &any); err != nil {
+					t.Errorf("--format json is not parseable: %v\n%s", err, out)
+				}
+
+				// csv and yaml must produce STRUCTURED output, not the human
+				// prose they used to fall through to.
+				for _, format := range []string{"csv", "yaml"} {
+					out, err := runCLIArgs(t, root, append(append([]string{}, tc.argv...), "--format", format)...)
+					if err != nil {
+						t.Errorf("--format %s: %v\n%s", format, err, out)
+						continue
+					}
+					if strings.TrimSpace(string(out)) == "" {
+						t.Errorf("--format %s produced nothing", format)
+					}
+					if format == "csv" && tc.csvHeader != "" {
+						recs, rerr := csv.NewReader(strings.NewReader(string(out))).ReadAll()
+						if rerr != nil || len(recs) == 0 {
+							t.Errorf("--format csv is not a csv document (%v):\n%s", rerr, out)
+							continue
+						}
+						if !slices.Contains(recs[0], tc.csvHeader) {
+							t.Errorf("--format csv header %v does not carry %q; the human printer ran instead of the writer:\n%s",
+								recs[0], tc.csvHeader, out)
+						}
+					}
+				}
+			})
 		})
 	}
 }

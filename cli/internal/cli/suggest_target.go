@@ -99,6 +99,11 @@ const llmPoolCap = 12
 const llmTopN = 3
 
 func runSuggestTarget(cmd *cobra.Command, args []string) error {
+	// Same reason as suggest-links: the semantic tier embeds, and --llm calls a
+	// generation model, so the format this cannot render is refused first.
+	if err := refuseBodylessFormat(cmd, "suggest-target"); err != nil {
+		return err
+	}
 	v, err := openVault()
 	if err != nil {
 		return err
