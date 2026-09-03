@@ -49,7 +49,11 @@ type IndexDocResult struct {
 type embeddingRunStats struct {
 	Attempted int
 	Embedded  int
-	Failed    int
+	// Failed counts embedding CALLS that failed. A note that could not be
+	// parsed is in Unparseable instead: no request was made for it.
+	Failed int
+	// Unparseable names the notes the pass could not read.
+	Unparseable []vault.UnparseableDoc
 	// Skipped counts documents with no embeddable text (empty or
 	// whitespace/comment-only bodies). These are not failures — there is
 	// simply nothing to embed — and embedding providers like Amazon Nova-2
@@ -189,7 +193,10 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	if !flagPorcelain {
+		// The "Indexed N files, N chunks, N links" line is a contract the macOS
+		// app parses; anything new goes beside it, on stderr, never inside it.
 		fmt.Printf("Indexed %d files, %d chunks, %d links\n", stats.DocsIndexed, stats.ChunksCreated, stats.LinksFound)
+		reportUnparseable(stats.Unparseable)
 		if stats.DocsIndexed > 0 {
 			fmt.Fprintln(os.Stderr, "\nReady to search:")
 			fmt.Fprintln(os.Stderr, "  2nb search \"your query\"")
@@ -306,11 +313,16 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	}
 
 	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder)
-	// Skipped (empty) documents are not embeddable, so "complete" means every
-	// non-skipped document embedded. Without subtracting Skipped here a vault
-	// with even one blank note would always report force-reembed as incomplete.
-	if err == nil && (stats.Failed > 0 || stats.Embedded < stats.Attempted-stats.Skipped) {
-		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, stats.Attempted-stats.Skipped, stats.Failed)
+	reportUnparseable(stats.Unparseable)
+	// Neither a skipped (empty) note nor an unparseable one is embeddable, so
+	// "complete" means every remaining document embedded. Without subtracting
+	// them a vault with one blank note, or one note with bad frontmatter,
+	// reports force-reembed as incomplete and throws away every embedding it
+	// just paid for: that is exactly what happened three times in a row on a
+	// 314-note vault where a single note had an empty frontmatter block.
+	embeddable := stats.Attempted - stats.Skipped - len(stats.Unparseable)
+	if err == nil && (stats.Failed > 0 || stats.Embedded < embeddable) {
+		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, embeddable, stats.Failed)
 	}
 	if err == nil {
 		return stats, nil
@@ -324,6 +336,18 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 		fmt.Fprintln(os.Stderr, "  force-reembed failed; restored previous embeddings")
 	}
 	return stats, err
+}
+
+// reportUnparseable prints one line per note the run could not read, naming the
+// note and the parser's own message so the fix is obvious. Silent under
+// --porcelain and when there is nothing to report.
+func reportUnparseable(docs []vault.UnparseableDoc) {
+	if flagPorcelain || len(docs) == 0 {
+		return
+	}
+	for _, d := range docs {
+		fmt.Fprintf(os.Stderr, "  skipped %d unparseable: %s (%s)\n", len(docs), d.Path, d.Err)
+	}
 }
 
 func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
@@ -364,13 +388,14 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 
 	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, vault.EmbedOpts{OnStart: onStart, OnEvent: onEvent})
 	stats := embeddingRunStats{
-		Attempted:  es.Attempted,
-		Embedded:   es.Embedded,
-		Failed:     es.Failed,
-		Skipped:    es.Skipped,
-		DurationMs: es.DurationMs,
-		TotalChars: es.TotalChars,
-		Model:      es.Model,
+		Attempted:   es.Attempted,
+		Embedded:    es.Embedded,
+		Failed:      es.Failed,
+		Unparseable: es.Unparseable,
+		Skipped:     es.Skipped,
+		DurationMs:  es.DurationMs,
+		TotalChars:  es.TotalChars,
+		Model:       es.Model,
 	}
 	if err != nil {
 		return stats, err

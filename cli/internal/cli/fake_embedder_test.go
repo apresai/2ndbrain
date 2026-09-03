@@ -16,6 +16,12 @@ type fakeEmbedder struct {
 	name      string
 	dims      int
 	available bool
+	// fill, when non-zero, is written into the first component of every
+	// returned vector. The default all-zero vector has zero norm, which
+	// embed.Document rejects as degenerate and reports as a skipped document,
+	// so a test that needs the document to actually land in the vector index
+	// sets this.
+	fill float32
 }
 
 func (f *fakeEmbedder) Name() string                       { return f.name }
@@ -25,6 +31,9 @@ func (f *fakeEmbedder) Embed(ctx context.Context, texts []string, _ ...ai.EmbedO
 	vecs := make([][]float32, len(texts))
 	for i := range vecs {
 		vecs[i] = make([]float32, f.dims)
+		if f.fill != 0 && f.dims > 0 {
+			vecs[i][0] = f.fill
+		}
 	}
 	return vecs, nil
 }

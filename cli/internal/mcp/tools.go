@@ -172,6 +172,10 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 	embeddedChars := 0
 	embeddingFailed := 0
 	embeddingCancelled := false
+	// Notes neither pass could read. A parse failure no longer counts as an
+	// embedding failure (nothing was sent), so without reporting it here the
+	// signal would vanish from this tool's result entirely.
+	unparseable := append([]vault.UnparseableDoc{}, stats.Unparseable...)
 	cfg := h.vault.Config.AI
 	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
 	if embErr == nil && embedder.Available(ctx) {
@@ -183,6 +187,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 			embeddedChars = es.TotalChars
 			embeddingFailed = es.Failed
 			embeddingCancelled = es.Cancelled
+			unparseable = append(unparseable, es.Unparseable...)
 			// Surface a non-clean result the way the CLI path does: a client
 			// disconnect mid-index (Cancelled) or per-doc embed failures would
 			// otherwise be invisible — embeddings_updated would just be smaller
@@ -218,6 +223,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 		"embeddings_updated":  embedded,
 		"embeddings_failed":   embeddingFailed,
 		"embedding_cancelled": embeddingCancelled,
+		"unparseable":         unparseable,
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")

@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,12 +13,30 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrUnparseable marks an index failure caused by the NOTE (frontmatter that
+// will not parse), rather than by the database or the filesystem. The two are
+// handled differently: a bad note is reported and skipped so the rest of the
+// vault still builds, while a bad database is a failure the run must surface.
+var ErrUnparseable = errors.New("unparseable note")
+
+// UnparseableDoc is one note a pass could not read. Err is the parser's own
+// message, kept as a string so the value survives JSON.
+type UnparseableDoc struct {
+	Path string `json:"path"`
+	Err  string `json:"error"`
+}
+
 type IndexStats struct {
 	FilesScanned  int `json:"files_scanned"`
 	DocsIndexed   int `json:"docs_indexed"`
 	ChunksCreated int `json:"chunks_created"`
 	LinksFound    int `json:"links_found"`
 	Errors        int `json:"errors"`
+	// Unparseable names the notes whose frontmatter would not parse. They are
+	// also counted in Errors: the run genuinely failed to index them, and
+	// redefining Errors to exclude them would silently change what a consumer
+	// of that number is being told.
+	Unparseable []UnparseableDoc `json:"unparseable,omitempty"`
 }
 
 // IndexVault walks all markdown files and indexes them into the database.
@@ -65,6 +84,10 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 			stats.Errors++
 			slog.Warn("index file failed", "path", relPath, "err", err)
 			fmt.Fprintf(os.Stderr, "warning: index %s: %v\n", relPath, err)
+			if errors.Is(err, ErrUnparseable) {
+				stats.Unparseable = append(stats.Unparseable, UnparseableDoc{Path: relPath, Err: err.Error()})
+				dropUnparseableRow(v, relPath)
+			}
 			return nil
 		}
 
@@ -112,10 +135,30 @@ func IndexSingleFile(v *Vault, absPath string) error {
 	return nil
 }
 
+// dropUnparseableRow removes the index row of a note that used to parse and no
+// longer does. Without this the last good version keeps answering searches from
+// the index (its chunks, links, tags and chunk vectors all survive) while the
+// file on disk says something else, and it keeps entering the embed work set on
+// every run only to fail there too. Best-effort: a note that was never indexed
+// has no row, and a delete failure is logged, never fatal.
+func dropUnparseableRow(v *Vault, relPath string) {
+	var id string
+	if err := v.DB.Conn().QueryRow("SELECT id FROM documents WHERE path = ?", relPath).Scan(&id); err != nil {
+		return
+	}
+	if err := v.DB.DeleteDocument(id); err != nil {
+		slog.Warn("drop index row for unparseable note failed", "path", relPath, "err", err)
+		return
+	}
+	slog.Info("dropped index row for unparseable note", "path", relPath)
+}
+
 func indexFile(db *store.DB, absPath, relPath string) error {
 	doc, err := document.ParseFile(absPath)
 	if err != nil {
-		return err
+		// Classify at the source: everything below this point is a database
+		// failure, and only the caller can tell the two apart.
+		return fmt.Errorf("%w: %w", ErrUnparseable, err)
 	}
 	doc.Path = relPath
 	doc.ComputeContentHash()

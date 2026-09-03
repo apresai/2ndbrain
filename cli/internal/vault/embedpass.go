@@ -19,7 +19,15 @@ type EmbedStats struct {
 	// Attempted is the number of documents that needed embedding (the work set).
 	Attempted int
 	Embedded  int
-	Failed    int
+	// Failed counts documents whose EMBEDDING CALL failed: a provider error, a
+	// dimension mismatch, a store write. A note that could not be parsed is not
+	// one of these, it is in Unparseable: no request was ever made for it, and
+	// counting it here used to fail an entire force-reembed (and roll back
+	// every good embedding) because one note in the vault had bad frontmatter.
+	Failed int
+	// Unparseable lists notes the pass could not read. Nothing was sent to the
+	// provider for them and nothing about their stored embedding changed.
+	Unparseable []UnparseableDoc
 	// Skipped counts documents with no embeddable text (empty or
 	// whitespace/comment-only bodies). These are not failures — there is simply
 	// nothing to embed — and providers like Amazon Nova-2 reject empty input.
@@ -106,7 +114,10 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 		opts.OnStart(len(docs), concurrency)
 	}
 
-	type docResult struct{ embedded, failed, skipped, chars int }
+	type docResult struct {
+		embedded, failed, skipped, chars int
+		unparseable                      *UnparseableDoc
+	}
 	results := make([]docResult, len(docs))
 	var completed atomic.Int64
 	var cancelled atomic.Bool
@@ -134,7 +145,10 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 			doc := docs[i]
 			parsed, err := document.ParseFile(v.AbsPath(doc.Path))
 			if err != nil {
-				results[i].failed = 1
+				// Not a failure of the embed call: nothing was sent. Report it
+				// so the note can be fixed, and let the rest of the pass count
+				// as complete.
+				results[i].unparseable = &UnparseableDoc{Path: doc.Path, Err: err.Error()}
 				slog.Warn("embedding skipped: parse failed", "path", doc.Path, "err", err)
 				emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedParseFailed, Err: err})
 				return
@@ -186,6 +200,11 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 		stats.Failed += r.failed
 		stats.Skipped += r.skipped
 		totalChars += r.chars
+		if r.unparseable != nil {
+			// Collected in work-set order, so the reported list is stable even
+			// though the workers complete out of order.
+			stats.Unparseable = append(stats.Unparseable, *r.unparseable)
+		}
 	}
 	stats.DurationMs = time.Since(embedStart).Milliseconds()
 	stats.TotalChars = totalChars
@@ -195,6 +214,7 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 		"total", len(docs),
 		"failed", stats.Failed,
 		"skipped", stats.Skipped,
+		"unparseable", len(stats.Unparseable),
 		"cancelled", stats.Cancelled,
 		"elapsed", time.Since(embedStart),
 	)
