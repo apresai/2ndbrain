@@ -936,7 +936,15 @@ final class AppState {
                     (continuation: CheckedContinuation<(exitCode: Int32, stdout: String, stderr: String), Error>) in
                     let process = Process()
                     process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-                    let subArgs = forceReembed ? ["index", "--force-reembed"] : ["index"]
+                    // --json, so the run's outcome is a parsed contract rather
+                    // than a scrape of prose. NOT --porcelain, which the
+                    // single-doc path does pass: --porcelain silences the
+                    // per-file and per-embedding stderr lines the progress sheet
+                    // below is built on, and a full index is the one call that
+                    // has a progress sheet. Verified against the built CLI:
+                    // --json leaves every stderr progress line in place.
+                    var subArgs = forceReembed ? ["index", "--force-reembed"] : ["index"]
+                    subArgs.append("--json")
                     process.arguments = CLIPath.args(subArgs, vault: vault.rootURL)
                     process.currentDirectoryURL = vault.rootURL
                     let stderrPipe = Pipe()
@@ -1031,18 +1039,20 @@ final class AppState {
 
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
 
-                // Parse stdout summary: "Indexed N files, N chunks, N links"
-                let statsPattern = /Indexed\s+(\d+)\s+files?,\s+(\d+)\s+chunks?,\s+(\d+)\s+links?/
-                if let match = result.stdout.firstMatch(of: statsPattern) {
-                    indexProgress?.docsIndexed = Int(match.1) ?? 0
-                    indexProgress?.chunksCreated = Int(match.2) ?? 0
-                    indexProgress?.linksFound = Int(match.3) ?? 0
+                // Counters come from the parsed envelope, not from a regex over
+                // prose. The keys are contractual (always present, lists never
+                // null), so there is nothing left for a scrape to add.
+                let summary = AppState.parseFullIndexSummary(result.stdout)
+                if let summary {
+                    indexProgress?.docsIndexed = summary.docsIndexed
+                    indexProgress?.chunksCreated = summary.chunksCreated
+                    indexProgress?.linksFound = summary.linksFound
                 }
 
                 indexProgress?.elapsed = elapsed
                 if result.exitCode == 0 {
                     indexProgress?.phase = .complete
-                    clearIndexingProblemAfterFullIndex()
+                    applyFullIndexOutcome(summary)
                     log.info("Index rebuild completed in \(String(format: "%.1f", elapsed))s (exit 0)")
                 } else {
                     // Surface the actual CLI failure (last stderr line) rather
@@ -2016,15 +2026,72 @@ final class AppState {
         }
     }
 
-    /// Clears the problem after a FULL index that exited cleanly. The
-    /// path-scoped clear above only ever fires from the single-note watcher, and
-    /// a whole-vault run reports no per-note paths, so a note repaired and then
-    /// picked up by Rebuild (or by the startup sync) left the banner up forever
-    /// naming a note that now indexes fine. A clean full index has just re-read
-    /// every note in the vault, which is the strongest evidence there is that
-    /// nothing is broken.
-    func clearIndexingProblemAfterFullIndex() {
-        lastIndexingProblem = nil
+    /// One full-index envelope, decoded. `index --json` guarantees every key is
+    /// present and both lists are emitted empty rather than omitted, so a decode
+    /// failure means the output was not the envelope at all (an older CLI on
+    /// PATH, say), never "nothing to report". Optional fields with defaults so a
+    /// CLI predating `unreadable` still decodes.
+    struct FullIndexSummary: Decodable {
+        struct SkippedNote: Decodable, Equatable {
+            let path: String
+            let error: String
+        }
+        var docsIndexed: Int = 0
+        var chunksCreated: Int = 0
+        var linksFound: Int = 0
+        var unparseable: [SkippedNote] = []
+        var unreadable: [SkippedNote] = []
+
+        enum CodingKeys: String, CodingKey {
+            case docsIndexed = "docs_indexed"
+            case chunksCreated = "chunks_created"
+            case linksFound = "links_found"
+            case unparseable, unreadable
+        }
+    }
+
+    /// Decodes an `index --json` envelope, or nil when stdout is not one.
+    static func parseFullIndexSummary(_ stdout: String) -> FullIndexSummary? {
+        guard let data = stdout.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(FullIndexSummary.self, from: data)
+    }
+
+    /// Decides what a FULL index that exited cleanly should say about skipped
+    /// notes. Exit 0 stopped meaning "nothing was wrong" the moment an
+    /// unparseable note became non-fatal AND had its index row dropped: a clean
+    /// exit can now hide a note that just vanished from search, and this banner
+    /// is the app's only surface naming it. So a successful run REPORTS the
+    /// notes it skipped and clears only when it skipped none.
+    ///
+    /// A nil summary means stdout was not the envelope, which is no evidence
+    /// either way, so the existing report is kept rather than dismissed: going
+    /// quiet about a broken note is the failure this exists to prevent, and a
+    /// stale banner is the cheaper mistake.
+    ///
+    /// The path-scoped `clearIndexingProblem(for:)` still belongs to the
+    /// single-note watcher; the vault-switch reset lives in `openVault(at:)`.
+    func applyFullIndexOutcome(_ summary: FullIndexSummary?) {
+        guard let summary else {
+            log.warning("Index rebuild exited 0 but its --json envelope did not decode; keeping any existing indexing problem")
+            return
+        }
+        let skipped = summary.unparseable + summary.unreadable
+        guard let first = skipped.first else {
+            lastIndexingProblem = nil
+            return
+        }
+        // The lists are separate because the remedies differ, and the message
+        // says which one this is: an unparseable note has LOST its index entry
+        // and is gone from search until it is fixed, while an unreadable one
+        // keeps whatever it had.
+        var message = summary.unparseable.isEmpty
+            ? "could not be read, so its existing index entry was kept: \(first.error)"
+            : "\(first.error)"
+        if skipped.count > 1 {
+            message += " (and \(skipped.count - 1) more)"
+        }
+        log.warning("Index rebuild skipped \(skipped.count, privacy: .public) note(s); reporting \(first.path, privacy: .public)")
+        lastIndexingProblem = IndexingProblem(path: first.path, message: message)
     }
 
     private func triggerIncrementalReindex(for url: URL) {

@@ -52,13 +52,94 @@ func indexingProblemReplacedByALaterFailure() {
 // and the startup sync) never cleared it, and a vault switch carried a problem
 // naming a path from the vault just closed.
 
+/// A clean vault's envelope: both lists present and empty, which `index --json`
+/// guarantees.
+private let cleanIndexEnvelope = """
+{"files_scanned":2,"docs_indexed":2,"chunks_created":3,"links_found":1,\
+"errors":0,"excluded_purged":0,"embedded":2,"embed_failed":0,\
+"embed_skipped":0,"embed_retries":0,"unparseable":[],"unreadable":[]}
+"""
+
 @MainActor
 @Test("a clean full index clears a problem the single-note watcher recorded")
 func indexingProblemClearsAfterASuccessfulFullIndex() {
     let state = AppState()
     state.noteIndexingProblem(path: "notes/broken.md", message: "malformed YAML frontmatter")
-    state.clearIndexingProblemAfterFullIndex()
+    state.applyFullIndexOutcome(AppState.parseFullIndexSummary(cleanIndexEnvelope))
     #expect(state.lastIndexingProblem == nil)
+}
+
+// Exit 0 stopped meaning "nothing was wrong" the moment an unparseable note
+// became non-fatal AND had its index row dropped. Clearing the banner on exit 0
+// alone made Rebuild, and the startup sync on every launch, go quiet about a
+// note that had just vanished from search.
+
+@MainActor
+@Test("a full index that skipped an unparseable note reports it instead of clearing")
+func fullIndexReportsAnUnparseableNote() {
+    let envelope = """
+    {"files_scanned":2,"docs_indexed":1,"chunks_created":1,"links_found":0,\
+    "errors":1,"excluded_purged":0,"embedded":1,"embed_failed":0,\
+    "embed_skipped":0,"embed_retries":0,\
+    "unparseable":[{"path":"broken.md","error":"malformed YAML frontmatter"}],\
+    "unreadable":[]}
+    """
+    let state = AppState()
+    state.applyFullIndexOutcome(AppState.parseFullIndexSummary(envelope))
+    #expect(state.lastIndexingProblem?.path == "broken.md")
+    #expect(state.lastIndexingProblem?.message == "malformed YAML frontmatter")
+}
+
+@MainActor
+@Test("a full index that could not read a note says its entry was kept")
+func fullIndexReportsAnUnreadableNote() {
+    let envelope = """
+    {"docs_indexed":1,"chunks_created":1,"links_found":0,\
+    "unparseable":[],\
+    "unreadable":[{"path":"locked.md","error":"permission denied"}]}
+    """
+    let state = AppState()
+    state.applyFullIndexOutcome(AppState.parseFullIndexSummary(envelope))
+    #expect(state.lastIndexingProblem?.path == "locked.md")
+    // The two categories have different remedies, so the message says which.
+    #expect(state.lastIndexingProblem?.message.contains("could not be read") == true)
+    #expect(state.lastIndexingProblem?.message.contains("existing index entry was kept") == true)
+}
+
+@MainActor
+@Test("more than one skipped note is counted, not hidden behind the first")
+func fullIndexCountsEverySkippedNote() {
+    let envelope = """
+    {"docs_indexed":1,"chunks_created":1,"links_found":0,\
+    "unparseable":[{"path":"a.md","error":"bad"},{"path":"b.md","error":"bad"}],\
+    "unreadable":[{"path":"c.md","error":"permission denied"}]}
+    """
+    let state = AppState()
+    state.applyFullIndexOutcome(AppState.parseFullIndexSummary(envelope))
+    #expect(state.lastIndexingProblem?.path == "a.md")
+    #expect(state.lastIndexingProblem?.message.contains("and 2 more") == true)
+}
+
+@MainActor
+@Test("an envelope that does not decode keeps the existing report rather than dismissing it")
+func fullIndexWithNoEnvelopeKeepsTheProblem() {
+    let state = AppState()
+    state.noteIndexingProblem(path: "notes/broken.md", message: "malformed YAML frontmatter")
+    // What the old prose summary looked like, and what an older CLI on PATH
+    // could still print: no evidence either way, so nothing is dismissed.
+    state.applyFullIndexOutcome(AppState.parseFullIndexSummary("Indexed 2 files, 3 chunks, 1 links\n"))
+    #expect(state.lastIndexingProblem?.path == "notes/broken.md")
+}
+
+@MainActor
+@Test("the progress counters come from the envelope, not from a scrape")
+func fullIndexCountersComeFromTheEnvelope() {
+    let summary = AppState.parseFullIndexSummary(cleanIndexEnvelope)
+    #expect(summary?.docsIndexed == 2)
+    #expect(summary?.chunksCreated == 3)
+    #expect(summary?.linksFound == 1)
+    // The prose the regex used to scrape is not an envelope.
+    #expect(AppState.parseFullIndexSummary("Indexed 2 files, 3 chunks, 1 links\n") == nil)
 }
 
 @MainActor
