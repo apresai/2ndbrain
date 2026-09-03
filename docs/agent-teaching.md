@@ -143,7 +143,9 @@ $ 2nb search "type:adr" --json --limit 1
   "warnings": [],
   "results": [
     {
+      "doc_id": "8f1c...",
       "path": "use-jwt-for-auth.md",
+      "title": "Use JWT for Auth",
       "chunk_id": "3a7e...",
       "heading_path": "# Use JWT for Auth",
       "content": "We will issue short-lived JWTs ...",

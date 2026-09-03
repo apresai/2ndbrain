@@ -59,7 +59,7 @@ reads and reports without changing anything.
 **Expected output:**
 ```
 Vault: /path/to/my-vault
-Upgrading the index schema v2 to v4... Done
+Upgraded the index schema v2 to v4
 Ensured ".2ndbrain/" is listed in the root .gitignore
 Your markdown was not modified. Run "2nb index" to rebuild the index and refresh embeddings.
 ```
