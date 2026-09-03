@@ -706,3 +706,63 @@ func TestContract_Move_AmbiguousBareLink(t *testing.T) {
 		t.Errorf("ambiguous bare [[dup]] should be left untouched under --force: %q", body)
 	}
 }
+
+// One link is one line. The links table holds a row per OCCURRENCE, so a note
+// that writes the same unresolved ambiguous link twice produced two
+// byte-identical skipped_ambiguous entries: the merge loop skipped a resolver
+// entry the byte-exact pass had already recorded, but never marked the entries
+// it appended itself, so the second occurrence sailed through. The duplicate
+// also inflated the refusal's count and the "Skipped N ambiguous link(s)" line.
+func TestContract_Move_AmbiguousLinkReportedOncePerLink(t *testing.T) {
+	_, root := newContractVault(t)
+	writeNote(t, root, "one/dup.md", "Dup", "first dup")
+	writeNote(t, root, "two/dup.md", "Dup", "second dup")
+	// The SAME link twice. Neither occurrence names either filename, so the
+	// byte-exact pass cannot see them and both come from the resolver pass.
+	writeNote(t, root, "ref.md", "Ref", "see [[Dup]] here, and [[Dup]] again.")
+	if out, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v\n%s", err, out)
+	}
+
+	assertOne := func(t *testing.T, label string, res moveResult) {
+		t.Helper()
+		if len(res.SkippedAmbiguous) != 1 {
+			t.Fatalf("%s reported %d ambiguous entries for one link: %+v",
+				label, len(res.SkippedAmbiguous), res.SkippedAmbiguous)
+		}
+		if got := res.SkippedAmbiguous[0]; got.Path != "ref.md" || got.Target != "Dup" {
+			t.Errorf("%s: skipped_ambiguous[0] = %+v, want ref.md -> Dup", label, got)
+		}
+	}
+
+	out, err := runCLIArgs(t, root, "move", "one/dup.md", "one/renamed.md", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("dry-run move: %v (out=%s)", err, out)
+	}
+	var res moveResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode: %v (out=%s)", err, out)
+	}
+	assertOne(t, "dry-run", res)
+
+	// The refusal counts the same list, so it must say 1 as well.
+	out, err = runCLIArgs(t, root, "move", "one/dup.md", "one/renamed.md")
+	if err == nil {
+		t.Fatalf("non-force move should be refused on ambiguity (out=%s)", out)
+	}
+	if !strings.Contains(err.Error(), "1 ambiguous link(s)") {
+		t.Errorf("refusal should count the link once, got: %v", err)
+	}
+
+	// And --force, where the list is the record of what was deliberately left
+	// alone rather than a refusal.
+	out, err = runCLIArgs(t, root, "move", "one/dup.md", "one/renamed.md", "--force", "--json")
+	if err != nil {
+		t.Fatalf("force move: %v (out=%s)", err, out)
+	}
+	res = moveResult{}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode: %v (out=%s)", err, out)
+	}
+	assertOne(t, "--force", res)
+}
