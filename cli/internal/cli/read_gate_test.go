@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
 
@@ -183,5 +185,145 @@ func TestResolveDailyNoteCreatesNothing(t *testing.T) {
 	}
 	if _, _, exists, err = resolveDailyNote(v, now); err != nil || !exists {
 		t.Errorf("resolveDailyNote missed an existing note: exists=%v err=%v", exists, err)
+	}
+}
+
+// `2nb migrate` is two halves with two openers on purpose: the schema check and
+// the whole --dry-run preview are READS, and the real run is a write (vault.Open
+// applies the migrations and writes .gitignore). Only the second half is gated.
+
+// writeLegacyV2Index replaces a vault's index with the smallest schema-v2
+// database the migration path accepts. The battery's writeV2Index lives in the
+// e2e_test package and cannot be imported here, so the statements are mirrored;
+// they only need the two tables migrate reads.
+func writeLegacyV2Index(t *testing.T, vaultRoot string) string {
+	t.Helper()
+	idx := filepath.Join(vaultRoot, ".2ndbrain", "index.db")
+	for _, p := range []string{idx, idx + "-wal", idx + "-shm"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove %s: %v", p, err)
+		}
+	}
+	db, err := sql.Open("sqlite", idx)
+	if err != nil {
+		t.Fatalf("open v2 db: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		`CREATE TABLE documents (
+			id TEXT PRIMARY KEY,
+			path TEXT NOT NULL UNIQUE,
+			title TEXT NOT NULL DEFAULT '',
+			doc_type TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT '',
+			modified_at TEXT NOT NULL DEFAULT '',
+			indexed_at TEXT NOT NULL DEFAULT '',
+			content_hash TEXT NOT NULL DEFAULT '',
+			frontmatter TEXT NOT NULL DEFAULT '{}',
+			embedding BLOB,
+			embedding_model TEXT NOT NULL DEFAULT '',
+			embedding_hash TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE schema_version (version INTEGER NOT NULL)`,
+		`INSERT INTO schema_version (version) VALUES (2)`,
+		`INSERT INTO documents (id, path, title, doc_type) VALUES ('m1', 'n.md', 'Stray Note', 'note')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("build v2 db (%q): %v", stmt, err)
+		}
+	}
+	return idx
+}
+
+func indexSchemaVersion(t *testing.T, idx string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", idx)
+	if err != nil {
+		t.Fatalf("open %s: %v", idx, err)
+	}
+	defer db.Close()
+	var v int
+	if err := db.QueryRow("SELECT MAX(version) FROM schema_version").Scan(&v); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	return v
+}
+
+func TestReadGate_MigrateDryRunNeedsNoUnconfigured(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote)
+	idx := writeLegacyV2Index(t, stray)
+	before := mtimeOf(t, idx)
+
+	out, err := runCLIArgs(t, stray, "migrate", "--dry-run")
+	if err != nil {
+		t.Fatalf("migrate --dry-run was refused on a vault Obsidian does not know: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "[dry-run]") {
+		t.Errorf("dry-run printed no preview:\n%s", out)
+	}
+	if got := indexSchemaVersion(t, idx); got != 2 {
+		t.Errorf("dry-run migrated the index: schema = v%d, want v2", got)
+	}
+	if after := mtimeOf(t, idx); !after.Equal(before) {
+		t.Errorf("dry-run changed the index mtime: %v -> %v", before, after)
+	}
+}
+
+func TestWriteGate_MigrateRealRunIsRefusedWithoutUnconfigured(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote)
+	idx := writeLegacyV2Index(t, stray)
+	before := mtimeOf(t, idx)
+
+	out, err := runCLIArgs(t, stray, "migrate")
+	if err == nil {
+		t.Fatalf("migrate wrote to a vault Obsidian does not know:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "unconfigured") {
+		t.Errorf("refusal should name the unconfigured vault, got: %v", err)
+	}
+	if got := indexSchemaVersion(t, idx); got != 2 {
+		t.Errorf("a refused migrate still upgraded the schema to v%d", got)
+	}
+	if after := mtimeOf(t, idx); !after.Equal(before) {
+		t.Errorf("a refused migrate touched the index: mtime %v -> %v", before, after)
+	}
+}
+
+func TestWriteGate_MigrateRealRunProceedsWithUnconfigured(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote)
+	idx := writeLegacyV2Index(t, stray)
+
+	out, err := runCLIArgs(t, stray, "migrate", "--unconfigured")
+	if err != nil {
+		t.Fatalf("migrate --unconfigured: %v\n%s", err, out)
+	}
+	if got := indexSchemaVersion(t, idx); got != store.MaxSchemaVersion {
+		t.Errorf("after an acknowledged migrate, schema = v%d, want v%d", got, store.MaxSchemaVersion)
+	}
+}
+
+// Ordering is deliberate: the pre-check runs BEFORE the write opener, so a
+// vault already at the current schema is answered without opening a write path
+// at all. That is correct precisely because nothing is written on that branch,
+// and it means a native stray vault reports "nothing to migrate" rather than a
+// refusal for a write that was never going to happen.
+func TestReadGate_MigrateOnANativeVaultAnswersBeforeTheWriteGate(t *testing.T) {
+	stray := newStrayVaultWithNote(t, "n.md", readGateNote) // vault.Init left it at the current schema
+	idx := filepath.Join(stray, ".2ndbrain", "index.db")
+	before := indexSchemaVersion(t, idx)
+
+	out, err := runCLIArgs(t, stray, "migrate")
+	if err != nil {
+		t.Fatalf("migrate on a native vault: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "nothing to migrate") {
+		t.Errorf("want the nothing-to-migrate answer, got:\n%s", out)
+	}
+	if strings.Contains(string(out), "refusing to write") {
+		t.Errorf("a branch that writes nothing must not hit the write gate:\n%s", out)
+	}
+	if got := indexSchemaVersion(t, idx); got != before {
+		t.Errorf("the no-op branch changed the schema: v%d -> v%d", before, got)
 	}
 }

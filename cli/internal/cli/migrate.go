@@ -55,11 +55,14 @@ func readIndexSchemaState(dbPath string) (version, docCount int, err error) {
 }
 
 func runMigrate(cmd *cobra.Command, args []string) error {
-	// Resolve the vault the way every other command does, instead of the
-	// hand-rolled "--vault or cwd" this had, which ignored 2NB_VAULT and the
-	// Obsidian rung. FindVaultRoot rather than vault.Open, because Open MIGRATES:
-	// calling it to find out whether a migration is needed would perform the
-	// migration a --dry-run promised not to.
+	// The pre-checks below are pure READS, so they resolve on the read ladder:
+	// the same one every other command uses, instead of the hand-rolled
+	// "--vault or cwd" this had, which ignored 2NB_VAULT and the Obsidian rung.
+	// FindVaultRoot rather than vault.Open, because Open MIGRATES: calling it to
+	// find out whether a migration is needed would perform the migration a
+	// --dry-run promised not to. The real run resolves again, on the WRITE
+	// ladder; see the comment at the bottom of this function for why the two
+	// halves deliberately use different openers.
 	dir, source := resolveVaultDir()
 	absDir, _ := filepath.Abs(dir)
 	root := vault.FindVaultRoot(absDir)
@@ -104,19 +107,37 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("Vault: %s\n", root)
-	fmt.Printf("Upgrading the index schema v%d to v%d...", version, store.MaxSchemaVersion)
-
-	// vault.Open runs the schema migrations and ensures the sidecar is ignored.
-	// That is the whole of the migration.
-	v, err := vault.Open(root)
+	// Everything above this line only READ the vault, which is why it runs on the
+	// read ladder: a --dry-run preview must never write, and a vault already at
+	// the current schema is answered without touching anything.
+	//
+	// This is where migrate becomes a write. vault.Open applies the schema
+	// migrations and ensures the sidecar is ignored, and that IS the migration,
+	// so it goes through the write opener like every other write: an explicit
+	// --vault at a vault Obsidian does not know is refused without
+	// --unconfigured, a working directory that is only a vault by walking up is
+	// refused outright, and the resolved target is announced.
+	v, err := openVaultAndSetActive()
 	if err != nil {
-		fmt.Println(" Failed")
-		return fmt.Errorf("migration failed: %w", err)
+		return err
 	}
 	defer v.Close()
-	fmt.Println(" Done")
 
+	// Defensive. The pre-check described `root` from the read ladder; the write
+	// ladder resolved `v.Root`. A migration must never run against a vault other
+	// than the one just inspected, so refuse rather than report someone else's
+	// schema numbers over this vault's upgrade. Note the ordering honestly: the
+	// open above has already applied the migrations by the time this can fire,
+	// and the only way to check earlier would be a third copy of the resolution
+	// ladder, which is how ladders drift apart. The migration itself is the same
+	// one any read command performs when it opens that vault, so the check is
+	// about reporting the truth, not about preventing a novel mutation.
+	if canonicalVaultPath(v.Root) != canonicalVaultPath(root) {
+		return fmt.Errorf("refusing to report a migration of %s: the schema was checked on %s, which is a different vault; re-run with --vault %s", v.Root, root, root)
+	}
+
+	fmt.Printf("Vault: %s\n", v.Root)
+	fmt.Printf("Upgraded the index schema v%d to v%d\n", version, store.MaxSchemaVersion)
 	fmt.Printf("Ensured \".2ndbrain/\" is listed in the root .gitignore\n")
 	fmt.Printf("Your markdown was not modified. Run \"2nb index\" to rebuild the index and refresh embeddings.\n")
 

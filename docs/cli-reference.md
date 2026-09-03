@@ -313,6 +313,8 @@ Export to Obsidian format: copies markdown, creates `.obsidian/` with a default 
 Upgrade a legacy vault's index database to the current schema (`store.MaxSchemaVersion`, v4 today); `--dry-run` previews without modifying. Non-mutating: source markdown is never changed.
 
 Legacy means "behind the current schema". A vault already at the current schema reports "already at the current schema (vN); nothing to migrate" and exits 0 in both modes. Below it, the output names the real work: the schema upgrade to the current version, and adding `.2ndbrain/` to the root `.gitignore`. There is no path-based mapping step; the schema has been path-based since v1, so the 0.5.0 pivot was an indexer change. The vault is resolved the same way every other command resolves it (`--vault`, then `2NB_VAULT`, then the vault Obsidian has open, then the cwd).
+
+The two halves are gated differently, because only one of them writes. The schema check and the whole of `--dry-run` are reads and need no `--unconfigured`. The real run applies the migrations and adds to `.gitignore`, so it takes the write path: a vault Obsidian does not know is refused without `--unconfigured`, a working directory that is a vault only by walking up is refused outright, and the resolved target is announced.
 ## MCP & Agent Integration
 
 ### mcp-server

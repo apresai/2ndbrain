@@ -45,7 +45,12 @@ Already at the current schema (v4); nothing to migrate. 120 documents indexed.
 ```
 
 ### 2. Execute Migration
-Run the command without the dry-run flag to apply the updates:
+Run the command without the dry-run flag to apply the updates. This step writes
+(it applies the schema migrations and adds `.2ndbrain/` to `.gitignore`), so it
+is gated like every other 2nb write: a vault Obsidian does not know is refused
+unless you add `--unconfigured`, and a working directory that is a vault only by
+walking up is refused. The `--dry-run` preview above needs neither, because it
+reads and reports without changing anything.
 
 ```bash
 2nb migrate --vault /path/to/my-vault
