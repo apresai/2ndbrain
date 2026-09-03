@@ -785,9 +785,7 @@ func nameSet(names []string) map[string]bool {
 // name, so text and csv showed a field json omits entirely.
 //
 // The guarantee is asserted against json.Marshal's own key set, so the three
-// views cannot drift apart again, for the shapes output structs actually have.
-// Two shapes none of them has diverge from json on purpose, and those are
-// pinned separately in TestFieldNames_EqualDepthCollisionKeepsFirst.
+// views cannot drift apart again.
 func TestFieldNames_MatchJSONKeysThroughEmbedding(t *testing.T) {
 	// Every field non-zero: an omitempty field json legitimately omits would
 	// otherwise show up as a difference against the static csv header.
@@ -905,85 +903,226 @@ func TestFieldSpecs_NilEmbeddedPointerRendersEmpty(t *testing.T) {
 	}
 }
 
-// Two anonymous embeds whose promoted fields collide at EQUAL depth, plus an
-// embedded UNEXPORTED struct. Both shapes are places where fieldNames and
-// encoding/json disagree, and neither occurs in any output struct in this repo.
-type EqualEmbedA struct {
-	Name string `json:"name"`
-}
+// The shapes where fieldSpecs used to disagree with encoding/json. All of them
+// are collisions between promoted names, or promotion out of an embedded
+// UNEXPORTED struct, and every one is now resolved json's way.
+//
+// Names are EFFECTIVE names: a `json:"n"` field and a bare field named N never
+// collide, because those are two different names. So every pair below shares an
+// effective name deliberately.
 
-type EqualEmbedB struct {
-	Name string `json:"name"`
+// Equal depth, both tagged with the same name: json calls it a conflict.
+type ClashTagA struct {
+	A string `json:"same"`
 }
-
-type EqualCollide struct {
-	EqualEmbedA
-	EqualEmbedB
+type ClashTagB struct {
+	B string `json:"same"`
+}
+type ClashBothTagged struct {
+	ClashTagA
+	ClashTagB
 	OK bool `json:"ok"`
 }
 
-type hiddenEmbed struct {
+// Equal depth, neither tagged, same Go name: also a conflict.
+type ClashBareA struct{ Same string }
+type ClashBareB struct{ Same string }
+type ClashNeitherTagged struct {
+	ClashBareA
+	ClashBareB
+	OK bool `json:"ok"`
+}
+
+// Equal depth, exactly one tagged with the other's name: the tagged one wins.
+type ClashTagNamedN struct {
+	Other string `json:"N"`
+}
+type ClashBareN struct{ N string }
+type ClashTagWins struct {
+	ClashTagNamedN
+	ClashBareN
+}
+
+// A tagged field at depth 1 against the same name at depth 2: shallower wins,
+// which is the case output structs actually hit.
+type ClashDeep struct {
+	V string `json:"same"`
+}
+type ClashDeepMid struct{ ClashDeep }
+type ClashShallowWins struct {
+	ClashDeepMid
+	Top string `json:"same"`
+}
+
+// A conflict at depth 2, then a winner at depth 1, then ANOTHER conflict at
+// depth 2. The depth-1 field must survive: a later deep pair must not revive a
+// conflict the shallow field already settled.
+type ClashOrdering struct {
+	ClashTagA
+	ClashTagB
+	Top string `json:"same"`
+	ClashTagC
+	ClashTagD
+	OK bool `json:"ok"`
+}
+type ClashTagC struct {
+	C string `json:"same"`
+}
+type ClashTagD struct {
+	D string `json:"same"`
+}
+
+// An embedded UNEXPORTED struct. json promotes its exported fields; fieldSpecs
+// used to skip it whole.
+type hiddenLeaf struct {
 	Slug string `json:"slug"`
 }
-
 type HiddenOuter struct {
-	hiddenEmbed
+	hiddenLeaf
 	OK bool `json:"ok"`
 }
 
-// A CHARACTERIZATION test, not a guarantee: it pins two shapes where the csv and
-// text header does NOT match json's key set, so a refactor of dedupeFieldSpecs
-// or of the unexported-field skip changes this file rather than slipping past.
+// THREE levels, two of them unexported, so a promoted value is read through two
+// embedded read-only hops. reflect.Value.Field does not propagate the embedded
+// read-only flag, so the exported leaf is still interfaceable; if that were
+// wrong, rendering would panic rather than fail an assertion.
+type hiddenL3 struct {
+	Deep string `json:"deep"`
+}
+type hiddenL2 struct {
+	hiddenL3
+	Mid string `json:"mid"`
+}
+type HiddenL1 struct {
+	hiddenL2
+	Top string `json:"top"`
+}
+
+// A nil embedded POINTER underneath an unexported embed: the deref happens
+// after the unexported hop, and Value.Elem DOES propagate the read-only flag,
+// so this is the path most likely to panic if the walk is wrong.
+type hiddenPtrLeaf struct {
+	Slug string `json:"slug"`
+}
+type hiddenPtrMid struct {
+	*hiddenPtrLeaf
+	Note string `json:"note"`
+}
+type HiddenPtrOuter struct {
+	hiddenPtrMid
+	OK bool `json:"ok"`
+}
+
+// fieldSpecs used to diverge from encoding/json in two ways, both of them in
+// the function whose entire job is that the json, text and csv views agree
+// about what a field is called. It kept the FIRST field on an equal-depth
+// collision where json drops the name, and it skipped an embedded unexported
+// struct whole where json promotes its exported fields. Both now follow json.
 //
-// Read the assertions as "this is what happens today", not "this is right".
-// Both divergences are known and neither is reachable from a real output struct:
+// json's rule, read off json.Marshal rather than off the spec: group by
+// EFFECTIVE name; shallower depth wins outright; at equal depth a tagged field
+// beats an untagged one; at equal depth with both tagged or neither, the name is
+// dropped entirely.
 //
-//   - EQUAL-DEPTH COLLISION. encoding/json treats two promoted fields with the
-//     same name at the same depth as a conflict and drops the name entirely.
-//     dedupeFieldSpecs keeps the first, because its tie-break (`len(specs[j].
-//     index) <= len(sp.index)` then `continue`) leaves the earlier index in
-//     place. The SHALLOWER-wins case, which is the one output structs actually
-//     hit, does match json and is covered by the tests above.
-//   - EMBEDDED UNEXPORTED STRUCT. json promotes its exported fields; fieldSpecs
-//     skips it, because reflect refuses Interface() on the unexported field.
-//
-// Changing either is a behavior decision that needs its own review, not a
-// silent fix, which is why this pins rather than asserts equality with json.
-func TestFieldNames_EqualDepthCollisionKeepsFirst(t *testing.T) {
-	collide := EqualCollide{OK: true}
-	collide.EqualEmbedA.Name = "from A"
-	collide.EqualEmbedB.Name = "from B"
-
-	// json's own verdict, read from json rather than assumed, so a change in
-	// the standard library's conflict rule shows up here too.
-	if keys := jsonKeys(t, collide); keys["name"] || !keys["ok"] {
-		t.Fatalf("encoding/json changed its equal-depth conflict rule: keys = %v, expected ok alone", keys)
+// Every case reads json's own key set from json.Marshal, so a change to the
+// standard library's conflict rule fails here rather than splitting the views.
+func TestFieldNames_MatchJSONThroughCollisionsAndUnexportedEmbeds(t *testing.T) {
+	cases := []struct {
+		name string
+		// value must have every field non-zero where it matters: jsonKeys comes
+		// from a real marshal, and an omitempty field json legitimately omits
+		// would read as a disagreement with the static csv header.
+		value any
+		want  string // the expected header, json's key set in index order
+	}{
+		{"equal depth, both tagged: json drops the name", ClashBothTagged{OK: true}, "ok"},
+		{"equal depth, neither tagged: json drops the name", ClashNeitherTagged{OK: true}, "ok"},
+		{"equal depth, one tagged: the tagged field wins", ClashTagWins{ClashTagNamedN: ClashTagNamedN{Other: "tagged"}}, "N"},
+		{"shallower wins over deeper", ClashShallowWins{Top: "shallow"}, "same"},
+		{"a shallow winner survives a later deep conflict", ClashOrdering{Top: "shallow", OK: true}, "same,ok"},
+		{"an embedded unexported struct is promoted", HiddenOuter{hiddenLeaf: hiddenLeaf{Slug: "s"}, OK: true}, "slug,ok"},
+		{"promotion reaches through two unexported levels", HiddenL1{hiddenL2: hiddenL2{hiddenL3: hiddenL3{Deep: "d"}, Mid: "m"}, Top: "t"}, "deep,mid,top"},
 	}
 
-	got := fieldNames(reflect.TypeOf(collide))
-	if strings.Join(got, ",") != "name,ok" {
-		t.Errorf("equal-depth collision: fieldNames = %v, want the divergence this test pins ([name ok])", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fieldNames(reflect.TypeOf(tc.value))
+			if strings.Join(got, ",") != tc.want {
+				t.Errorf("fieldNames = %v, want %v", got, strings.Split(tc.want, ","))
+			}
+			// The real assertion: the header IS json's key set.
+			want := jsonKeys(t, tc.value)
+			gotSet := nameSet(got)
+			for k := range want {
+				if !gotSet[k] {
+					t.Errorf("json emits %q but the csv/text header does not", k)
+				}
+			}
+			for k := range gotSet {
+				if !want[k] {
+					t.Errorf("the csv/text header carries %q, which json does not emit", k)
+				}
+			}
+		})
 	}
 
-	// The kept field is the FIRST embed's, so the csv cell is A's value.
-	var csvBuf bytes.Buffer
-	if err := Write(&csvBuf, FormatCSV, []EqualCollide{collide}); err != nil {
-		t.Fatalf("Write(csv): %v", err)
-	}
-	recs, err := csv.NewReader(&csvBuf).ReadAll()
-	if err != nil || len(recs) != 2 {
-		t.Fatalf("csv did not render a header and one row (%v): %q", err, csvBuf.String())
-	}
-	if recs[1][0] != "from A" {
-		t.Errorf("the kept column should carry the FIRST embed's value, got %q", recs[1][0])
-	}
+	// Values, not just names: a promoted field must be READABLE through the
+	// unexported hops, and the winner of a tie must be the field json picked.
+	t.Run("promoted values are readable", func(t *testing.T) {
+		row := HiddenL1{hiddenL2: hiddenL2{hiddenL3: hiddenL3{Deep: "d"}, Mid: "m"}, Top: "t"}
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatCSV, []HiddenL1{row}); err != nil {
+			t.Fatalf("Write(csv): %v", err)
+		}
+		recs, err := csv.NewReader(&buf).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("csv did not render a header and one row (%v): %v", err, recs)
+		}
+		if strings.Join(recs[1], ",") != "d,m,t" {
+			t.Errorf("row = %v, want the values read through two unexported embeds", recs[1])
+		}
+	})
 
-	// The embedded unexported struct: json promotes slug, fieldNames drops it.
-	hidden := HiddenOuter{hiddenEmbed: hiddenEmbed{Slug: "s"}, OK: true}
-	if keys := jsonKeys(t, hidden); !keys["slug"] {
-		t.Fatalf("encoding/json stopped promoting an embedded unexported struct: keys = %v", keys)
-	}
-	if names := fieldNames(reflect.TypeOf(hidden)); strings.Join(names, ",") != "ok" {
-		t.Errorf("an embedded unexported struct: fieldNames = %v, want the divergence this test pins ([ok])", names)
-	}
+	t.Run("the tie winner is the field json picked", func(t *testing.T) {
+		row := ClashTagWins{ClashTagNamedN: ClashTagNamedN{Other: "tagged"}, ClashBareN: ClashBareN{N: "bare"}}
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatText, row); err != nil {
+			t.Fatalf("Write(text): %v", err)
+		}
+		if got := buf.String(); got != "N: tagged\n" {
+			t.Errorf("text = %q, want the TAGGED field's value under N", got)
+		}
+	})
+
+	// A nil embedded pointer is the one shape where key-set equality does NOT
+	// apply, and deliberately so: json's marshal omits a key it cannot reach,
+	// while the csv header is static and must keep the column so every row has
+	// the same width. Assert the header and the empty cell instead.
+	t.Run("a nil embedded pointer under an unexported embed keeps its column", func(t *testing.T) {
+		if keys := jsonKeys(t, HiddenPtrOuter{OK: true}); keys["slug"] {
+			t.Fatalf("json started emitting a key behind a nil embedded pointer: %v", keys)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatCSV, []HiddenPtrOuter{{OK: true}}); err != nil {
+			t.Fatalf("Write(csv): %v", err)
+		}
+		recs, err := csv.NewReader(&buf).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("csv did not render a header and one row (%v): %v", err, recs)
+		}
+		if strings.Join(recs[0], ",") != "slug,note,ok" {
+			t.Errorf("header = %v, want the promoted columns kept", recs[0])
+		}
+		if recs[1][0] != "" || recs[1][1] != "" || recs[1][2] != "true" {
+			t.Errorf("row = %v, want an empty cell for the unreachable field", recs[1])
+		}
+		// Non-nil, and now the key sets DO agree.
+		full := HiddenPtrOuter{hiddenPtrMid: hiddenPtrMid{hiddenPtrLeaf: &hiddenPtrLeaf{Slug: "s"}, Note: "n"}, OK: true}
+		want := jsonKeys(t, full)
+		for k := range nameSet(fieldNames(reflect.TypeOf(full))) {
+			if !want[k] {
+				t.Errorf("the header carries %q, which json does not emit for a populated value", k)
+			}
+		}
+	})
 }

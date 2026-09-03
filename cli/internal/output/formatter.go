@@ -472,11 +472,15 @@ func delimitedCell(field reflect.Value) string {
 
 // fieldSpec is one struct field as the output formatters see it: the index PATH
 // that reaches it (more than one hop when it was promoted out of an embedded
-// struct), the name its json tag gives it (the Go name when it has none), and
-// whether that tag carries omitempty.
+// struct), the name its json tag gives it (the Go name when it has none),
+// whether that name CAME from a tag, and whether that tag carries omitempty.
+//
+// tagged exists only for the collision rule: json breaks an equal-depth tie in
+// favor of the tagged field, and calls it a conflict when neither side wins.
 type fieldSpec struct {
 	index     []int
 	name      string
+	tagged    bool
 	omitEmpty bool
 }
 
@@ -504,19 +508,24 @@ const maxFieldDepth = 8
 //     that appears nowhere in the json view, and `skills doctor --format text`
 //     did the same with `Verification`. An embedded field WITH a json name keeps
 //     that name and stays one value.
-//   - On a name collision the SHALLOWER field wins, as it does in json.
+//   - On a name collision json's own rule applies, in dedupeFieldSpecs.
+//   - An unexported field does not exist for output, with one exception json
+//     also makes: an anonymous field of unexported STRUCT type is recursed into
+//     and its exported fields are promoted. reflect refuses Interface() on the
+//     embedded field itself, but not on the exported fields beneath it, because
+//     Value.Field does not propagate the embedded read-only flag. So the embed
+//     is never rendered as a value and its fields are rendered normally.
 //
-// Two deliberate narrowings. An embedded type that renders itself is kept as
-// ONE value rather than flattened. isRowStruct already excludes every
+// One deliberate narrowing. An embedded type that renders itself is kept as ONE
+// value rather than flattened. isRowStruct already excludes every
 // encoding.TextMarshaler, and that is the branch time.Time takes, so the
 // jsonMarshalerType check below covers only what TextMarshaler misses: a
 // json.Marshaler that is NOT also a TextMarshaler. It is not what stops an
 // embedded time from exploding into wall/ext/loc, which cannot happen anyway:
-// those three are UNEXPORTED, so the f.PkgPath guard drops them and flattening
-// time.Time yields no fields at all. And an unexported field is still skipped,
-// embedded structs included: json promotes the exported fields of an embedded
-// unexported struct, but reflect refuses Interface() on the unexported field
-// itself, and no output struct in this repo has one.
+// those three are UNEXPORTED, so flattening time.Time yields no fields at all.
+// json renders such an embed as the WHOLE record, discarding its siblings,
+// which no row-shaped format can represent; this is the one place the two views
+// legitimately differ, and no output struct in this repo embeds a Marshaler.
 func fieldSpecs(t reflect.Type) []fieldSpec {
 	return dedupeFieldSpecs(appendFieldSpecs(nil, t, nil, 0))
 }
@@ -527,7 +536,9 @@ func appendFieldSpecs(specs []fieldSpec, t reflect.Type, prefix []int, depth int
 	}
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if f.PkgPath != "" {
+		unexported := f.PkgPath != ""
+		if unexported && !f.Anonymous {
+			// An unexported non-embedded field does not exist for json either.
 			continue
 		}
 		tag := f.Tag.Get("json")
@@ -535,12 +546,11 @@ func appendFieldSpecs(specs []fieldSpec, t reflect.Type, prefix []int, depth int
 			continue
 		}
 		spec := fieldSpec{name: f.Name}
-		named := false
 		if tag != "" {
 			parts := strings.Split(tag, ",")
 			if parts[0] != "" {
 				spec.name = parts[0]
-				named = true
+				spec.tagged = true
 			}
 			for _, opt := range parts[1:] {
 				if opt == "omitempty" {
@@ -549,12 +559,21 @@ func appendFieldSpecs(specs []fieldSpec, t reflect.Type, prefix []int, depth int
 			}
 		}
 		spec.index = append(append(make([]int, 0, len(prefix)+1), prefix...), i)
-		if f.Anonymous && !named && isFlattenable(f.Type) {
+		if f.Anonymous && !spec.tagged && isFlattenable(f.Type) {
 			ft := f.Type
 			if ft.Kind() == reflect.Ptr {
 				ft = ft.Elem()
 			}
 			specs = appendFieldSpecs(specs, ft, spec.index, depth+1)
+			continue
+		}
+		if unexported {
+			// An anonymous field that was NOT flattened has to be rendered as a
+			// value, and reflect refuses Interface() on an unexported field. So
+			// an unexported embed that names itself with a json tag, renders
+			// itself (Marshaler), or is not a struct at all is skipped. json
+			// emits the first two; nothing in this repo has either shape, and
+			// panicking on a Go-level restriction is the worse trade.
 			continue
 		}
 		specs = append(specs, spec)
@@ -577,27 +596,55 @@ func isFlattenable(t reflect.Type) bool {
 	return isRowStruct(t)
 }
 
-// dedupeFieldSpecs keeps one field per name, the shallowest (the first at that
-// depth), in declaration order. json resolves a promoted name against an
-// outer-level one the same way.
+// dedupeFieldSpecs resolves same-name fields exactly as encoding/json's
+// dominantField does, so a promoted name and an outer-level one settle the same
+// way in text and csv as in json. Grouping is by the EFFECTIVE name, so a
+// `json:"n"` field and a bare field named N never meet: they are two names.
 //
-// One KNOWN divergence, pinned by TestFieldNames_EqualDepthCollisionKeepsFirst:
-// when two anonymous embeds collide at EQUAL depth, json calls that a conflict
-// and drops the name from the output entirely, while this keeps the first one
-// declared. No output struct in this repo has that shape. Which behavior is
-// right is a decision, not a cleanup, so it is pinned here rather than quietly
-// changed.
+// Within a name, DEPTH decides first and a tag breaks a tie at equal depth:
+//
+//   - shallower wins outright, tagged or not
+//   - at equal depth, exactly one tagged: the tagged one wins
+//   - at equal depth, both tagged or neither: json calls it a CONFLICT and drops
+//     the name from the output entirely, and so does this
+//
+// Every one of those was read off json.Marshal rather than from the spec, and
+// TestFieldNames_MatchJSONThroughCollisionsAndUnexportedEmbeds re-reads them
+// from json on every run, so a change in the standard library's rule trips the
+// suite instead of silently splitting the two views apart.
 func dedupeFieldSpecs(specs []fieldSpec) []fieldSpec {
 	best := make(map[string]int, len(specs))
+	conflicted := make(map[string]bool)
 	for i, sp := range specs {
-		if j, seen := best[sp.name]; seen && len(specs[j].index) <= len(sp.index) {
+		j, seen := best[sp.name]
+		if !seen {
+			best[sp.name] = i
 			continue
 		}
-		best[sp.name] = i
+		cur := specs[j]
+		switch {
+		case len(cur.index) < len(sp.index):
+			// A shallower field already won, so this one never competes and
+			// cannot revive a conflict resolved above it.
+		case len(cur.index) > len(sp.index):
+			// This one is shallower, so it wins outright and clears any tie
+			// recorded among the deeper fields it just displaced.
+			best[sp.name] = i
+			delete(conflicted, sp.name)
+		case cur.tagged == sp.tagged:
+			// Equal depth and neither out-tags the other.
+			conflicted[sp.name] = true
+		case sp.tagged:
+			// Equal depth, and only this one carries a json name.
+			best[sp.name] = i
+			delete(conflicted, sp.name)
+		default:
+			// Equal depth, and only the incumbent carries a json name.
+		}
 	}
 	out := make([]fieldSpec, 0, len(specs))
 	for i, sp := range specs {
-		if best[sp.name] == i {
+		if best[sp.name] == i && !conflicted[sp.name] {
 			out = append(out, sp)
 		}
 	}
