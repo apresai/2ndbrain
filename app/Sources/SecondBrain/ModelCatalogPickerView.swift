@@ -375,8 +375,8 @@ struct ModelCatalogPickerView: View {
                 if model.modelType == "embedding" {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Catalog recommendation for this model")
-                                .help("Saves this model's recommended similarity threshold to the user catalog. It feeds the automatic resolution chain when no vault override is set; the vault-level override lives under Advanced settings in the AI Hub.")
+                            Text("Your similarity threshold override")
+                                .help("Saves a similarity threshold you choose to the user catalog, stamped as yours. Leave it empty to keep using the value shown to the right, which is this model's built-in recommendation. It feeds the automatic resolution chain when no vault override is set; the vault-level override lives under Advanced settings in the AI Hub.")
                             TextField("0.00-1.00", text: $thresholdText)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 100)
@@ -564,9 +564,23 @@ struct ModelCatalogPickerView: View {
         resetDetailInputs()
     }
 
+    /// The similarity-threshold field starts EMPTY for every model, so pressing
+    /// Save can only ever mean "the user typed this number".
+    ///
+    /// It used to be prefilled with the model's catalog recommendation, so Save
+    /// with no edit wrote the built-in value into the user catalog through
+    /// `models add --similarity-threshold`, the one save path allowed to author
+    /// a calibration. That produced a calibration the user never chose, and it
+    /// then shadowed any later change to the built-in value. The caption under
+    /// the field already reports the effective threshold and its source, so
+    /// nothing is hidden by leaving the field blank.
+    static func initialThresholdText(for model: CatalogModelInfo) -> String {
+        ""
+    }
+
     private func resetDetailInputs() {
         guard let model = selectedModel else { return }
-        thresholdText = model.recommendedSimilarityThreshold.map { String(format: "%.2f", $0) } ?? ""
+        thresholdText = Self.initialThresholdText(for: model)
         benchmarkProbeSelection = model.modelType == "embedding" ? "embed" : "generate"
         costPreview = nil
         benchmarkEvents = []
