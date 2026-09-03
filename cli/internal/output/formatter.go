@@ -185,8 +185,9 @@ var textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
 
 // isRowStruct reports whether t is a struct the text renderer should expand
 // into named fields. A struct with its own text form is a scalar, not a row:
-// expanding time.Time into wall/ext/loc would be exactly the debug dump this
-// renderer exists to stop.
+// expanding time.Time would print NOTHING at all, because wall, ext and loc are
+// unexported and fieldSpecs skips them, so the instant would vanish instead of
+// rendering as the RFC3339 text its MarshalText gives.
 func isRowStruct(t reflect.Type) bool {
 	if t.Kind() != reflect.Struct {
 		return false
@@ -505,13 +506,17 @@ const maxFieldDepth = 8
 //     that name and stays one value.
 //   - On a name collision the SHALLOWER field wins, as it does in json.
 //
-// Two deliberate narrowings. An embedded type that renders itself (it
-// implements encoding.TextMarshaler or json.Marshaler, as time.Time does) is
-// kept as ONE value rather than flattened, so an embedded time never explodes
-// into wall/ext/loc. And an unexported field is still skipped, embedded structs
-// included: json promotes the exported fields of an embedded unexported struct,
-// but reflect refuses Interface() on the unexported field itself, and no output
-// struct in this repo has one.
+// Two deliberate narrowings. An embedded type that renders itself is kept as
+// ONE value rather than flattened. isRowStruct already excludes every
+// encoding.TextMarshaler, and that is the branch time.Time takes, so the
+// jsonMarshalerType check below covers only what TextMarshaler misses: a
+// json.Marshaler that is NOT also a TextMarshaler. It is not what stops an
+// embedded time from exploding into wall/ext/loc, which cannot happen anyway:
+// those three are UNEXPORTED, so the f.PkgPath guard drops them and flattening
+// time.Time yields no fields at all. And an unexported field is still skipped,
+// embedded structs included: json promotes the exported fields of an embedded
+// unexported struct, but reflect refuses Interface() on the unexported field
+// itself, and no output struct in this repo has one.
 func fieldSpecs(t reflect.Type) []fieldSpec {
 	return dedupeFieldSpecs(appendFieldSpecs(nil, t, nil, 0))
 }
@@ -575,6 +580,13 @@ func isFlattenable(t reflect.Type) bool {
 // dedupeFieldSpecs keeps one field per name, the shallowest (the first at that
 // depth), in declaration order. json resolves a promoted name against an
 // outer-level one the same way.
+//
+// One KNOWN divergence, pinned by TestFieldNames_EqualDepthCollisionKeepsFirst:
+// when two anonymous embeds collide at EQUAL depth, json calls that a conflict
+// and drops the name from the output entirely, while this keeps the first one
+// declared. No output struct in this repo has that shape. Which behavior is
+// right is a decision, not a cleanup, so it is pinned here rather than quietly
+// changed.
 func dedupeFieldSpecs(specs []fieldSpec) []fieldSpec {
 	best := make(map[string]int, len(specs))
 	for i, sp := range specs {

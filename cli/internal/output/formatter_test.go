@@ -785,7 +785,9 @@ func nameSet(names []string) map[string]bool {
 // name, so text and csv showed a field json omits entirely.
 //
 // The guarantee is asserted against json.Marshal's own key set, so the three
-// views cannot drift apart again.
+// views cannot drift apart again, for the shapes output structs actually have.
+// Two shapes none of them has diverge from json on purpose, and those are
+// pinned separately in TestFieldNames_EqualDepthCollisionKeepsFirst.
 func TestFieldNames_MatchJSONKeysThroughEmbedding(t *testing.T) {
 	// Every field non-zero: an omitempty field json legitimately omits would
 	// otherwise show up as a difference against the static csv header.
@@ -900,5 +902,88 @@ func TestFieldSpecs_NilEmbeddedPointerRendersEmpty(t *testing.T) {
 	}
 	if recs[1][2] != "true" {
 		t.Errorf("the outer field is missing from the row: %v", recs[1])
+	}
+}
+
+// Two anonymous embeds whose promoted fields collide at EQUAL depth, plus an
+// embedded UNEXPORTED struct. Both shapes are places where fieldNames and
+// encoding/json disagree, and neither occurs in any output struct in this repo.
+type EqualEmbedA struct {
+	Name string `json:"name"`
+}
+
+type EqualEmbedB struct {
+	Name string `json:"name"`
+}
+
+type EqualCollide struct {
+	EqualEmbedA
+	EqualEmbedB
+	OK bool `json:"ok"`
+}
+
+type hiddenEmbed struct {
+	Slug string `json:"slug"`
+}
+
+type HiddenOuter struct {
+	hiddenEmbed
+	OK bool `json:"ok"`
+}
+
+// A CHARACTERIZATION test, not a guarantee: it pins two shapes where the csv and
+// text header does NOT match json's key set, so a refactor of dedupeFieldSpecs
+// or of the unexported-field skip changes this file rather than slipping past.
+//
+// Read the assertions as "this is what happens today", not "this is right".
+// Both divergences are known and neither is reachable from a real output struct:
+//
+//   - EQUAL-DEPTH COLLISION. encoding/json treats two promoted fields with the
+//     same name at the same depth as a conflict and drops the name entirely.
+//     dedupeFieldSpecs keeps the first, because its tie-break (`len(specs[j].
+//     index) <= len(sp.index)` then `continue`) leaves the earlier index in
+//     place. The SHALLOWER-wins case, which is the one output structs actually
+//     hit, does match json and is covered by the tests above.
+//   - EMBEDDED UNEXPORTED STRUCT. json promotes its exported fields; fieldSpecs
+//     skips it, because reflect refuses Interface() on the unexported field.
+//
+// Changing either is a behavior decision that needs its own review, not a
+// silent fix, which is why this pins rather than asserts equality with json.
+func TestFieldNames_EqualDepthCollisionKeepsFirst(t *testing.T) {
+	collide := EqualCollide{OK: true}
+	collide.EqualEmbedA.Name = "from A"
+	collide.EqualEmbedB.Name = "from B"
+
+	// json's own verdict, read from json rather than assumed, so a change in
+	// the standard library's conflict rule shows up here too.
+	if keys := jsonKeys(t, collide); keys["name"] || !keys["ok"] {
+		t.Fatalf("encoding/json changed its equal-depth conflict rule: keys = %v, expected ok alone", keys)
+	}
+
+	got := fieldNames(reflect.TypeOf(collide))
+	if strings.Join(got, ",") != "name,ok" {
+		t.Errorf("equal-depth collision: fieldNames = %v, want the divergence this test pins ([name ok])", got)
+	}
+
+	// The kept field is the FIRST embed's, so the csv cell is A's value.
+	var csvBuf bytes.Buffer
+	if err := Write(&csvBuf, FormatCSV, []EqualCollide{collide}); err != nil {
+		t.Fatalf("Write(csv): %v", err)
+	}
+	recs, err := csv.NewReader(&csvBuf).ReadAll()
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("csv did not render a header and one row (%v): %q", err, csvBuf.String())
+	}
+	if recs[1][0] != "from A" {
+		t.Errorf("the kept column should carry the FIRST embed's value, got %q", recs[1][0])
+	}
+
+	// The embedded unexported struct: json promotes slug, fieldNames drops it.
+	hidden := HiddenOuter{hiddenEmbed: hiddenEmbed{Slug: "s"}, OK: true}
+	if keys := jsonKeys(t, hidden); !keys["slug"] {
+		t.Fatalf("encoding/json stopped promoting an embedded unexported struct: keys = %v", keys)
+	}
+	if names := fieldNames(reflect.TypeOf(hidden)); strings.Join(names, ",") != "ok" {
+		t.Errorf("an embedded unexported struct: fieldNames = %v, want the divergence this test pins ([ok])", names)
 	}
 }
