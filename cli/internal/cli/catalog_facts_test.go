@@ -1,0 +1,283 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/apresai/2ndbrain/internal/ai"
+)
+
+// saveProbeVerdict runs the exact sequence every `--save` site runs (build the
+// row from the probe result, then the four preserve/adopt helpers, then the
+// wholesale save), so a test exercises the real write path rather than a
+// hand-built row. No provider is called: the TestProbeResult is the shape a
+// probe returns, not a stand-in for one.
+func saveProbeVerdict(t *testing.T, scope ai.UserCatalogScope, vaultRoot string, result *ai.TestProbeResult) {
+	t.Helper()
+	entry := catalogEntryFromTestResult(context.Background(), ai.AIConfig{Provider: "bedrock"}, vaultRoot, result)
+	entry.Enabled = preserveScopeEnabled(scope, vaultRoot, entry.Provider, entry.ID)
+	preserveRoutingFields(scope, vaultRoot, &entry)
+	preserveUserFacts(scope, vaultRoot, &entry)
+	preserveUserThreshold(scope, vaultRoot, &entry)
+	if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
+		t.Fatalf("save probe verdict: %v", err)
+	}
+}
+
+// mergedContextLen reads the context length `models list` would print for a
+// model, straight from the command's own JSON, so the assertion is what a user
+// sees rather than an internal call.
+func mergedContextLen(t *testing.T, vaultRoot, modelID string) int {
+	t.Helper()
+	out, err := runCLIArgs(t, vaultRoot, "models", "list", "--json")
+	if err != nil {
+		t.Fatalf("models list --json: %v", err)
+	}
+	var rows []ai.ModelInfo
+	if err := json.Unmarshal(out, &rows); err != nil {
+		t.Fatalf("decode models list --json: %v\n%s", err, out)
+	}
+	for _, m := range rows {
+		if m.Provider == "bedrock" && m.ID == modelID {
+			return m.ContextLen
+		}
+	}
+	t.Fatalf("%s is absent from models list --json:\n%s", modelID, out)
+	return 0
+}
+
+// The failing-probe branch used to copy the merged base row WHOLESALE, which is
+// the other half of the mirroring the promotion path had: a probe that could
+// not even reach the model wrote the builtin's name, dimensions, context length
+// and prices into the user file as if the user had typed them.
+func TestCatalogEntryFromTestResultFailBranchCarriesNoBuiltinFacts(t *testing.T) {
+	setupModelsAddHome(t)
+	builtin := findBuiltinModel("bedrock", novaEmbeddingID)
+	if builtin == nil {
+		t.Fatalf("%s is not in the builtin catalog; this test cannot detect mirroring without it", novaEmbeddingID)
+	}
+	if builtin.ContextLen == 0 || builtin.Name == "" {
+		t.Fatalf("the builtin %s row no longer carries the facts this test watches: %+v", novaEmbeddingID, builtin)
+	}
+
+	fail := &ai.TestProbeResult{
+		ModelID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+		OK: false, Detail: "denied", Code: ai.TestErrAccessDenied,
+	}
+	got := catalogEntryFromTestResult(context.Background(), ai.AIConfig{Provider: "bedrock"}, "", fail)
+
+	if got.ContextLen != 0 {
+		t.Errorf("ContextLen = %d, want 0: a failing probe copied the builtin's context length", got.ContextLen)
+	}
+	if got.Name != "" {
+		t.Errorf("Name = %q, want empty: a failing probe copied the builtin's name", got.Name)
+	}
+	if got.Dimensions != 0 {
+		t.Errorf("Dimensions = %d, want 0", got.Dimensions)
+	}
+	if got.PriceIn != 0 || got.PriceOut != 0 || got.PriceSource != "" {
+		t.Errorf("prices carried: in=%g out=%g source=%q", got.PriceIn, got.PriceOut, got.PriceSource)
+	}
+	if got.Notes != "" || got.Recommended || got.ConfigHint != "" {
+		t.Errorf("notes/curation carried: notes=%q recommended=%v config_hint=%q", got.Notes, got.Recommended, got.ConfigHint)
+	}
+	// The verdict itself still lands, on the route that was actually probed.
+	if got.TestErrorCode != string(ai.TestErrAccessDenied) {
+		t.Errorf("TestErrorCode = %q, want %q", got.TestErrorCode, ai.TestErrAccessDenied)
+	}
+	if got.Plane != ai.PlaneClassic || got.Region != "us-east-1" {
+		t.Errorf("route lost: plane=%q region=%q", got.Plane, got.Region)
+	}
+}
+
+// `models add --context-length` is the only way to author a context length, so
+// it stamps the row, and a later probe save must not lose the number the user
+// typed. The stamped row is route-less (models add describes a MODEL), so what
+// has to survive is the MERGED value the user reads back.
+func TestModelsAddStampsTypedFactsAndAProbeSaveKeepsThem(t *testing.T) {
+	_, root := newContractVault(t)
+	resetModelsAddFlags(t)
+
+	if _, err := runCLIArgs(t, root, "models", "add", novaEmbeddingID,
+		"--provider", "bedrock", "--type", "embedding",
+		"--context-length", "4096", "--scope", "vault"); err != nil {
+		t.Fatalf("models add: %v", err)
+	}
+
+	var stamped bool
+	for _, m := range ai.LoadUserCatalog(root) {
+		if m.ID != novaEmbeddingID {
+			continue
+		}
+		stamped = true
+		if m.ContextLen != 4096 {
+			t.Errorf("stored context_length = %d, want 4096", m.ContextLen)
+		}
+		if m.FactSource != ai.FactSourceUser {
+			t.Errorf("fact_source = %q, want %q: an unstamped fact is ignored by the merge", m.FactSource, ai.FactSourceUser)
+		}
+	}
+	if !stamped {
+		t.Fatal("models add wrote no row for the model")
+	}
+	if got := mergedContextLen(t, root, novaEmbeddingID); got != 4096 {
+		t.Fatalf("models list context_len = %d, want the typed 4096", got)
+	}
+
+	saveProbeVerdict(t, ai.ScopeVault, root, &ai.TestProbeResult{
+		ModelID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+		OK: true, Detail: "dims=1024",
+	})
+
+	// The probe writes a CONCRETE route row; the stamped row stays route-less,
+	// so the value survives as the model-level template that
+	// retireSupersededTemplates redistributes, not by being copied onto the new
+	// row. Either way it is still what `models list` prints, which is the
+	// contract that matters.
+	if got := mergedContextLen(t, root, novaEmbeddingID); got != 4096 {
+		t.Errorf("a probe save lost the user's typed context length: models list shows %d, want 4096", got)
+	}
+}
+
+// preserveUserFacts' carry-forward branch, at a route its lookup can match.
+// UserCatalogRouteToPreserve refuses to graft across endpoints, so it returns
+// nothing when the probe names a full plane+region that no stored row has; this
+// is the case where the stored row IS the probed route and the stamped value
+// has to ride through a wholesale save that would otherwise delete it.
+func TestProbeSaveKeepsAStampedFactOnTheProbedRoute(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+		ContextLen: 4096, FactSource: ai.FactSourceUser,
+	}); err != nil {
+		t.Fatalf("seed stamped row: %v", err)
+	}
+
+	saveProbeVerdict(t, ai.ScopeVault, root, &ai.TestProbeResult{
+		ModelID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+		OK: true, Detail: "dims=1024",
+	})
+
+	stored, ok := ai.UserCatalogEntry(ai.ScopeVault, root, ai.RouteKey{
+		Provider: "bedrock", ID: novaEmbeddingID, Plane: ai.PlaneClassic, Region: "us-east-1",
+	})
+	if !ok {
+		t.Fatal("the probe save wrote no row for the probed route")
+	}
+	if stored.ContextLen != 4096 {
+		t.Errorf("stored context_length = %d, want the stamped 4096", stored.ContextLen)
+	}
+	if stored.FactSource != ai.FactSourceUser {
+		t.Errorf("fact_source = %q, want %q: an unstamped survivor is ignored on the next read", stored.FactSource, ai.FactSourceUser)
+	}
+	if stored.TestedAt == "" {
+		t.Error("the probe verdict itself was not recorded")
+	}
+}
+
+// The write-side half of the self-heal. A catalog contaminated by an older
+// version carries an UNSTAMPED context_length copied off a builtin that has
+// since changed; the next probe save drops it rather than rewriting it, and the
+// merged view returns to the builtin's current value with nothing to clean up.
+func TestProbeSaveDropsAnUnstampedContextLength(t *testing.T) {
+	_, root := newContractVault(t)
+	builtin := findBuiltinModel("bedrock", novaEmbeddingID)
+	if builtin == nil || builtin.ContextLen == 0 {
+		t.Fatalf("%s has no builtin context length; this test cannot detect the self-heal", novaEmbeddingID)
+	}
+
+	// Written as TEXT: the absence of a fact_source key is the contaminated
+	// shape, and no ModelInfo literal can express "field never written".
+	catalogPath := filepath.Join(root, ".2ndbrain", "models.yaml")
+	if err := os.WriteFile(catalogPath, []byte(
+		"version: 1\nmodels:\n"+
+			"  - id: "+novaEmbeddingID+"\n    provider: bedrock\n    type: embedding\n"+
+			"    plane: classic\n    region: us-east-1\n"+
+			"    context_length: 2048\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mergedContextLen(t, root, novaEmbeddingID); got != 2048 {
+		t.Fatalf("precondition: the contaminated catalog should read back as 2048, got %d", got)
+	}
+
+	saveProbeVerdict(t, ai.ScopeVault, root, &ai.TestProbeResult{
+		ModelID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		Plane: ai.PlaneClassic, Region: "us-east-1",
+		OK: true, Detail: "dims=1024",
+	})
+
+	stored, ok := ai.UserCatalogEntry(ai.ScopeVault, root, ai.RouteKey{
+		Provider: "bedrock", ID: novaEmbeddingID, Plane: ai.PlaneClassic, Region: "us-east-1",
+	})
+	if !ok {
+		t.Fatal("the probe save wrote no row for the probed route")
+	}
+	if stored.ContextLen != 0 {
+		t.Errorf("stored context_length = %d, want 0: the unstamped copy must not be rewritten", stored.ContextLen)
+	}
+	// Replaced, not appended: a second row would leave the contaminated 2048 on
+	// disk, and the merged read below would pass while the file stayed dirty.
+	rows := ai.LoadUserCatalog(root)
+	if len(rows) != 1 {
+		t.Fatalf("the save appended instead of replacing: %d rows, want 1: %+v", len(rows), rows)
+	}
+	if got := mergedContextLen(t, root, novaEmbeddingID); got != builtin.ContextLen {
+		t.Errorf("models list context_len = %d, want the builtin %d", got, builtin.ContextLen)
+	}
+}
+
+// Dropping an unstamped threshold is deliberate, so it has to be SAID. The
+// value 0.65 is the case that motivated the rule: 2nb's own Nova recommendation
+// until June 2026, now 2.6x the current 0.25.
+func TestUnstampedThresholdNoticeNamesTheFile(t *testing.T) {
+	setupModelsAddHome(t)
+	vaultRoot := t.TempDir()
+
+	if got := unstampedThresholdNotice(vaultRoot, "bedrock", novaEmbeddingID); got != "" {
+		t.Errorf("with nothing stored the notice must be empty, got %q", got)
+	}
+
+	// A STAMPED row is applied, not ignored, so it produces no notice.
+	if err := ai.SaveUserCatalogEntry(ai.ScopeGlobal, "", ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		RecommendedSimilarityThreshold: 0.41, ThresholdSource: ai.ThresholdSourceUser,
+	}); err != nil {
+		t.Fatalf("seed stamped: %v", err)
+	}
+	if got := unstampedThresholdNotice(vaultRoot, "bedrock", novaEmbeddingID); got != "" {
+		t.Errorf("a stamped calibration must produce no ignored-value notice, got %q", got)
+	}
+
+	if err := ai.SaveUserCatalogEntry(ai.ScopeGlobal, "", ai.ModelInfo{
+		ID: novaEmbeddingID, Provider: "bedrock", Type: "embedding",
+		RecommendedSimilarityThreshold: 0.65,
+	}); err != nil {
+		t.Fatalf("seed unstamped: %v", err)
+	}
+	globalPath, err := ai.CatalogPathForScope(ai.ScopeGlobal, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := unstampedThresholdNotice(vaultRoot, "bedrock", novaEmbeddingID)
+	if !strings.Contains(got, globalPath) {
+		t.Errorf("notice %q does not name the file that carries the value (%s)", got, globalPath)
+	}
+	if !strings.Contains(got, "0.65") {
+		t.Errorf("notice %q does not name the value it ignored", got)
+	}
+	if !strings.Contains(got, "ignored") {
+		t.Errorf("notice %q does not say the value is ignored", got)
+	}
+	if !strings.Contains(got, "models calibrate --save") || !strings.Contains(got, "--similarity-threshold") {
+		t.Errorf("notice %q does not say how to keep the value", got)
+	}
+}

@@ -619,6 +619,37 @@ func UserThresholdRow(vaultRoot, provider, modelID string) (ModelInfo, UserCatal
 	return ModelInfo{}, "", false
 }
 
+// UnstampedThresholdRow finds a stored row that carries a positive
+// recommended_similarity_threshold WITHOUT the provenance stamp: a value 2nb
+// IGNORES, because it cannot tell a measurement from a copy of a builtin
+// recommendation that has since changed.
+//
+// It is the reporting twin of UserThresholdRow, and takes the same per-scope
+// view of RAW rows for the same reason: a vault row and a global row are
+// separate statements, and the merged view would hide one behind the other. The
+// vault scope is searched first so `ai status` names the file closest to the
+// user. Nothing consumes the value; it exists so a user whose threshold stopped
+// applying is told which key stopped applying and how to keep it.
+func UnstampedThresholdRow(vaultRoot, provider, modelID string) (ModelInfo, UserCatalogScope, bool) {
+	if provider == "" || modelID == "" {
+		return ModelInfo{}, "", false
+	}
+	for _, scope := range []UserCatalogScope{ScopeVault, ScopeGlobal} {
+		if scope == ScopeVault && vaultRoot == "" {
+			continue
+		}
+		for _, m := range userCatalogRows(scope, vaultRoot) {
+			if m.Type != "embedding" || m.Provider != provider || m.ID != modelID {
+				continue
+			}
+			if m.RecommendedSimilarityThreshold > 0 && m.ThresholdSource != ThresholdSourceUser {
+				return m, scope, true
+			}
+		}
+	}
+	return ModelInfo{}, "", false
+}
+
 // userCatalogRows returns one scope's stored rows verbatim: no builtin overlay,
 // no cross-scope merge. Missing or unreadable files are an empty slice, matching
 // every other read path, which never bricks the CLI on a bad catalog.

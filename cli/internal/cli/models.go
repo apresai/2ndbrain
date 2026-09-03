@@ -335,6 +335,7 @@ func runModelsList(cmd *cobra.Command, args []string) error {
 			// verdict with a false positive that even carried the mantle
 			// strategy. adoptCandidateRouting cannot correct it (fill-only-empty).
 			persistProbedRegion(&entry, result, ai.ResolveBedrockConfig(v.Config.AI.Bedrock).Region)
+			preserveUserFacts(scope, v.Root, &entry)
 			preserveUserThreshold(scope, v.Root, &entry)
 			// Wholesale: a passing probe records a complete fresh verdict.
 			if saveErr := ai.SaveUserCatalogEntry(scope, v.Root, entry); saveErr == nil {
@@ -619,6 +620,7 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
 		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
 		preserveRoutingFields(scope, v.Root, &entry)
+		preserveUserFacts(scope, v.Root, &entry)
 		preserveUserThreshold(scope, v.Root, &entry)
 		// Wholesale: a probe records a complete fresh verdict (pass or fail).
 		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
@@ -735,9 +737,21 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		// would then read back as the builtin's own recommendation.
 		entry.ThresholdSource = ai.ThresholdSourceUser
 	}
+	if factsTyped(cmd) {
+		// Same rule for the model facts: the flags are the only way a user can
+		// author a name, dimension or context length, so they are the only
+		// thing that stamps one. Without the stamp the value is
+		// indistinguishable from a copy some probe save took off the builtin,
+		// and the merge deliberately ignores those.
+		entry.FactSource = ai.FactSourceUser
+	}
 	if existing, ok := findCurrentCatalogEntry(vaultRoot, addProvider, modelID); ok {
 		entry = mergeAddCatalogEntry(cmd, existing, entry, priceOverride)
-	} else if entry.Name == "" {
+	} else if entry.Name == "" && findBuiltinModel(addProvider, modelID) == nil {
+		// The id-as-name fallback keeps a user-only row from rendering nameless.
+		// A BUILTIN model already has a name, and writing the id over it is the
+		// mirroring in reverse: the stamp says "the user typed these facts", so
+		// a fallback the user never typed must not ride along under it.
 		entry.Name = modelID
 	}
 
@@ -749,6 +763,16 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 	slog.Info("models add", "provider", entry.Provider, "model", entry.ID, "type", entry.Type, "scope", scope)
 	fmt.Fprintf(cmd.ErrOrStderr(), "Added %s/%s to %s catalog\n", entry.Provider, entry.ID, scope)
 	return nil
+}
+
+// factsTyped reports whether this `models add` invocation authored a model
+// FACT. Only these three flags can, so only they stamp ai.FactSourceUser; an
+// add that touches none of them leaves whatever stamp the stored row carried,
+// because mergeAddCatalogEntry starts from that row.
+func factsTyped(cmd *cobra.Command) bool {
+	return cmd.Flags().Changed("name") ||
+		cmd.Flags().Changed("dimensions") ||
+		cmd.Flags().Changed("context-length")
 }
 
 func warnSuspiciousPerMillionPrice(cmd *cobra.Command, flagName string, value float64) {
@@ -784,7 +808,7 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 	out.Plane, out.Region = "", ""
 	if patch.Name != "" {
 		out.Name = patch.Name
-	} else if out.Name == "" {
+	} else if out.Name == "" && findBuiltinModel(patch.Provider, patch.ID) == nil {
 		out.Name = patch.ID
 	}
 	if cmd.Flags().Changed("dimensions") || patch.Dimensions != 0 {
@@ -809,6 +833,9 @@ func mergeAddCatalogEntry(cmd *cobra.Command, existing, patch ai.ModelInfo, pric
 		// the flag leaves both fields alone: `out` starts from the raw stored
 		// user row, so an earlier stamp survives untouched.
 		out.ThresholdSource = ai.ThresholdSourceUser
+	}
+	if factsTyped(cmd) {
+		out.FactSource = ai.FactSourceUser
 	}
 	if out.Tier == "" {
 		out.Tier = ai.TierUserVerified
@@ -1074,16 +1101,25 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 		entry.TestError = ""
 		entry.TestErrorCode = ""
 	} else if base != nil {
-		entry = *base
-		// The wholesale copy carries every field of a MERGED row, including the
-		// builtin's similarity-threshold recommendation. Drop it for the same
-		// reason promotedEntry does not copy it: a failing probe must never mint
-		// a calibration. preserveUserThreshold restores the user's own value at
-		// the save site.
-		entry.RecommendedSimilarityThreshold, entry.ThresholdSource = 0, ""
-		if entry.Tier == "" {
-			entry.Tier = ai.TierUnverified
+		// Built from the result, NOT copied from `base`. The old wholesale copy
+		// (`entry = *base`) carried every field of a MERGED row into the user
+		// file: the builtin's similarity threshold, its name, its dimensions,
+		// its context length, its notes and its curation. A failing probe must
+		// mint none of that. Only the ROUTE is taken from the base row, and
+		// only as a starting point: persistProbedRegion overwrites plane and
+		// region from the result below, and preserveRoutingFields restores the
+		// stored invoke strategy and endpoint at the save site.
+		entry = ai.ModelInfo{
+			ID:             result.ModelID,
+			Provider:       result.Provider,
+			Type:           result.Type,
+			Tier:           ai.TierUnverified,
+			Plane:          base.Plane,
+			Region:         base.Region,
+			InvokeStrategy: base.InvokeStrategy,
+			Endpoint:       base.Endpoint,
 		}
+		carryNonBuiltinFacts(&entry, base)
 	} else {
 		entry = ai.ModelInfo{
 			ID:       result.ModelID,
@@ -1107,8 +1143,10 @@ func catalogEntryFromTestResult(ctx context.Context, cfg ai.AIConfig, vaultRoot 
 }
 
 // preserveRoutingFields carries user-authored routing metadata (invoke
-// strategy, endpoint, mantle region pin, context length) from the existing
-// scope entry through a probe save. SaveUserCatalogEntry replaces wholesale,
+// strategy, endpoint, mantle region pin) from the existing scope entry through
+// a probe save. It used to rescue ContextLen too, which meant rescuing whatever
+// an older save had copied off the builtin; the context length now has exactly
+// one owner on this path, preserveUserFacts, and only when the user stamped it. SaveUserCatalogEntry replaces wholesale,
 // and the merged row a save is built from can lose these fields — observed
 // live 2026-08-20 when `models test --save` stripped a hand-added mantle
 // entry's invoke_strategy, leaving a row that had just PASSED its probe
@@ -1148,6 +1186,77 @@ func preserveUserThreshold(scope ai.UserCatalogScope, vaultRoot string, entry *a
 		"threshold", entry.RecommendedSimilarityThreshold, "source", entry.ThresholdSource)
 }
 
+// preserveUserFacts carries, from the RAW stored user row for this route, the
+// things a probe save must not invent and cannot rebuild: the model facts the
+// user typed (stamped ai.FactSourceUser by `models add --name/--dimensions/
+// --context-length`), their price override, their notes, and the benchmark
+// summary already recorded against the route.
+//
+// It is the fact-side twin of preserveUserThreshold, and exists for the same
+// reason: SaveUserCatalogEntry replaces WHOLESALE, so a field the probe row
+// does not carry is deleted from the user file. Building the row from the
+// merged catalog instead is what made a builtin fact look authored, so the
+// only base a save may inherit from is the stored row itself. The lookup is
+// UserCatalogRouteToPreserve, so a value stored on a pre-route row or under a
+// sibling region is carried forward when the stored row is UNIQUE, and is never
+// grafted from one endpoint onto another when it is not.
+//
+// An UNSTAMPED stored fact is carried only for a model the builtin catalog has
+// never declared. For a BUILTIN model it is a copy an older save took off the
+// merged view, so letting it survive would re-freeze the very snapshot this
+// exists to clear: dropping it is the write-side half of the self-heal, and the
+// builtin supplies the value again on read. For a model no builtin declares
+// there is nothing to fall back to, so the stored row is the only copy and
+// dropping it would destroy a value the user cannot get back.
+func preserveUserFacts(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
+	existing, ok := ai.UserCatalogRouteToPreserve(scope, vaultRoot, entry.Route())
+	if !ok {
+		return
+	}
+	var carried []string
+	stamped := existing.FactSource == ai.FactSourceUser
+	if stamped || findBuiltinModel(entry.Provider, entry.ID) == nil {
+		if existing.Name != "" {
+			entry.Name = existing.Name
+			carried = append(carried, "name")
+		}
+		if existing.Dimensions != 0 {
+			entry.Dimensions = existing.Dimensions
+			carried = append(carried, "dimensions")
+		}
+		if existing.ContextLen != 0 {
+			entry.ContextLen = existing.ContextLen
+			carried = append(carried, "context_len")
+		}
+		if stamped && len(carried) > 0 {
+			entry.FactSource = ai.FactSourceUser
+		}
+	}
+	// Prices only when the user OVERRODE them. A vendor or builtin price is
+	// re-derived on read, and carrying it forward is the same mirroring.
+	if existing.PriceSource == "user" {
+		entry.PriceIn, entry.PriceOut, entry.PriceRequest = existing.PriceIn, existing.PriceOut, existing.PriceRequest
+		entry.PriceSource, entry.PriceOverride = existing.PriceSource, existing.PriceOverride
+		carried = append(carried, "prices")
+	}
+	if entry.Notes == "" && existing.Notes != "" {
+		entry.Notes = existing.Notes
+		carried = append(carried, "notes")
+	}
+	// A benchmark is a measurement against THIS route. A probe that failed must
+	// not erase it; only a newer bench run replaces it.
+	if entry.Benchmark == nil && existing.Benchmark != nil {
+		b := *existing.Benchmark
+		entry.Benchmark = &b
+		carried = append(carried, "benchmark")
+	}
+	if len(carried) > 0 {
+		slog.Debug("preserve user facts: carried from the stored scope entry",
+			"provider", entry.Provider, "model", entry.ID, "scope", scope,
+			"fields", strings.Join(carried, ","))
+	}
+}
+
 func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *ai.ModelInfo) {
 	// Resolve by route where the entry knows it, else by a UNIQUE row for the
 	// model. A probe result turned into a save often carries no plane yet, so
@@ -1177,10 +1286,6 @@ func preserveRoutingFields(scope ai.UserCatalogScope, vaultRoot string, entry *a
 	if entry.Region == "" && existing.Region != "" && entry.InvokeStrategy == ai.StrategyBedrockMantleResponses {
 		entry.Region = existing.Region
 		carried = append(carried, "region")
-	}
-	if entry.ContextLen == 0 && existing.ContextLen != 0 {
-		entry.ContextLen = existing.ContextLen
-		carried = append(carried, "context_len")
 	}
 	if len(carried) > 0 {
 		slog.Debug("preserve routing fields: carried from existing scope entry",
@@ -1309,8 +1414,10 @@ func findModelInfoForRoute(ctx context.Context, cfg ai.AIConfig, vaultRoot strin
 }
 
 // promotedEntry builds a user-catalog ModelInfo from a passing probe result.
-// base (from the builtin catalog or discovery data) supplies name, pricing, and
-// dimensions when available; Tier and TestedAt are always set from the promotion.
+// Tier and TestedAt always come from the promotion; base supplies model facts
+// only for a model the builtin catalog has never declared (see
+// carryNonBuiltinFacts). What the USER authored is restored at the save site by
+// preserveUserFacts and preserveUserThreshold, which know the target scope.
 func promotedEntry(base *ai.ModelInfo, result *ai.TestProbeResult) ai.ModelInfo {
 	entry := ai.ModelInfo{
 		ID:            result.ModelID,
@@ -1320,35 +1427,47 @@ func promotedEntry(base *ai.ModelInfo, result *ai.TestProbeResult) ai.ModelInfo 
 		TestedAt:      time.Now().UTC().Format(time.RFC3339),
 		TestLatencyMs: latencyMs(result.Latency),
 	}
-	if base != nil {
-		entry.Name = base.Name
-		entry.Dimensions = base.Dimensions
-		entry.ContextLen = base.ContextLen
-		entry.PriceIn = base.PriceIn
-		entry.PriceOut = base.PriceOut
-		entry.PriceRequest = base.PriceRequest
-		// RecommendedSimilarityThreshold is deliberately NOT carried. `base` is
-		// a row from the MERGED catalog, so copying the field wrote the builtin
-		// catalog's own recommendation into the user file, where it read back as
-		// a calibration the user never took and froze out any later builtin
-		// change. The user's own value, when there is one, is restored from the
-		// raw stored row by preserveUserThreshold at the save site, which knows
-		// the scope being written.
-		entry.Notes = base.Notes
-		if base.PriceSource != "" {
-			entry.PriceSource = base.PriceSource
-		} else if base.PriceIn > 0 || base.PriceOut > 0 || base.PriceRequest > 0 {
-			entry.PriceSource = "vendor"
-		}
-	}
+	carryNonBuiltinFacts(&entry, base)
 	// For embedding models with no dimension info, parse actual dims from the
-	// probe result detail ("dims=1024") so promoted entries carry accurate metadata.
-	if result.Type == "embedding" && entry.Dimensions == 0 {
+	// probe result detail ("dims=1024") so promoted entries carry accurate
+	// metadata. For a BUILTIN model entry.Dimensions is deliberately left at
+	// zero above and the builtin fills it back in at read time, so this only
+	// fires where the probe really is the only source.
+	if result.Type == "embedding" && entry.Dimensions == 0 && findBuiltinModel(result.Provider, result.ModelID) == nil {
 		if d := parseDimsFromDetail(result.Detail); d > 0 {
 			entry.Dimensions = d
 		}
 	}
 	return entry
+}
+
+// carryNonBuiltinFacts copies the model facts off the probe's base row, but
+// ONLY for a model the builtin catalog has never declared.
+//
+// `base` comes from the MERGED catalog, so for a builtin model those facts ARE
+// the builtin's. Persisting them freezes a snapshot in the user file that
+// shadows every later builtin correction: a context_length of 2048 outlived the
+// builtin's own 8192, kept `models list` reporting the stale number, and spread
+// to every per-region row discovery found. It is the same lesson
+// RecommendedSimilarityThreshold taught, which is why that field has never been
+// carried here. Leaving them zero loses nothing, because the builtin supplies
+// them again on every read. For a model no builtin declares there is no other
+// source, so dropping them would leave the row nameless and unpriced.
+func carryNonBuiltinFacts(entry *ai.ModelInfo, base *ai.ModelInfo) {
+	if base == nil || findBuiltinModel(entry.Provider, entry.ID) != nil {
+		return
+	}
+	entry.Name = base.Name
+	entry.Dimensions = base.Dimensions
+	entry.ContextLen = base.ContextLen
+	entry.PriceIn, entry.PriceOut, entry.PriceRequest = base.PriceIn, base.PriceOut, base.PriceRequest
+	entry.Notes = base.Notes
+	switch {
+	case base.PriceSource != "":
+		entry.PriceSource = base.PriceSource
+	case base.PriceIn > 0 || base.PriceOut > 0 || base.PriceRequest > 0:
+		entry.PriceSource = "vendor"
+	}
 }
 
 // parseDimsFromDetail extracts the embedding dimension from a probe result

@@ -716,6 +716,15 @@ func TestProbeSavePreservesRoutingFields(t *testing.T) {
 	if entry.Region != "us-west-2" {
 		t.Errorf("mantle region pin not preserved: %q", entry.Region)
 	}
+	// The context length moved to preserveUserFacts, which is the one owner of
+	// the model FACTS: rescuing it here rescued whatever an older save had
+	// copied off the builtin as readily as something the user typed. This id is
+	// not in the builtin catalog, so the stored row is the only copy and it is
+	// still carried, stamp or no stamp.
+	if entry.ContextLen != 0 {
+		t.Errorf("preserveRoutingFields no longer owns the context length, got %d", entry.ContextLen)
+	}
+	preserveUserFacts(scope, root, &entry)
 	if entry.ContextLen != 500000 {
 		t.Errorf("context length not preserved: %d", entry.ContextLen)
 	}
