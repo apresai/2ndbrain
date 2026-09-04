@@ -188,7 +188,7 @@ func (s *SchemaSet) IsDateField(docType, field string) bool {
 	return false
 }
 
-// CoerceDate reports the time.Time a DATE field's value should be STORED as,
+// CoerceDate reports the value a DATE field should be STORED as,
 // and false when the field is not a date or the value is not date-shaped text.
 //
 // It exists because the two write surfaces would otherwise diverge. `meta --set`
@@ -201,15 +201,55 @@ func (s *SchemaSet) IsDateField(docType, field string) bool {
 // A value it refuses is stored exactly as the caller supplied it, which is what
 // every value did before: coercion is additive, and `--set created=tomorrow`
 // still writes that text rather than failing.
-func (s *SchemaSet) CoerceDate(docType, field string, value any) (time.Time, bool) {
+//
+// It returns a document.PlainDate rather than a time.Time so a CALENDAR DATE
+// can keep the precision the caller typed. `--set incident-date=2026-07-14` on
+// a field the schema declares `date` used to write `2026-07-14T00:00:00Z`,
+// inventing a time of day nobody supplied and flipping Obsidian's type for that
+// property from Date to Date and time.
+//
+// A calendar date is the only field that keeps its spelling. `created` and
+// `modified` are INSTANTS 2nb owns and writes itself, and a schema `datetime`
+// says the same, so those still normalize to one second-precision RFC3339 form
+// however the caller spelled them: `TestContract_MetaSetKeepsADateUnquoted`
+// pins that three spellings of one moment come back as one instant, which is
+// what makes the file and the index column agree.
+func (s *SchemaSet) CoerceDate(docType, field string, value any) (document.PlainDate, bool) {
 	if !s.IsDateField(docType, field) {
-		return time.Time{}, false
+		return "", false
 	}
 	str, ok := value.(string)
 	if !ok {
-		return time.Time{}, false
+		return "", false
 	}
-	return document.ParseFrontmatterDate(str)
+	if s.IsCalendarDateField(docType, field) {
+		return document.ParseFrontmatterDateText(str)
+	}
+	t, ok := document.ParseFrontmatterDate(str)
+	if !ok {
+		return "", false
+	}
+	return document.PlainDate(t.Format(time.RFC3339)), true
+}
+
+// IsCalendarDateField reports whether a field means a DATE ON A CALENDAR rather
+// than an instant in time. Obsidian types the two differently (Date versus Date
+// and time), so a value written `2026-07-14` must not come back carrying a time
+// of day it never had.
+//
+// `created` and `modified` are never calendar dates however a schema declares
+// them: 2nb writes them itself, always as a full instant, and `stale` and
+// `list --sort modified` compare them as instants.
+func (s *SchemaSet) IsCalendarDateField(docType, field string) bool {
+	if field == "created" || field == "modified" {
+		return false
+	}
+	if schema, ok := s.Types[docType]; ok {
+		if def, ok := schema.Fields[field]; ok {
+			return def.Type == "date"
+		}
+	}
+	return false
 }
 
 func (s *SchemaSet) ValidateField(docType, field string, value any) error {

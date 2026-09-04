@@ -245,8 +245,16 @@ func runObsidianMigrateProperties(cmd *cobra.Command, args []string) error {
 // it is already written plain: nothing to do. That is what makes the migration
 // idempotent, and it is the same comparison the surgical writer's nodeHoldsValue
 // makes, so a second run leaves the node exactly as the first run wrote it.
-func plannedDateRewrites(doc *document.Document, schemas *vault.SchemaSet) (map[string]time.Time, []SkippedNote) {
-	planned := map[string]time.Time{}
+// The planned value is a document.PlainDate carrying the text the AUTHOR
+// wrote, not the instant it parses to. A migration changes QUOTING and nothing
+// else, so `incident-date: "2026-07-14"` must become `incident-date:
+// 2026-07-14`. 0.23.0 planned a time.Time here, the encoder formatted it
+// RFC3339Nano, and the value came back `2026-07-14T00:00:00Z`: a time of day
+// nobody typed, on a field the schema declares `date`, which Obsidian then
+// types as Date and time instead of Date. Found by running the migration on a
+// real vault, where exactly one note had a date-only schema field.
+func plannedDateRewrites(doc *document.Document, schemas *vault.SchemaSet) (map[string]document.PlainDate, []SkippedNote) {
+	planned := map[string]document.PlainDate{}
 	var refused []SkippedNote
 	for key, value := range doc.Frontmatter {
 		if !schemas.IsDateField(doc.Type, key) {
@@ -258,13 +266,13 @@ func plannedDateRewrites(doc *document.Document, schemas *vault.SchemaSet) (map[
 			// reader formats with RFC3339 and drops the fraction, so the file
 			// and the index column disagree until it is rewritten.
 			if t.Nanosecond() != 0 {
-				planned[key] = t.Truncate(time.Second)
+				planned[key] = document.PlainDate(t.Truncate(time.Second).Format(time.RFC3339))
 			}
 		case string:
 			if t == "" {
 				continue // an emptied property is not a date to migrate
 			}
-			parsed, ok := document.ParseFrontmatterDate(t)
+			parsed, ok := document.ParseFrontmatterDateText(t)
 			if !ok {
 				refused = append(refused, SkippedNote{
 					Field: key, Value: t,
@@ -293,7 +301,7 @@ func plannedDateRewrites(doc *document.Document, schemas *vault.SchemaSet) (map[
 // re-marshal when the AST writer errors, and that fallback alphabetizes keys
 // and drops comments; across a whole vault that is a large, silent reformat
 // nobody asked for.
-func applyDateRewrites(v *vault.Vault, doc *document.Document, absPath, rel string, planned map[string]time.Time, write bool) (*MigratedNote, error) {
+func applyDateRewrites(v *vault.Vault, doc *document.Document, absPath, rel string, planned map[string]document.PlainDate, write bool) (*MigratedNote, error) {
 	original, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not be read: %w", err)
@@ -334,8 +342,20 @@ func applyDateRewrites(v *vault.Vault, doc *document.Document, absPath, rel stri
 	// and a schema date field had only the alphabetically first one checked, so
 	// a second field that came back as text rather than a date was written to
 	// disk unverified.
+	//
+	// The test is "reads back as a DATE", not "reads back as a time.Time", and
+	// the difference is load-bearing now that the rewrite keeps the author's own
+	// spelling. yaml.v3 resolves only four layouts, so a preserved zone-less
+	// `2026-04-05T09:00:00` comes back a STRING, exactly as it did before the
+	// migration ran and exactly as `frontmatterTime` already handles. Asserting
+	// time.Time here would refuse every note Obsidian's datetime editor has
+	// touched and report it as a failure.
 	for _, key := range fields {
-		if _, ok := back.Frontmatter[key].(time.Time); !ok {
+		text, ok := document.ScalarText(back.Frontmatter[key])
+		if !ok {
+			return nil, fmt.Errorf("the rewritten %q did not read back as a scalar; the note was left untouched", key)
+		}
+		if _, ok := document.ParseFrontmatterDate(text); !ok {
 			return nil, fmt.Errorf("the rewritten %q did not read back as a date; the note was left untouched", key)
 		}
 	}

@@ -2,7 +2,8 @@ package vault
 
 import (
 	"testing"
-	"time"
+
+	"github.com/apresai/2ndbrain/internal/document"
 )
 
 // dateSchemas declares one field of every FieldDef.Type the coercion cares
@@ -62,11 +63,22 @@ func TestCoerceDate_OnlyDateShapedTextInADateField(t *testing.T) {
 		value          any
 		want           string // "" means the coercion must refuse
 	}{
+		// A CALENDAR DATE keeps the spelling the caller typed; an INSTANT is
+		// normalized. Reformatting a calendar date to the instant it parses to
+		// is what wrote `2026-07-14T00:00:00Z` over `2026-07-14` in 0.23.0,
+		// inventing a time of day nobody typed and flipping Obsidian's type for
+		// that property from Date to Date and time. `created` and `modified`
+		// are instants whatever a schema says, since 2nb writes them itself and
+		// `stale` compares them.
 		{"created from the CLI string form", "note", "created", "2026-09-04T12:34:56Z", "2026-09-04T12:34:56Z"},
-		{"created from Obsidian's zone-less form", "note", "created", "2026-09-04T12:34:56", "2026-09-04T12:34:56Z"},
-		{"modified from a bare date", "note", "modified", "2026-09-04", "2026-09-04T00:00:00Z"},
-		{"a schema date field", "meeting", "held", "2026-09-04", "2026-09-04T00:00:00Z"},
-		{"a schema datetime field", "meeting", "starts_at", "2026-09-04T09:30:00", "2026-09-04T09:30:00Z"},
+		{"created from the zone-less form normalizes to an instant", "note", "created", "2026-09-04T12:34:56", "2026-09-04T12:34:56Z"},
+		{"modified from a bare date is an instant, not a calendar date", "note", "modified", "2026-09-04", "2026-09-04T00:00:00Z"},
+		{"a schema date field stays date-only", "meeting", "held", "2026-09-04", "2026-09-04"},
+		{"a schema datetime field is an instant too", "meeting", "starts_at", "2026-09-04T09:30:00", "2026-09-04T09:30:00Z"},
+		// A fraction is the one precision the reader cannot keep (it formats
+		// RFC3339), so it is normalized to the second rather than left to make
+		// the file and the index column disagree forever.
+		{"a sub-second value normalizes to the second", "note", "created", "2026-09-04T12:34:56.75Z", "2026-09-04T12:34:56Z"},
 		{"a text field is never coerced", "meeting", "summary", "2026-09-04", ""},
 		{"an undeclared field is never coerced", "meeting", "notes", "2026-09-04", ""},
 		{"unparseable text in a date field is left alone", "note", "created", "tomorrow", ""},
@@ -85,11 +97,14 @@ func TestCoerceDate_OnlyDateShapedTextInADateField(t *testing.T) {
 			if !ok {
 				t.Fatalf("CoerceDate(%q, %q, %v) refused, want %s", tc.docType, tc.field, tc.value, tc.want)
 			}
-			if s := got.Format(time.RFC3339); s != tc.want {
-				t.Errorf("CoerceDate(%q, %q, %v) = %s, want %s", tc.docType, tc.field, tc.value, s, tc.want)
+			if string(got) != tc.want {
+				t.Errorf("CoerceDate(%q, %q, %v) = %s, want %s", tc.docType, tc.field, tc.value, got, tc.want)
 			}
-			if got.Nanosecond() != 0 {
-				t.Errorf("CoerceDate returned %d ns; the encoder writes RFC3339Nano and the reader drops it", got.Nanosecond())
+			// Whatever precision it keeps, the value must still BE a date: the
+			// index column parses it back, and text that is not a date there
+			// leaves `stale` with nothing to compare.
+			if _, ok := document.ParseFrontmatterDate(string(got)); !ok {
+				t.Errorf("CoerceDate returned %q, which does not parse back as a date", got)
 			}
 		})
 	}

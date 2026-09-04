@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **`2nb obsidian migrate-properties` added a time of day to dates that never had one.** A property written as a plain day, like `incident-date: "2026-07-14"`, came back as `2026-07-14T00:00:00Z`: a midnight nobody typed, on a value that was only supposed to have its quotes removed. Obsidian then shows that property as **Date and time** instead of **Date**. This affects only properties your own `.2ndbrain/schemas.yaml` declares as `date`, since `created` and `modified` are always written by 2nb as a full timestamp, so most vaults have nothing to repair. **This shipped in 0.23.0.** If you already ran the migration, `2nb polish <path> --undo` puts an affected note back the way it was, and rerunning the migration on 0.23.1 rewrites it correctly. `2nb meta --set` and the MCP `kb_update_meta` had the same fault on the same fields and are fixed with it
+- A date property carrying a time but no timezone (`2026-07-19T17:07:29`, the shape Obsidian's own datetime editor writes) is still normalized to `2026-07-19T17:07:29Z` rather than kept as typed. That is deliberate: it states the timezone 2nb was already assuming, it does not change how Obsidian types the property, and it is the only spelling that settles after one pass. Kept as typed, the migration would rewrite the same note on every run and `2nb obsidian register-types` would stay blocked behind it forever
 
 ## [0.23.0] - 2026-09-04
 

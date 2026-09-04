@@ -1,6 +1,7 @@
 package document
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
 
@@ -158,6 +159,12 @@ func ScalarText(v any) (string, bool) {
 	switch t := v.(type) {
 	case string:
 		return t, true
+	case PlainDate:
+		// Its own text, for the same reason the type exists: rendering the
+		// instant it parses to would show a time of day nobody wrote. This is
+		// what `meta --get` reads right after a `meta --set` on a date field,
+		// before the note is parsed again.
+		return string(t), true
 	case time.Time:
 		return t.Format(time.RFC3339), true
 	case bool:
@@ -196,6 +203,13 @@ func ScalarText(v any) (string, bool) {
 // Only the value RETURNED is normalized; the map itself is never rewritten (see
 // the "Never normalize the parsed frontmatter MAP" rule in CLAUDE.md), because
 // Serialize re-marshals every key of that map back to disk.
+// A PlainDate reaches here only between a write and the next parse, and it must
+// normalize exactly as its string spelling would. Without this case the column
+// would go EMPTY on every `meta --set modified=...`, which is a worse fault
+// than the invented time-of-day PlainDate exists to prevent: `stale` skips a
+// note with no date, so the note would vanish from it entirely. The FILE keeps
+// the written precision, the COLUMN gets the resolved instant, which is the
+// division of labor this file is built on.
 func frontmatterTime(meta map[string]any, key string) (string, bool) {
 	switch t := meta[key].(type) {
 	case string:
@@ -203,6 +217,11 @@ func frontmatterTime(meta map[string]any, key string) (string, bool) {
 			return norm, true
 		}
 		return t, true
+	case PlainDate:
+		if norm, ok := normalizeDateText(string(t)); ok {
+			return norm, true
+		}
+		return string(t), true
 	case time.Time:
 		return t.Format(time.RFC3339), true
 	}
@@ -310,6 +329,108 @@ func normalizeDateText(s string) (string, bool) {
 		return t.Format(time.RFC3339), true
 	}
 	return "", false
+}
+
+// PlainDate is a date on its way to a frontmatter WRITE, carrying the precision
+// the author actually wrote.
+//
+// A time.Time cannot: yaml.v3's encoder formats one with RFC3339Nano, so a
+// value the user wrote as `2026-07-14` comes back as `2026-07-14T00:00:00Z` and
+// the file now states a time of day that was never written. Obsidian types the
+// two differently (Date versus Date and time), so it is visible, and it is the
+// same "resolution is lossy" fault this file already documents for TEXT fields:
+// `2026-07-14` and `2026-07-14T00:00:00Z` are different inputs that resolve to
+// one instant, and formatting the resolved value corrupts one of them. 0.23.0
+// shipped `obsidian migrate-properties` doing exactly that to a schema-declared
+// date field, and `meta --set incident-date=2026-07-14` did it too.
+//
+// A plain string cannot either, which is the whole reason this type exists:
+// yaml.v3 QUOTES any string that would re-resolve to a non-string tag, and a
+// quoted date is the Obsidian Text type the 0.23.0 release was cut to stop
+// writing.
+//
+// So it marshals as a plain !!timestamp scalar carrying its own text verbatim,
+// and marshals to JSON as that same text, which is what a quoted string in the
+// `documents.frontmatter` column already produced and what a time.Time produces
+// for a full timestamp. The column shape does not move.
+//
+// It is TRANSIENT and must stay that way. It lives between a write's coercion
+// and Serialize, and never survives a read: parsing an unquoted `2026-07-14`
+// off disk yields a time.Time as it always has. Only frontmatterTime and
+// ScalarText need to know it exists, because SetMeta puts one in the map and
+// those two are what read the map back before the next parse.
+type PlainDate string
+
+// MarshalYAML emits the date's own text as a plain scalar, so the encoder
+// neither quotes it nor pads it out to a precision it does not have.
+//
+// The node carries NO TAG, and that is load-bearing. Tagging it `!!timestamp`
+// makes the encoder write the tag EXPLICITLY for any spelling yaml.v3's own
+// resolver does not accept, and its resolver takes only four layouts: a
+// zone-less `2026-09-04T12:34:56`, which is precisely what Obsidian's datetime
+// editor writes, came out as `modified: !!timestamp 2026-09-04T12:34:56` and
+// then failed to decode on the next read with "cannot decode !!str as a
+// !!timestamp". The note became UNPARSEABLE, which is far worse than the
+// invented time-of-day this type exists to prevent. Caught by the contract
+// tests before it left the branch.
+//
+// Untagged, the encoder resolves the text itself and emits it plain either way:
+// yaml reads `2026-09-04` back as a time.Time and `2026-09-04T12:34:56` back as
+// a string, and frontmatterTime already normalizes both to the same instant.
+// Plain and unquoted is the whole requirement; which tag yaml infers is its
+// business.
+func (d PlainDate) MarshalYAML() (any, error) {
+	return &yaml.Node{Kind: yaml.ScalarNode, Value: string(d)}, nil
+}
+
+// MarshalJSON emits the text, matching byte for byte what the quoted string it
+// replaces already wrote into the documents.frontmatter column.
+func (d PlainDate) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(d))
+}
+
+// ParseFrontmatterDateText is ParseFrontmatterDate for the WRITE side: it
+// reports the value to STORE, and false for text that is not a date.
+//
+// A CALENDAR DATE keeps its own spelling. Anything carrying a time of day is
+// normalized to second-precision RFC3339, which is what 2nb has always written.
+// That split is not a compromise between two preferences, it is the only rule
+// that is IDEMPOTENT in both directions:
+//
+//   - `2026-07-14` written plain re-reads as a time.Time (yaml.v3 resolves the
+//     date-only layout), so a second pass sees a value already migrated and
+//     leaves it alone. Preserving it is safe, and it is the whole fix: writing
+//     the parsed instant instead produced `2026-07-14T00:00:00Z`, a time of day
+//     nobody typed, which Obsidian then types as Date and time rather than Date.
+//   - `2026-07-14T09:00:00` written plain re-reads as a STRING, because no
+//     yaml.v3 layout is T-separated without a zone. Preserving THAT would make
+//     every later pass see a string again and rewrite the same bytes forever:
+//     `obsidian migrate-properties` would report the note as changed on every
+//     run and `register-types`, which refuses while any note looks unmigrated,
+//     would stay blocked permanently. Normalizing it to `...T09:00:00Z` states
+//     the zone that was already assumed, keeps the Obsidian type identical, and
+//     settles after one pass.
+//
+// A sub-second value normalizes for a related reason: the reader formats
+// RFC3339 and drops the fraction, so preserving it would put the file and the
+// index column in permanent disagreement.
+func ParseFrontmatterDateText(s string) (PlainDate, bool) {
+	t, ok := ParseFrontmatterDate(s)
+	if !ok {
+		return "", false
+	}
+	if IsCalendarDateText(s) {
+		return PlainDate(s), true
+	}
+	return PlainDate(t.Format(time.RFC3339)), true
+}
+
+// IsCalendarDateText reports whether a date's text names a day and nothing
+// finer. It is the yaml.v3 date-only layout, so exactly the values that resolve
+// back to a time.Time when written plain.
+func IsCalendarDateText(s string) bool {
+	_, err := time.Parse("2006-1-2", s)
+	return err == nil
 }
 
 // frontmatterText reads a TEXT field (id, title, type, status) as the note
