@@ -259,14 +259,31 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 	doc.Path = relPath
 	doc.ComputeContentHash()
 
-	// Ensure document has an ID (look up existing surrogate ID or generate a new one)
+	// Ensure the document has an ID: reuse the surrogate one this path already
+	// carries, and mint a new one only when the path has genuinely never been
+	// indexed.
+	//
+	// Only sql.ErrNoRows means "never indexed". Treating EVERY lookup error as
+	// that (the previous `if err == nil { ... } else { new uuid }`) mints a
+	// fresh id for a note that already has a row, and the upsert then fails on
+	// the documents.path UNIQUE constraint with a message that names a
+	// constraint rather than the contention that caused it. A transient
+	// SQLITE_BUSY is exactly that case, and it is reachable: an app or plugin
+	// holding a read while the CLI reindexes one note is the normal state of
+	// this product. Returning the error instead lets RetryBusy (which already
+	// wraps this whole function, and matches through wrapping) retry and
+	// succeed. dropUnparseableRow, ten lines up, already made this
+	// distinction; this site had not.
 	if doc.ID == "" {
 		var existingID string
 		err := db.Conn().QueryRow("SELECT id FROM documents WHERE path = ?", relPath).Scan(&existingID)
-		if err == nil {
+		switch {
+		case err == nil:
 			doc.ID = existingID
-		} else {
+		case errors.Is(err, sql.ErrNoRows):
 			doc.ID = uuid.New().String()
+		default:
+			return fmt.Errorf("look up the index row for %s: %w", relPath, err)
 		}
 	}
 
