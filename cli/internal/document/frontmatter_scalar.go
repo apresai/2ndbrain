@@ -190,11 +190,123 @@ func ScalarText(v any) (string, bool) {
 // Obsidian's Date property writes). A number, a boolean, a list or a mapping
 // under `modified:` is not a date, and coercing one to text would put an
 // unparseable value in a timestamp column instead of leaving it empty.
+//
+// The STRING case is normalized too, through normalizeDateText, because a
+// string here does not mean "not a date": it means yaml.v3 did not RESOLVE one.
+// Only the value RETURNED is normalized; the map itself is never rewritten (see
+// the "Never normalize the parsed frontmatter MAP" rule in CLAUDE.md), because
+// Serialize re-marshals every key of that map back to disk.
 func frontmatterTime(meta map[string]any, key string) (string, bool) {
 	switch t := meta[key].(type) {
 	case string:
+		if norm, ok := normalizeDateText(t); ok {
+			return norm, true
+		}
 		return t, true
 	case time.Time:
+		return t.Format(time.RFC3339), true
+	}
+	return "", false
+}
+
+// dateTextLayouts are the spellings of a date that reach frontmatterTime as a
+// STRING, in the order they are tried.
+//
+// ORDER IS NOT LOAD-BEARING, and the table used to claim it was. time.Parse is
+// anchored: a layout that does not consume the WHOLE value fails with "extra
+// text" rather than truncating it, so `2006-1-2T15:4` cannot claim
+// `2026-09-04T12:34:56` and `2006-1-2` cannot claim a value carrying a time.
+// The order here is most-specific-first only so the common shapes match early,
+// and TestParseFrontmatterDate_AShorterLayoutNeverTruncates pins the property
+// the order is NOT what provides. Stating it twice, once as the reason the
+// table is safe and once as a note that it is not, is how a reader ends up
+// trusting the wrong half.
+//
+// yaml.v3 resolves only four layouts to time.Time (resolve.go's
+// allowedTimestampFormats): RFC3339Nano with short fields, its lower-case "t"
+// twin, `2006-1-2 15:4:5.999999999` (space separated, no zone) and `2006-1-2`.
+// Anything else stays a Go string, and so does EVERY quoted value whatever its
+// shape. Both are dates, and both used to land in documents.created_at /
+// modified_at verbatim.
+//
+// FOUR entries look inert and are not: yaml.v3's own four are all here
+// verbatim, so their UNQUOTED forms never reach the string case. They reach it
+// two other ways: QUOTED (`created: "2026-09-04"` is a plain !!str, which is
+// exactly the shape 2nb has been writing), and from setMetaDate (document.go),
+// which calls this on the raw CLI string a `meta --set modified=...` supplied.
+// Do not delete them as dead.
+//
+// The T-separated zone-less forms are the load-bearing ones: they are what
+// Obsidian's own datetime property editor writes, they are on NO yaml.v3 layout
+// list, and without them `stale` reported DaysStale 0 for every note Obsidian
+// had touched.
+//
+// The table stops at spellings it can justify rather than implementing
+// ISO-8601 in general. Two axes vary. The SEPARATOR: yaml.v3 accepts `T` and
+// its lower-case twin `t`, and a space only without a zone (`meta --set
+// created=2026-09-04t12:34:56Z` reached CoerceDate, failed, and was stored as a
+// quoted string, which is the Text type this release exists to stop writing).
+// The PRECISION: minutes as well as seconds, because Obsidian's editor writes a
+// minute-precision value and neither `2026-09-04T12:34Z` nor
+// `2026-09-04T12:34+02:00` is on any yaml.v3 layout, so `stale` reported 0 days
+// for those too.
+//
+// Eight of the ten entries name a writer that way. The two lower-case ZONE-LESS
+// entries do not, and are here for SYMMETRY rather than because anything is
+// known to emit them: yaml.v3's lower-case layout carries a zone and Obsidian
+// writes an upper-case `T`, so nothing produces `2026-09-04t12:34:56`. A reader
+// that accepts `t` with a zone and rejects the same `t` without one is a trap,
+// and the cost of closing it is one table row each. Saying they have a named
+// writer would be the kind of claim that quietly stops being true.
+//
+// The short field widths are yaml.v3's own spelling: `1`, `2`, `4` and `5`
+// accept a zero-padded value as well as a bare one, and a trailing
+// `.999999999` makes the fraction optional, so `2006-1-2T15:4:5.999999999Z07:00`
+// covers RFC3339 and every unpadded or fractional spelling of it in one entry.
+var dateTextLayouts = []string{
+	"2006-1-2T15:4:5.999999999Z07:00", // yaml.v3, and RFC3339 with it
+	"2006-1-2t15:4:5.999999999Z07:00", // yaml.v3's lower-case twin
+	"2006-1-2T15:4Z07:00",             // minute precision, zone carried
+	"2006-1-2t15:4Z07:00",
+	"2006-1-2T15:4:5.999999999", // Obsidian's datetime editor
+	"2006-1-2t15:4:5.999999999",
+	"2006-1-2T15:4", // Obsidian, minute precision
+	"2006-1-2t15:4",
+	"2006-1-2 15:4:5.999999999", // yaml.v3, space separated, no zone
+	"2006-1-2",                  // yaml.v3, date only
+}
+
+// ParseFrontmatterDate parses a date spelled as frontmatter text, at SECOND
+// precision. It reports false for text that is not a date, so a caller passes
+// the text through untouched rather than inventing an instant.
+//
+// It is the single date vocabulary for both directions. Reading, it backs
+// normalizeDateText. WRITING, it is what turns the raw string a `meta --set` or
+// a `kb_update_meta` supplied into the time.Time the encoder emits UNQUOTED,
+// which is the form Obsidian's Properties panel types as Date and time
+// (vault.SchemaSet.CoerceDate is the write-side entry point).
+//
+// A zone-less layout parses as UTC, which is what time.Parse does with no zone
+// in the layout and what yaml.v3 already produces for its own two zone-less
+// layouts. The truncation matters on the WRITE side: yaml.v3's encoder formats
+// a time.Time with RFC3339Nano, so a sub-second value would be written to the
+// file at a precision the reader's time.RFC3339 format then drops, and the file
+// and the index column would disagree from the moment of the write.
+func ParseFrontmatterDate(s string) (time.Time, bool) {
+	for _, layout := range dateTextLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.Truncate(time.Second), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// normalizeDateText reports a date spelled as text in RFC3339, the one format
+// the index column stores, and false for text that is not a date. Normalizing
+// is an improvement layered on the old behavior, never a filter: unrecognized
+// text is passed through by the caller exactly as it was.
+func normalizeDateText(s string) (string, bool) {
+	if t, ok := ParseFrontmatterDate(s); ok {
 		return t.Format(time.RFC3339), true
 	}
 	return "", false

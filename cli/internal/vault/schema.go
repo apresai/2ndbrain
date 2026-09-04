@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/apresai/2ndbrain/internal/document"
 )
 
 type SchemaSet struct {
@@ -163,6 +166,50 @@ func (s *SchemaSet) IsListField(docType, field string) bool {
 		}
 	}
 	return false
+}
+
+// IsDateField reports whether a frontmatter field holds a DATE rather than a
+// scalar of some other kind. True for the universal "created" and "modified"
+// (every doc type carries those, declared or not, and NewDocument writes them),
+// and for any field the type schema marks "date" or "datetime".
+//
+// This is the first consumer of FieldDef.Type beyond "list" and "tags", which
+// IsListField reads. A schema that declares a date field has, until now, had
+// that declaration ignored entirely.
+func (s *SchemaSet) IsDateField(docType, field string) bool {
+	if field == "created" || field == "modified" {
+		return true
+	}
+	if schema, ok := s.Types[docType]; ok {
+		if def, ok := schema.Fields[field]; ok {
+			return def.Type == "date" || def.Type == "datetime"
+		}
+	}
+	return false
+}
+
+// CoerceDate reports the time.Time a DATE field's value should be STORED as,
+// and false when the field is not a date or the value is not date-shaped text.
+//
+// It exists because the two write surfaces would otherwise diverge. `meta --set`
+// passes the raw CLI string and `kb_update_meta` passes the raw JSON value, so
+// once a note's `created` node holds an unquoted date, writing a string over it
+// makes the surgical writer requote it and the note is back to Obsidian's Text
+// type. Both callers route through here so the CLI and the MCP server cannot
+// disagree about what a date is.
+//
+// A value it refuses is stored exactly as the caller supplied it, which is what
+// every value did before: coercion is additive, and `--set created=tomorrow`
+// still writes that text rather than failing.
+func (s *SchemaSet) CoerceDate(docType, field string, value any) (time.Time, bool) {
+	if !s.IsDateField(docType, field) {
+		return time.Time{}, false
+	}
+	str, ok := value.(string)
+	if !ok {
+		return time.Time{}, false
+	}
+	return document.ParseFrontmatterDate(str)
 }
 
 func (s *SchemaSet) ValidateField(docType, field string, value any) error {

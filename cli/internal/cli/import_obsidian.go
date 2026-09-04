@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,9 +33,24 @@ func init() {
 }
 
 // isObsidianSkipDir returns true for directories that should not be imported.
-func isObsidianSkipDir(base string) bool {
-	return base == ".obsidian" || base == "templates" ||
-		strings.HasPrefix(base, ".") || base == "node_modules"
+//
+// The template rule is the SHARED one (vault.ObsidianTemplateFolders resolved
+// against the walked root), not a hardcoded basename. It used to skip any
+// directory named "templates" at any depth, which disagreed with what the
+// indexer excluded; a file-level backstop (vault.HasTemplatePlaceholders in
+// copyMarkdownFiles) covers the templates that basename rule used to catch,
+// wherever they live, and covers them by what they ARE rather than by what
+// their parent folder is called.
+func isObsidianSkipDir(root, path string, excluded []string) bool {
+	base := filepath.Base(path)
+	if base == ".obsidian" || strings.HasPrefix(base, ".") || base == "node_modules" {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return vault.IsExcludedFolderPath(filepath.ToSlash(rel), excluded)
 }
 
 // inlineTagRe matches #tag patterns that are NOT headings.
@@ -99,13 +115,13 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 	// Walk and rewrite the COPIES in the target directory so
 	// every file has a UUID when IndexVault runs.
 	stats := &importObsidianStats{}
+	targetExcluded := vault.ObsidianTemplateFolders(targetRoot)
 	if err := filepath.Walk(targetRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip inaccessible paths
 		}
 		if info.IsDir() {
-			base := filepath.Base(path)
-			if isObsidianSkipDir(base) {
+			if isObsidianSkipDir(targetRoot, path, targetExcluded) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -171,13 +187,16 @@ func runImportObsidian(cmd *cobra.Command, args []string) error {
 // copyMarkdownFiles copies .md files from src to dst, preserving directory structure.
 // Skips .obsidian/, hidden directories, and non-markdown files.
 func copyMarkdownFiles(src, dst string) error {
+	// The source vault's OWN template configuration decides what a template is
+	// there. It is a different vault from the target, so it gets its own
+	// resolution.
+	excluded := vault.ObsidianTemplateFolders(src)
 	return filepath.Walk(src, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
 		if info.IsDir() {
-			base := filepath.Base(path)
-			if isObsidianSkipDir(base) {
+			if isObsidianSkipDir(src, path, excluded) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -201,6 +220,14 @@ func copyMarkdownFiles(src, dst string) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", path, err)
+		}
+		// The file-level half of the template definition, applied at any depth.
+		// A template's frontmatter is deliberately not valid YAML, so importing
+		// one mints a note that can never parse, in a vault the user did not
+		// author. Import is a one-way copy, so this is the cheap side to err on.
+		if vault.HasTemplatePlaceholders(data) {
+			slog.Debug("import skipping a template (unresolved {{placeholders}} in frontmatter)", "path", path)
+			return nil
 		}
 		if err := os.WriteFile(dstPath, data, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", dstPath, err)
@@ -275,8 +302,13 @@ func processObsidianFile(path string) (int, int, error) {
 		meta["status"] = "draft"
 	}
 
-	// Ensure created / modified timestamps.
-	now := time.Now().UTC().Format(time.RFC3339)
+	// Ensure created / modified timestamps. A time.Time, not a string, for the
+	// reason NewDocument gives: yaml.v3 quotes a string that would re-resolve
+	// to a timestamp, and Obsidian reads a quoted ISO value as Text. An
+	// imported note must land with the same property types a created one gets.
+	// Truncated to the second so the file matches the index column, since the
+	// encoder formats with RFC3339Nano.
+	now := time.Now().UTC().Truncate(time.Second)
 	if _, ok := meta["created"]; !ok {
 		meta["created"] = now
 	}

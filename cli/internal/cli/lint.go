@@ -140,9 +140,19 @@ func runLint(cmd *cobra.Command, args []string) error {
 	// GUI can show "N drift-repairable / M need a decision" before any click.
 	repairIdx := polish.NewRepairIndex(docs, aliasIndex)
 
+	// One resolution for the whole run, the same shape IndexVault takes.
+	excludedFolders := vault.ObsidianTemplateFolders(v.Root)
+
 	for _, path := range matches {
 		relPath := v.RelPath(path)
 		if vault.IsIgnored(relPath) {
+			continue
+		}
+		// The FOLDER half of the same definition. A template folder is not
+		// indexed, so linting it reports findings on notes no other command
+		// will ever see. Read-only: this drops findings, never files.
+		if folder, ok := vault.ExcludedFolderFor(relPath, excludedFolders); ok {
+			slog.Debug("lint skipping a note in an Obsidian template folder", "path", relPath, "folder", folder)
 			continue
 		}
 
@@ -150,9 +160,12 @@ func runLint(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			// Obsidian template files carry unresolved {{placeholder}} tokens in
 			// their frontmatter (e.g. `date: {{date}}`) that are deliberately
-			// invalid YAML. They are scaffolding, not notes — the indexer skips
-			// them too — so a parse failure there is not a real lint error.
-			if raw, rerr := os.ReadFile(path); rerr == nil && hasTemplatePlaceholders(raw) {
+			// invalid YAML. They are scaffolding, not notes, so a parse failure
+			// there is not a real lint error. This is the FILE-level half of the
+			// shared definition, and it stays on the parse-failure path only:
+			// widening it would silently skip a note that parses and merely
+			// mentions {{ }} in its frontmatter.
+			if raw, rerr := os.ReadFile(path); rerr == nil && vault.HasTemplatePlaceholders(raw) {
 				slog.Debug("lint skipping template (unresolved {{placeholders}} in frontmatter)", "path", relPath)
 				continue
 			}
@@ -280,24 +293,6 @@ func runLint(cmd *cobra.Command, args []string) error {
 		os.Exit(ExitValidation)
 	}
 	return nil
-}
-
-// hasTemplatePlaceholders reports whether a file's YAML frontmatter contains
-// unresolved {{...}} template tokens (Obsidian core Templates / Templater).
-// Such files are scaffolding, not notes; their frontmatter is deliberately not
-// valid YAML, so lint skips them rather than reporting a false-positive parse
-// error. Only the frontmatter block is inspected so a body that merely mentions
-// {{ }} (e.g. a note about templating) is never mistaken for a template.
-func hasTemplatePlaceholders(raw []byte) bool {
-	s := string(raw)
-	if !strings.HasPrefix(s, "---") {
-		return false
-	}
-	rest := s[3:]
-	if end := strings.Index(rest, "\n---"); end >= 0 {
-		rest = rest[:end]
-	}
-	return strings.Contains(rest, "{{")
 }
 
 // isAssetOrAnchorTarget reports whether a link target should be excluded from

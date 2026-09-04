@@ -59,6 +59,24 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	     affected notes, so charging every user for a whole-vault rebuild is
 //	     the wrong trade.
 //	     Fix: 2nb index.
+//	  5  a frontmatter date is read as a date however it is SPELLED, and 2nb
+//	     writes one Obsidian can type. yaml.v3 resolves only four layouts to
+//	     time.Time and NONE of them is T-separated without a zone, which is
+//	     exactly what Obsidian's own datetime property editor writes
+//	     (`2026-09-04T12:34:56`); every QUOTED date is a plain !!str whatever
+//	     its shape, and `created: "2026-09-04"` is a shape 2nb itself wrote.
+//	     All of those landed in documents.created_at / modified_at VERBATIM,
+//	     where time.Parse(time.RFC3339, ...) in `stale` fails, so DaysStale was
+//	     silently 0 and `list --sort modified` ordered on unparseable text.
+//	     They now normalize to one comparable instant, so `stale` output and
+//	     modified-order change for existing vaults. That is what this counter
+//	     is for.
+//	     NOT an EmbedGeneration bump: this moves no body text at all. The
+//	     content hash is computed from the parsed BODY, which frontmatter
+//	     cannot move, so no chunk and no vector is affected, and charging every
+//	     user a whole-vault re-embed for a frontmatter change would repeat the
+//	     mistake entries 3 and 4 were written to avoid.
+//	     Fix: 2nb index.
 //
 // If you change the watched files (see `make check-index-generation`) but a
 // reindex is genuinely NOT needed, add a `Reindex-Not-Needed: <reason>` trailer
@@ -66,7 +84,7 @@ import "github.com/apresai/2ndbrain/internal/store"
 const (
 	// IndexGeneration bumps for index-only logic changes (FTS content, link/tag
 	// extraction) that do NOT alter chunk boundaries or embeddings. Fix: 2nb index.
-	IndexGeneration = 4
+	IndexGeneration = 5
 
 	// EmbedGeneration bumps for chunking OR embedding-production logic changes
 	// (chunk boundaries, purpose, pooling, normalization) at the SAME model and

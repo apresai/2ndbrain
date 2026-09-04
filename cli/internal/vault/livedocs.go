@@ -41,6 +41,10 @@ import (
 func CollectLiveDocs(root string) ([]store.DocInfo, map[string][]string, error) {
 	var docs []store.DocInfo
 	aliasIndex := make(map[string][]string)
+	// Resolved ONCE for the whole walk, not per file. There is no *Vault here
+	// (this takes a bare root, and every caller passes v.Root), so it calls the
+	// free resolver rather than the memoized field.
+	excluded := ObsidianTemplateFolders(root)
 	if werr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -49,6 +53,15 @@ func CollectLiveDocs(root string) ([]store.DocInfo, map[string][]string, error) 
 			if path != root {
 				base := filepath.Base(path)
 				if strings.HasPrefix(base, ".") || base == "node_modules" {
+					return filepath.SkipDir
+				}
+				// The indexer skips template folders whole; so must this, or
+				// the resolver sees documents the DB never held. That gap was
+				// live: templates/note.md was a candidate BY TITLE for every
+				// lint finding, repair-links, relink and suggest-target, and it
+				// could make a legitimate [[name]] read as ambiguous and refuse
+				// a non-force `move`.
+				if rel, rerr := filepath.Rel(root, path); rerr == nil && IsExcludedFolderPath(filepath.ToSlash(rel), excluded) {
 					return filepath.SkipDir
 				}
 			}

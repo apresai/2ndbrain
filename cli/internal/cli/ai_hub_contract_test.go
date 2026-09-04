@@ -953,6 +953,8 @@ func resetCLIFlags(t *testing.T) {
 	polishSystemFlag, polishMaxTokens = "", 4096
 	repairLinksWrite, repairLinksTargets = false, nil
 	relinkFrom, relinkTo, relinkWrite = "", "", false
+	migratePropertiesWrite = false
+	registerTypesWrite, registerTypesForce = false, false
 	unlinkTarget, unlinkWrite = "", false
 	suggestTargetLimit = 6
 	suggestTargetSource = ""

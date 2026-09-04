@@ -149,8 +149,31 @@ func ParseFile(path string) (*Document, error) {
 	return Parse(path, content)
 }
 
+// NewDocument builds a fresh note from a template.
+//
+// created and modified go into the map as a time.Time, NOT as a string. yaml.v3
+// double-quotes any string that would re-resolve to a non-string tag, so the
+// string form was written as `created: "2026-09-04T12:34:56Z"`, and Obsidian
+// reads a QUOTED ISO value as Text: no date picker, no date sorting, no
+// date-based query, on every note 2nb has ever written. A time.Time is emitted
+// plain by both write paths, and Obsidian types it as Date and time.
+//
+// A time.Time and not a yaml.Node, though both emit identical YAML. A Node in
+// the map would serialize its Kind/Style/Tag/Line into the JSON
+// documents.frontmatter column and out through every `search --json` row, has
+// no ScalarText case so `meta --get` would render Go syntax, and could never
+// satisfy nodeHoldsValue, so every later `meta --set` and `tag add` would
+// rewrite the date lines forever. A time.Time marshals to JSON as the same
+// RFC3339 string the column already held.
+//
+// Truncate(time.Second) is load-bearing. yaml.v3's encoder formats a time.Time
+// with RFC3339Nano, so without it a fresh note gets
+// `created: 2026-09-04T12:34:56.302914Z` on disk while CreatedAt (formatted
+// with time.RFC3339) holds second precision: file and index column disagree
+// from birth.
 func NewDocument(title, docType, templateBody string) *Document {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Truncate(time.Second)
+	nowText := now.Format(time.RFC3339)
 	id := uuid.New().String()
 
 	meta := map[string]any{
@@ -169,8 +192,8 @@ func NewDocument(title, docType, templateBody string) *Document {
 		Type:        docType,
 		Status:      "draft",
 		Tags:        []string{},
-		CreatedAt:   now,
-		ModifiedAt:  now,
+		CreatedAt:   nowText,
+		ModifiedAt:  nowText,
 		Frontmatter: meta,
 		Body:        templateBody,
 	}

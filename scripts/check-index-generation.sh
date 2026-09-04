@@ -39,6 +39,7 @@ WATCHED_INDEX=(
   cli/internal/store/docs.go
   cli/internal/store/resolve.go
   cli/internal/document/frontmatter.go
+  cli/internal/document/frontmatter_scalar.go
   cli/internal/document/document.go
 )
 GEN_FILE="cli/internal/vault/generation.go"

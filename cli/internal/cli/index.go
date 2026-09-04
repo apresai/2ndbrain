@@ -273,6 +273,13 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		// The "Indexed N files, N chunks, N links" line is a contract the macOS
 		// app parses; anything new goes beside it, on stderr, never inside it.
 		fmt.Printf("Indexed %d files, %d chunks, %d links\n", stats.DocsIndexed, stats.ChunksCreated, stats.LinksFound)
+		// A purge is a DELETION of rows, chunks and vectors, so it belongs in
+		// the human summary and not only in --json: a user whose notes left the
+		// index because a folder became excluded must be told, in the run that
+		// did it. Beside the contract line on stderr, never inside it.
+		if stats.ExcludedPurged > 0 {
+			fmt.Fprintf(os.Stderr, "  Removed %d indexed note(s) now under an excluded template folder.\n", stats.ExcludedPurged)
+		}
 		reportUnparseable(unparseable)
 		reportUnreadable(unreadable)
 		if stats.DocsIndexed > 0 {

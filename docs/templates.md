@@ -2,6 +2,54 @@
 
 2ndbrain ships with six built-in document types, each with a template and schema.
 
+## Property types and Obsidian
+
+Every note `2nb create` writes carries `id`, `title`, `type`, `status`, `tags`,
+`created` and `modified`. Obsidian infers each property's TYPE from how its
+value is written, so the spelling is part of the template contract:
+
+- `created` and `modified` are written as a PLAIN, second-precision RFC3339
+  value (`created: 2026-09-04T12:34:56Z`), which Obsidian types as **Date and
+  time**. They are held in the frontmatter map as a `time.Time`, not a string,
+  because yaml.v3 quotes any Go string that would re-resolve to a timestamp and
+  Obsidian reads a quoted ISO value as **Text**: no date picker, no date
+  sorting, no date-based query. Notes written before 0.23.0 carry the quoted
+  form; `2nb obsidian migrate-properties` repairs them.
+- `2nb meta --set` and the MCP `kb_update_meta` coerce a date-shaped value for
+  those fields (and for any field a schema declares `date` or `datetime`) to the
+  same plain form, so an ordinary edit cannot revert a note to Text.
+- `2nb obsidian register-types` declares the types in `.obsidian/types.json`, so
+  the right editor appears even for a note where the property is empty. `status`
+  is declared `text`: Obsidian has no enum type, and its list editor would write
+  a YAML sequence back, which reads as no status at all.
+
+## Obsidian template files
+
+A template's frontmatter is deliberately not valid YAML (`date: {{date}}` is a
+flow mapping used as a mapping key), so it is scaffolding, not a note. 2nb
+recognizes one in two ways: it is inside a template FOLDER (Obsidian's own
+`templates.json` / Templater setting, or a top-level `templates/` when the
+Templates core plugin is enabled and that folder exists), or its frontmatter
+carries a `{{placeholder}}`. Neither is indexed, neither is a link-resolution
+candidate, and neither is migrated.
+
+If you keep a template of your own, prefer leaving the date placeholder OUT of
+the frontmatter and putting `{{date}}` in the BODY, where it is ordinary
+markdown:
+
+```markdown
+---
+title:
+tags: [daily]
+---
+
+# {{date}}
+```
+
+Quoting the placeholder (`date: "{{date}}"`) makes the YAML valid but produces a
+QUOTED value after substitution, which is exactly the Text-not-date shape this
+release exists to fix.
+
 **Required frontmatter per type:** `adr`, `runbook`, `prd`, and `prfaq` require `title` + `status`; `note` requires only `title`; `postmortem` requires `title` + `status` + `incident-date`.
 
 ## ADR (Architecture Decision Record)

@@ -76,6 +76,13 @@ func IndexVault(v *Vault, onProgress func(path string)) (*IndexStats, error) {
 	// key that disappears when it is empty forces every consumer to special-case
 	// its absence.
 	stats := &IndexStats{Unparseable: []UnparseableDoc{}, Unreadable: []UnparseableDoc{}}
+	// Resolved ONCE per run, not per file. Deliberately NOT cached on the Vault:
+	// every caller of IndexSingleFile invokes it once per process (the macOS app
+	// shells out a fresh `2nb index --doc` on each save, AppState.swift), so a
+	// cache would save nothing there, while the long-lived MCP server would hold
+	// a stale answer across an Obsidian settings change. That answer governs
+	// purgeStale, which DELETES rows, so stale is the expensive direction and
+	// three file reads plus a Stat is the cheap one.
 	excluded := ObsidianTemplateFolders(v.Root)
 	if len(excluded) > 0 {
 		slog.Debug("excluding obsidian template folders from the index", "folders", excluded)

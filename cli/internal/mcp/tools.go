@@ -575,6 +575,14 @@ func (h *handlers) handleKBUpdateMeta(ctx context.Context, request mcplib.CallTo
 				}
 			}
 		}
+		// Same date coercion as the CLI `meta --set` path, through the same
+		// helper: an agent writing `created` must not requote a date node the
+		// CLI wrote plain, and the two surfaces cannot be allowed to disagree
+		// about what counts as a date.
+		if t, ok := h.vault.Schemas.CoerceDate(doc.Type, k, v); ok {
+			doc.SetMeta(k, t)
+			continue
+		}
 		doc.SetMeta(k, v)
 	}
 
