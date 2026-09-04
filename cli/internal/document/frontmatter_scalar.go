@@ -97,21 +97,53 @@ func rawFrontmatterOf(yamlStr string) rawFrontmatter {
 	}
 	raw := make(rawFrontmatter, len(root.Content)/2)
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		key, val := root.Content[i].Value, root.Content[i+1]
+		key, val := root.Content[i].Value, resolveAlias(root.Content[i+1])
 		switch val.Kind {
 		case yaml.ScalarNode:
-			raw[key] = rawValue{text: val.Value, ok: true}
+			if text, ok := scalarNodeText(val); ok {
+				raw[key] = rawValue{text: text, ok: true}
+			}
 		case yaml.SequenceNode:
 			items := make([]rawItem, len(val.Content))
 			for j, item := range val.Content {
-				if item.Kind == yaml.ScalarNode {
-					items[j] = rawItem{text: item.Value, ok: true}
+				item = resolveAlias(item)
+				if item.Kind != yaml.ScalarNode {
+					continue
+				}
+				if text, ok := scalarNodeText(item); ok {
+					items[j] = rawItem{text: text, ok: true}
 				}
 			}
 			raw[key] = rawValue{items: items}
 		}
 	}
 	return raw
+}
+
+// resolveAlias follows an alias node to the anchor it names, so `use: *a` reads
+// the anchored VALUE rather than the alias node, whose own Value is the anchor
+// NAME ("a"). Anything else is returned unchanged.
+func resolveAlias(n *yaml.Node) *yaml.Node {
+	if n != nil && n.Kind == yaml.AliasNode && n.Alias != nil {
+		return n.Alias
+	}
+	return n
+}
+
+// scalarNodeText returns a scalar node's verbatim text, reporting false for a
+// NULL scalar.
+//
+// A null has no text: `title: null` and `type: ~` mean the property is empty,
+// and the node's Value is the literal spelling of the null ("null", "~", or ""
+// for a bare `title:`). Taking that spelling as the value is how a note with an
+// emptied property indexed with the literal title "null", and how a null in a
+// tag list became the tag "null". The resolved map holds nil for these, and nil
+// is what every reader already treats as absent.
+func scalarNodeText(n *yaml.Node) (string, bool) {
+	if n.Tag == "!!null" {
+		return "", false
+	}
+	return n.Value, true
 }
 
 // ScalarText renders a RESOLVED frontmatter scalar as text, reporting false for

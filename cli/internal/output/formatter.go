@@ -416,6 +416,12 @@ func writeDelimited(w io.Writer, data any, comma rune) error {
 	// then JSON-unquote to read one word. The composite fallback stays, because
 	// a map or a struct genuinely is compact JSON in a cell.
 	if v.IsValid() {
+		// A value that renders ITSELF as text (time.Time) is a scalar too, and
+		// it is a STRUCT, so the kind switch below never saw it: `meta --get
+		// created --format csv` came out as """2020-01-01T00:00:00Z""".
+		if _, ok := data.(encoding.TextMarshaler); ok && !isNilValue(v) {
+			return cw.Write([]string{delimitedCell(v)})
+		}
 		switch v.Kind() {
 		case reflect.String, reflect.Bool,
 			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,

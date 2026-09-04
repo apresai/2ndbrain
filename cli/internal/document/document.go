@@ -244,6 +244,19 @@ func (d *Document) SetMeta(key string, value any) {
 		}
 	case "tags":
 		d.Tags = extractTags(d.Frontmatter, d.raw)
+	case "created":
+		// The DATE fields need syncing for the same reason the others do: the
+		// index reads these struct fields, not the map, so `meta --set
+		// modified=...` followed by a reindex wrote the OLD timestamp. They go
+		// through the same normalization the reader uses, so a value set here
+		// lands in the column in the same form a parse would have produced.
+		if s, ok := frontmatterTime(d.Frontmatter, "created"); ok {
+			d.CreatedAt = s
+		}
+	case "modified":
+		if s, ok := frontmatterTime(d.Frontmatter, "modified"); ok {
+			d.ModifiedAt = s
+		}
 	}
 }
 
@@ -402,6 +415,16 @@ func (d *Document) MetaText(key string) (string, bool) {
 	return d.raw.scalar(key)
 }
 
+// ForgetMetaText drops the note's verbatim text for one key, for a caller that
+// REMOVES a key from Frontmatter directly rather than through SetMeta (which
+// invalidates it itself). Leaving it behind would let a stale reading shadow a
+// later write of the same key on this document.
+func (d *Document) ForgetMetaText(key string) {
+	if d != nil {
+		delete(d.raw, key)
+	}
+}
+
 // MetaTextItem is MetaText for one element of a top-level frontmatter LIST,
 // index-aligned with the decoded []any.
 func (d *Document) MetaTextItem(key string, i int) (string, bool) {
@@ -409,6 +432,17 @@ func (d *Document) MetaTextItem(key string, i int) (string, bool) {
 		return "", false
 	}
 	return d.raw.item(key, i)
+}
+
+// TagsOf reads a document's frontmatter tags as the note wrote them. Prefer it
+// over reading the map wherever a *Document is in hand: a caller that asserted
+// item.(string) DROPPED every unquoted date, integer and boolean tag, and the
+// tag commands then wrote that shortened list back to the file.
+func TagsOf(d *Document) []string {
+	if d == nil {
+		return nil
+	}
+	return scalarList(d.Frontmatter, d.raw, "tags")
 }
 
 // AliasesOf reads a document's frontmatter aliases as the note wrote them.

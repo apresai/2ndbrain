@@ -106,7 +106,7 @@ func runTagMutate(cmd *cobra.Command, args []string, add bool) error {
 		return exitWithError(ExitValidation, fmt.Sprintf("error: cannot edit tags of a read-only %s file (%s); .canvas/.base files are indexed read-only", doc.Type, relPath))
 	}
 
-	current := frontmatterTags(doc.Frontmatter)
+	current := document.TagsOf(doc)
 	var newTags []string
 	if add {
 		// Validate each new tag against the schema (tags carry no enum by

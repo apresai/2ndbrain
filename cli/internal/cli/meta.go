@@ -354,6 +354,7 @@ func removeMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 			return exitWithError(ExitNotFound, fmt.Sprintf("error: frontmatter key %q not found", key))
 		}
 
+		doc.ForgetMetaText(key)
 		delete(doc.Frontmatter, key)
 
 		// Mirror SetMeta's struct-field sync in reverse: clearing a key that

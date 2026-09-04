@@ -275,3 +275,93 @@ func TestContract_ScalarPayloadIsOnePlainCell(t *testing.T) {
 		}
 	}
 }
+
+// End to end on disk: a frontmatter-only command must not touch the body, and
+// must not touch a property nobody edited.
+//
+// Two bugs met here. The reader ended the frontmatter at the FIRST "\n---"
+// anywhere in the note with no check that it was at end of file, so a body
+// containing a horizontal rule was truncated on read; and Serialize rewrites
+// the whole file from that body, so `meta --set` then wrote the truncated
+// version to disk. Separately the writer re-marshaled EVERY key from the parsed
+// map, so an unrelated edit rewrote untouched properties. Both verified against
+// the released 0.22.3.
+func TestContract_MetaSetTouchesOnlyWhatItWasAsked(t *testing.T) {
+	_, root := newContractVault(t)
+	path := filepath.Join(root, "n.md")
+	src := "---\n" +
+		"title: 2026-09-04\n" +
+		"type: note\n" +
+		"status: draft\n" +
+		"modified: 2020-01-01\n" +
+		"id: 007\n" +
+		"num: 3.50\n" +
+		"tags: [2026-09-04, 42, real]\n" +
+		"note: v # keep me\n" +
+		"---\n" +
+		"real body that must survive\n" +
+		"\n" +
+		"---\n" +
+		"\n" +
+		"and more under a horizontal rule\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLIArgs(t, root, "meta", "n.md", "--set", "status=complete"); err != nil {
+		t.Fatalf("meta --set: %v\n%s", err, out)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(after)
+
+	for _, line := range []string{
+		"title: 2026-09-04\n",
+		"modified: 2020-01-01\n",
+		"id: 007\n",
+		"num: 3.50\n",
+		"tags: [2026-09-04, 42, real]\n",
+		"note: v # keep me\n",
+	} {
+		if !strings.Contains(got, line) {
+			t.Errorf("the untouched property %q was rewritten:\n%s", strings.TrimSuffix(line, "\n"), got)
+		}
+	}
+	if !strings.Contains(got, "status: complete") {
+		t.Errorf("the property that WAS set is missing:\n%s", got)
+	}
+	for _, want := range []string{"real body that must survive", "and more under a horizontal rule"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the body lost %q:\n%s", want, got)
+		}
+	}
+}
+
+// The tag commands used to assert item.(string) on the parsed map, so every
+// unquoted date, integer and boolean tag was DROPPED from the list they then
+// wrote back: one `tag add` deleted the others from the file.
+func TestContract_TagAddKeepsEveryExistingTag(t *testing.T) {
+	_, root := newContractVault(t)
+	path := filepath.Join(root, "n.md")
+	if err := os.WriteFile(path, []byte(
+		"---\ntitle: T\ntype: note\nstatus: draft\ntags: [2026-09-04, 42, true, real]\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLIArgs(t, root, "tag", "add", "n.md", "extra"); err != nil {
+		t.Fatalf("tag add: %v\n%s", err, out)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"2026-09-04", "42", "true", "real", "extra"} {
+		if !strings.Contains(string(after), want) {
+			t.Errorf("tag %q was dropped from the file by an unrelated tag add:\n%s", want, after)
+		}
+	}
+}
