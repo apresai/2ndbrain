@@ -238,19 +238,19 @@ func (d *Document) SetMeta(key string, value any) {
 	// means adding a case here.
 	switch key {
 	case "id":
-		if s, ok := setMetaText(value); ok {
+		if s, ok := setMetaField(value); ok {
 			d.ID = s
 		}
 	case "title":
-		if s, ok := setMetaText(value); ok {
+		if s, ok := setMetaField(value); ok {
 			d.Title = s
 		}
 	case "type":
-		if s, ok := setMetaText(value); ok {
+		if s, ok := setMetaField(value); ok {
 			d.Type = s
 		}
 	case "status":
-		if s, ok := setMetaText(value); ok {
+		if s, ok := setMetaField(value); ok {
 			d.Status = s
 		}
 	case "tags":
@@ -258,22 +258,42 @@ func (d *Document) SetMeta(key string, value any) {
 	case "created":
 		// The DATE fields normalize, because the index compares them as
 		// instants: a value set here lands in the column in the same form a
-		// parse would have produced.
-		if s, ok := frontmatterTime(d.Frontmatter, "created"); ok {
-			d.CreatedAt = s
-		}
+		// parse would have produced. A nil clears, for the same reason it
+		// clears a text field.
+		d.CreatedAt = setMetaDate(value, d.Frontmatter, "created", d.CreatedAt)
 	case "modified":
-		if s, ok := frontmatterTime(d.Frontmatter, "modified"); ok {
-			d.ModifiedAt = s
-		}
+		d.ModifiedAt = setMetaDate(value, d.Frontmatter, "modified", d.ModifiedAt)
 	}
 }
 
-// setMetaText renders a value handed to SetMeta as the text a string-typed
-// struct field wants. There is no node behind a programmatic write, so
-// ScalarText is the right reading here, unlike on the parse path.
-func setMetaText(value any) (string, bool) {
+// setMetaField reports the value a mirrored string field should take after a
+// SetMeta, and whether to assign it at all.
+//
+// A NIL CLEARS the field. nil is how a property is emptied (kb_update_meta
+// passes a JSON null straight through), and leaving the struct field holding
+// the old value while the map says the property is gone is the same stale-field
+// bug as the missing `id` case: the index reads the field, not the map.
+//
+// A scalar renders as its text. Anything else (a list, a mapping) is not a
+// value a string field can hold, so the field is left as it was rather than
+// blanked on a write that says nothing about it.
+func setMetaField(value any) (string, bool) {
+	if value == nil {
+		return "", true
+	}
 	return ScalarText(value)
+}
+
+// setMetaDate is setMetaField for a DATE field: nil clears, a readable date
+// normalizes, and anything else leaves the column as it was.
+func setMetaDate(value any, meta map[string]any, key, current string) string {
+	if value == nil {
+		return ""
+	}
+	if s, ok := frontmatterTime(meta, key); ok {
+		return s
+	}
+	return current
 }
 
 func (d *Document) WriteFile(dir string) (string, error) {

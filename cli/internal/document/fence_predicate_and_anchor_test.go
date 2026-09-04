@@ -299,3 +299,124 @@ func TestSetMeta_SyncsEveryMirroredStructField(t *testing.T) {
 		t.Errorf("ID = %q after a numeric set, want 7", doc.ID)
 	}
 }
+
+// The line-ending decision is taken ONCE, before any early return. An empty
+// frontmatter block takes a different route through the writer (it delegates to
+// the serializer), and that route hardcoded LF, so a CRLF note with an emptied
+// properties block came back with LF fences over a CRLF body. Two paths that
+// should agree is the fault this file keeps producing.
+func TestUpdateDocumentFrontmatterAST_LineEndingIsOneDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		src     string
+		wantCR  bool
+		wantKey string
+	}{
+		{"CRLF with an EMPTY block", "---\r\n---\r\nbody\r\n", true, "status: published\r\n"},
+		{"CRLF with properties", "---\r\ntitle: X\r\n---\r\nbody\r\n", true, "status: published\r\n"},
+		{"LF with an EMPTY block", "---\n---\nbody\n", false, "status: published\n"},
+		{"LF with properties", "---\ntitle: X\n---\nbody\n", false, "status: published\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := writeThrough(t, tc.src, map[string]any{"status": "published"})
+			got := string(out)
+			if !strings.Contains(got, tc.wantKey) {
+				t.Errorf("the written key does not carry the note's line ending:\n%q", got)
+			}
+			if tc.wantCR {
+				if strings.Contains(strings.ReplaceAll(got, "\r\n", ""), "\n") {
+					t.Errorf("a bare LF survived in a CRLF note:\n%q", got)
+				}
+			} else if strings.Contains(got, "\r") {
+				t.Errorf("a CR appeared in an LF note:\n%q", got)
+			}
+			reparse(t, out)
+		})
+	}
+}
+
+// BOTH fence lines come back byte for byte. The reader deliberately admits a
+// fence carrying invisible trailing characters, so a writer that normalized
+// them to a bare "---" rewrote a line the user never touched: the same
+// reader-accepts/writer-normalizes asymmetry that produced the duplicated block
+// and the unrecognized opening fence.
+func TestUpdateDocumentFrontmatterAST_PreservesBothFencesVerbatim(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		src        string
+		wantFences []string
+	}{
+		{
+			name:       "a zero-width character on the opening fence",
+			src:        "---​\ntitle: X\n---\nbody\n",
+			wantFences: []string{"---​\n", "\n---\n"},
+		},
+		{
+			name:       "a non-breaking space on the closing fence",
+			src:        "---\ntitle: X\n--- \nbody\n",
+			wantFences: []string{"---\n", "--- \n"},
+		},
+		{
+			name:       "trailing spaces on both",
+			src:        "--- \ntitle: X\n--- \nbody\n",
+			wantFences: []string{"--- \n", "--- \n"},
+		},
+		{
+			name:       "a plain note keeps plain fences",
+			src:        "---\ntitle: X\n---\nbody\n",
+			wantFences: []string{"---\n", "---\n"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := writeThrough(t, tc.src, map[string]any{"status": "published"})
+			got := string(out)
+			for _, fence := range tc.wantFences {
+				if !strings.Contains(got, fence) {
+					t.Errorf("the fence %q was rewritten:\n%q", fence, got)
+				}
+			}
+			if !strings.Contains(got, "status: published") || !strings.Contains(got, "body") {
+				t.Errorf("the write lost content:\n%q", got)
+			}
+			reparse(t, out)
+		})
+	}
+}
+
+// A NIL clears the mirrored struct field. nil is how a property is emptied
+// (kb_update_meta passes a JSON null straight through), and leaving the field
+// holding the old value while the map says the property is gone is the same
+// stale-field bug as the missing `id` case: the index reads the field, not the
+// map. A list or a mapping is not a value these fields can hold, so those leave
+// the field as it was rather than blanking it on a write that says nothing.
+func TestSetMeta_NilClearsTheMirroredField(t *testing.T) {
+	doc, err := Parse("n.md", []byte(
+		"---\nid: a\ntitle: T\ntype: note\nstatus: draft\ncreated: 2020-01-01T00:00:00Z\nmodified: 2020-01-01T00:00:00Z\n---\nb\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for _, key := range []string{"id", "title", "type", "status", "created", "modified"} {
+		doc.SetMeta(key, nil)
+	}
+	for _, tc := range []struct {
+		name string
+		got  string
+	}{
+		{"ID", doc.ID}, {"Title", doc.Title}, {"Type", doc.Type},
+		{"Status", doc.Status}, {"CreatedAt", doc.CreatedAt}, {"ModifiedAt", doc.ModifiedAt},
+	} {
+		if tc.got != "" {
+			t.Errorf("%s = %q after being set to nil, want empty", tc.name, tc.got)
+		}
+	}
+
+	// A composite says nothing about a string field, so it leaves it alone.
+	doc2, err := Parse("n.md", []byte("---\ntitle: T\n---\nb\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	doc2.SetMeta("title", []any{"a", "b"})
+	if doc2.Title != "T" {
+		t.Errorf("Title = %q after a list set, want the previous value untouched", doc2.Title)
+	}
+}

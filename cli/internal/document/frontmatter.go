@@ -391,12 +391,27 @@ func SerializeFrontmatter(meta map[string]any) ([]byte, error) {
 }
 
 func SerializeDocument(meta map[string]any, body string) ([]byte, error) {
+	return serializeDocumentWith(meta, body, "\n")
+}
+
+// serializeDocumentWith is SerializeDocument in a chosen line ending. Only the
+// frontmatter BLOCK is re-emitted; the body is the note's own bytes and is
+// appended untouched.
+//
+// It exists because UpdateDocumentFrontmatterAST delegates here on three paths
+// (no opening fence, no closing fence, an empty block that is not a key block)
+// and each one hardcoded LF, so a CRLF note with an EMPTY properties block came
+// back with LF fences over a CRLF body. That is the empty-block twin of the
+// populated path's line-ending bug: two paths that should agree, which is the
+// fault this file keeps producing. There is one decision now (noteNewline) and
+// every path takes it.
+func serializeDocumentWith(meta map[string]any, body, newline string) ([]byte, error) {
 	fm, err := SerializeFrontmatter(meta)
 	if err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	buf.Write(fm)
+	buf.WriteString(withNewline(string(fm), newline))
 	if body != "" {
 		// An EMPTY frontmatter block is closed by a delimiter identical to the
 		// one that opened it, so what the parser meets is a doubled fence, and
@@ -412,7 +427,7 @@ func SerializeDocument(meta map[string]any, body string) ([]byte, error) {
 		// delimiter is unambiguous. SerializeFrontmatter's own return is
 		// deliberately unchanged, since it promises the block and not the note.
 		if len(meta) == 0 && !strings.HasPrefix(body, "\n") && !strings.HasPrefix(body, "\r\n") {
-			buf.WriteString("\n")
+			buf.WriteString(newline)
 		}
 		buf.WriteString(body)
 	}
@@ -550,18 +565,35 @@ func nodeHoldsValue(node *yaml.Node, value any) bool {
 // preserving comments, formatting, and key order for all untouched fields.
 func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, body string) ([]byte, error) {
 	s := string(original)
-	openLen, ok := openingFenceLen(s)
-	if !ok {
-		return SerializeDocument(updatedMeta, body)
+	openLen, hasOpen := openingFenceLen(s)
+	openFence := ""
+	if hasOpen {
+		openFence = s[:openLen]
+	}
+	// ONE line-ending decision, taken before any early return, because three of
+	// the paths below delegate to the serializer and each of them used to
+	// hardcode LF.
+	newline := noteNewline(openFence, body)
+	if !hasOpen {
+		return serializeDocumentWith(updatedMeta, body, newline)
 	}
 
 	rest := s[openLen:]
 	// The SAME boundary the reader used, not a second search for it.
-	idx, _ := closingFence(rest)
+	idx, closeLen := closingFence(rest)
 	if idx == -1 {
-		return SerializeDocument(updatedMeta, body)
+		return serializeDocumentWith(updatedMeta, body, newline)
 	}
 	yamlStr := rest[:idx]
+
+	// The closing fence LINE, byte for byte. closingFence returns the index of
+	// the newline BEFORE it, so the line itself starts past that ending.
+	closeRegion := rest[idx : idx+closeLen]
+	sep := "\n"
+	if strings.HasPrefix(closeRegion, "\r\n") {
+		sep = "\r\n"
+	}
+	closeFence := closeRegion[len(sep):]
 
 	// An empty frontmatter block carries no YAML to preserve surgically, and the
 	// closing-fence search would otherwise match a "---" in the body and treat
@@ -574,7 +606,7 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 	if _, empty := emptyFrontmatterBlock(rest); empty {
 		block, _, isBlock := doubledFenceKeyBlock(rest)
 		if !isBlock {
-			return SerializeDocument(updatedMeta, body)
+			return serializeDocumentWith(updatedMeta, body, newline)
 		}
 		yamlStr = block
 	}
@@ -679,24 +711,37 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 	}
 	enc.Close()
 
-	// The note's OWN line endings. The yaml encoder emits LF, so a CRLF note
-	// came back with LF fences and LF between its keys while its body kept
-	// CRLF: one file, two conventions, from an edit that touched one property.
-	// The opening fence is the note's own statement of which it uses.
-	newline := "\n"
-	if strings.HasSuffix(s[:openLen], "\r\n") {
-		newline = "\r\n"
-	}
-
+	// BOTH fence lines come back byte for byte, invisible trailing characters
+	// included. The reader deliberately admits a fence carrying a zero-width
+	// character or a non-breaking space, so a writer that normalized them to a
+	// bare "---" rewrote a line the user never touched: the same
+	// reader-accepts/writer-normalizes asymmetry that produced the duplicated
+	// block and the lost opening fence. Each captured line carries its own
+	// terminator, which is also how the note's line ending is preserved here.
 	var docBuf bytes.Buffer
-	docBuf.WriteString("---")
-	docBuf.WriteString(newline)
+	docBuf.WriteString(openFence)
 	docBuf.WriteString(withNewline(buf.String(), newline))
-	docBuf.WriteString("---")
-	docBuf.WriteString(newline)
+	docBuf.WriteString(closeFence)
 	docBuf.WriteString(body)
 
 	return docBuf.Bytes(), nil
+}
+
+// noteNewline reports the line ending a rewritten frontmatter block should use.
+// The note's OPENING FENCE is the authority when it has one, since that is the
+// note's own statement about its convention; otherwise the body's first line
+// ending answers, and LF is the fallback for a note with neither.
+func noteNewline(openFence, body string) string {
+	if strings.HasSuffix(openFence, "\r\n") {
+		return "\r\n"
+	}
+	if openFence != "" {
+		return "\n"
+	}
+	if i := strings.IndexByte(body, '\n'); i > 0 && body[i-1] == '\r' {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 // withNewline re-emits LF-separated text with the note's line ending. The
