@@ -81,23 +81,34 @@ func Parse(path string, content []byte) (*Document, error) {
 		Body:        body,
 	}
 
+	// Every field below goes through a helper rather than a bare
+	// meta[key].(string), because an UNQUOTED YAML scalar is not a Go string:
+	// yaml.v3 resolves it to time.Time, bool, int or float64, and the assertion
+	// silently failed for all of them. See frontmatter_scalar.go.
+	//
+	// The parsed map is deliberately NOT normalized in place. Serialize
+	// re-marshals every key of Frontmatter through
+	// UpdateDocumentFrontmatterAST, so writing a string back over a time.Time
+	// would make an unrelated `meta --set`, `tag add` or `polish --write`
+	// requote a date line the user never touched. The struct fields the index
+	// reads are normalized; the note's bytes are left alone.
 	if meta != nil {
-		if id, ok := meta["id"].(string); ok {
+		if id, ok := frontmatterText(meta, "id"); ok {
 			doc.ID = id
 		}
-		if title, ok := meta["title"].(string); ok {
+		if title, ok := frontmatterText(meta, "title"); ok {
 			doc.Title = title
 		}
-		if typ, ok := meta["type"].(string); ok {
+		if typ, ok := frontmatterText(meta, "type"); ok {
 			doc.Type = typ
 		}
-		if status, ok := meta["status"].(string); ok {
+		if status, ok := frontmatterText(meta, "status"); ok {
 			doc.Status = status
 		}
-		if created, ok := meta["created"].(string); ok {
+		if created, ok := frontmatterTime(meta, "created"); ok {
 			doc.CreatedAt = created
 		}
-		if modified, ok := meta["modified"].(string); ok {
+		if modified, ok := frontmatterTime(meta, "modified"); ok {
 			doc.ModifiedAt = modified
 		}
 		doc.Tags = extractTags(meta)
@@ -330,21 +341,23 @@ func extractTags(meta map[string]any) []string {
 	case []any:
 		tags := make([]string, 0, len(v))
 		for _, item := range v {
-			if s, ok := item.(string); ok {
+			// ScalarText, not item.(string): an unquoted list entry that YAML
+			// reads as a date, a number or a boolean (`- 2026-09-04`) was
+			// dropped from the note's tags without a word.
+			if s, ok := ScalarText(item); ok {
 				tags = append(tags, s)
 			}
 		}
 		return tags
 	case []string:
 		return v
-	case string:
-		// `tags: foo` in YAML parses as a bare string; treat it as one tag.
-		if v == "" {
+	default:
+		// `tags: foo` in YAML parses as a bare scalar; treat it as one tag.
+		s, ok := ScalarText(v)
+		if !ok || s == "" {
 			return nil
 		}
-		return []string{v}
-	default:
-		return nil
+		return []string{s}
 	}
 }
 
@@ -361,20 +374,21 @@ func ExtractAliases(meta map[string]any) []string {
 	case []any:
 		aliases := make([]string, 0, len(v))
 		for _, item := range v {
-			if s, ok := item.(string); ok {
+			// Same coercion as tags: an unquoted alias YAML reads as a date or
+			// a number is still an alias.
+			if s, ok := ScalarText(item); ok {
 				aliases = append(aliases, s)
 			}
 		}
 		return aliases
 	case []string:
 		return v
-	case string:
-		if v == "" {
+	default:
+		s, ok := ScalarText(v)
+		if !ok || s == "" {
 			return nil
 		}
-		return []string{v}
-	default:
-		return nil
+		return []string{s}
 	}
 }
 

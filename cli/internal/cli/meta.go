@@ -158,16 +158,30 @@ func getMeta(cmd *cobra.Command, doc *document.Document) error {
 	switch t := val.(type) {
 	case []any:
 		for _, item := range t {
-			fmt.Fprintln(&sb, item)
+			fmt.Fprintln(&sb, metaScalarLine(item))
 		}
 	default:
-		fmt.Fprintln(&sb, val)
+		fmt.Fprintln(&sb, metaScalarLine(val))
 	}
 	fmt.Print(sb.String())
 	if flagCopy {
 		return copyToClipboard(strings.TrimRight(sb.String(), "\n"))
 	}
 	return nil
+}
+
+// metaScalarLine renders one frontmatter value for the DEFAULT (pretty) output
+// of `meta --get`. Only this branch needed it: --json marshals a time.Time as
+// RFC3339 and output.delimitedCell renders one through MarshalText, while plain
+// %v prints Go's own "2020-01-01 00:00:00 +0000 UTC". So `meta --get modified`
+// disagreed with every other view of the same note, and disagreed with itself
+// depending on whether the date in the file was quoted. Anything ScalarText
+// does not recognize (a nested mapping) keeps its %v form.
+func metaScalarLine(v any) string {
+	if s, ok := document.ScalarText(v); ok {
+		return s
+	}
+	return fmt.Sprint(v)
 }
 
 func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absPath string) error {
