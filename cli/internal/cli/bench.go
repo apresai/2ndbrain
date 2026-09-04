@@ -494,11 +494,28 @@ func runBenchFav(cmd *cobra.Command, args []string) error {
 	if err := bdb.AddFavorite(provider, ref.ID, modelType); err != nil {
 		return err
 	}
+	// The confirmation went to STDOUT as prose for every format, so
+	// `models bench fav <id> --json` printed a sentence where a record belongs.
+	if done, err := emitStructured(cmd, BenchFavoriteResult{
+		Action: cmd.Name(), Provider: provider, Model: ref.ID, Type: modelType,
+	}); done {
+		return err
+	}
 	fmt.Printf("Added %s/%s (%s) to bench favorites\n", provider, ref.ID, modelType)
 	if ref.Plane != "" || ref.Region != "" {
 		fmt.Fprintf(cmd.ErrOrStderr(), "(favorites are the model, every route)\n")
 	}
 	return nil
+}
+
+// BenchFavoriteResult is the structured record for `models bench fav` and
+// `models bench unfav`. A favorite is the MODEL, every route, so it carries no
+// plane or region.
+type BenchFavoriteResult struct {
+	Action   string `json:"action"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Type     string `json:"model_type,omitempty"`
 }
 
 func runBenchUnfav(cmd *cobra.Command, args []string) error {
@@ -526,6 +543,11 @@ func runBenchUnfav(cmd *cobra.Command, args []string) error {
 	if err := bdb.RemoveFavorite(provider, ref.ID); err != nil {
 		return err
 	}
+	if done, err := emitStructured(cmd, BenchFavoriteResult{
+		Action: cmd.Name(), Provider: provider, Model: ref.ID,
+	}); done {
+		return err
+	}
 	fmt.Printf("Removed %s/%s from bench favorites\n", provider, ref.ID)
 	return nil
 }
@@ -550,7 +572,10 @@ func runBenchFavs(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, favs)
+		// jsonSafeList, so an empty favorites list is `[]` and not the bare
+		// token `null`, which is what `jq '.[]'` needs and what every other
+		// listing in this CLI already emits.
+		return output.Write(os.Stdout, format, jsonSafeList(format, favs))
 	}
 
 	if len(favs) == 0 {

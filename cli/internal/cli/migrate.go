@@ -62,7 +62,39 @@ func readIndexSchemaState(dbPath string) (version, docCount int, err error) {
 	return version, docCount, nil
 }
 
+// MigrateReport is the structured record for `migrate` and `migrate --dry-run`.
+// It answers the three questions the human lines answer: which vault, where its
+// schema stands, and what was (or would be) done.
+//
+// migrate ignored --format entirely: json, csv, yaml, tsv, text and md all
+// printed the same human prose, so `migrate --dry-run --json` emitted
+// "Vault: /..." to a caller parsing JSON. An unknown --format WAS refused, so
+// only the render dispatch had never been wired.
+type MigrateReport struct {
+	Vault          string `json:"vault"`
+	DryRun         bool   `json:"dry_run"`
+	SchemaVersion  int    `json:"schema_version"`
+	TargetVersion  int    `json:"target_version"`
+	Documents      int    `json:"documents"`
+	AlreadyCurrent bool   `json:"already_current"`
+	// Migrated is true only when this invocation actually applied the upgrade,
+	// so a --dry-run is never mistaken for one that ran.
+	Migrated bool `json:"migrated"`
+	// Actions is what was done, or would be done under --dry-run. Empty for a
+	// vault already at the current schema.
+	Actions []string `json:"actions"`
+	// MarkdownModified is always false and says so out loud: migrate upgrades
+	// the index database and the root .gitignore, never a note.
+	MarkdownModified bool `json:"markdown_modified"`
+}
+
 func runMigrate(cmd *cobra.Command, args []string) error {
+	// A migration report is a record, not a document body, and the refusal runs
+	// before the vault is even located so it cannot depend on what was found.
+	if err := refuseBodylessFormat(cmd, "migrate"); err != nil {
+		return err
+	}
+
 	// The pre-checks below are pure READS, so they resolve on the read ladder:
 	// the same one every other command uses, instead of the hand-rolled
 	// "--vault or cwd" this had, which ignored 2NB_VAULT and the Obsidian rung.
@@ -101,12 +133,32 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// does not exist: the schema has been path-based since v1, and nothing here
 	// maps anything.
 	if version == store.MaxSchemaVersion {
+		report := MigrateReport{
+			Vault: root, DryRun: migrateDryRun,
+			SchemaVersion: version, TargetVersion: store.MaxSchemaVersion,
+			Documents: docCount, AlreadyCurrent: true, Actions: []string{},
+		}
+		if done, err := emitStructured(cmd, report); done {
+			return err
+		}
 		fmt.Printf("Vault: %s\n", root)
 		fmt.Printf("Already at the current schema (v%d); nothing to migrate. %d documents indexed.\n", version, docCount)
 		return nil
 	}
 
 	if migrateDryRun {
+		report := MigrateReport{
+			Vault: root, DryRun: true,
+			SchemaVersion: version, TargetVersion: store.MaxSchemaVersion,
+			Documents: docCount,
+			Actions: []string{
+				fmt.Sprintf("would upgrade the index schema v%d to v%d", version, store.MaxSchemaVersion),
+				"would ensure \".2ndbrain/\" is listed in the root .gitignore",
+			},
+		}
+		if done, err := emitStructured(cmd, report); done {
+			return err
+		}
 		fmt.Printf("[dry-run] Vault: %s\n", root)
 		fmt.Printf("[dry-run] Legacy index database at schema v%d, %d documents indexed\n", version, docCount)
 		fmt.Printf("[dry-run] Would upgrade the index schema v%d to v%d\n", version, store.MaxSchemaVersion)
@@ -141,6 +193,18 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// one any read command performs when it opens that vault, so the check is
 	// about reporting the truth, not about preventing a novel mutation.
 	if err := migrateTargetMismatch(root, v.Root); err != nil {
+		return err
+	}
+
+	report := MigrateReport{
+		Vault: v.Root, SchemaVersion: version, TargetVersion: store.MaxSchemaVersion,
+		Documents: docCount, Migrated: true,
+		Actions: []string{
+			fmt.Sprintf("upgraded the index schema v%d to v%d", version, store.MaxSchemaVersion),
+			"ensured \".2ndbrain/\" is listed in the root .gitignore",
+		},
+	}
+	if done, err := emitStructured(cmd, report); done {
 		return err
 	}
 

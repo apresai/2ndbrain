@@ -225,13 +225,53 @@ func runSkillsUninstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// SkillDocument is the `skills show --json` record: the SKILL.md body plus the
+// identity a caller would otherwise have to parse out of it.
+type SkillDocument struct {
+	Slug        string `json:"slug"`
+	Agent       string `json:"agent"`
+	ProjectPath string `json:"project_path"`
+	UserPath    string `json:"user_path"`
+	Version     string `json:"version"`
+	Content     string `json:"content"`
+	Chars       int    `json:"chars"`
+}
+
 func runSkillsShow(cmd *cobra.Command, args []string) error {
+	// `skills show` emits a document BODY (the SKILL.md markdown), so it has
+	// the same shape as `git diff` and `export-context`: raw/md/text emit it,
+	// json wraps it in a record, and the row-set formats have nothing to
+	// render. It never called getFormat at all, so `--json`, `--csv` and
+	// `--yaml` each printed raw markdown and exited 0, and an agent fetching a
+	// skill body programmatically got a parse error on a successful command.
+	// Refused up front, before the agent lookup, so the answer never depends on
+	// which agent was named.
+	format := getFormat(cmd)
+	switch format {
+	case output.FormatCSV, output.FormatTSV, output.FormatYAML:
+		return exitWithError(ExitValidation, fmt.Sprintf(
+			"error: a SKILL.md is a document body, not a row set; --format %s has nothing to render (use --json for a record, or raw/md/text for the markdown itself)", format))
+	}
+
 	a, ok := skills.AgentBySlug(args[0])
 	if !ok {
 		return fmt.Errorf("unknown agent %q — run `2nb skills list` to see supported agents", args[0])
 	}
-	fmt.Print(a.RenderContent())
-	return nil
+	content := a.RenderContent()
+	if format == output.FormatJSON {
+		return writeOut(cmd, format, SkillDocument{
+			Slug:        a.Slug,
+			Agent:       a.Name,
+			ProjectPath: a.ProjectPath,
+			UserPath:    a.UserPath,
+			Version:     skills.Version,
+			Content:     content,
+			Chars:       len(content),
+		})
+	}
+	// Empty, raw, md and text all emit the markdown itself; --copy goes through
+	// the same writer so it copies the skill rather than nothing.
+	return writeOut(cmd, output.FormatRaw, content)
 }
 
 // autoRefreshStaleSkills re-installs any stamped, unmodified, out-of-date managed

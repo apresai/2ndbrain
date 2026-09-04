@@ -18,8 +18,8 @@ var allMCPToolNames = []string{
 
 // ToolInfo is one registered kb_* tool's name and routing description.
 type ToolInfo struct {
-	Name        string
-	Description string
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // ToolCatalog is name plus description of every registered kb_* tool, in
