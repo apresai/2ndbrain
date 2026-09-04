@@ -47,3 +47,7 @@ app/*.xcworkspace/xcuserdata/
 # machine-local derived state, never commit. (git has no trailing-inline-comment
 # support, so this comment must sit on its own line above the bare pattern.)
 .2ndbrain/
+
+# Review proof records are per-branch scratch, never committed. PROOF.md was
+# committed by accident in cycle 5 (its own first line says "untracked").
+PROOF*.md
