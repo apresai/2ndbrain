@@ -212,7 +212,7 @@ func init() {
 
 	modelsEnableStateCmd.Flags().StringVar(&enableStateProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
 	modelsEnableStateCmd.Flags().StringVar(&enableStateScope, "scope", "vault", "Scope: vault or global")
-	modelsEnableStateCmd.Flags().StringVar(&enableStateValue, "state", "", "State: default, enabled, disabled")
+	modelsEnableStateCmd.Flags().StringVar(&enableStateValue, "state", "", "State: default, enabled, disabled (required)")
 	_ = modelsEnableStateCmd.MarkFlagRequired("provider")
 	_ = modelsEnableStateCmd.MarkFlagRequired("state")
 	_ = modelsEnableStateCmd.RegisterFlagCompletionFunc("provider", completeProviders)
