@@ -300,3 +300,89 @@ func TestContract_MigrateProperties_NeverSuggestsTypingATextFieldAsADate(t *test
 		t.Errorf("the date-shaped title was rewritten:\n%s", readNote(t, filepath.Join(root, "daily.md")))
 	}
 }
+
+// An inline comment on a date line the migration RESPELLS is not carried onto
+// the new value: the surgical writer drops a comment on a value it replaces,
+// deliberately, and a respelling does not get an option that relaxes that on
+// the most safety-critical function in the package. So the loss is REPORTED,
+// per field, in the preview, before anything is written.
+//
+// It was silent before: other_lines_changed skips any line keyed by a migrated
+// field, which is exactly the line the comment sat on, and both the command's
+// help and the release notes claimed comments came back byte for byte.
+func TestContract_MigrateProperties_ReportsACommentItCannotKeep(t *testing.T) {
+	_, root := newContractVault(t)
+	path := filepath.Join(root, "commented.md")
+	original := "---\ntitle: Commented\n" +
+		"created: \"2026-04-05T07:27:34Z\" # imported from an old vault\n" +
+		"modified: \"2026-04-05T07:27:34Z\"\n" +
+		"other: keep me # this one is never touched\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The PREVIEW reports it, which is the point: the user sees the loss before
+	// any byte is written.
+	preview := migrateJSON(t, root)
+	if len(preview.Notes) != 1 {
+		t.Fatalf("preview notes = %d, want 1", len(preview.Notes))
+	}
+	dropped := preview.Notes[0].CommentsDropped
+	if len(dropped) != 1 || dropped[0].Field != "created" {
+		t.Fatalf("comments_dropped = %+v, want one entry for created", dropped)
+	}
+	if !strings.Contains(dropped[0].Comment, "imported from an old vault") {
+		t.Errorf("the reported comment does not carry its text: %q", dropped[0].Comment)
+	}
+
+	res := migrateJSON(t, root, "--write")
+	if len(res.Notes) != 1 || len(res.Notes[0].CommentsDropped) != 1 {
+		t.Fatalf("the write run did not report the same loss: %+v", res.Notes)
+	}
+	after := readNote(t, path)
+	// A comment on a property the migration did NOT touch still survives, which
+	// is what makes this one exception rather than a general regression.
+	if !strings.Contains(after, "other: keep me # this one is never touched") {
+		t.Errorf("a comment on an untouched property was dropped:\n%s", after)
+	}
+	if !strings.Contains(after, "created: 2026-04-05T07:27:34Z") {
+		t.Errorf("the date was not migrated:\n%s", after)
+	}
+	// modified carried no comment, so nothing is reported for it.
+	for _, c := range res.Notes[0].CommentsDropped {
+		if c.Field != "created" {
+			t.Errorf("reported a dropped comment for %q, which never had one", c.Field)
+		}
+	}
+}
+
+// The read-back check runs over EVERY migrated field. It used to check only the
+// alphabetically first one, so a note carrying two date properties had the
+// second written to disk without ever being confirmed to read back as a date.
+func TestContract_MigrateProperties_VerifiesEveryFieldNotJustTheFirst(t *testing.T) {
+	_, root := newContractVault(t)
+	schemas := "types:\n  meeting:\n    name: Meeting\n    fields:\n      zz-held:\n        type: datetime\n    required: []\n"
+	if err := os.WriteFile(filepath.Join(root, ".2ndbrain", "schemas.yaml"), []byte(schemas), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// "created" sorts first and "zz-held" last, so a check that reads fields[0]
+	// alone never looks at the schema-declared one.
+	original := "---\ntitle: Standup\ntype: meeting\ncreated: \"2026-04-05T07:27:34Z\"\nzz-held: \"2026-04-06T09:00:00Z\"\n---\nbody\n"
+	if err := os.WriteFile(filepath.Join(root, "standup.md"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := migrateJSON(t, root, "--write")
+	if res.Changed != 1 {
+		t.Fatalf("changed = %d, want 1: %+v", res.Changed, res.Skipped)
+	}
+	after := readNote(t, filepath.Join(root, "standup.md"))
+	for _, want := range []string{"created: 2026-04-05T07:27:34Z", "zz-held: 2026-04-06T09:00:00Z"} {
+		if !strings.Contains(after, want) {
+			t.Errorf("missing %q after migration:\n%s", want, after)
+		}
+	}
+	if len(res.Notes) != 1 || len(res.Notes[0].Fields) != 2 {
+		t.Fatalf("both date fields should be reported as migrated: %+v", res.Notes)
+	}
+}

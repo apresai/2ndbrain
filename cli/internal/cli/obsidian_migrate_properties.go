@@ -12,6 +12,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var migratePropertiesWrite bool
@@ -31,9 +32,12 @@ schemas declare as "date" or "datetime". Properties you authored are reported
 and left alone: a vault typically spells its own "date" field several ways, and
 picking one of them is your call, not a migration's.
 
-Every other byte of a note is preserved, comments and key order included: the
-rewrite goes through the surgical frontmatter writer directly, never through the
-whole-map re-marshal that alphabetizes keys and drops comments.
+Every other byte of a note is preserved, key order and the comments on every
+property it does NOT touch included: the rewrite goes through the surgical
+frontmatter writer directly, never through the whole-map re-marshal that
+alphabetizes keys and drops comments. The one exception is an inline comment
+sitting on a date line it DOES respell, which is not carried onto the new value
+and is named in the preview so you see it before anything is written.
 
 It is idempotent. A value already written plain reads back as a date and is left
 untouched, so running it twice changes nothing the second time.
@@ -69,6 +73,25 @@ type MigratedNote struct {
 	// block. That is correct, and it is more than the property asked for, so it
 	// is reported rather than sprung on you.
 	OtherLinesChanged []string `json:"other_lines_changed,omitempty"`
+	// CommentsDropped names each migrated property that carried an inline
+	// comment the rewrite does not keep. The surgical writer deliberately does
+	// not carry a comment onto a value it replaces (a comment described the OLD
+	// value, and `meta --set status=published` must not leave one asserting
+	// `draft`), and a respelling cannot opt out of that without an option on the
+	// most safety-critical function in the package.
+	//
+	// So the loss is REPORTED instead, in the preview, before anything is
+	// written. OtherLinesChanged cannot carry it: it skips any line keyed by a
+	// migrated field, which is exactly the line the comment sat on, so the loss
+	// was silent.
+	CommentsDropped []DroppedComment `json:"comments_dropped,omitempty"`
+}
+
+// DroppedComment is an inline comment a respelling did not carry onto the new
+// value node.
+type DroppedComment struct {
+	Field   string `json:"field"`
+	Comment string `json:"comment"`
 }
 
 // SkippedNote is a note the migration did not touch, and why.
@@ -292,10 +315,17 @@ func applyDateRewrites(v *vault.Vault, doc *document.Document, absPath, rel stri
 			To:    frontmatterLine(string(out), key),
 		})
 	}
-	if _, ok := back.Frontmatter[fields[0]].(time.Time); !ok {
-		return nil, fmt.Errorf("the rewritten %q did not read back as a date; the note was left untouched", fields[0])
+	// EVERY migrated field, not just the first. A note carrying both `created`
+	// and a schema date field had only the alphabetically first one checked, so
+	// a second field that came back as text rather than a date was written to
+	// disk unverified.
+	for _, key := range fields {
+		if _, ok := back.Frontmatter[key].(time.Time); !ok {
+			return nil, fmt.Errorf("the rewritten %q did not read back as a date; the note was left untouched", key)
+		}
 	}
 	note.OtherLinesChanged = unexpectedChangedLines(string(original), string(out), fields)
+	note.CommentsDropped = droppedValueComments(string(original), string(out), fields)
 
 	if !write {
 		return note, nil
@@ -349,6 +379,57 @@ func frontmatterRegion(content string) string {
 		return rest[:end]
 	}
 	return rest
+}
+
+// droppedValueComments names each migrated field whose value carried an inline
+// comment before the rewrite and does not carry one after it.
+//
+// It reads the comment off the AST rather than looking for a `#` in the line,
+// because a `#` inside a quoted value is not a comment. It compares before
+// against after rather than assuming the writer always drops one, so the day
+// the writer learns to carry a comment across, this reports nothing instead of
+// reporting a loss that did not happen.
+//
+// A region that will not parse yields no comments and therefore no findings,
+// which is the safe direction: this is a report, and inventing one from a
+// half-read region would be worse than staying quiet.
+func droppedValueComments(before, after string, fields []string) []DroppedComment {
+	was := valueLineComments(before)
+	if len(was) == 0 {
+		return nil
+	}
+	is := valueLineComments(after)
+	var out []DroppedComment
+	for _, f := range fields {
+		if was[f] != "" && is[f] == "" {
+			out = append(out, DroppedComment{Field: f, Comment: was[f]})
+		}
+	}
+	return out
+}
+
+// valueLineComments maps each frontmatter key to the comment attached to its
+// VALUE node, which is the one a replacement drops. A comment attached to the
+// KEY sits on the key node, which the writer never replaces.
+func valueLineComments(content string) map[string]string {
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(frontmatterRegion(content)), &node); err != nil {
+		return nil
+	}
+	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {
+		return nil
+	}
+	root := node.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	out := map[string]string{}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if c := root.Content[i+1].LineComment; c != "" {
+			out[root.Content[i].Value] = c
+		}
+	}
+	return out
 }
 
 // unexpectedChangedLines returns every frontmatter line that differs between
@@ -444,6 +525,9 @@ func printMigratePropertiesReport(r MigratePropertiesResult) {
 		}
 		for _, extra := range n.OtherLinesChanged {
 			fmt.Printf("    also changed (a YAML anchor was resolved): %s\n", extra)
+		}
+		for _, c := range n.CommentsDropped {
+			fmt.Printf("    comment NOT kept on %s: %s\n", c.Field, c.Comment)
 		}
 	}
 

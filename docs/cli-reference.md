@@ -689,9 +689,20 @@ timestamp.
 - A YAML anchor in a replaced node makes the writer resolve aliases elsewhere in
   the block (`materializeAliasesInto`). Correct, and more than the property
   asked for, so those lines are listed under `other_lines_changed`.
+- An inline comment on a date line it respells is NOT carried onto the new
+  value: the surgical writer deliberately drops a comment on a value it replaces
+  (see the frontmatter rules in CLAUDE.md), and a respelling does not get an
+  option that would relax that on the most safety-critical function in the
+  package. The loss is reported per field under `comments_dropped` instead, in
+  the preview, before anything is written. `other_lines_changed` cannot carry it:
+  it skips any line keyed by a migrated field, which is the line the comment sat
+  on, so the loss used to be silent. The read-back check that the rewritten value
+  parses as a date runs over EVERY migrated field, not just the first.
 - Template folders and `.canvas`/`.base` files are skipped.
 
-JSON: `{scanned, changed, written, notes[], skipped[], user_date_fields[]}`.
+JSON: `{scanned, changed, written, notes[], skipped[], user_date_fields[]}`; a
+note carries `fields[]` plus the optional `other_lines_changed[]` and
+`comments_dropped[]` (`{field, comment}`).
 
 ### `obsidian register-types`
 
