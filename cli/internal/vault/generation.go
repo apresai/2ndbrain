@@ -47,9 +47,17 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	     silently, so documents.created_at/modified_at stayed EMPTY and `stale`
 //	     omitted the note. The same coercion fills title/type/status/id from a
 //	     scalar YAML read as a number, a boolean or a date, and keeps a
-//	     list entry of those types as a tag or alias. Only INDEXED COLUMNS
-//	     change: the content hash is computed from the parsed BODY, which
+//	     list entry of those types as a tag or alias. That half moves no text
+//	     at all: the content hash is computed from the parsed BODY, which
 //	     frontmatter cannot move, so no chunk and no vector is affected.
+//	     0.22.4 also fixed the CLOSING FENCE, and that half DOES move text:
+//	     a note whose body was truncated by a horizontal rule or a fence
+//	     carrying a trailing space now parses with its whole body, so its
+//	     content hash differs and a plain reindex re-chunks and re-embeds
+//	     exactly those notes. Still IndexGeneration and not EmbedGeneration,
+//	     for the reason entry 3 records: content drift already re-embeds the
+//	     affected notes, so charging every user for a whole-vault rebuild is
+//	     the wrong trade.
 //	     Fix: 2nb index.
 //
 // If you change the watched files (see `make check-index-generation`) but a
