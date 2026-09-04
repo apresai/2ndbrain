@@ -127,8 +127,11 @@ final class AppState {
     // run two `2nb index --doc` at once (they would contend on the single
     // SQLite writer and spawn a parallel embed storm). A bulk change collapses
     // to a single full `2nb index`.
-    private var pendingExternalPaths: Set<String> = []
-    private var externalReindexTask: Task<Void, Never>?
+    // internal, not private, so IndexingProblemTests can drive the real
+    // schedule-then-switch path instead of waiting out the 1.5s debounce.
+    // @testable import keeps them inside the module regardless.
+    var pendingExternalPaths: Set<String> = []
+    var externalReindexTask: Task<Void, Never>?
     private var externalReindexInFlight = false
     private let externalReindexDebounce: Duration = .seconds(1.5)
     private let bulkExternalReindexThreshold = 8
@@ -167,6 +170,13 @@ final class AppState {
     /// concurrent bench runs into the same bench.db.
     let benchRun = BenchRunModel()
     var indexError: String?
+    /// The most recent per-note reindex failure, from the watcher's
+    /// `index --doc`. Distinct from `indexError`, which belongs to a full index
+    /// run, so a broken note cannot erase the reason a whole rebuild failed (or
+    /// the other way round). Both call sites used to log.debug this and show
+    /// nothing, so a note whose frontmatter broke on save silently vanished from
+    /// search until the next full index reported it.
+    var lastIndexingProblem: IndexingProblem?
     var embeddingProgress: EmbeddingProgress?
     var indexProgress: IndexProgress?
     var showIndexProgress = false
@@ -325,6 +335,10 @@ final class AppState {
 
     func openVault(at url: URL) {
         log.info("Opening vault at \(url.path)")
+        // A recorded problem names a path inside the vault being left behind, so
+        // carrying it across a switch shows a banner about a note the new vault
+        // does not even have.
+        lastIndexingProblem = nil
         let vm = VaultManager(rootURL: url)
         self.vault = vm
 
@@ -386,6 +400,23 @@ final class AppState {
         // and models.yaml (catalog changes written by the CLI wizard or
         // enable/disable commands).
         fileWatcher?.stop()
+        // The debounce queue is AppState-wide, not vault-scoped, so a change
+        // queued against the vault being closed would drain 1.5s later against
+        // the one just opened. `relativePath(for:)` falls back to
+        // `lastPathComponent` for a path outside its root, so that drain could
+        // reindex a same-named note in the wrong vault, or record a problem
+        // naming a path the new vault does not have. Drop what is queued here,
+        // beside the watcher that queued it. A call already executing is pinned
+        // to the vault it was started with and correctly finishes there;
+        // cancellation is not cooperative inside runCLI, so this is a guarantee
+        // about what is QUEUED, not about what is already mid-flight.
+        externalReindexTask?.cancel()
+        externalReindexTask = nil
+        pendingExternalPaths.removeAll()
+        for task in reindexTasks.values {
+            task.cancel()
+        }
+        reindexTasks.removeAll()
         let watcher = FSEventsWatcher(
             path: url.path,
             filter: {
@@ -925,7 +956,15 @@ final class AppState {
                     (continuation: CheckedContinuation<(exitCode: Int32, stdout: String, stderr: String), Error>) in
                     let process = Process()
                     process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-                    let subArgs = forceReembed ? ["index", "--force-reembed"] : ["index"]
+                    // --json, so the run's outcome is a parsed contract rather
+                    // than a scrape of prose. NOT --porcelain, which the
+                    // single-doc path does pass: --porcelain silences the
+                    // per-file and per-embedding stderr lines the progress sheet
+                    // below is built on, and a full index is the one call that
+                    // has a progress sheet. Verified against the built CLI:
+                    // --json leaves every stderr progress line in place.
+                    var subArgs = forceReembed ? ["index", "--force-reembed"] : ["index"]
+                    subArgs.append("--json")
                     process.arguments = CLIPath.args(subArgs, vault: vault.rootURL)
                     process.currentDirectoryURL = vault.rootURL
                     let stderrPipe = Pipe()
@@ -1020,17 +1059,20 @@ final class AppState {
 
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
 
-                // Parse stdout summary: "Indexed N files, N chunks, N links"
-                let statsPattern = /Indexed\s+(\d+)\s+files?,\s+(\d+)\s+chunks?,\s+(\d+)\s+links?/
-                if let match = result.stdout.firstMatch(of: statsPattern) {
-                    indexProgress?.docsIndexed = Int(match.1) ?? 0
-                    indexProgress?.chunksCreated = Int(match.2) ?? 0
-                    indexProgress?.linksFound = Int(match.3) ?? 0
+                // Counters come from the parsed envelope, not from a regex over
+                // prose. The keys are contractual (always present, lists never
+                // null), so there is nothing left for a scrape to add.
+                let summary = AppState.parseFullIndexSummary(result.stdout)
+                if let summary {
+                    indexProgress?.docsIndexed = summary.docsIndexed
+                    indexProgress?.chunksCreated = summary.chunksCreated
+                    indexProgress?.linksFound = summary.linksFound
                 }
 
                 indexProgress?.elapsed = elapsed
                 if result.exitCode == 0 {
                     indexProgress?.phase = .complete
+                    applyFullIndexOutcome(summary)
                     log.info("Index rebuild completed in \(String(format: "%.1f", elapsed))s (exit 0)")
                 } else {
                     // Surface the actual CLI failure (last stderr line) rather
@@ -1918,7 +1960,7 @@ final class AppState {
     /// and deletes (a removed file can't be incrementally indexed; the next full
     /// Sync's purgeStale reconciles it). This is what makes externally-edited
     /// notes searchable/embedded without a manual Sync.
-    private func scheduleExternalReindex(path: String) {
+    func scheduleExternalReindex(path: String) {
         guard vault != nil else { return }
         if isRecentSelfWrite(path: path) { return }
         // A delete or rename-away leaves no file; `index --doc` would just error
@@ -1966,21 +2008,110 @@ final class AppState {
                 break
             }
 
-            do {
-                // Sequential: never two `index --doc` writing the DB at once.
-                for path in paths.sorted() {
-                    guard FileManager.default.fileExists(atPath: path) else { continue }
-                    let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+            // Sequential: never two `index --doc` writing the DB at once. The
+            // do/catch is PER PATH: one note that will not parse used to abort
+            // the rest of the batch, so a single broken file could leave a
+            // whole sync's worth of edits unindexed.
+            for path in paths.sorted() {
+                guard FileManager.default.fileExists(atPath: path) else { continue }
+                let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+                do {
                     _ = try await runCLI(["index", "--doc", rel, "--json", "--porcelain"], cwd: vault.rootURL)
+                    clearIndexingProblem(for: rel)
+                } catch {
+                    noteIndexingProblem(path: rel, message: error.localizedDescription)
                 }
-                // Reflect the new/updated embeddings in the Index card's count.
-                // Inside the loop so a path queued during this pass is still
-                // drained before we clear the in-flight flag.
-                await refreshAIStatus()
-            } catch {
-                log.debug("external reindex failed: \(error.localizedDescription)")
             }
+            // Reflect the new/updated embeddings in the Index card's count.
+            // Inside the loop so a path queued during this pass is still
+            // drained before we clear the in-flight flag.
+            await refreshAIStatus()
         }
+    }
+
+    /// Records a per-note reindex failure. Logged at warning, not debug: a note
+    /// dropping out of the index is a user-visible outcome, and the previous
+    /// debug line meant nobody ever saw it.
+    func noteIndexingProblem(path: String, message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        log.warning("index --doc failed for \(path, privacy: .public): \(trimmed, privacy: .public)")
+        lastIndexingProblem = IndexingProblem(path: path, message: trimmed)
+    }
+
+    /// Clears the problem when THAT path indexes cleanly. Scoped to the path so
+    /// a different note succeeding cannot hide a failure the user has not fixed.
+    func clearIndexingProblem(for path: String) {
+        if lastIndexingProblem?.path == path {
+            lastIndexingProblem = nil
+        }
+    }
+
+    /// One full-index envelope, decoded. `index --json` guarantees every key is
+    /// present and both lists are emitted empty rather than omitted, so a decode
+    /// failure means the output was not the envelope at all (an older CLI on
+    /// PATH, say), never "nothing to report". Optional fields with defaults so a
+    /// CLI predating `unreadable` still decodes.
+    struct FullIndexSummary: Decodable {
+        struct SkippedNote: Decodable, Equatable {
+            let path: String
+            let error: String
+        }
+        var docsIndexed: Int = 0
+        var chunksCreated: Int = 0
+        var linksFound: Int = 0
+        var unparseable: [SkippedNote] = []
+        var unreadable: [SkippedNote] = []
+
+        enum CodingKeys: String, CodingKey {
+            case docsIndexed = "docs_indexed"
+            case chunksCreated = "chunks_created"
+            case linksFound = "links_found"
+            case unparseable, unreadable
+        }
+    }
+
+    /// Decodes an `index --json` envelope, or nil when stdout is not one.
+    static func parseFullIndexSummary(_ stdout: String) -> FullIndexSummary? {
+        guard let data = stdout.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(FullIndexSummary.self, from: data)
+    }
+
+    /// Decides what a FULL index that exited cleanly should say about skipped
+    /// notes. Exit 0 stopped meaning "nothing was wrong" the moment an
+    /// unparseable note became non-fatal AND had its index row dropped: a clean
+    /// exit can now hide a note that just vanished from search, and this banner
+    /// is the app's only surface naming it. So a successful run REPORTS the
+    /// notes it skipped and clears only when it skipped none.
+    ///
+    /// A nil summary means stdout was not the envelope, which is no evidence
+    /// either way, so the existing report is kept rather than dismissed: going
+    /// quiet about a broken note is the failure this exists to prevent, and a
+    /// stale banner is the cheaper mistake.
+    ///
+    /// The path-scoped `clearIndexingProblem(for:)` still belongs to the
+    /// single-note watcher; the vault-switch reset lives in `openVault(at:)`.
+    func applyFullIndexOutcome(_ summary: FullIndexSummary?) {
+        guard let summary else {
+            log.warning("Index rebuild exited 0 but its --json envelope did not decode; keeping any existing indexing problem")
+            return
+        }
+        let skipped = summary.unparseable + summary.unreadable
+        guard let first = skipped.first else {
+            lastIndexingProblem = nil
+            return
+        }
+        // The lists are separate because the remedies differ, and the message
+        // says which one this is: an unparseable note has LOST its index entry
+        // and is gone from search until it is fixed, while an unreadable one
+        // keeps whatever it had.
+        var message = summary.unparseable.isEmpty
+            ? "could not be read, so its existing index entry was kept: \(first.error)"
+            : "\(first.error)"
+        if skipped.count > 1 {
+            message += " (and \(skipped.count - 1) more)"
+        }
+        log.warning("Index rebuild skipped \(skipped.count, privacy: .public) note(s); reporting \(first.path, privacy: .public)")
+        lastIndexingProblem = IndexingProblem(path: first.path, message: message)
     }
 
     private func triggerIncrementalReindex(for url: URL) {
@@ -1999,8 +2130,9 @@ final class AppState {
                     ["index", "--doc", relPath, "--json", "--porcelain"],
                     cwd: vault.rootURL
                 )
+                self.clearIndexingProblem(for: relPath)
             } catch {
-                log.debug("incremental reindex failed for \(relPath): \(error.localizedDescription)")
+                self.noteIndexingProblem(path: relPath, message: error.localizedDescription)
             }
             self.reindexTasks.removeValue(forKey: relPath)
         }
@@ -4567,6 +4699,13 @@ struct OllamaReadiness: Codable {
 
 struct OllamaReport: Codable {
     let ollama: OllamaReadiness
+}
+
+/// One note the incremental reindex could not index, with the CLI's own reason.
+/// Equatable so a view can diff it and a test can compare it.
+struct IndexingProblem: Equatable {
+    let path: String
+    let message: String
 }
 
 enum CLIError: LocalizedError {

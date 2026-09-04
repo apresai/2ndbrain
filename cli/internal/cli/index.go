@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,6 +39,31 @@ func init() {
 	rootCmd.AddCommand(indexCmd)
 }
 
+// IndexResult is the JSON summary of a whole-vault `2nb index`. It is the walk's
+// counters PLUS the embed pass's, because the two phases each discover their own
+// unparseable notes and a consumer reading only one of them sees a partial
+// truth: `index --force-reembed --json` never surfaced an embed-phase failure at
+// all, since the envelope was built from the walk's stats alone.
+//
+// Every list is always present and never null, and every counter is always
+// emitted, so an agent never has to tell "absent" apart from "zero".
+type IndexResult struct {
+	FilesScanned   int `json:"files_scanned"`
+	DocsIndexed    int `json:"docs_indexed"`
+	ChunksCreated  int `json:"chunks_created"`
+	LinksFound     int `json:"links_found"`
+	Errors         int `json:"errors"`
+	ExcludedPurged int `json:"excluded_purged"`
+	// Embed-phase counters, previously visible only in the human summary.
+	Embedded     int `json:"embedded"`
+	EmbedFailed  int `json:"embed_failed"`
+	EmbedSkipped int `json:"embed_skipped"`
+	EmbedRetries int `json:"embed_retries"`
+
+	Unparseable []vault.UnparseableDoc `json:"unparseable"`
+	Unreadable  []vault.UnparseableDoc `json:"unreadable"`
+}
+
 // IndexDocResult is the JSON summary returned by `2nb index --doc <path>`.
 // Editors use this to know whether a save triggered real re-embedding work.
 type IndexDocResult struct {
@@ -49,7 +75,19 @@ type IndexDocResult struct {
 type embeddingRunStats struct {
 	Attempted int
 	Embedded  int
-	Failed    int
+	// Failed counts embedding CALLS that failed. A note that could not be
+	// parsed is in Unparseable instead, and one that could not be opened is in
+	// Unreadable: no request was made for either.
+	Failed int
+	// Unparseable names the notes whose content would not parse.
+	Unparseable []vault.UnparseableDoc
+	// Unreadable names the notes the pass could not open. They keep whatever
+	// embedding they already had, so the run is incomplete without being a
+	// reason to throw away every embedding it just paid for.
+	Unreadable []vault.UnparseableDoc
+	// Retries is how many provider retries the pass rode out, read from the
+	// context's counter so every caller records it the same way.
+	Retries int
 	// Skipped counts documents with no embeddable text (empty or
 	// whitespace/comment-only bodies). These are not failures — there is
 	// simply nothing to embed — and embedding providers like Amazon Nova-2
@@ -79,6 +117,7 @@ func indexOperation(force bool, start time.Time, ix vault.IndexStats, es embeddi
 		Embedded:       es.Embedded,
 		EmbedSkipped:   es.Skipped,
 		EmbedFailed:    es.Failed,
+		EmbedRetries:   es.Retries,
 		EmbedMs:        es.DurationMs,
 		TotalChars:     es.TotalChars,
 		EmbeddingModel: es.Model,
@@ -135,7 +174,10 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	// Generate embeddings if a provider is available
 	initAIProviders(v)
-	ctx := context.Background()
+	// The bulk pass gets a counter but NO notice: its per-document progress
+	// printer already owns the terminal line, and the count is what the
+	// observatory needs.
+	ctx := ai.WithRetryCounter(context.Background(), &ai.RetryCounter{})
 	cfg := v.Config.AI
 
 	// Capture pre-embed state so the stamping below can tell whether the vault's
@@ -144,14 +186,22 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	priorEmbedGen := vault.PriorEmbedGeneration(v.DB)
 
 	var embedStats embeddingRunStats
+	// Set when the run has work left but nothing to undo: it is reported
+	// through the normal summary and returned at the end, so the exit code is
+	// non-zero without the report being skipped.
+	var deferredErr error
 	if indexForceReembed {
 		embedStats, err = forceReembedDocuments(ctx, v, cfg)
 		if err != nil {
-			recordMetric(v, indexOperation(true, startTime, *stats, embedStats, cfg, err))
-			slog.Error("force-reembed failed", "error", err)
-			return err
+			if !errors.Is(err, errReembedUnreadable) {
+				recordMetric(v, indexOperation(true, startTime, *stats, embedStats, cfg, err))
+				slog.Error("force-reembed failed", "error", err)
+				return err
+			}
+			deferredErr = err
+			slog.Warn("force-reembed left notes unembedded", "error", err, "embedded", embedStats.Embedded, "unreadable", len(embedStats.Unreadable))
 		}
-	} else if es, eerr := embedDocuments(ctx, v, cfg); eerr != nil {
+	} else if es, eerr := embedDocuments(ctx, v, cfg, withEmbedProgress); eerr != nil {
 		slog.Debug("embedding skipped", "reason", eerr.Error())
 		if !flagPorcelain {
 			// When no provider is configured at all, guide the user
@@ -171,7 +221,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	recordMetric(v, indexOperation(indexForceReembed, startTime, *stats, embedStats, cfg, nil))
+	recordMetric(v, indexOperation(indexForceReembed, startTime, *stats, embedStats, cfg, deferredErr))
 
 	// Stamp which indexing/embedding LOGIC generation this build achieved, so a
 	// future 2nb that changes that logic can detect this vault is stale and prompt
@@ -179,24 +229,59 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	// never fail the index over it. StampAfterIndex advances the embed generation
 	// only when all stored embeddings are current-gen (a full re-embed, or a fresh/
 	// already-current vault with everything embedded).
-	if serr := vault.StampAfterIndex(v.DB, Version, indexForceReembed, embedStats.Failed, embeddingCountBefore, priorEmbedGen); serr != nil {
+	// The shortfall is every document that needed embedding and did not get it:
+	// failed calls PLUS notes the pass could not open. An unreadable note keeps
+	// its OLD vector, which InvalidateAllEmbeddings does not clear, so counting
+	// only Failed would let a force-reembed stamp the vault as fully current-gen
+	// while one note's vector is still from the previous generation.
+	if serr := vault.StampAfterIndex(v.DB, Version, indexForceReembed, embedStats.Failed+len(embedStats.Unreadable), embeddingCountBefore, priorEmbedGen); serr != nil {
 		slog.Warn("stamp index generation failed", "err", serr)
 	}
 
+	// One merged truth for both surfaces. A note that fails to parse can be
+	// discovered by the walk or by the embed pass, and until now the JSON carried
+	// only the walk's list while the human summary printed whichever list the
+	// code path happened to hold.
+	unparseable := vault.MergeUnparseable(stats.Unparseable, embedStats.Unparseable)
+	// Both phases meet the same unopenable note: the walk keeps its row and
+	// names it, then the embed pass tries to re-read it and names it again. One
+	// note to fix is one entry.
+	unreadable := vault.MergeUnparseable(stats.Unreadable, embedStats.Unreadable)
+
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, stats)
+		if werr := output.Write(os.Stdout, format, IndexResult{
+			FilesScanned:   stats.FilesScanned,
+			DocsIndexed:    stats.DocsIndexed,
+			ChunksCreated:  stats.ChunksCreated,
+			LinksFound:     stats.LinksFound,
+			Errors:         stats.Errors,
+			ExcludedPurged: stats.ExcludedPurged,
+			Embedded:       embedStats.Embedded,
+			EmbedFailed:    embedStats.Failed,
+			EmbedSkipped:   embedStats.Skipped,
+			EmbedRetries:   embedStats.Retries,
+			Unparseable:    unparseable,
+			Unreadable:     unreadable,
+		}); werr != nil {
+			return werr
+		}
+		return deferredErr
 	}
 
 	if !flagPorcelain {
+		// The "Indexed N files, N chunks, N links" line is a contract the macOS
+		// app parses; anything new goes beside it, on stderr, never inside it.
 		fmt.Printf("Indexed %d files, %d chunks, %d links\n", stats.DocsIndexed, stats.ChunksCreated, stats.LinksFound)
+		reportUnparseable(unparseable)
+		reportUnreadable(unreadable)
 		if stats.DocsIndexed > 0 {
 			fmt.Fprintln(os.Stderr, "\nReady to search:")
 			fmt.Fprintln(os.Stderr, "  2nb search \"your query\"")
 			fmt.Fprintln(os.Stderr, "  2nb ask \"your question\"")
 		}
 	}
-	return nil
+	return deferredErr
 }
 
 func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err error) {
@@ -216,6 +301,7 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 			Embedded:       embedStats.Embedded,
 			EmbedSkipped:   embedStats.Skipped,
 			EmbedFailed:    embedStats.Failed,
+			EmbedRetries:   embedStats.Retries,
 			EmbedMs:        embedStats.DurationMs,
 			TotalChars:     embedStats.TotalChars,
 			EmbeddingModel: embedStats.Model,
@@ -242,7 +328,14 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 	ctx := context.Background()
 	cfg := v.Config.AI
 	embedded := false
-	if stats, embErr := embedDocuments(ctx, v, cfg); embErr != nil {
+	// The high-frequency path: editors and the macOS app run this on every
+	// save, so a throttled account shows up here first. The pass runs SILENT
+	// here: the notice owns the terminal line, and for one document its own
+	// progress lines say nothing the notice does not.
+	ctx, stopNotice := slowCallNotice(ctx, "embedding note")
+	stats, embErr := embedDocuments(ctx, v, cfg, withoutEmbedProgress)
+	stopNotice()
+	if embErr != nil {
 		slog.Debug("incremental embed skipped", "reason", embErr.Error())
 	} else {
 		embedStats = stats
@@ -281,6 +374,14 @@ func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.Embeddi
 	return embedder, nil
 }
 
+// errReembedUnreadable marks a force-reembed that embedded every note it could
+// open but could not open all of them. It is the one incomplete outcome that
+// must NOT roll the vault back: the notes it did embed were paid for, and the
+// unreadable ones keep the embedding they already had. runIndex recognizes it,
+// prints the full summary, and returns it so the exit code still says the run
+// has work left.
+var errReembedUnreadable = errors.New("force-reembed incomplete")
+
 func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
 	embedder, err := validateEmbeddingProvider(ctx, cfg)
 	if err != nil {
@@ -305,14 +406,28 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 		fmt.Fprintf(os.Stderr, "  force-reembed: invalidated %d embeddings, re-embedding...\n", n)
 	}
 
-	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder)
-	// Skipped (empty) documents are not embeddable, so "complete" means every
-	// non-skipped document embedded. Without subtracting Skipped here a vault
-	// with even one blank note would always report force-reembed as incomplete.
-	if err == nil && (stats.Failed > 0 || stats.Embedded < stats.Attempted-stats.Skipped) {
-		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, stats.Attempted-stats.Skipped, stats.Failed)
+	stats, err := embedDocumentsWithProvider(ctx, v, cfg, embedder, withEmbedProgress)
+	// Reporting is the caller's: it is the only place that knows BOTH phases'
+	// lists, and one merged summary is the whole point.
+	// A note that is skipped (empty), unparseable, or unreadable is not
+	// embeddable this run, so "complete" means every remaining document
+	// embedded. Without subtracting them a vault with one blank note, one note
+	// with bad frontmatter, or one note the run could not open reports
+	// force-reembed as incomplete and throws away every embedding it just paid
+	// for: that is exactly what happened three times in a row on a 314-note
+	// vault where a single note had an empty frontmatter block.
+	embeddable := stats.Attempted - stats.Skipped - len(stats.Unparseable) - len(stats.Unreadable)
+	if err == nil && (stats.Failed > 0 || stats.Embedded < embeddable) {
+		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, embeddable, stats.Failed)
 	}
 	if err == nil {
+		if len(stats.Unreadable) > 0 {
+			// Every note that could be opened was embedded. Keeping those
+			// embeddings and naming what is left to do beats rolling a whole
+			// vault back over a permission bit, so this error travels WITHOUT a
+			// restore: the caller still prints the summary and exits non-zero.
+			return stats, fmt.Errorf("%w: %d note(s) could not be read", errReembedUnreadable, len(stats.Unreadable))
+		}
 		return stats, nil
 	}
 
@@ -326,30 +441,86 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	return stats, err
 }
 
-func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig) (embeddingRunStats, error) {
-	embedder, err := validateEmbeddingProvider(ctx, cfg)
-	if err != nil {
-		return embeddingRunStats{}, err
+// unparseableSummaryLimit bounds how many paths the human summary names before
+// it defers to -v. Five is enough to recognize a pattern (one folder, one
+// template set) without turning a 300-note vault's output into a wall.
+const unparseableSummaryLimit = 5
+
+// reportUnparseable prints the count and the notes to fix. It names up to
+// unparseableSummaryLimit paths and points at -v ONLY when it actually elided
+// some: the previous version printed the whole list and told the reader to run
+// -v to see it, which is a hint to run a command that shows them nothing new.
+// Silent under --porcelain and when there is nothing to report.
+func reportUnparseable(docs []vault.UnparseableDoc) {
+	if flagPorcelain || len(docs) == 0 {
+		return
 	}
-	return embedDocumentsWithProvider(ctx, v, cfg, embedder)
+	fmt.Fprintf(os.Stderr, "  skipped %d unparseable note(s):\n", len(docs))
+	shown := docs
+	if !flagVerbose && len(shown) > unparseableSummaryLimit {
+		shown = shown[:unparseableSummaryLimit]
+	}
+	for _, d := range shown {
+		fmt.Fprintf(os.Stderr, "    %s (%s)\n", d.Path, d.Err)
+	}
+	if elided := len(docs) - len(shown); elided > 0 {
+		fmt.Fprintf(os.Stderr, "    ... and %d more (run with -v to list them all)\n", elided)
+	}
 }
 
-// embedDocumentsWithProvider runs the shared concurrent embed pass
-// (vault.EmbedDocuments) and layers the CLI's stderr progress + cost estimate on
-// top. The worker-pool logic itself lives in internal/vault so the MCP kb_index
-// tool shares it; here we only translate the pass's events into the CLI's
-// !flagPorcelain output and convert the result into embeddingRunStats.
-func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, embedder ai.EmbeddingProvider) (embeddingRunStats, error) {
-	var onStart func(int, int)
-	var onEvent func(vault.EmbedEvent)
-	if !flagPorcelain {
-		onStart = func(count, concurrency int) {
+// reportUnreadable names the notes the run could not open. They keep whatever
+// index entry they already had, which is the part a reader needs to know.
+func reportUnreadable(docs []vault.UnparseableDoc) {
+	if flagPorcelain || len(docs) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  could not read %d note(s); their existing index entries were kept:\n", len(docs))
+	shown := docs
+	if !flagVerbose && len(shown) > unparseableSummaryLimit {
+		shown = shown[:unparseableSummaryLimit]
+	}
+	for _, d := range shown {
+		fmt.Fprintf(os.Stderr, "    %s (%s)\n", d.Path, d.Err)
+	}
+	if elided := len(docs) - len(shown); elided > 0 {
+		fmt.Fprintf(os.Stderr, "    ... and %d more (run with -v to list them all)\n", elided)
+	}
+}
+
+// embedProgress selects whether the pass prints its per-document stderr
+// progress. It exists because that printer and the slow-call notice both write
+// to stderr WITHOUT a newline: run together they interleave on one line, and
+// the notice's erase then wipes whatever the printer left there. Only one of
+// them may own the terminal line at a time.
+type embedProgress bool
+
+const (
+	// withEmbedProgress: the pass owns the line. Used where there is real
+	// per-document progress worth watching (a whole-vault index or reembed).
+	withEmbedProgress embedProgress = true
+	// withoutEmbedProgress: the caller owns the line. Used by `index --doc`,
+	// whose slow-call notice is the thing worth watching; for ONE document
+	// "embedding 1 documents (concurrency 4)" and "embedded 1/1" are noise
+	// anyway.
+	withoutEmbedProgress embedProgress = false
+)
+
+// embedProgressOpts builds the pass's callbacks. Nil callbacks mean a silent
+// pass, which is also what --porcelain gets.
+func embedProgressOpts(p embedProgress) vault.EmbedOpts {
+	if p == withoutEmbedProgress || flagPorcelain {
+		return vault.EmbedOpts{}
+	}
+	return vault.EmbedOpts{
+		OnStart: func(count, concurrency int) {
 			fmt.Fprintf(os.Stderr, "  embedding %d documents (concurrency %d)...\n", count, concurrency)
-		}
-		onEvent = func(ev vault.EmbedEvent) {
+		},
+		OnEvent: func(ev vault.EmbedEvent) {
 			switch ev.Kind {
 			case vault.EmbedParseFailed:
 				fmt.Fprintf(os.Stderr, "  skip %s: %v\n", ev.Path, ev.Err)
+			case vault.EmbedReadFailed:
+				fmt.Fprintf(os.Stderr, "  skip %s: could not read it (%v)\n", ev.Path, ev.Err)
 			case vault.EmbedFailed:
 				fmt.Fprintf(os.Stderr, "  embed error %s: %v\n", ev.Path, ev.Err)
 			case vault.EmbedSkipped:
@@ -359,32 +530,55 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 				// non-deterministic under concurrency.
 				fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", ev.Done, ev.Total, ev.Path)
 			}
-		}
+		},
 	}
+}
 
-	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, vault.EmbedOpts{OnStart: onStart, OnEvent: onEvent})
+func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, progress embedProgress) (embeddingRunStats, error) {
+	embedder, err := validateEmbeddingProvider(ctx, cfg)
+	if err != nil {
+		return embeddingRunStats{}, err
+	}
+	return embedDocumentsWithProvider(ctx, v, cfg, embedder, progress)
+}
+
+// embedDocumentsWithProvider runs the shared concurrent embed pass
+// (vault.EmbedDocuments) and layers the CLI's stderr progress + cost estimate on
+// top. The worker-pool logic itself lives in internal/vault so the MCP kb_index
+// tool shares it; here we only translate the pass's events into the CLI's
+// !flagPorcelain output and convert the result into embeddingRunStats.
+func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, embedder ai.EmbeddingProvider, progress embedProgress) (embeddingRunStats, error) {
+	quiet := embedProgressOpts(progress).OnEvent == nil
+
+	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, embedProgressOpts(progress))
+	// Read the counter AFTER the pass: every worker reports into the one the
+	// caller attached to ctx, so this is the whole pass's retry total.
+	retries := ai.RetriesFrom(ctx)
 	stats := embeddingRunStats{
-		Attempted:  es.Attempted,
-		Embedded:   es.Embedded,
-		Failed:     es.Failed,
-		Skipped:    es.Skipped,
-		DurationMs: es.DurationMs,
-		TotalChars: es.TotalChars,
-		Model:      es.Model,
+		Retries:     retries,
+		Attempted:   es.Attempted,
+		Embedded:    es.Embedded,
+		Failed:      es.Failed,
+		Unparseable: es.Unparseable,
+		Unreadable:  es.Unreadable,
+		Skipped:     es.Skipped,
+		DurationMs:  es.DurationMs,
+		TotalChars:  es.TotalChars,
+		Model:       es.Model,
 	}
 	if err != nil {
 		return stats, err
 	}
 
 	if es.Attempted == 0 {
-		if !flagPorcelain {
+		if !flagPorcelain && !quiet {
 			fmt.Fprintln(os.Stderr, "  all embeddings up to date")
 		}
 		return stats, nil
 	}
 
 	// Show cost estimate for non-free providers (CLI-only UX, after the pass).
-	if !flagPorcelain && es.Embedded > 0 {
+	if !flagPorcelain && !quiet && es.Embedded > 0 {
 		var modelInfo ai.ModelInfo
 		if models, err := loadVerifiedModelCatalog(ctx, cfg, v.Root); err == nil {
 			modelInfo, _ = lookupModelInfo(models, cfg.Provider, es.Model)
@@ -404,7 +598,7 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		}
 	}
 
-	if !flagPorcelain && stats.Skipped > 0 {
+	if !flagPorcelain && !quiet && stats.Skipped > 0 {
 		fmt.Fprintf(os.Stderr, "  skipped %d empty document(s)\n", stats.Skipped)
 	}
 	return stats, nil

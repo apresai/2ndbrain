@@ -83,13 +83,18 @@ type Operation struct {
 	Error      string `json:"error,omitempty"`
 
 	// index / embed
-	FilesScanned   int    `json:"files_scanned,omitempty"`
-	DocsIndexed    int    `json:"docs_indexed,omitempty"`
-	ChunksCreated  int    `json:"chunks_created,omitempty"`
-	LinksFound     int    `json:"links_found,omitempty"`
-	Embedded       int    `json:"embedded,omitempty"`
-	EmbedSkipped   int    `json:"embed_skipped,omitempty"`
-	EmbedFailed    int    `json:"embed_failed,omitempty"`
+	FilesScanned  int `json:"files_scanned,omitempty"`
+	DocsIndexed   int `json:"docs_indexed,omitempty"`
+	ChunksCreated int `json:"chunks_created,omitempty"`
+	LinksFound    int `json:"links_found,omitempty"`
+	Embedded      int `json:"embedded,omitempty"`
+	EmbedSkipped  int `json:"embed_skipped,omitempty"`
+	EmbedFailed   int `json:"embed_failed,omitempty"`
+	// EmbedRetries is how many provider retries the operation rode out
+	// (throttling, server faults). Recorded because wall time alone cannot tell
+	// a slow model from a throttled account, and the two have different fixes.
+	// Schema v3.
+	EmbedRetries   int    `json:"embed_retries,omitempty"`
 	EmbedMs        int64  `json:"embed_ms,omitempty"`
 	TotalChars     int    `json:"total_chars,omitempty"`
 	EmbeddingModel string `json:"embedding_model,omitempty"`
@@ -146,6 +151,8 @@ type Aggregate struct {
 	// Token sums across the retained window for this operation type.
 	TokensIn  int `json:"tokens_in,omitempty"`
 	TokensOut int `json:"tokens_out,omitempty"`
+	// EmbedRetries is the total provider retries across the retained window.
+	EmbedRetries int `json:"embed_retries,omitempty"`
 }
 
 // DB wraps a SQLite connection for the metrics store.
@@ -182,7 +189,7 @@ func Open(dbPath string) (*DB, error) {
 }
 
 // maxMetricsSchemaVersion is the highest schema version this binary writes.
-const maxMetricsSchemaVersion = 2
+const maxMetricsSchemaVersion = 3
 
 // metricsSchemaV2 adds the token columns. Run as an idempotent ALTER (rather than
 // baked into the v1 CREATE) so an EXISTING metrics.db — carrying the user's
@@ -191,6 +198,15 @@ const maxMetricsSchemaVersion = 2
 var metricsSchemaV2 = []string{
 	`ALTER TABLE operations ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE operations ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`,
+}
+
+// metricsSchemaV3 adds the provider-retry count. Additive ALTER for the same
+// reason v2 was: an existing metrics.db carries the user's whole index history
+// and must gain the column rather than be recreated. Deliberately NOT added to
+// the base `schema` const, so a fresh DB takes the same migration path an
+// upgraded one does and the migration is exercised on every install.
+var metricsSchemaV3 = []string{
+	`ALTER TABLE operations ADD COLUMN embed_retries INTEGER NOT NULL DEFAULT 0`,
 }
 
 // migrate brings an existing operations table up to maxMetricsSchemaVersion.
@@ -217,6 +233,11 @@ func (db *DB) migrate() error {
 	}
 	if version < 2 {
 		if err := db.applyMigration(2, metricsSchemaV2); err != nil {
+			return err
+		}
+	}
+	if version < 3 {
+		if err := db.applyMigration(3, metricsSchemaV3); err != nil {
 			return err
 		}
 	}
@@ -306,13 +327,13 @@ func (db *DB) Record(op Operation) error {
 		`INSERT INTO operations (
 			ts, operation, source, duration_ms, ok, error,
 			files_scanned, docs_indexed, chunks_created, links_found,
-			embedded, embed_skipped, embed_failed, embed_ms, total_chars,
+			embedded, embed_skipped, embed_failed, embed_retries, embed_ms, total_chars,
 			embedding_model, embedding_dims, result_count, mode,
 			input_tokens, output_tokens, cli_version
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		op.Timestamp, op.Operation, op.Source, op.DurationMs, boolToInt(op.OK), op.Error,
 		op.FilesScanned, op.DocsIndexed, op.ChunksCreated, op.LinksFound,
-		op.Embedded, op.EmbedSkipped, op.EmbedFailed, op.EmbedMs, op.TotalChars,
+		op.Embedded, op.EmbedSkipped, op.EmbedFailed, op.EmbedRetries, op.EmbedMs, op.TotalChars,
 		op.EmbeddingModel, op.EmbeddingDims, op.ResultCount, op.Mode,
 		op.InputTokens, op.OutputTokens, op.CLIVersion,
 	)
@@ -397,6 +418,7 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 		rateSum             float64
 		rateN               int
 		tokensIn, tokensOut int
+		retries             int
 	}
 	buckets := map[string]*acc{}
 	for _, o := range ops {
@@ -408,6 +430,7 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 		a.durations = append(a.durations, o.DurationMs)
 		a.tokensIn += o.InputTokens
 		a.tokensOut += o.OutputTokens
+		a.retries += o.EmbedRetries
 		if r := o.WithRates().DocsPerSec; r > 0 {
 			a.rateSum += r
 			a.rateN++
@@ -422,6 +445,7 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 			AvgDocsPerSec: round2(safeDiv(a.rateSum, float64(a.rateN))),
 			TokensIn:      a.tokensIn,
 			TokensOut:     a.tokensOut,
+			EmbedRetries:  a.retries,
 		}
 	}
 	return out, nil
@@ -429,7 +453,7 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 
 const opColumns = `id, ts, operation, source, duration_ms, ok, error,
 	files_scanned, docs_indexed, chunks_created, links_found,
-	embedded, embed_skipped, embed_failed, embed_ms, total_chars,
+	embedded, embed_skipped, embed_failed, embed_retries, embed_ms, total_chars,
 	embedding_model, embedding_dims, result_count, mode,
 	input_tokens, output_tokens, cli_version`
 
@@ -441,7 +465,7 @@ func scanOps(rows *sql.Rows) ([]Operation, error) {
 		if err := rows.Scan(
 			&o.ID, &o.Timestamp, &o.Operation, &o.Source, &o.DurationMs, &ok, &o.Error,
 			&o.FilesScanned, &o.DocsIndexed, &o.ChunksCreated, &o.LinksFound,
-			&o.Embedded, &o.EmbedSkipped, &o.EmbedFailed, &o.EmbedMs, &o.TotalChars,
+			&o.Embedded, &o.EmbedSkipped, &o.EmbedFailed, &o.EmbedRetries, &o.EmbedMs, &o.TotalChars,
 			&o.EmbeddingModel, &o.EmbeddingDims, &o.ResultCount, &o.Mode,
 			&o.InputTokens, &o.OutputTokens, &o.CLIVersion,
 		); err != nil {

@@ -391,12 +391,14 @@ func (b *BedrockEmbedder) invokeModel(ctx context.Context, reqBody []byte) ([]by
 		if !isBedrockRetryable(err) || attempt == maxBedrockAttempts {
 			break
 		}
+		wait := bedrockRetryDelay(attempt)
+		noteBedrockRetry(ctx, "classic", attempt, maxBedrockAttempts, wait, err)
 		// Wait the backoff, but honor cancellation: a client disconnect / timeout
 		// mid-backoff should abort promptly instead of sleeping out the full delay.
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(bedrockRetryDelay(attempt)):
+		case <-time.After(wait):
 		}
 	}
 	return nil, fmt.Errorf("invoke %s: %w", b.model, err)
@@ -874,11 +876,13 @@ func (b *BedrockGenerator) converseWithRetry(ctx context.Context, input *bedrock
 		if err == nil || !isBedrockRetryable(err) || attempt == maxBedrockAttempts {
 			break
 		}
+		wait := bedrockRetryDelay(attempt)
+		noteBedrockRetry(ctx, "classic", attempt, maxBedrockAttempts, wait, err)
 		// Honor cancellation during backoff (see invokeModel).
 		select {
 		case <-ctx.Done():
 			return resp, ctx.Err()
-		case <-time.After(bedrockRetryDelay(attempt)):
+		case <-time.After(wait):
 		}
 	}
 	return resp, err

@@ -90,6 +90,11 @@ type AIStatus struct {
 	// models everywhere, so surface it loudly. `config set ai.provider`
 	// clears the flag, so only manual YAML edits produce this.
 	ActiveProviderDisabled bool `json:"active_provider_disabled,omitempty"`
+
+	// EmbedRetryAdvice is the concurrency hint when the last index rode out
+	// throttled retries at a user-raised ai.embed_concurrency. Empty otherwise,
+	// which is the common case: it never fires at the automatic setting.
+	EmbedRetryAdvice string `json:"embed_retry_advice,omitempty"`
 }
 
 // ModelAccessSummary aggregates persisted per-account test outcomes.
@@ -224,6 +229,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	status.Providers = collectProviderStatus(ctx, cfg, embedReady)
 	status.ModelAccess = summarizeModelAccess(v.Root, cfg.Provider)
 	status.ActiveProviderDisabled = cfg.ProviderDisabled(cfg.Provider)
+	status.EmbedRetryAdvice = embedRetryAdvice(v)
 
 	format := getFormat(cmd)
 	if format != "" {
@@ -260,6 +266,11 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	// Denominator is embeddable docs (content-bearing); empty notes are hidden
 	// so coverage reads cleanly against what can actually be embedded.
 	fmt.Printf("Embeddings:       %d/%d\n", status.EmbeddingCount, status.VaultEmbeddableDocs)
+	if status.EmbedRetryAdvice != "" {
+		// The account is throttling and the user chose the concurrency that
+		// causes it. Say both, with the number to change.
+		fmt.Printf("Throttling:       %s\n", status.EmbedRetryAdvice)
+	}
 	fmt.Printf("Search threshold: %g (%s)\n", status.SimilarityThreshold, status.SimilarityThresholdSource)
 	// A threshold 2nb decided to ignore has to be SAID, not silently dropped:
 	// the user set a number, search stopped using it, and nothing else in the

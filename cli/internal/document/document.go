@@ -2,6 +2,7 @@ package document
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -105,10 +106,18 @@ func Parse(path string, content []byte) (*Document, error) {
 	return doc, nil
 }
 
+// ErrRead marks a failure to READ a file, as distinct from a failure to parse
+// what was read. The two must never be treated alike: a note that will not parse
+// is the note's own problem, reported and skipped, while a note that cannot be
+// read right now (a permission bit, a file locked mid-save, any transient I/O
+// error) says NOTHING about its contents and must never cost it its index row.
+// Callers classify with errors.Is(err, document.ErrRead).
+var ErrRead = errors.New("read")
+
 func ParseFile(path string) (*Document, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, fmt.Errorf("%w %s: %w", ErrRead, path, err)
 	}
 	lower := strings.ToLower(path)
 	if strings.HasSuffix(lower, ".canvas") {

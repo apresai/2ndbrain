@@ -147,6 +147,7 @@ func fetchMantleModelList(ctx context.Context, client *http.Client, baseURL, tok
 
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries-1 {
 			delay := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s
+			noteMantleRetry(ctx, attempt+1, maxRetries, delay, resp.StatusCode)
 			select {
 			case <-time.After(delay):
 				continue

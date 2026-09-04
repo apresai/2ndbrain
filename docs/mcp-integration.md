@@ -22,7 +22,7 @@
 | `kb_tags` | none | Vault tag vocabulary with counts. |
 | `kb_tasks` | `path`, `done`, `todo` | GFM checkboxes (`- [ ]` / `- [x]`) vault-wide or under path. |
 | `kb_delete` | `path` (required) | Delete file plus index. Irreversible except via git. |
-| `kb_index` | none | Full reindex plus re-embed. Only after bulk external edits or model switch. |
+| `kb_index` | none | Full reindex plus re-embed. Only after bulk external edits or model switch. The result carries `unparseable` and `unreadable` (both always present, `[]` when empty): a note whose CONTENT would not parse has had its row dropped and is gone from search until you fix it; one that could not be OPENED keeps its row and is still answering searches from what was indexed before. |
 | `kb_suggest_links` | `path` (required), `limit` | Semantic wikilink candidates for path, excluding already-linked. |
 | `kb_polish` | `path` (required), `links`, `system` | Copy-edit preview; does not write. |
 | `kb_git_activity` | `since_days` | Recent vault commits (default 7 days). No-op if not a git repo. |

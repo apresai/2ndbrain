@@ -231,10 +231,12 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 	// degrades to BM25 with a warning on any compat/embed/hybrid failure.
 	r := retrieve.New(v)
 	runRetrieve := func(query string) ([]search.Result, bool, error) {
-		res, err := r.Retrieve(ctx, retrieve.Options{
+		rctx, stopNotice := slowCallNotice(ctx, "embedding question")
+		res, err := r.Retrieve(rctx, retrieve.Options{
 			Query: query,
 			Limit: ai.DefaultRAGCandidateDocs,
 		})
+		stopNotice()
 		if err != nil {
 			return nil, false, err
 		}
@@ -282,7 +284,9 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		fmt.Fprintf(os.Stderr, "Found %d relevant chunks. Generating answer...\n", len(chunks))
 	}
 
-	result, err := ai.RAGWithHistory(ctx, generator, question, history, chunks, reasoning)
+	gctx, stopGenNotice := slowCallNotice(ctx, "generating answer")
+	result, err := ai.RAGWithHistory(gctx, generator, question, history, chunks, reasoning)
+	stopGenNotice()
 	if err != nil {
 		slog.Error("RAG failed", "question", question, "err", err)
 		return AskResponse{}, fmt.Errorf("RAG failed: %w", err)

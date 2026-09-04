@@ -18,6 +18,7 @@ var (
 	costProvider  string
 	costAll       bool
 	costDiscover  bool
+	costRefresh   bool
 )
 
 var modelsCostPreviewCmd = &cobra.Command{
@@ -40,6 +41,8 @@ func init() {
 		"Estimate across every verified model (when no IDs given)")
 	modelsCostPreviewCmd.Flags().BoolVar(&costDiscover, "discover", false,
 		"Resolve IDs against vendor-discovered models too (mantle-plane discoveries have no catalog entry until verified)")
+	modelsCostPreviewCmd.Flags().BoolVar(&costRefresh, "refresh", false,
+		"With --discover, re-walk the vendor APIs instead of using the 24h discovery cache")
 	_ = modelsCostPreviewCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsCostPreviewCmd.RegisterFlagCompletionFunc("probe", completeProbeKinds)
 	modelsCmd.AddCommand(modelsCostPreviewCmd)
@@ -70,6 +73,9 @@ func runModelsCostPreview(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 && !costAll {
 		return fmt.Errorf("pass at least one model id, or --all to estimate across the full catalog")
 	}
+	if costRefresh && !costDiscover {
+		return fmt.Errorf("--refresh requires --discover")
+	}
 
 	v, err := openVault()
 	if err != nil {
@@ -84,8 +90,9 @@ func runModelsCostPreview(cmd *cobra.Command, args []string) error {
 		Discover:  costDiscover,
 		// A cost preview precedes a verify --discover run, which reads
 		// discovery through the 24h cache; reading through the same cache
-		// keeps the previewed pool identical and the preview fast.
-		DiscoverCached: costDiscover,
+		// keeps the previewed pool identical and the preview fast. --refresh
+		// is the deliberate re-walk, for when the pool itself is in doubt.
+		DiscoverCached: costDiscover && !costRefresh,
 	})
 	if err != nil {
 		return fmt.Errorf("load model catalog: %w", err)

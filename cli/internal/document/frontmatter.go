@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,6 +18,209 @@ var sensitiveKeys = map[string]bool{
 
 func IsSensitiveKey(key string) bool {
 	return sensitiveKeys[strings.ToLower(key)]
+}
+
+// emptyFrontmatterBlock reports whether the region after the opening delimiter
+// begins with the CLOSING delimiter, i.e. the note opens with an empty
+// frontmatter block ("---\n---\n"), and returns the body that follows it.
+//
+// Obsidian writes that shape when every property is removed from a note, and
+// SerializeFrontmatter writes it for an empty map, so 2nb produces it itself.
+// Without this check the closing-delimiter search below runs straight past the
+// empty block and matches the next "---" in the BODY (a horizontal rule),
+// handing real prose to the YAML parser. The note then fails to parse on every
+// index, and one such note was enough to fail a whole force-reembed and roll
+// 313 good embeddings back.
+func emptyFrontmatterBlock(rest string) (body string, ok bool) {
+	switch {
+	case strings.HasPrefix(rest, "---\r\n"):
+		return rest[len("---\r\n"):], true
+	case strings.HasPrefix(rest, "---\n"):
+		return rest[len("---\n"):], true
+	case rest == "---":
+		// Closing delimiter at end of file, no trailing newline.
+		return "", true
+	}
+	return "", false
+}
+
+// isFrontmatterSpace reports whether a rune is invisible filler on an otherwise
+// empty line. unicode.IsSpace covers space, tab, CR, formfeed, vertical tab,
+// NBSP and the U+2028/U+2029 separators. The zero-width characters are FORMAT
+// characters, not spaces, so IsSpace says no to them and they have to be named:
+// each one is invisible in every editor, so a line carrying one looks blank to
+// the person who left it there.
+func isFrontmatterSpace(r rune) bool {
+	if unicode.IsSpace(r) {
+		return true
+	}
+	switch r {
+	case '\u200b', // zero-width space
+		'\ufeff', // zero-width no-break space / BOM
+		'\u200c', // zero-width non-joiner
+		'\u200d': // zero-width joiner
+		return true
+	}
+	return false
+}
+
+// isBlankLine reports whether one line of a frontmatter region is blank. Blank
+// means INVISIBLE, not byte-empty: a line carrying a stray space, tab or
+// zero-width character is blank to the reader and to the editor that left it
+// there. Narrower definitions cost data in both directions, because this
+// predicate decides both whether prose is absorbed as properties and whether
+// real properties survive. The CR of a CRLF line is handled here rather than by
+// normalizing the document, so the body that comes back is the original bytes.
+func isBlankLine(line string) bool {
+	return strings.TrimFunc(line, isFrontmatterSpace) == ""
+}
+
+// contiguousKeyBlock returns the YAML text to parse from the region between a
+// doubled opening
+// fence and its closing fence is what frontmatter actually is: a CONTIGUOUS
+// block of keys. Leading blank lines are skipped (a note may open its properties
+// a line down), and after that the block must contain NO blank line at all,
+// interior or trailing.
+//
+// That single test is what tells the two competing shapes apart, and nothing
+// simpler does, because BOTH of them have a blank line right after the doubled
+// fence:
+//
+//	"---\n---\n\nStatus: draft\n\n---\n\nRest\n"              body, blank line before the fence
+//	"---\n---\n\ntitle: Real Note\ntags: [a, b]\n---\nBody\n"   properties, none
+//
+// Judging by the LEADING blank line alone got both wrong in turn: it absorbed
+// the first (whenever that blank line carried whitespace) and discarded the
+// second outright, moving a note's real title and tags into its body.
+func contiguousKeyBlock(region string) (string, bool) {
+	lines := strings.Split(region, "\n")
+	first := 0
+	for first < len(lines) && isBlankLine(lines[first]) {
+		first++
+	}
+	if first == len(lines) {
+		return "", false // nothing but blank lines is not a key block
+	}
+	for _, line := range lines[first:] {
+		if isBlankLine(line) {
+			return "", false
+		}
+	}
+	// The recognized leading blanks are STRIPPED, not merely stepped over. They
+	// used to be left in the region handed to the YAML parser, which is the root
+	// cause of the worst version of this bug: YAML forbids tab indentation, so a
+	// tab-only "blank" line the classifier had already accepted made the whole
+	// region fail to parse and a note's real properties were discarded into its
+	// body. Validating a region and then parsing a different one is the shape of
+	// that mistake; there is one region now.
+	return strings.Join(lines[first:], "\n"), true
+}
+
+// closingFence locates the fence that ENDS a frontmatter region: "\n---\n", its
+// CRLF form, or a "---" at end of file, in that order. It returns the index of
+// the fence's first byte within rest and the fence's length, or (-1, 0) when
+// there is none.
+//
+// It is the single definition of where frontmatter ends, called by both the
+// reader and the surgical writer. They used to search separately and could
+// disagree about the end-of-file forms, the writer's version matching a bare
+// "\n---" anywhere rather than only at the end. Nothing lost data through that
+// today, because every production caller hands the writer the full frontmatter
+// map and the editor re-appends what is missing, so the visible cost was
+// reordered keys and dropped comments. It is unified anyway: two implementations
+// of one boundary in a function fixed this many times is how the next round
+// starts.
+func closingFence(rest string) (idx, length int) {
+	if i := strings.Index(rest, "\n---\n"); i != -1 {
+		return i, len("\n---\n")
+	}
+	if i := strings.Index(rest, "\r\n---\r\n"); i != -1 {
+		return i, len("\r\n---\r\n")
+	}
+	// End-of-file closers, CRLF first: "\r\n---" also ends with "\n---", and
+	// taking the LF reading there would leave a stray "\r" on the YAML region.
+	if strings.HasSuffix(rest, "\r\n---") {
+		return len(rest) - len("\r\n---"), len("\r\n---")
+	}
+	if strings.HasSuffix(rest, "\n---") {
+		return len(rest) - len("\n---"), len("\n---")
+	}
+	return -1, 0
+}
+
+// legacyDoubledDelimiterFrontmatter re-reads a doubled opening delimiter the way
+// the parser did before the empty-block rule: everything up to the NEXT closing
+// delimiter is the YAML region, and its leading "---" is a document start marker
+// that YAML accepts. It wins only when that region yields a NON-EMPTY mapping;
+// a parse error or an empty result means the block really is empty.
+//
+// The region between the two fences is real frontmatter only when it is a
+// contiguous key block (contiguousKeyBlock) AND parses as a non-empty mapping.
+// Anything else means the block really is empty and the whole region is body.
+// The closing fence is found exactly as the main parser finds one: "\n---\n",
+// its CRLF form, or a "---" at end of file.
+//
+// Both halves of that test cost real data when they were missing. Reading the
+// region as properties whenever it parsed absorbed body prose, and because
+// UpdateDocumentFrontmatterAST consults this same function, `2nb meta --set` and
+// `2nb tag add` then REWROTE the file, lifting those lines out of the visible
+// body and into a properties block on disk. Rejecting the region whenever a
+// blank line followed the fence did the mirror image: a note whose real title
+// and tags began one line down had them discarded into its body, and rewritten
+// there. A frontmatter-only command must never touch the body, in either
+// direction.
+//
+// What is left is genuinely ambiguous and deliberately kept: a body whose first
+// non-blank stretch has no blank line in it and happens to parse as a mapping
+// ("---\n---\nStatus: draft\n---\nbody") is read as properties. Prose that runs
+// to more than one paragraph, or that ends a paragraph before the next "---",
+// is not, which covers the shapes notes actually take. Losing real metadata is
+// the worse of the two failures, so that is the side the tie falls on, and it is
+// pinned by test rather than left accidental.
+func doubledFenceKeyBlock(rest string) (block, body string, ok bool) {
+	var afterOpen int
+	switch {
+	case strings.HasPrefix(rest, "---\r\n"):
+		afterOpen = len("---\r\n")
+	case strings.HasPrefix(rest, "---\n"):
+		afterOpen = len("---\n")
+	default:
+		// A second delimiter at end of file: an empty block, nothing behind it.
+		return "", "", false
+	}
+	idx, closeLen := closingFence(rest)
+	// One guard for two cases: no closing fence at all (idx == -1), and a
+	// TRIPLED delimiter, where the fence found is the one already consumed and
+	// there is no region between them (slicing it would panic).
+	if idx < afterOpen {
+		return "", "", false
+	}
+
+	// The ORIGINAL bytes, sliced. Nothing here normalizes line endings: the body
+	// returned is what was read, so a CRLF note keeps its CRLF through the write
+	// path that rewrites the whole file from it.
+	block, ok = contiguousKeyBlock(rest[afterOpen:idx])
+	if !ok {
+		return "", "", false
+	}
+	return block, rest[idx+closeLen:], true
+}
+
+// legacyDoubledDelimiterFrontmatter parses the region doubledFenceKeyBlock
+// isolated. The split exists so the surgical writer can parse the SAME text: it
+// used to derive its own region, and one that merely skipped the leading blank
+// lines rather than stripping them handed YAML filler the reader had already
+// removed, which threw a note's properties away on a `meta --set`.
+func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, bool) {
+	block, body, ok := doubledFenceKeyBlock(rest)
+	if !ok {
+		return nil, "", false
+	}
+	meta := make(map[string]any)
+	if err := yaml.Unmarshal([]byte(block), &meta); err != nil || len(meta) == 0 {
+		return nil, "", false
+	}
+	return meta, body, true
 }
 
 func ParseFrontmatter(content []byte) (meta map[string]any, body string, err error) {
@@ -37,6 +241,20 @@ func ParseFrontmatter(content []byte) (meta map[string]any, body string, err err
 	}
 
 	rest := s[openLen:]
+	if emptyBody, ok := emptyFrontmatterBlock(rest); ok {
+		// A doubled delimiter is genuinely ambiguous, so prefer the reading that
+		// cannot LOSE data. "---\n---\nreal: value\n---\nbody" is either an
+		// empty block followed by prose that happens to look like YAML, or a
+		// mapping whose region opens with a stray document marker. Before the
+		// empty-block rule existed the second reading always won (the search
+		// below found the THIRD delimiter and YAML accepted the leading "---" as
+		// a document start), so taking the first reading unconditionally moved a
+		// note's real metadata into its body.
+		if meta, legacyBody, ok := legacyDoubledDelimiterFrontmatter(rest); ok {
+			return meta, legacyBody, nil
+		}
+		return map[string]any{}, emptyBody, nil
+	}
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
 		// Try CRLF with trailing newline
@@ -107,6 +325,22 @@ func SerializeDocument(meta map[string]any, body string) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(fm)
 	if body != "" {
+		// An EMPTY frontmatter block is closed by a delimiter identical to the
+		// one that opened it, so what the parser meets is a doubled fence, and
+		// the blank line after it is how it knows the block really is empty
+		// (see legacyDoubledDelimiterFrontmatter). Write no blank line and 2nb
+		// produces a note it then MISREADS: an empty map with the body
+		// "Status: draft\n\n---\n\nAction items\n" was written as
+		// "---\n---\nStatus: draft\n\n---\n\nAction items\n" and read straight
+		// back as {Status: draft} with that line gone from the body. Exactly one
+		// newline, and only when the body does not already begin with one, so a
+		// body that is already spaced is emitted byte for byte and no blank line
+		// is ever doubled. A non-empty block needs nothing: its closing
+		// delimiter is unambiguous. SerializeFrontmatter's own return is
+		// deliberately unchanged, since it promises the block and not the note.
+		if len(meta) == 0 && !strings.HasPrefix(body, "\n") && !strings.HasPrefix(body, "\r\n") {
+			buf.WriteString("\n")
+		}
 		buf.WriteString(body)
 	}
 	return buf.Bytes(), nil
@@ -138,22 +372,28 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 	}
 
 	rest := s[openLen:]
-	idx := strings.Index(rest, "\n---\n")
-	if idx == -1 {
-		idx = strings.Index(rest, "\r\n---\r\n")
-		if idx == -1 {
-			idx = strings.Index(rest, "\r\n---")
-			if idx == -1 {
-				idx = strings.Index(rest, "\n---")
-			}
-		}
-	}
-
+	// The SAME boundary the reader used, not a second search for it.
+	idx, _ := closingFence(rest)
 	if idx == -1 {
 		return SerializeDocument(updatedMeta, body)
 	}
-
 	yamlStr := rest[:idx]
+
+	// An empty frontmatter block carries no YAML to preserve surgically, and the
+	// closing-fence search would otherwise match a "---" in the body and treat
+	// body prose as the region to edit. A doubled delimiter that still reads as
+	// real frontmatter DOES have a region to preserve, and it is the reader's
+	// region, byte for byte. Re-deriving it here is how the writer ended up
+	// handing YAML the blank filler the reader had already stripped: a tab-only
+	// line is legal filler and illegal indentation, so the parse failed and a
+	// `meta --set` threw the note's properties away.
+	if _, empty := emptyFrontmatterBlock(rest); empty {
+		block, _, isBlock := doubledFenceKeyBlock(rest)
+		if !isBlock {
+			return SerializeDocument(updatedMeta, body)
+		}
+		yamlStr = block
+	}
 
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlStr), &node); err != nil {

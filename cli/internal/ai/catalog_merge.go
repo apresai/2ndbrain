@@ -61,8 +61,12 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	catalog := BuiltinCatalog()
 	result := &MergedModelList{}
 
-	// Layer 2+3: overlay user catalog (global merged with per-vault).
-	if user := LoadUserCatalog(opts.VaultRoot); len(user) > 0 {
+	// Layer 2+3: overlay user catalog (global merged with per-vault). The raw
+	// rows are kept: reconcileBuiltinFacts below reads AUTHORSHIP from them,
+	// which the merged rows can no longer answer once retirement has moved
+	// facts between routes.
+	user := LoadUserCatalog(opts.VaultRoot)
+	if len(user) > 0 {
 		// The base here IS the builtin catalog, so the builtin owns its model
 		// facts, its ConfigHint and its curation unless the user stamped
 		// otherwise (see mergeFields).
@@ -107,7 +111,7 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 
 	// Layer 4: vendor discovery. Only add entries not already in the merged catalog.
 	if opts.Discover {
-		vendorModels, warnings := discoverVendorModels(ctx, opts.Config, opts.DiscoverCached)
+		vendorModels, warnings := discoverVendorModels(ctx, opts.Config, opts.DiscoverCached, opts.IncludeDisabledProviders)
 		result.Warnings = append(result.Warnings, warnings...)
 		result.Unverified = mergeDiscovered(catalog, vendorModels)
 		// Freshly discovered entries get the same policy verdict as the
@@ -138,6 +142,12 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	// that pair un-retired, listing the model twice and (worse) making its
 	// slot look ambiguous to the invoke path.
 	retireSupersededTemplates(&result.Verified, &result.Unverified)
+
+	// A builtin's facts win over a user row's unauthored copies of them, on
+	// every row of that model rather than only on a row whose route a builtin
+	// happens to share. Runs after retirement, so a fact retirement donated
+	// from a route-less authored row is still recognized as the user's.
+	reconcileBuiltinFacts(user, &result.Verified, &result.Unverified)
 
 	// Re-mark Active AFTER retiring, and across BOTH halves.
 	//
@@ -248,7 +258,23 @@ func applyStatusChecks(ctx context.Context, catalog []ModelInfo, cfg AIConfig) {
 // discoverVendorModels queries all provider APIs for their full model catalogs
 // in parallel. Errors are returned as warnings so callers can explain why a
 // provider contributed no discovered rows.
-func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]ModelInfo, []string) {
+//
+// A provider the user has SILENCED (ai.<provider>.disabled) is skipped
+// entirely, with no call and no warning, unless includeDisabled is set for the
+// one surface that needs it (the setup wizard, where opt-in providers are
+// turned ON). filterDisabledProviders already dropped every such row from the
+// result, so the walk was pure cost: with OpenRouter disabled and therefore no
+// API key, one real machine logged 19 "vendor discovery failed
+// provider=openrouter" warnings in a day, each one from a Models-tab refresh
+// reporting a provider the user had deliberately turned off.
+func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache, includeDisabled bool) ([]ModelInfo, []string) {
+	skip := func(provider string) bool {
+		if includeDisabled || !cfg.ProviderDisabled(provider) {
+			return false
+		}
+		slog.Debug("vendor discovery skipped: provider disabled", "provider", provider)
+		return true
+	}
 	var (
 		mu       sync.Mutex
 		all      []ModelInfo
@@ -275,6 +301,9 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if skip("bedrock") {
+			return
+		}
 		list := ListBedrockVendorModels
 		if useCache {
 			list = ListBedrockVendorModelsCached
@@ -337,6 +366,9 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if skip("openrouter") {
+			return
+		}
 		key, err := GetAPIKey("openrouter")
 		if err != nil || key == "" {
 			if err != nil {
@@ -369,6 +401,10 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// The mantle plane is Bedrock: one disable silences both planes.
+		if skip("bedrock") {
+			return
+		}
 		if resolveMantleBearerToken() == "" {
 			slog.Debug("bedrock mantle discovery skipped: no bearer token (SigV4-only setup)")
 			return
@@ -417,6 +453,9 @@ func discoverVendorModels(ctx context.Context, cfg AIConfig, useCache bool) ([]M
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if skip("ollama") {
+			return
+		}
 		endpoint := cfg.Ollama.Endpoint
 		if endpoint == "" {
 			endpoint = "http://localhost:11434"

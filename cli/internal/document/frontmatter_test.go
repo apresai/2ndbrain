@@ -162,3 +162,180 @@ func TestFilterSensitive(t *testing.T) {
 		t.Error("tags should survive filtering")
 	}
 }
+
+// The four tests below cover a note that opens with an EMPTY frontmatter block
+// ("---" immediately followed by "---"). Obsidian writes that shape when a note
+// loses its last property, and SerializeFrontmatter writes it for an empty map,
+// so 2nb produces it too. The parser used to search past the empty block for a
+// closing delimiter and match the next "---" in the body instead, so the note
+// failed to parse on every index.
+func TestParseFrontmatter_EmptyBlockLF(t *testing.T) {
+	content := []byte("---\n---\n# Heading\n\nBody\n")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta == nil {
+		t.Error("meta = nil, want an empty map (the block exists, it is just empty)")
+	}
+	if len(meta) != 0 {
+		t.Errorf("meta = %v, want empty", meta)
+	}
+	if body != "# Heading\n\nBody\n" {
+		t.Errorf("body = %q, want %q", body, "# Heading\n\nBody\n")
+	}
+}
+
+func TestParseFrontmatter_EmptyBlockCRLF(t *testing.T) {
+	content := []byte("---\r\n---\r\nBody\r\n")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(meta) != 0 {
+		t.Errorf("meta = %v, want empty", meta)
+	}
+	if body != "Body\r\n" {
+		t.Errorf("body = %q, want %q", body, "Body\r\n")
+	}
+}
+
+func TestParseFrontmatter_EmptyBlockAtEOF(t *testing.T) {
+	// Nothing at all after the block, and no trailing newline.
+	content := []byte("---\n---")
+	meta, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(meta) != 0 {
+		t.Errorf("meta = %v, want empty", meta)
+	}
+	if body != "" {
+		t.Errorf("body = %q, want empty", body)
+	}
+}
+
+// TestParseFrontmatter_EmptyBlockKeepsBodyWithHorizontalRule is the shape that
+// broke a real vault: an empty block followed by prose that contains its own
+// "---" horizontal rule. The body must come back byte for byte.
+func TestParseFrontmatter_EmptyBlockKeepsBodyWithHorizontalRule(t *testing.T) {
+	const wantBody = "# AGENTS\n\nsome text\n\n---\n\nmore text\n"
+	meta, body, err := ParseFrontmatter([]byte("---\n---\n" + wantBody))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(meta) != 0 {
+		t.Errorf("meta = %v, want empty", meta)
+	}
+	if body != wantBody {
+		t.Errorf("body = %q, want %q (the horizontal rule is body, not a closing delimiter)", body, wantBody)
+	}
+}
+
+// TestUpdateDocumentFrontmatterAST_EmptyBlock covers the write side: adding a
+// property to a note with an empty block must not treat the body's horizontal
+// rule as the frontmatter region.
+func TestUpdateDocumentFrontmatterAST_EmptyBlock(t *testing.T) {
+	original := []byte("---\n---\n# Heading\n\ntext\n\n---\n\nmore\n")
+	meta, body, err := ParseFrontmatter(original)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_ = meta
+	out, err := UpdateDocumentFrontmatterAST(original, map[string]any{"title": "Hello"}, body)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	gotMeta, gotBody, err := ParseFrontmatter(out)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	if gotMeta["title"] != "Hello" {
+		t.Errorf("title = %v, want Hello", gotMeta["title"])
+	}
+	if gotBody != body {
+		t.Errorf("body = %q, want %q (unchanged)", gotBody, body)
+	}
+}
+
+// TestParseFrontmatter_DoubledDelimiterKeepsRealFrontmatter is the regression
+// the empty-block rule introduced: a note written as "---\n---\nreal: value\n---\n"
+// carries real metadata behind a doubled opening delimiter, and reading the
+// block as empty moved that metadata into the body, silently. A doubled
+// delimiter is ambiguous, so the reading that cannot lose data wins.
+func TestParseFrontmatter_DoubledDelimiterKeepsRealFrontmatter(t *testing.T) {
+	meta, body, err := ParseFrontmatter([]byte("---\n---\nreal: value\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["real"] != "value" {
+		t.Errorf("meta = %v, want real: value preserved as metadata, not moved into the body", meta)
+	}
+	if body != "body\n" {
+		t.Errorf("body = %q, want %q", body, "body\n")
+	}
+}
+
+func TestParseFrontmatter_DoubledDelimiterKeepsRealFrontmatterCRLF(t *testing.T) {
+	meta, body, err := ParseFrontmatter([]byte("---\r\n---\r\nreal: value\r\n---\r\nbody\r\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta["real"] != "value" {
+		t.Errorf("meta = %v, want real: value", meta)
+	}
+	if body != "body\r\n" {
+		t.Errorf("body = %q, want %q", body, "body\r\n")
+	}
+}
+
+// TestParseFrontmatter_DoubledDelimiterAmbiguityIsPinned pinned a COST when it
+// was written: a markdown heading is a YAML comment, so "# H\n\nkey: value"
+// parsed as a mapping and was read as frontmatter, which is what 2nb did before
+// the empty-block rule existed. It was pinned "so a future change to it is a
+// decision, not a surprise", and this is that decision.
+//
+// The contiguous-key-block rule retires the cost. Frontmatter is a contiguous
+// run of keys, and this region has a blank line in the middle of it, so it is
+// body: the heading, the colon line and the horizontal rule all stay where the
+// author put them. The test is kept, inverted, because the shape is still worth
+// pinning; what changed is that the honest answer is now available.
+func TestParseFrontmatter_DoubledDelimiterAmbiguityIsPinned(t *testing.T) {
+	const input = "---\n---\n# H\n\nkey: value\n---\nmore\n"
+	meta, body, err := ParseFrontmatter([]byte(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(meta) != 0 {
+		t.Errorf("meta = %v, want empty: a blank line inside the region means it is not a key block", meta)
+	}
+	if want := input[len("---\n---\n"):]; body != want {
+		t.Errorf("body = %q, want %q byte for byte", body, want)
+	}
+}
+
+// TestUpdateDocumentFrontmatterAST_DoubledDelimiterKeepsRealFrontmatter: the
+// write side follows the read side, so a meta edit does not drop the metadata
+// the read side just recognized.
+func TestUpdateDocumentFrontmatterAST_DoubledDelimiterKeepsRealFrontmatter(t *testing.T) {
+	original := []byte("---\n---\nreal: value\n---\nbody\n")
+	meta, body, err := ParseFrontmatter(original)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	meta["added"] = "yes"
+	out, err := UpdateDocumentFrontmatterAST(original, meta, body)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	gotMeta, gotBody, err := ParseFrontmatter(out)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	if gotMeta["real"] != "value" || gotMeta["added"] != "yes" {
+		t.Errorf("meta = %v, want both the existing and the added key", gotMeta)
+	}
+	if gotBody != body {
+		t.Errorf("body = %q, want %q (unchanged)", gotBody, body)
+	}
+}

@@ -189,8 +189,10 @@ func TestProbeSaveKeepsAStampedFactOnTheProbedRoute(t *testing.T) {
 
 // The write-side half of the self-heal. A catalog contaminated by an older
 // version carries an UNSTAMPED context_length copied off a builtin that has
-// since changed; the next probe save drops it rather than rewriting it, and the
-// merged view returns to the builtin's current value with nothing to clean up.
+// since changed. The READ side now refuses that copy on its own
+// (reconcileBuiltinFacts), so what this test proves is that the next probe save
+// also removes it FROM DISK rather than rewriting it, leaving nothing for the
+// read side to keep healing.
 func TestProbeSaveDropsAnUnstampedContextLength(t *testing.T) {
 	_, root := newContractVault(t)
 	builtin := findBuiltinModel("bedrock", novaEmbeddingID)
@@ -208,8 +210,8 @@ func TestProbeSaveDropsAnUnstampedContextLength(t *testing.T) {
 			"    context_length: 2048\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := mergedContextLen(t, root, novaEmbeddingID); got != 2048 {
-		t.Fatalf("precondition: the contaminated catalog should read back as 2048, got %d", got)
+	if got := mergedContextLen(t, root, novaEmbeddingID); got != builtin.ContextLen {
+		t.Fatalf("precondition: the read side should already show the builtin %d over the contaminated 2048, got %d", builtin.ContextLen, got)
 	}
 
 	saveProbeVerdict(t, ai.ScopeVault, root, &ai.TestProbeResult{

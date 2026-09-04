@@ -136,6 +136,18 @@ struct VaultStatusView: View {
                 LabeledContent("State", value: "Up to date")
             }
 
+            // A per-note failure is reported alongside the state rather than
+            // replacing it: the index as a whole is fine, one note is not.
+            if let problem = appState.lastIndexingProblem {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Could not index \(problem.path): \(problem.message)")
+                        .foregroundStyle(.orange)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                }
+            }
         }
     }
 

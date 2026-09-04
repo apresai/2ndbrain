@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -19,7 +20,22 @@ type EmbedStats struct {
 	// Attempted is the number of documents that needed embedding (the work set).
 	Attempted int
 	Embedded  int
-	Failed    int
+	// Failed counts documents whose EMBEDDING CALL failed: a provider error, a
+	// dimension mismatch, a store write. Neither a note that could not be parsed
+	// nor one that could not be opened is one of these (they are in Unparseable
+	// and Unreadable): no request was ever made for them, and counting them here
+	// used to fail an entire force-reembed and roll back every good embedding
+	// because one note in the vault had bad frontmatter or a permission bit.
+	Failed int
+	// Unparseable lists notes whose CONTENT would not parse. Nothing was sent to
+	// the provider for them and nothing about their stored embedding changed.
+	Unparseable []UnparseableDoc
+	// Unreadable lists notes the pass could not OPEN this run (a permission bit,
+	// a file another program held mid-save, any transient I/O error). Nothing is
+	// known about their contents, so they still need embedding, but they are not
+	// a failure of the embedding call: keeping the rest of the pass costs the
+	// user nothing and re-embedding it is what a later run is for.
+	Unreadable []UnparseableDoc
 	// Skipped counts documents with no embeddable text (empty or
 	// whitespace/comment-only bodies). These are not failures — there is simply
 	// nothing to embed — and providers like Amazon Nova-2 reject empty input.
@@ -48,6 +64,10 @@ const (
 	EmbedFailed
 	// EmbedSkipped: the document had no embeddable text.
 	EmbedSkipped
+	// EmbedReadFailed: the document could not be opened (Err set). Distinct from
+	// EmbedFailed because nothing was sent to the provider, and distinct from
+	// EmbedParseFailed because there is no note content to go fix.
+	EmbedReadFailed
 )
 
 // EmbedEvent is a single per-document progress event. Callers (the CLI) use it
@@ -93,7 +113,12 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 	if err != nil {
 		return EmbedStats{}, err
 	}
-	stats := EmbedStats{Attempted: len(docs), Model: model}
+	stats := EmbedStats{
+		Attempted:   len(docs),
+		Model:       model,
+		Unparseable: []UnparseableDoc{},
+		Unreadable:  []UnparseableDoc{},
+	}
 	if len(docs) == 0 {
 		slog.Debug("all embeddings up to date", "model", model)
 		return stats, nil
@@ -106,7 +131,11 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 		opts.OnStart(len(docs), concurrency)
 	}
 
-	type docResult struct{ embedded, failed, skipped, chars int }
+	type docResult struct {
+		embedded, failed, skipped, chars int
+		unparseable                      *UnparseableDoc
+		unreadable                       *UnparseableDoc
+	}
 	results := make([]docResult, len(docs))
 	var completed atomic.Int64
 	var cancelled atomic.Bool
@@ -134,7 +163,24 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 			doc := docs[i]
 			parsed, err := document.ParseFile(v.AbsPath(doc.Path))
 			if err != nil {
-				results[i].failed = 1
+				if errors.Is(err, document.ErrRead) {
+					// Could not OPEN it this run. The document still needs
+					// embedding and did not get it, so the run must not call
+					// itself complete, but it is not a failed embedding call
+					// either: nothing was sent for it. Counting it in Failed
+					// made one unreadable note (a permission bit, or a note
+					// another program held open mid-save) roll back every
+					// embedding a --force-reembed had just paid for. It is
+					// named instead, and the caller decides the exit code.
+					results[i].unreadable = &UnparseableDoc{Path: doc.Path, Err: err.Error()}
+					slog.Warn("embedding skipped: could not read note", "path", doc.Path, "err", err)
+					emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedReadFailed, Err: err})
+					return
+				}
+				// Not a failure of the embed call: nothing was sent. Report it
+				// so the note can be fixed, and let the rest of the pass count
+				// as complete.
+				results[i].unparseable = &UnparseableDoc{Path: doc.Path, Err: err.Error()}
 				slog.Warn("embedding skipped: parse failed", "path", doc.Path, "err", err)
 				emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedParseFailed, Err: err})
 				return
@@ -186,6 +232,14 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 		stats.Failed += r.failed
 		stats.Skipped += r.skipped
 		totalChars += r.chars
+		if r.unparseable != nil {
+			// Collected in work-set order, so the reported list is stable even
+			// though the workers complete out of order.
+			stats.Unparseable = append(stats.Unparseable, *r.unparseable)
+		}
+		if r.unreadable != nil {
+			stats.Unreadable = append(stats.Unreadable, *r.unreadable)
+		}
 	}
 	stats.DurationMs = time.Since(embedStart).Milliseconds()
 	stats.TotalChars = totalChars
@@ -195,6 +249,8 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 		"total", len(docs),
 		"failed", stats.Failed,
 		"skipped", stats.Skipped,
+		"unparseable", len(stats.Unparseable),
+		"unreadable", len(stats.Unreadable),
 		"cancelled", stats.Cancelled,
 		"elapsed", time.Since(embedStart),
 	)

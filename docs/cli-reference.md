@@ -16,6 +16,8 @@ Deprecated alias for `vault create`.
 
 Unified health report: vault info, index coverage, portability, AI reachability, and stale docs.
 
+Two conditional lines, both also `omitempty` JSON fields on `vault status --json` so a consumer reads the CLI's verdict rather than deriving its own: `excluded_folders` names the Obsidian template folders left out of the index, and `embed_retry_advice` reports throttling ("N throttled retries in the last index (embed_concurrency is C, automatic is A); consider lowering ai.embed_concurrency"). The advice fires only when the LAST build actually rode out retries AND `ai.embed_concurrency` is above the per-provider automatic value: a throttled account at the automatic setting is the provider's quota, not a setting to change. `ai status` prints and emits `embed_retry_advice` too; `excluded_folders` is `vault status` only. The macOS app currently decodes NEITHER (it calls `ai status` and its `AIStatusInfo` has no field for the advice), so both are CLI surfaces today.
+
 ### vault show
 
 Terse summary of the active vault: path, source, name, doc count. Supports `--json`.
@@ -130,6 +132,20 @@ Delete a document from disk and the index. Prompts `[y/N]` interactively; pass `
 
 Rebuild the index. `--doc <path>` indexes a single doc; `--force-reembed` invalidates every stored embedding. The embed pass runs concurrently through a bounded worker pool; the cap is `ai.embed_concurrency`, defaulting to 4 for Bedrock (see the Embedding Concurrency notes in the project docs, and `2nb ai embed-probe` to find a safe cap for your account).
 
+`index --doc` runs the embed pass SILENT and shows the slow-call notice instead: the two both write to stderr without a newline, so sharing a line would interleave them, and for one document "embedding 1 documents" and "embedded 1/1" say nothing the notice does not. The whole-vault run keeps its per-document progress and shows no notice.
+
+**Unparseable notes are reported, never fatal; unreadable ones change nothing.** The two are different failures and are classified apart (`document.ErrRead`).
+
+A note whose CONTENT will not parse is skipped, named, and its index row DROPPED (documents, chunks, links, tags and chunk vectors), the same way a deleted file's row is dropped, so the last readable version stops answering searches. A note that cannot be READ right now (a permission bit, a file locked mid-save, any transient I/O error) says nothing about its contents: its existing row is kept exactly as it was, and it is reported under `unreadable` instead. Before 0.22.3 both took the same path, so a `chmod 0o000` note lost its row, its chunks and its embeddings on the next index.
+
+`--force-reembed` still COMPLETES over unparseable and unreadable notes (before 0.22.3 either one counted as a failed embedding, so the run declared itself incomplete and restored the previous embeddings, discarding everything it had just re-embedded). In the EMBED pass a note that could not be opened still needs embedding and did not get it, so the run keeps every embedding it produced, names the notes under `unreadable`, and exits NON-ZERO without restoring anything: keeping what was paid for and naming what is left to do. A genuine provider failure is unchanged and still rolls the vault back.
+
+The human summary names up to five notes per list and points at `-v` only when it actually withheld some; `-v` prints them all. Every command that indexes prints it, not only `index`: the automatic first index behind `2nb search` and the index at the end of `import-obsidian` report through the same helpers, so a note they skip is never silent. A single-file `index --doc` on either kind still exits non-zero: an editor saving one broken note needs to hear about it, and the macOS app now shows that failure beside the Index state. The MCP `kb_index` result carries the same two lists, `unparseable` and `unreadable`, merged and deduplicated the same way and always present.
+
+**`index --json` shape.** Every key is always present and every list is emitted empty rather than omitted, so a consumer never has to tell "absent" from "zero": `files_scanned`, `docs_indexed`, `chunks_created`, `links_found`, `errors`, `excluded_purged`, `embedded`, `embed_failed`, `embed_skipped`, `embed_retries`, `unparseable: [{path, error}]`, `unreadable: [{path, error}]`. The two lists MERGE the walk phase and the embed phase, deduplicated by path: before 0.22.3 the envelope was built from the walk's counters alone, so a note that only failed during the embed phase of `index --force-reembed --json` never appeared there at all. `errors` counts both kinds, unchanged in meaning. `index --doc` keeps its own smaller result (`path`, `embedded`, `duration_ms`), which the macOS app decodes.
+
+Obsidian's template folders are not indexed. 2nb reads them from Obsidian's own settings (`.obsidian/templates.json` `folder`, and Templater's `.obsidian/plugins/templater-obsidian/data.json` `templates_folder`) and skips those folders whole, on the walk and on `index --doc` alike (which names the folder in its refusal); a template's `{{date}}` placeholders are not YAML, so indexing them failed on every run. Matching is on whole path segments, so a `templates` exclusion never covers `templates-archive`. Rows already indexed under a folder that LATER becomes a template folder are purged before the walk and counted in `excluded_purged`: a walk that skips a folder can never clean up after itself, so those rows used to keep their chunks and vectors, answer searches, and be counted by `vault status` forever. `2nb vault status` names whatever is excluded. A vault that configures no template folder is unaffected.
+
 ### search
 
 Hybrid BM25 plus semantic search. Filters: `--type --status --tag --limit`. `--threshold` overrides the cosine cutoff; `--bm25-only` disables the vector channel.
@@ -212,7 +228,9 @@ List documents not modified within N days (`--since`).
 
 ### metrics
 
-The vault performance observatory: reads the local `.2ndbrain/metrics.db` and reports the last index build (duration, docs/sec, throughput), live vault gauges (doc/chunk/embedded counts, coverage, index.db plus WAL size, stale count, embedding model and dims), token usage (input/output across the window), recent operations, and per-operation aggregates (count, avg, p50, avg docs per second, tokens in/out).
+The vault performance observatory: reads the local `.2ndbrain/metrics.db` and reports the last index build (duration, docs/sec, throughput), live vault gauges (doc/chunk/embedded counts, coverage, index.db plus WAL size, stale count, embedding model and dims), token usage (input/output across the window), recent operations, and per-operation aggregates (count, avg, p50, avg docs per second, tokens in/out, provider retries).
+
+`embed_retries` (schema v3) counts the provider retries an operation rode out, on the `index`, `reembed`, `index_doc` and `search` rows. It is what separates "the model is slow" from "the account is throttled", which wall time alone cannot tell apart: a throttled Bedrock account rides out up to five backoffs of as much as 10s each per call. It prints per build and in the aggregates.
 
 Metrics are recorded automatically (best-effort, never failing the op) by `index`, `index --doc`, `--force-reembed`, `search`, and `ask`. Token semantics: `ask` records the provider's ACTUAL generation usage when the provider reports it (Bedrock Converse, via the optional `ai.UsageGenerator`) plus a query-embed estimate; a provider that does not report usage (OpenRouter and Ollama, the non-`UsageGenerator` path) falls back to a chars/4 estimate, and `index`/`reembed` and `search` always estimate at chars/4 (Nova embeddings report no usage).
 
@@ -425,8 +443,10 @@ Model pins and licenses live in `internal/llama/models.go`.
 
 ### models list
 
-The verified catalog. Flags: `--type`, `--free`, `--discover`, `--status`, `--provider`, `--promote`, `--scope`, `--enabled-only`, `--recommended`, `--working-set`, `--sort best`.
+The verified catalog. Flags: `--type`, `--free`, `--discover`, `--refresh`, `--status`, `--provider`, `--promote`, `--scope`, `--enabled-only`, `--recommended`, `--working-set`, `--sort best`.
 
+- `--discover` is served from the 24h discovery cache, the same store `models discover` reads. `--refresh` re-walks the vendor APIs and re-warms the cache; it is refused without `--discover` rather than silently ignored. The human output says which of the two it got and how old the cache is, so a fast answer is not mistaken for a fresh one. Before 0.22.3 every `--discover` re-walked both Bedrock planes across three regions, which is what made the macOS app's Models tab take about 11 seconds to reload a catalog that changes when AWS ships a model.
+- A provider silenced with `ai.<provider>.disabled` is skipped by discovery entirely: no call, no warning. Its rows were dropped from the result anyway, so the walk bought nothing while reporting a failure the user had deliberately caused. The setup wizard still reaches disabled providers, since it is where an opt-in provider gets turned on.
 - `--discover --promote` tests unverified models concurrently and adds the passing ones.
 - `--discover` enumerates BOTH Bedrock planes: the classic control plane (ListInferenceProfiles plus ListFoundationModels) and the mantle plane's own `/v1/models` listing per documented mantle region, merging unverified generation rows that carry `invoke_strategy` plus a listing-region pin. An exact-id collision across planes is no longer collapsed: both rows survive as distinct routes, and `PreferRoutes` merely ranks classic ahead of mantle when choosing which to probe.
 - `--enabled-only` drops user-disabled models (selection dropdowns pass this; CLI use does not).
@@ -502,7 +522,7 @@ Persistence paths that start from a `BuildModelList`-derived entry (`models test
 
 ### models cost-preview [ids...]
 
-Estimates USD cost across one or more models. `--probe test|bench_embed|bench_gen|bench_rag|retrieval`. `--discover` resolves IDs against the vendor-discovered pool too: this is needed for mantle-plane discoveries, which have no catalog entry until verified. Without it, a discovered id warns "unknown model id" and contributes $0, under-stating the spend a matching `verify --discover` run is about to make. Discovery is read through the 24h cache, so a cold cache triggers one discovery walk. Otherwise the command is fully local: no API calls, and no model is ever invoked.
+Estimates USD cost across one or more models. `--probe test|bench_embed|bench_gen|bench_rag|retrieval`. `--discover` resolves IDs against the vendor-discovered pool too: this is needed for mantle-plane discoveries, which have no catalog entry until verified. Without it, a discovered id warns "unknown model id" and contributes $0, under-stating the spend a matching `verify --discover` run is about to make. Discovery is read through the 24h cache, so a cold cache triggers one discovery walk; `--refresh` forces the walk and is refused without `--discover`. Otherwise the command is fully local: no API calls, and no model is ever invoked.
 
 ### models discover
 

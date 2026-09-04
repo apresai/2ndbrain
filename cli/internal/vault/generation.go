@@ -32,6 +32,15 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	     link ([x](My%20Note.md)) to a real note now resolves (target_id set),
 //	     so backlinks/lint/graph outcomes change for vaults holding encoded
 //	     links. Fix: 2nb index.
+//	  3  the frontmatter/body boundary moved for a note that opens with an
+//	     empty properties block. Such a note either failed to parse or had the
+//	     block's delimiters read as body text, so what got indexed differs from
+//	     what 0.22.2 indexed. The content hash is computed from the PARSED body
+//	     and every file is re-parsed on every run, so a plain reindex notices
+//	     the change and re-chunks and re-embeds exactly those notes.
+//	     Fix: 2nb index. Deliberately NOT an EmbedGeneration bump: charging
+//	     every user for a whole-vault re-embed to repair a handful of notes is
+//	     the wrong trade when content drift already repairs them.
 //
 // If you change the watched files (see `make check-index-generation`) but a
 // reindex is genuinely NOT needed, add a `Reindex-Not-Needed: <reason>` trailer
@@ -39,7 +48,7 @@ import "github.com/apresai/2ndbrain/internal/store"
 const (
 	// IndexGeneration bumps for index-only logic changes (FTS content, link/tag
 	// extraction) that do NOT alter chunk boundaries or embeddings. Fix: 2nb index.
-	IndexGeneration = 2
+	IndexGeneration = 3
 
 	// EmbedGeneration bumps for chunking OR embedding-production logic changes
 	// (chunk boundaries, purpose, pooling, normalization) at the SAME model and
@@ -156,12 +165,18 @@ func PriorEmbedGeneration(db *store.DB) int {
 // forever (the embed pass skips them), so counting them would leave the stamp
 // unwritten and nag a re-embed on any vault holding a blank note.
 //
+// embedShortfall is every document that needed embedding this run and did not
+// get it: failed calls plus notes the pass could not open. A note that could not
+// be opened keeps its previous vector, which a force-reembed's invalidation does
+// not clear, so it would otherwise be invisible to the "all embedded" check and
+// let a partial run claim the whole vault is at the current embed generation.
+//
 // embeddingCountBefore and priorEmbedGen must be captured BEFORE the embed pass.
-func StampAfterIndex(db *store.DB, cliVersion string, forceReembed bool, embedFailures, embeddingCountBefore, priorEmbedGen int) error {
+func StampAfterIndex(db *store.DB, cliVersion string, forceReembed bool, embedShortfall, embeddingCountBefore, priorEmbedGen int) error {
 	_, _, embeddableUnembedded, err := db.EmbeddingCounts()
 	allEmbedded := err == nil && embeddableUnembedded == 0
 	embedCurrent := forceReembed || priorEmbedGen >= EmbedGeneration || embeddingCountBefore == 0
-	if embedFailures == 0 && allEmbedded && embedCurrent {
+	if embedShortfall == 0 && allEmbedded && embedCurrent {
 		return StampEmbedGeneration(db, cliVersion)
 	}
 	return StampIndexGeneration(db, cliVersion)

@@ -35,7 +35,15 @@ have independent entitlement, pricing, and wire dialect, so each is its own row.
   on a Bedrock row means an *unpinned template* (a builtin authored
   region-agnostically, or a row predating routes). Templates are retired by
   `retireSupersededTemplates` once concrete per-region routes cover them, so a
-  model is never listed both ways.
+  model is never listed both ways. Retirement redistributes the template's
+  facts, but only into EMPTY fields, so a concrete row carrying an old snapshot
+  of a builtin fact used to keep it forever; since 0.22.3
+  `reconcileBuiltinFacts` runs straight after retirement and gives every row of
+  a builtin model the builtin's `name`, `dimensions`, `context_length`,
+  `config_hint`, `recommended`, `supported_dimensions`, `modalities` and
+  `recommended_similarity_threshold`, keeping only what a user row actually
+  authored (`authored_facts`, or a stamped `threshold_source: user`). It shares
+  `takeTopFact` with the exact-route overlay rather than restating the rules.
 - **Canonical text form:** `[<provider>|]<id>[@<plane>[/<region>]]`, e.g.
   `xai.grok-4.6@mantle/us-west-2`. The separators are forced, not chosen: `:`
   appears in model ids (`cohere.rerank-v3-5:0`, `llama3.1:8b`) and `/` appears

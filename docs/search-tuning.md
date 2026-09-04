@@ -62,6 +62,19 @@ region row to every sibling discovery found. A probe save now drops an unlisted
 fact for a builtin model and keeps one for a model no builtin declares, where the
 stored row is the only copy.
 
+Since 0.22.3 the read side applies the same rules whatever ROUTE the user row
+names, not only where it matches a builtin row exactly
+(`reconcileBuiltinFacts`). Builtins are authored route-less, so a probe save
+that pinned a plane and a region (`models test --save` after a region fallback)
+writes a row no builtin shares a route key with: the overlay never ran for it,
+the row superseded the builtin template instead, and template retirement only
+fills EMPTY facts, so the row's stale snapshot stood. A released 0.22.2 vault had
+Nova pinned to `classic/us-east-1` printing `context_length: 2048` and
+`recommended_similarity_threshold: 0.65` in `models list --json` while `ai
+status` correctly ignored the 0.65 and named the file it came from. The merged
+view now shows the threshold the resolver actually uses, and `threshold_source`
+appears only on a stamped value.
+
 Different embedding models have very different baseline distributions. Builtin recommendations:
 Nova-2 `0.25` (measured on a real 151-doc vault under the asymmetric query purpose, see below),
 Nemotron-VL `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`,
@@ -179,6 +192,19 @@ jitter** (`bedrockRetryDelay`, up to `maxBedrockAttempts`=5), so an over-set con
 degrades to retries rather than failures. Find an account's real ceiling with
 `2nb ai embed-probe`, which ramps concurrency over a discarded sample of vault chunks and
 recommends the lowest level at ≥90% of peak throughput before throttling.
+
+Those retries used to be completely silent, and the difference matters: on a throttled
+account a single-note reindex measured 10 to 14s, a two-document embed pass 53.6s, and one
+search's query embedding 10.8s, against 0.7s for the same call unthrottled. Since 0.22.3
+every retry logs one INFO line (attempt, budget, the wait about to be taken, the classified
+cause) on all four Bedrock retry loops; the count is recorded per operation in
+`metrics.db.embed_retries` and printed by `2nb metrics`; and a call still running after two
+seconds prints a self-erasing stderr line naming the wait and, once a retry has happened, the
+cause. `2nb vault status` and `2nb ai status` print
+"N throttled retries in the last index (embed_concurrency is C, automatic is A); consider
+lowering ai.embed_concurrency" when the last build rode out retries AND the configured
+concurrency is above the automatic value. Both conditions matter: at the automatic setting the
+throttling is the provider's quota, not a number the user chose.
 
 Both the CLI `index`/`--force-reembed` path and the MCP `kb_index` tool share this one pass (the
 worker pool was extracted into `vault.EmbedDocuments`), so an agent-driven reindex gets the same

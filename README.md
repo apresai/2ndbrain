@@ -157,8 +157,9 @@ Browse verified models across all providers, test any model, and benchmark your 
 # See all verified models with pricing
 2nb models list
 
-# Discover vendor catalogs (Bedrock, OpenRouter, Ollama)
+# Discover vendor catalogs (Bedrock, OpenRouter, Ollama), from the 24h cache
 2nb models list --discover
+2nb models list --discover --refresh   # re-walk the vendor APIs instead
 
 # Check credentials and reachability
 2nb models list --status
@@ -211,7 +212,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 
 | Command | Description |
 |---------|-------------|
-| `vault` | Health report for the active vault (same as `vault status`) |
+| `vault` | Health report for the active vault (same as `vault status`). Names any Obsidian template folder left out of the index, and warns when the last index rode out throttled retries at a raised `ai.embed_concurrency` |
 | `vault create <path>` | Initialize a new vault (open it in Obsidian to use it; 2nb follows your open Obsidian vault) |
 | `vault set <path>` | Register an existing vault in recents (the active vault follows Obsidian) |
 | `vault list` | List recently used vaults |
@@ -245,7 +246,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `chat` | Interactive multi-turn Q&A session (REPL over the same pipeline) |
 | `suggest-links <path> [--limit 10]` | Rank semantically related documents for wikilink insertion |
 | `polish <path> [--system <prompt>] [--write] [--links] [--repair-links] [--undo] [--force]` | AI copy-edit a document (JSON with original + polished body). `--links` adds grounded `[[wikilinks]]` to existing notes (never invents a target). `--repair-links` repairs broken `[[wikilinks]]` to existing notes (case, separator (hyphen/underscore vs space), whitespace, and alias drift; ambiguous or unmatched targets reported, never guessed). `--write` applies the polished body in place (opt-in; default is preview only) after snapshotting the original; `--undo` reverts that snapshot (refusing if the file changed since, unless `--force`) |
-| `index [--doc <path>] [--force-reembed]` | Build search index + embeddings (full vault or a single document); `--force-reembed` invalidates every stored embedding for after an intentional provider switch |
+| `index [--doc <path>] [--force-reembed]` | Build search index + embeddings (full vault or a single document); `--force-reembed` invalidates every stored embedding for after an intentional provider switch. A note whose frontmatter will not parse is reported by name and skipped (and its stale index row dropped) rather than failing the run; a note that could not be READ keeps its existing entry and is reported separately. Neither counts as a failed embedding, so `--force-reembed` keeps every embedding it produced and names what is left instead of restoring the whole vault (it still exits non-zero when a note could not be read). The automatic first index behind `search` and the index at the end of `import-obsidian` print the same report. Obsidian's template folders are not indexed, and rows already indexed under a folder that later becomes one are purged |
 | `ai status` | Show AI provider, models, embedding count, and vault portability state |
 | `ai setup` | Multi-provider setup wizard (easy mode or custom); a model that passes its probe is saved to the user catalog as `user_verified` |
 | `ai local` | Check local AI readiness (Ollama, disk, RAM, models) |
@@ -259,7 +260,7 @@ Commands are organized into groups (`2nb --help` shows the full list).
 | `models enable [id] --provider [--vendor <name>] [--scope global\|vault]` | Mark a model enabled so it appears in dropdowns; a route-qualified id applies to every route; `--vendor` toggles every model from that vendor (the GUI's bulk toggle) |
 | `models disable [id] --provider [--vendor <name>] [--scope global\|vault]` | Hide a model from dropdowns; still listed by bare `models list`; a route-qualified id applies to every route; `--vendor` for the bulk toggle |
 | `models enable-state <id> --state default\|enabled\|disabled` | Tri-state enable pointer; `default` clears the override for tier defaults (used by the GUI Enable State menu); a route-qualified id applies to every route |
-| `models cost-preview [ids...] --probe <kind> [--provider] [--all]` | Estimate USD cost of running a probe (test / bench_embed / bench_gen / bench_rag / retrieval) across one or more models before committing |
+| `models cost-preview [ids...] --probe <kind> [--provider] [--all] [--discover] [--refresh]` | Estimate USD cost of running a probe (test / bench_embed / bench_gen / bench_rag / retrieval) across one or more models before committing. `--discover` widens the lookup pool from the 24h discovery cache; `--refresh` re-walks it |
 | `models calibrate [--samples] [--save] [--scope] [--seed]` | Sample the vault's baseline cosine distribution (p50/p90/p95/p99) and recommend a similarity threshold; `--save` persists it to the user catalog |
 | `models wizard [--scope] [--provider] [--skip-discover] [--cost-cap] [--json] [--set-active]` | Interactive discover → pick → cost preview → test → save flow; `--json` emits an event stream for GUI / automation; `--set-active` also writes the chosen embedding + generation models into the vault config (same write path as `config set`) |
 | `models bench` | Benchmark favorites with persistent history |
