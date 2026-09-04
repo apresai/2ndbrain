@@ -15,7 +15,7 @@ import (
 // DATE fields: every legitimate spelling of an instant normalizes to the same
 // RFC3339 string. The unquoted forms are what Obsidian's own Date property
 // writes; before this they left the column EMPTY and `stale` (which filters
-// `modified_at != ''`) omitted the note however old it was.
+// `modified_at != ”`) omitted the note however old it was.
 func TestParse_DateFieldsNormalizeToRFC3339(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -96,43 +96,40 @@ func TestParse_TextFieldsKeepTheNotesOwnText(t *testing.T) {
 		id, title, docType, status string
 	}{
 		{
-			name:   "unquoted scalars keep their text",
-			fm:     "id: 007\ntitle: 2026-09-04\ntype: 3\nstatus: true\n",
-			id:     "007",
-			title:  "2026-09-04",
-			status: "true",
+			name:    "unquoted scalars keep their text",
+			fm:      "id: 007\ntitle: 2026-09-04\ntype: 3\nstatus: true\n",
+			id:      "007",
+			title:   "2026-09-04",
+			docType: "3",
+			status:  "true",
 		},
 		{
-			name:   "quoted scalars are unchanged",
-			fm:     "id: \"007\"\ntitle: \"2026-09-04\"\ntype: \"3\"\nstatus: \"true\"\n",
-			id:     "007",
-			title:  "2026-09-04",
-			status: "true",
+			name:    "quoted scalars are unchanged",
+			fm:      "id: \"007\"\ntitle: \"2026-09-04\"\ntype: \"3\"\nstatus: \"true\"\n",
+			id:      "007",
+			title:   "2026-09-04",
+			docType: "3",
+			status:  "true",
 		},
 		{
-			name:   "an unquoted full timestamp title keeps its own spelling",
-			fm:     "id: a\ntitle: 2026-09-04T00:00:00Z\ntype: note\nstatus: draft\n",
-			id:     "a",
-			title:  "2026-09-04T00:00:00Z",
-			status: "draft",
+			name:    "an unquoted full timestamp title keeps its own spelling",
+			fm:      "id: a\ntitle: 2026-09-04T00:00:00Z\ntype: note\nstatus: draft\n",
+			id:      "a",
+			title:   "2026-09-04T00:00:00Z",
+			docType: "note",
+			status:  "draft",
 		},
 		{
-			name:   "a trailing zero survives",
-			fm:     "id: b\ntitle: 3.50\ntype: note\nstatus: draft\n",
-			id:     "b",
-			title:  "3.50",
-			status: "draft",
+			name:    "a trailing zero survives",
+			fm:      "id: b\ntitle: 3.50\ntype: note\nstatus: draft\n",
+			id:      "b",
+			title:   "3.50",
+			docType: "note",
+			status:  "draft",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			docType := tc.docType
-			if docType == "" {
-				docType = "3"
-				if tc.status == "draft" {
-					docType = "note"
-				}
-			}
 			doc, err := Parse("n.md", []byte("---\n"+tc.fm+"---\nbody\n"))
 			if err != nil {
 				t.Fatalf("parse: %v", err)
@@ -143,8 +140,8 @@ func TestParse_TextFieldsKeepTheNotesOwnText(t *testing.T) {
 			if doc.Title != tc.title {
 				t.Errorf("Title = %q, want %q", doc.Title, tc.title)
 			}
-			if doc.Type != docType {
-				t.Errorf("Type = %q, want %q", doc.Type, docType)
+			if doc.Type != tc.docType {
+				t.Errorf("Type = %q, want %q", doc.Type, tc.docType)
 			}
 			if doc.Status != tc.status {
 				t.Errorf("Status = %q, want %q", doc.Status, tc.status)
