@@ -177,15 +177,44 @@ func (s *SchemaSet) IsListField(docType, field string) bool {
 // IsListField reads. A schema that declares a date field has, until now, had
 // that declaration ignored entirely.
 func (s *SchemaSet) IsDateField(docType, field string) bool {
+	return s.dateFieldKind(docType, field) != notADateField
+}
+
+// dateFieldKind classifies a field ONCE, so the "which type strings are dates"
+// rule and the `created`/`modified` special case each exist in one place.
+// IsDateField and IsCalendarDateField are both views of it: written as separate
+// walks they were two copies that had to agree, and a third universal date
+// field would have had to be added to both.
+type dateFieldKind int
+
+const (
+	notADateField dateFieldKind = iota
+	// calendarDateField is a day on a calendar. Obsidian types it Date, and its
+	// written precision is preserved.
+	calendarDateField
+	// instantDateField is a moment in time. Obsidian types it Date and time,
+	// and it is normalized to one RFC3339 spelling.
+	instantDateField
+)
+
+func (s *SchemaSet) dateFieldKind(docType, field string) dateFieldKind {
+	// created and modified are universal and are always instants: 2nb writes
+	// them itself as a full timestamp, and `stale` and `list --sort modified`
+	// compare them as moments. A schema cannot redeclare them a calendar date.
 	if field == "created" || field == "modified" {
-		return true
+		return instantDateField
 	}
 	if schema, ok := s.Types[docType]; ok {
 		if def, ok := schema.Fields[field]; ok {
-			return def.Type == "date" || def.Type == "datetime"
+			switch def.Type {
+			case "date":
+				return calendarDateField
+			case "datetime":
+				return instantDateField
+			}
 		}
 	}
-	return false
+	return notADateField
 }
 
 // CoerceDate reports the value a DATE field should be STORED as,
@@ -222,7 +251,7 @@ func (s *SchemaSet) CoerceDate(docType, field string, value any) (document.Plain
 	if !ok {
 		return "", false
 	}
-	if s.IsCalendarDateField(docType, field) {
+	if s.dateFieldKind(docType, field) == calendarDateField {
 		return document.ParseFrontmatterDateText(str)
 	}
 	t, ok := document.ParseFrontmatterDate(str)
@@ -241,15 +270,7 @@ func (s *SchemaSet) CoerceDate(docType, field string, value any) (document.Plain
 // them: 2nb writes them itself, always as a full instant, and `stale` and
 // `list --sort modified` compare them as instants.
 func (s *SchemaSet) IsCalendarDateField(docType, field string) bool {
-	if field == "created" || field == "modified" {
-		return false
-	}
-	if schema, ok := s.Types[docType]; ok {
-		if def, ok := schema.Fields[field]; ok {
-			return def.Type == "date"
-		}
-	}
-	return false
+	return s.dateFieldKind(docType, field) == calendarDateField
 }
 
 func (s *SchemaSet) ValidateField(docType, field string, value any) error {

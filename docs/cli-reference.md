@@ -681,8 +681,8 @@ timestamp.
   reported new spelling off those bytes rather than off the value handed in.
 - **A CALENDAR DATE keeps the day it names and gains no time of day.** A field
   the schema declares `date`, written `"2026-07-14"`, becomes `2026-07-14`, not
-  `2026-07-14T00:00:00Z`. 0.23.0 wrote the midnight, which flips Obsidian's type
-  for that property from Date to Date and time; `document.ParseFrontmatterDateText`
+  `2026-07-14T00:00:00Z`. 0.23.0 wrote the midnight, so Obsidian typed that property Date
+  and time rather than Date; `document.ParseFrontmatterDateText`
   is the shared rule and `vault.SchemaSet.IsCalendarDateField` decides which
   fields it applies to on the `meta --set` / `kb_update_meta` path (`created` and
   `modified` are instants 2nb writes itself, never calendar dates).

@@ -211,17 +211,19 @@ func ScalarText(v any) (string, bool) {
 // the written precision, the COLUMN gets the resolved instant, which is the
 // division of labor this file is built on.
 func frontmatterTime(meta map[string]any, key string) (string, bool) {
-	switch t := meta[key].(type) {
+	v := meta[key]
+	// A PlainDate IS its text, so it takes the string path rather than a second
+	// copy of it. Two identical branches would drift the moment the
+	// normalize-or-pass-through rule changes.
+	if pd, ok := v.(PlainDate); ok {
+		v = string(pd)
+	}
+	switch t := v.(type) {
 	case string:
 		if norm, ok := normalizeDateText(t); ok {
 			return norm, true
 		}
 		return t, true
-	case PlainDate:
-		if norm, ok := normalizeDateText(string(t)); ok {
-			return norm, true
-		}
-		return string(t), true
 	case time.Time:
 		return t.Format(time.RFC3339), true
 	}
@@ -292,8 +294,16 @@ var dateTextLayouts = []string{
 	"2006-1-2T15:4", // Obsidian, minute precision
 	"2006-1-2t15:4",
 	"2006-1-2 15:4:5.999999999", // yaml.v3, space separated, no zone
-	"2006-1-2",                  // yaml.v3, date only
+	calendarDateLayout,          // yaml.v3, date only
 }
+
+// calendarDateLayout is yaml.v3's date-only layout, and it is named because TWO
+// decisions have to agree on it: this table accepts it, and IsCalendarDateText
+// uses it to decide which values keep their own spelling on a write. Written
+// twice, widening one without the other would preserve a spelling that does not
+// resolve back to a time.Time, and the migration would rewrite that note on
+// every run forever.
+const calendarDateLayout = "2006-1-2"
 
 // ParseFrontmatterDate parses a date spelled as frontmatter text, at SECOND
 // precision. It reports false for text that is not a date, so a caller passes
@@ -426,10 +436,11 @@ func ParseFrontmatterDateText(s string) (PlainDate, bool) {
 }
 
 // IsCalendarDateText reports whether a date's text names a day and nothing
-// finer. It is the yaml.v3 date-only layout, so exactly the values that resolve
-// back to a time.Time when written plain.
+// finer. It reads calendarDateLayout, the same entry dateTextLayouts carries, so
+// it accepts exactly the values that resolve back to a time.Time when written
+// plain. That equivalence is what makes preserving them idempotent.
 func IsCalendarDateText(s string) bool {
-	_, err := time.Parse("2006-1-2", s)
+	_, err := time.Parse(calendarDateLayout, s)
 	return err == nil
 }
 
