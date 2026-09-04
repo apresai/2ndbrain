@@ -378,12 +378,27 @@ func unexpectedChangedLines(before, after string, fields []string) []string {
 	return out
 }
 
+// documentTextFields are the properties Document mirrors as TEXT (the set
+// frontmatter_scalar.go's file comment names, minus the list fields, which are
+// never scalars and so never reach the tally below).
+//
+// They are excluded from the user-date tally, and that exclusion is a
+// correctness rule rather than tidiness. A daily note is TITLED by its date, so
+// `title: 2026-09-04` would otherwise be reported as a date-shaped property the
+// user authors, right beside a line inviting them to declare such a field
+// `date` in schemas.yaml. Taking that advice would make IsDateField true for
+// `title`, route it through CoerceDate on every `meta --set`, and have this
+// very migration rewrite the title line to `2026-09-04T00:00:00Z`, which is the
+// exact regression 0.22.4 shipped to fix. A command must not recommend the
+// thing a release was cut to prevent.
+var documentTextFields = map[string]bool{"id": true, "title": true, "type": true, "status": true}
+
 // tallyUserDateFields counts how a note spells the date-shaped properties 2nb
 // does NOT own. Reported, never acted on: a vault commonly spells its own
 // `date` field two ways, and choosing one is the user's call.
 func tallyUserDateFields(doc *document.Document, schemas *vault.SchemaSet, into map[string]*UserDateField) {
 	for key, value := range doc.Frontmatter {
-		if schemas.IsDateField(doc.Type, key) {
+		if schemas.IsDateField(doc.Type, key) || documentTextFields[key] {
 			continue
 		}
 		text, ok := doc.MetaText(key)

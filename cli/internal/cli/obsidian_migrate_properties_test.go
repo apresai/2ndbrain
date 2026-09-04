@@ -265,3 +265,38 @@ func TestContract_MigrateProperties_SkipsTemplateFolders(t *testing.T) {
 		t.Errorf("the template was rewritten:\n%s", got)
 	}
 }
+
+// A daily note is TITLED by its date. `title` must never be reported as a
+// date-shaped property the user authors, because the report's own advice is to
+// declare such a field `date` in schemas.yaml, and doing that for `title` would
+// route it through CoerceDate and have this migration rewrite the title to
+// `2026-09-04T00:00:00Z`: the exact regression 0.22.4 shipped to fix.
+func TestContract_MigrateProperties_NeverSuggestsTypingATextFieldAsADate(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.WriteFile(filepath.Join(root, "daily.md"), []byte(
+		"---\ntitle: 2026-09-04\ntype: note\nstatus: draft\nid: 2026-09-04\ndate: 2026-09-04\n---\nstandup\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := migrateJSON(t, root)
+	for _, f := range res.UserDateFields {
+		if documentTextFields[f.Field] {
+			t.Errorf("%q is a TEXT field Document mirrors; reporting it as a date-shaped property invites declaring it a date, which reintroduces the 0.22.4 title regression: %+v", f.Field, res.UserDateFields)
+		}
+	}
+	// The user's OWN date-shaped property is still reported, so the exclusion
+	// is narrow rather than a blanket silencing.
+	found := false
+	for _, f := range res.UserDateFields {
+		if f.Field == "date" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the user's own `date` property stopped being reported: %+v", res.UserDateFields)
+	}
+	// And the title on disk is untouched either way.
+	if !strings.Contains(readNote(t, filepath.Join(root, "daily.md")), "title: 2026-09-04\n") {
+		t.Errorf("the date-shaped title was rewritten:\n%s", readNote(t, filepath.Join(root, "daily.md")))
+	}
+}
