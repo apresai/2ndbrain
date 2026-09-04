@@ -220,9 +220,9 @@ func frontmatterTime(meta map[string]any, key string) (string, bool) {
 // shape. Both are dates, and both used to land in documents.created_at /
 // modified_at verbatim.
 //
-// Two entries look inert and are not. `2006-01-02 15:04:05` and `2006-01-02`
-// are on yaml.v3's own list, so the UNQUOTED forms never reach the string case.
-// They reach it two other ways: QUOTED (`created: "2026-09-04"` is a plain
+// Two entries look inert and are not. The space-separated one and the date-only
+// one are on yaml.v3's own list, so the UNQUOTED forms never reach the string
+// case. They reach it two other ways: QUOTED (`created: "2026-09-04"` is a plain
 // !!str, which is exactly the shape 2nb has been writing), and from setMetaDate
 // (document.go), which calls this on the raw CLI string a `meta --set
 // modified=...` supplied. Do not delete them as dead.
@@ -231,12 +231,34 @@ func frontmatterTime(meta map[string]any, key string) (string, bool) {
 // Obsidian's own datetime property editor writes, they are on NO yaml.v3 layout
 // list, and without them `stale` reported DaysStale 0 for every note Obsidian
 // had touched.
+//
+// EVERY entry has a named writer, and the table stops there rather than
+// implementing ISO-8601 in general. Two axes vary. The SEPARATOR: yaml.v3
+// accepts `T` and its lower-case twin `t`, and a space only without a zone, so
+// each layout it lists has its twin here (`meta --set created=2026-09-04t12:34:56Z`
+// reached CoerceDate, failed, and was stored as a quoted string, which is the
+// Text type this release exists to stop writing). The PRECISION: minutes as
+// well as seconds, because Obsidian's editor writes a minute-precision value
+// and neither `2026-09-04T12:34Z` nor `2026-09-04T12:34+02:00` is on any
+// yaml.v3 layout, so `stale` reported 0 days for those too.
+//
+// The short field widths are yaml.v3's own spelling: `1`, `2`, `4` and `5`
+// accept a zero-padded value as well as a bare one, and a trailing
+// `.999999999` makes the fraction optional, so `2006-1-2T15:4:5.999999999Z07:00`
+// covers RFC3339 and every unpadded or fractional spelling of it in one entry.
+// Ordering is defensive only: time.Parse is anchored, so a layout that does not
+// consume the whole value fails with "extra text" rather than truncating it.
 var dateTextLayouts = []string{
-	time.RFC3339,
-	"2006-01-02T15:04:05",
-	"2006-01-02T15:04",
-	"2006-01-02 15:04:05",
-	"2006-01-02",
+	"2006-1-2T15:4:5.999999999Z07:00", // yaml.v3, and RFC3339 with it
+	"2006-1-2t15:4:5.999999999Z07:00", // yaml.v3's lower-case twin
+	"2006-1-2T15:4Z07:00",             // minute precision, zone carried
+	"2006-1-2t15:4Z07:00",
+	"2006-1-2T15:4:5.999999999", // Obsidian's datetime editor
+	"2006-1-2t15:4:5.999999999",
+	"2006-1-2T15:4", // Obsidian, minute precision
+	"2006-1-2t15:4",
+	"2006-1-2 15:4:5.999999999", // yaml.v3, space separated, no zone
+	"2006-1-2",                  // yaml.v3, date only
 }
 
 // ParseFrontmatterDate parses a date spelled as frontmatter text, at SECOND

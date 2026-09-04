@@ -97,3 +97,65 @@ func TestNormalizeDateText_RefusesNonDates(t *testing.T) {
 		}
 	}
 }
+
+// Every layout in the table has a named writer, and these are the two groups
+// added after the first release of this reader shipped without them.
+//
+// The lower-case "t" separator is yaml.v3's own (allowedTimestampFormats
+// carries `2006-1-2t15:4:5.999999999Z07:00`), so an UNQUOTED value spelled that
+// way already resolved to a time.Time while the same value QUOTED, or supplied
+// to `meta --set`, failed to parse and was stored as text: the reader and the
+// writer disagreed about one instant.
+//
+// Minute precision carrying a zone is on no yaml.v3 layout at all, and it is
+// what a datetime editor writes when the seconds are zero, so `stale` reported
+// 0 days for those notes exactly as it did for the zone-less form.
+func TestParse_LowercaseTAndMinutePrecisionAreDates(t *testing.T) {
+	for _, tc := range []struct{ fm, want string }{
+		{"modified: 2026-09-04t12:34:56Z\n", "2026-09-04T12:34:56Z"},
+		{"modified: \"2026-09-04t12:34:56Z\"\n", "2026-09-04T12:34:56Z"},
+		{"modified: \"2026-09-04t12:34:56\"\n", "2026-09-04T12:34:56Z"},
+		{"modified: 2026-09-04t12:34\n", "2026-09-04T12:34:00Z"},
+		{"modified: 2026-09-04T12:34Z\n", "2026-09-04T12:34:00Z"},
+		{"modified: 2026-09-04T12:34+02:00\n", "2026-09-04T12:34:00+02:00"},
+		{"modified: \"2026-09-04T12:34-07:00\"\n", "2026-09-04T12:34:00-07:00"},
+		// Unpadded fields and a fractional second are yaml.v3's spelling too,
+		// and the fraction is dropped because the column is second precision.
+		{"modified: \"2026-9-4\"\n", "2026-09-04T00:00:00Z"},
+		{"modified: \"2026-09-04T12:34:56.75Z\"\n", "2026-09-04T12:34:56Z"},
+	} {
+		doc, err := Parse("n.md", []byte("---\ntitle: N\n"+tc.fm+"---\nbody\n"))
+		if err != nil {
+			t.Fatalf("parse %q: %v", tc.fm, err)
+		}
+		if doc.ModifiedAt != tc.want {
+			t.Errorf("%q -> ModifiedAt = %q, want %q", tc.fm, doc.ModifiedAt, tc.want)
+		}
+		if _, perr := time.Parse(time.RFC3339, doc.ModifiedAt); perr != nil {
+			t.Errorf("%q -> ModifiedAt %q does not parse as RFC3339: %v", tc.fm, doc.ModifiedAt, perr)
+		}
+	}
+}
+
+// A shorter layout must never CLAIM a longer value and silently drop what it
+// could not consume. time.Parse is anchored, so `2006-1-2T15:4` fails on a
+// value carrying seconds rather than truncating them, and `2006-1-2` fails on a
+// value carrying a time. This is the assertion that makes the table's ordering
+// defensive rather than load-bearing: if it ever regressed, every second and
+// every time-of-day Obsidian wrote would be quietly discarded.
+func TestParseFrontmatterDate_AShorterLayoutNeverTruncates(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"2026-09-04T12:34:56", "2026-09-04T12:34:56Z"},
+		{"2026-09-04T12:34:56Z", "2026-09-04T12:34:56Z"},
+		{"2026-09-04 12:34:56", "2026-09-04T12:34:56Z"},
+		{"2026-09-04t12:34:56", "2026-09-04T12:34:56Z"},
+	} {
+		got, ok := ParseFrontmatterDate(tc.in)
+		if !ok {
+			t.Fatalf("ParseFrontmatterDate(%q) refused", tc.in)
+		}
+		if s := got.Format(time.RFC3339); s != tc.want {
+			t.Errorf("ParseFrontmatterDate(%q) = %s, want %s (a shorter layout truncated it)", tc.in, s, tc.want)
+		}
+	}
+}
