@@ -409,6 +409,22 @@ func writeDelimited(w io.Writer, data any, comma rune) error {
 		}
 	}
 
+	// A SCALAR payload is ONE cell, and that cell is the scalar's text.
+	// Falling through to the JSON encoder below quotes a string, and the csv
+	// writer then escapes those quotes, so `config get ai.provider --format
+	// csv` came out as """bedrock""": a consumer had to strip CSV quoting and
+	// then JSON-unquote to read one word. The composite fallback stays, because
+	// a map or a struct genuinely is compact JSON in a cell.
+	if v.IsValid() {
+		switch v.Kind() {
+		case reflect.String, reflect.Bool,
+			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+			reflect.Float32, reflect.Float64:
+			return cw.Write([]string{delimitedCell(v)})
+		}
+	}
+
 	// Fallback: marshal as JSON lines
 	b, err := json.Marshal(data)
 	if err != nil {
