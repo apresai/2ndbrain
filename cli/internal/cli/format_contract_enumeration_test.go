@@ -98,6 +98,7 @@ var formatContractArgv = map[string][]string{
 	"2nb models remove":               {"models", "remove", "fixture.model", "--provider", "bedrock"},
 	"2nb move":                        {"move", "movable.md", "moved.md", "--dry-run"},
 	"2nb obsidian migrate-properties": {"obsidian", "migrate-properties"},
+	"2nb obsidian register-types":     {"obsidian", "register-types"},
 	"2nb orphans":                     {"orphans"},
 	"2nb outline":                     {"outline", "doc.md"},
 	"2nb plugin":                      {"plugin"},

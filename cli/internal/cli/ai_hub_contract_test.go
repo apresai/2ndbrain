@@ -954,6 +954,7 @@ func resetCLIFlags(t *testing.T) {
 	repairLinksWrite, repairLinksTargets = false, nil
 	relinkFrom, relinkTo, relinkWrite = "", "", false
 	migratePropertiesWrite = false
+	registerTypesWrite, registerTypesForce = false, false
 	unlinkTarget, unlinkWrite = "", false
 	suggestTargetLimit = 6
 	suggestTargetSource = ""

@@ -149,3 +149,43 @@ func ObsidianKnownVaults() []string {
 	}
 	return out
 }
+
+// ObsidianHasVaultOpen reports whether Obsidian currently has the vault at root
+// open, and whether that question could be ANSWERED at all.
+//
+// The second return is the point. A missing, empty or unparseable registry
+// (Obsidian never installed, or a shape this build does not know) yields
+// (false, false), which is "unknown", not "closed". A caller gating a write on
+// this must not read an unreadable registry as permission: it warns instead.
+//
+// Only an entry explicitly flagged `open` counts. ObsidianActiveVault falls back
+// to the most-recently-opened vault when nothing is flagged, which is right for
+// RESOLVING a target and wrong here: a vault Obsidian merely opened last week is
+// not a vault Obsidian is holding now.
+func ObsidianHasVaultOpen(root string) (open, known bool) {
+	entries := readObsidianRegistry()
+	if len(entries) == 0 {
+		return false, false
+	}
+	want := canonicalVaultPath(root)
+	for _, e := range entries {
+		if e.Open && canonicalVaultPath(e.Path) == want {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// canonicalVaultPath normalizes a vault path for comparison: symlinks resolved
+// where possible (macOS hands out /var and /private/var for the same directory),
+// then cleaned. An unresolvable path falls back to the cleaned original rather
+// than to "", so two unresolvable paths can still compare equal.
+func canonicalVaultPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(p)
+}
