@@ -24,11 +24,11 @@ Terse summary of the active vault: path, source, name, doc count. Supports `--js
 
 ### vault create
 
-`vault create <path>` initializes a new vault and records it in recents (this replaces `init`). It does NOT make the new vault active: 2nb follows the vault Obsidian has open, so open the new folder as a vault in Obsidian (or pass `--vault`) to use it.
+`vault create <path>` initializes a new vault and records it in recents (this replaces `init`). It does NOT make the new vault active: 2nb follows the vault Obsidian has open, so open the new folder as a vault in Obsidian (or pass `--vault`) to use it. `--json` emits `{action, path, name, created, registered}`; it used to write nothing at all to stdout for every format.
 
 ### vault set
 
-`vault set <path>` registers an existing vault in recents (for `vault list`). 2nb's active vault follows Obsidian's open vault, so this does not switch the active vault: open it in Obsidian, or pass `--vault`.
+`vault set <path>` registers an existing vault in recents (for `vault list`). 2nb's active vault follows Obsidian's open vault, so this does not switch the active vault: open it in Obsidian, or pass `--vault`. `--json` emits the same `{action, path, name, created, registered}` record `vault create` does, with `created` false; it used to print three sentences of prose on stdout for every format.
 
 ### vault list
 
@@ -74,8 +74,10 @@ Resolve today's daily note from Obsidian's core daily-notes plugin config (`.obs
 
 View or update frontmatter with schema validation. Aliases: `frontmatter`, `fm`, `properties`.
 
+A write touches ONLY the property named, never leaves the file invalid, and keeps the note's line endings. An anchored property (`status: &s draft` with `other: *s`) has its aliases RESOLVED before the anchored node is replaced or removed, so the file always reparses; carrying the anchor onto the replacement instead would make `other` follow `status`, changing a key the user did not touch.  Every other key's node is left exactly as the file wrote it (its scalar text, its style, its quoting and any comment attached to it), because `UpdateDocumentFrontmatterAST` replaces a node only when the value actually changed. It used to re-marshal every key, so an unrelated `--set` rewrote `modified: 2020-01-01` as a timestamp, `id: 007` as `7` and a flow list as block style. The same holds for `tag add`/`tag remove`/`tags rename`, which read the tag list through `document.TagsOf` rather than asserting on the parsed map.
+
 - `--set key=value` writes a field. Array-typed fields (`tags`, `aliases`, or any schema `list`/`tags` field) are coerced to a YAML list, comma-split, with replace semantics: `--set tags=a,b` becomes `[a, b]`, and `--set tags=` clears the field. Use `tag add`/`tag remove` for incremental edits.
-- `--get <key>` reads one field (exit `ExitNotFound` if absent).
+- `--get <key>` reads one field (exit `ExitNotFound` if absent). It answers what the FIELD SAYS, so it renders the note's own text where the parsed value would differ from it: `title: 2026-09-04` reads back as `2026-09-04`, not as the `2026-09-04T00:00:00Z` yaml resolved it to, and `id: 007` keeps its leading zeros. A value the parsed form renders faithfully keeps its parsed type, so `--json` still emits `42` for a plain integer rather than `"42"`; a list is handled element by element under the same rule. The DATE columns are the other reading and are still normalized (`stale` compares instants), so `meta --get modified` on a date-only property shows the date the file carries while `stale` uses the instant. Plain `%v` used to print Go's own `2020-01-01 00:00:00 +0000 UTC` here.
 - `--remove <key>` (repeatable) deletes a field in place, preserving comments and order. It refuses identity keys (id, path, title, type) and schema-required fields.
 
 Writes re-index the whole file (chunks, tags, links via `IndexSingleFile`), so a frontmatter tag change is reflected in `list --tag` immediately; re-embedding stays gated on the body content hash, so a metadata-only edit does not re-embed.
@@ -224,13 +226,15 @@ Together these let a UI show "N one-click fixable / M need a decision" before an
 
 ### stale
 
-List documents not modified within N days (`--since`).
+List documents not modified within N days (`--since`). It filters on `documents.modified_at != ''` and parses that column as RFC3339, which is why an unreadable date is the same as no date at all: a note whose `modified:` was written UNQUOTED (the shape Obsidian's own Date property writes) left the column empty and never appeared, however old it was. Both the quoted and unquoted forms read as the same instant now; see the frontmatter-scalar rule in CLAUDE.md, and run `2nb index` once after upgrading past 0.22.3 so existing rows carry the value.
 
 ### metrics
 
 The vault performance observatory: reads the local `.2ndbrain/metrics.db` and reports the last index build (duration, docs/sec, throughput), live vault gauges (doc/chunk/embedded counts, coverage, index.db plus WAL size, stale count, embedding model and dims), token usage (input/output across the window), recent operations, and per-operation aggregates (count, avg, p50, avg docs per second, tokens in/out, provider retries).
 
 `embed_retries` (schema v3) counts the provider retries an operation rode out, on the `index`, `reembed`, `index_doc` and `search` rows. It is what separates "the model is slow" from "the account is throttled", which wall time alone cannot tell apart: a throttled Bedrock account rides out up to five backoffs of as much as 10s each per call. It prints per build and in the aggregates.
+
+`metrics clear` deletes the recorded history and reports `{cleared}` (the row count) under an explicit format; it used to print the count to stderr and nothing to stdout.
 
 Metrics are recorded automatically (best-effort, never failing the op) by `index`, `index --doc`, `--force-reembed`, `search`, and `ask`. Token semantics: `ask` records the provider's ACTUAL generation usage when the provider reports it (Bedrock Converse, via the optional `ai.UsageGenerator`) plus a query-embed estimate; a provider that does not report usage (OpenRouter and Ollama, the non-`UsageGenerator` path) falls back to a chars/4 estimate, and `index`/`reembed` and `search` always estimate at chars/4 (Nova embeddings report no usage).
 
@@ -336,6 +340,8 @@ Upgrade a legacy vault's index database to the current schema (`store.MaxSchemaV
 
 Legacy means "behind the current schema". A vault already at the current schema reports "already at the current schema (vN); nothing to migrate" and exits 0 in both modes. Below it, the output names the real work: the schema upgrade to the current version, and adding `.2ndbrain/` to the root `.gitignore`. There is no path-based mapping step; the schema has been path-based since v1, so the 0.5.0 pivot was an indexer change. The vault is resolved the same way every other command resolves it (`--vault`, then `2NB_VAULT`, then the vault Obsidian has open, then the cwd).
 
+`--json`/`--csv`/`--yaml` emit `{vault, dry_run, schema_version, target_version, documents, already_current, migrated, actions, markdown_modified}`; `migrated` is true only when the upgrade actually ran, so a `--dry-run` is never mistaken for one. `--format raw`/`md` are refused by name at the top of the handler, before the vault is located. migrate used to ignore `--format` entirely, in dry-run and for real, printing the same human prose for json, csv, yaml, tsv, text and md alike.
+
 The two halves are gated differently, because only one of them writes. The schema check and the whole of `--dry-run` are reads and need no `--unconfigured`. The real run applies the migrations and adds to `.gitignore`, so it takes the write path: a vault Obsidian does not know is refused without `--unconfigured`, a working directory that is a vault only by walking up is refused outright, and the resolved target is announced.
 ## MCP & Agent Integration
 
@@ -345,7 +351,7 @@ Starts the MCP server on stdio transport. The server exits with its client (a pa
 
 ### mcp-setup
 
-Shows MCP setup instructions for all AI tools.
+Shows MCP setup instructions for all AI tools. The snippets are DATA (`MCPSetupGuide`), and the human output is rendered from the same list the record carries, so the two cannot drift: `--json`/`--csv`/`--yaml` emit `{vault, clients[{client, config_path, notes, snippet}], tools[{name, description}], example_prompts}`, and `--format raw`/`md` are refused by name. It used to print the same boxed prose for every format.
 
 ### mcp status
 
@@ -405,6 +411,10 @@ Installs or updates the Obsidian plugin: downloads `manifest.json`/`main.js`/`st
 ### skills list / install / uninstall / show
 
 Generates SKILL.md for AI coding agents (`--user`, `--all`, `--force`). Supported agents include `claude-code` (which also serves Claude Desktop, since Claude Desktop reads the same `~/.claude/skills`), `cursor`, `windsurf`, `github-copilot`, `kiro`, `cline`, `roo-code`, `junie`, `warp` (`~/.warp/skills/2nb/SKILL.md`; Warp also reads `~/.claude/skills`), `codex` (`~/.codex/skills/2nb/SKILL.md`; Codex also reads `~/.agents/skills`), and the cross-tool `agents` (`.agents/skills/2nb/SKILL.md`, Warp's recommended primary, also honored by other agents). A force-overwrite of a differing SKILL.md backs it up to `SKILL.md.bak` first; installs are version-stamped; `skills list` auto-refreshes a stale, unmodified managed copy (no `.bak`), so a `brew upgrade` keeps the skill current. A project-scope `--all` from the 2ndbrain source tree skips the committed mirror slugs (use `make sync-skills` for those).
+
+`install` and `uninstall` emit one `SkillChangeResult` per target under an explicit format (`{slug, agent, scope, path, changed, backup_path?, skipped?, error?, note?}`), matching `mcp.InstallResult`'s shape, so a `--all` batch reports every agent even when one fails. Both used to print "Installed ..." on stdout for every format.
+
+`show` emits a document BODY, the same shape as `git diff` and `export-context`: the default form and `--format raw`/`md`/`text` emit the SKILL.md markdown, `--json` wraps it as `{slug, agent, project_path, user_path, version, content, chars}`, and `--csv`/`--tsv`/`--yaml` are refused by name (a SKILL.md is not a row set). The refusal runs before the agent lookup, so the answer never depends on which agent was named. `show` used to emit raw markdown for every format, and an agent fetching a skill body programmatically is its likely caller.
 
 ### skills doctor [slug]
 
@@ -492,7 +502,11 @@ This is the per-account complement to the catalog: on a staged-rollout-gated acc
 
 ### models add
 
-Adds or updates a model by id. The argument is a bare model id; a route-qualified form (`id@plane/region`) is refused, because add describes a model, not one endpoint. The default scope is the per-vault `.2ndbrain/models.yaml`; `--scope global` writes `~/.config/2nb/models.yaml`. Updates merge: `Enabled`, `TestedAt`, `TestLatencyMs`, and `Benchmark` are preserved unless explicitly re-set. `--similarity-threshold` is embedding-only; `--price-request` is for per-request priced models.
+Adds or updates a model by id. The argument is a bare model id; a route-qualified form (`id@plane/region`) is refused, because add describes a model, not one endpoint.
+
+The five catalog MUTATIONS (`add`, `remove`, `enable`, `disable`, `enable-state`) are WRITES and emit one `ModelsCatalogResult` under an explicit format: `{action, provider, model?, vendor?, type?, scope, state?, rows, models?}`. `rows` is the number of CATALOG ROWS written or removed, which is not always 1 because a model can have several routes; a `--vendor` batch names `vendor` and `models` instead of one id. All five used to write ZERO BYTES to stdout for every format, with the confirmation going to stderr as prose.
+
+The default scope is the per-vault `.2ndbrain/models.yaml`; `--scope global` writes `~/.config/2nb/models.yaml`. Updates merge: `Enabled`, `TestedAt`, `TestLatencyMs`, and `Benchmark` are preserved unless explicitly re-set. `--similarity-threshold` is embedding-only; `--price-request` is for per-request priced models.
 
 ### models remove
 
@@ -546,7 +560,7 @@ Benchmarks a model against the vault. `--probe embed|generate|retrieval|search|r
 
 ### models bench fav / unfav / favs / history / compare
 
-Manages benchmark favorites and views history. `compare` reports the latest run per (model, probe) pair; its `--json` is the same `[]bench.Run` shape as `history --json` (the macOS compare matrix decodes it), while the human view groups by probe.
+Manages benchmark favorites and views history. `compare` reports the latest run per (model, probe) pair; its `--json` is the same `[]bench.Run` shape as `history --json` (the macOS compare matrix decodes it), while the human view groups by probe. `favs`, `history` and `compare` emit `[]` rather than the bare token `null` on an empty set, like every other listing. `fav` and `unfav` emit `{action, provider, model, model_type?}` under an explicit format; they used to print prose on STDOUT, so `--json` mixed a sentence into the stream.
 
 ### models calibrate
 
@@ -557,6 +571,8 @@ Samples the baseline cosine distribution and recommends a similarity threshold. 
 ### config show / get / set / set-key / bedrock / doctor
 
 Reads and writes config.
+
+**Format handling.** `config get` prints its bare scalar with no format and under `--porcelain`, which is the scripting contract `$(2nb config get ai.provider)` depends on; an explicit `--format` renders the value instead, as ONE plain cell under csv/tsv (a scalar payload is not a JSON record, and wrapping it as one produced `"""bedrock"""`). `getConfigValue` returns the value already formatted as text, so json emits a quoted string (`"bedrock"`, `"1024"`) rather than guessing a type back out of it. `config get` used to print the bare scalar for EVERY format, which is not JSON. `config set` emits `{key, value}` under an explicit format, with the value read back from the SAVED config rather than echoed from the argument (a model-slot write goes through `applyModelSlotRoute` and can store a different string than was typed); it used to write nothing at all to stdout.
 
 **Model slots name a ROUTE.** Each of the three slots carries a plane and a region alongside its model: `ai.{generation,embedding}_{plane,region}` and `ai.rerank.{plane,region}`. `config set ai.<slot>_model` accepts either a bare id or a full route (`xai.grok-4.6@mantle/us-west-2`) and writes all three keys as one unit, so a slot is never left half-routed.
 

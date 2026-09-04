@@ -192,8 +192,20 @@ func runMetricsClear(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A WRITE, so it emits the same shape every other write emits: what
+	// changed, and the count. It wrote ZERO BYTES to stdout for every format,
+	// so `metrics clear --json` reported success with nothing to parse even
+	// when it had just cleared a non-empty history.
+	if done, err := emitStructured(cmd, MetricsClearResult{Cleared: n}); done {
+		return err
+	}
 	fmt.Fprintf(os.Stderr, "Cleared %d recorded operation(s).\n", n)
 	return nil
+}
+
+// MetricsClearResult is the structured record for `metrics clear`.
+type MetricsClearResult struct {
+	Cleared int64 `json:"cleared"`
 }
 
 func printMetricsReport(r MetricsReport) {

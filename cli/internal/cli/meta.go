@@ -148,6 +148,12 @@ func getMeta(cmd *cobra.Command, doc *document.Document) error {
 		return exitWithError(ExitNotFound, fmt.Sprintf("error: frontmatter key %q not found", metaGet))
 	}
 
+	// What the FIELD says, which is not always what the parsed value renders
+	// as: yaml.v3 resolves an unquoted `2026-09-04` to a time.Time, and every
+	// rendering of that instant is `2026-09-04T00:00:00Z`. `meta --get` answers
+	// "what does this field say", so it answers with the note's own text.
+	val = metaGetValue(doc, metaGet, val)
+
 	if format := getFormat(cmd); format != "" {
 		return writeOut(cmd, format, val)
 	}
@@ -158,16 +164,68 @@ func getMeta(cmd *cobra.Command, doc *document.Document) error {
 	switch t := val.(type) {
 	case []any:
 		for _, item := range t {
-			fmt.Fprintln(&sb, item)
+			fmt.Fprintln(&sb, metaScalarLine(item))
 		}
 	default:
-		fmt.Fprintln(&sb, val)
+		fmt.Fprintln(&sb, metaScalarLine(val))
 	}
 	fmt.Print(sb.String())
 	if flagCopy {
 		return copyToClipboard(strings.TrimRight(sb.String(), "\n"))
 	}
 	return nil
+}
+
+// metaGetValue substitutes the note's VERBATIM text for a value the parsed form
+// cannot reproduce, and leaves every other value exactly as parsed.
+//
+// The rule is fidelity, not type: a value is replaced only where rendering the
+// PARSED value would differ from what the file says, which is precisely the
+// lossy case (an unquoted date, whose text `2026-09-04` and whose resolved
+// instant `2026-09-04T00:00:00Z` are different strings; an unquoted `007`,
+// which resolves to the int 7). A string, a plain integer, a boolean and a
+// float all render identically either way, so they keep their parsed type and
+// `--json` still emits `42` rather than `"42"`.
+//
+// A list is handled element by element under the same rule, so a tag written
+// `- 2026-09-04` reads back as `2026-09-04` while a numeric element stays a
+// number. A non-scalar element (a nested list or mapping) has no text and is
+// left alone.
+func metaGetValue(doc *document.Document, key string, val any) any {
+	if s, ok := doc.MetaText(key); ok {
+		if parsed, ok := document.ScalarText(val); !ok || parsed != s {
+			return s
+		}
+		return val
+	}
+	items, ok := val.([]any)
+	if !ok {
+		return val
+	}
+	out := make([]any, len(items))
+	for i, item := range items {
+		out[i] = item
+		if s, ok := doc.MetaTextItem(key, i); ok {
+			if parsed, ok := document.ScalarText(item); !ok || parsed != s {
+				out[i] = s
+			}
+		}
+	}
+	return out
+}
+
+// metaScalarLine renders one frontmatter value for the DEFAULT (pretty) output
+// of `meta --get`. Only this branch needed it: --json marshals a time.Time as
+// RFC3339 and output.delimitedCell renders one through MarshalText, while plain
+// %v prints Go's own "2020-01-01 00:00:00 +0000 UTC". So `meta --get modified`
+// disagreed with every other view of the same note, and disagreed with itself
+// depending on whether the date in the file was quoted. Anything ScalarText
+// does not recognize (a nested mapping) keeps its %v form.
+func metaScalarLine(v any) string {
+	if s, ok := document.ScalarText(v); ok {
+		return s
+	}
+	return fmt.Sprint(v)
 }
 
 func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absPath string) error {
@@ -296,6 +354,7 @@ func removeMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 			return exitWithError(ExitNotFound, fmt.Sprintf("error: frontmatter key %q not found", key))
 		}
 
+		doc.ForgetMetaText(key)
 		delete(doc.Frontmatter, key)
 
 		// Mirror SetMeta's struct-field sync in reverse: clearing a key that

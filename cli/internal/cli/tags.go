@@ -152,7 +152,7 @@ func runTagsRename(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		newTags, changed := renameTagInFrontmatter(doc.Frontmatter, old, newTag)
+		newTags, changed := renameTagInFrontmatter(doc, old, newTag)
 		if !changed {
 			// The doc surfaced via the tags table but carries no frontmatter
 			// "tags" entry for <old> (it lived only inline). v1 is
@@ -205,8 +205,8 @@ func runTagsRename(cmd *cobra.Command, args []string) error {
 // <old> is present it is replaced with <new>; if <new> already appears the result
 // dedupes (a single <new>, <old> dropped). Order is otherwise preserved. Returns
 // changed=false when <old> is not in the frontmatter tags at all.
-func renameTagInFrontmatter(fm map[string]any, old, newTag string) ([]string, bool) {
-	current := frontmatterTags(fm)
+func renameTagInFrontmatter(doc *document.Document, old, newTag string) ([]string, bool) {
+	current := document.TagsOf(doc)
 	hasOld := false
 	for _, t := range current {
 		if t == old {
@@ -232,36 +232,6 @@ func renameTagInFrontmatter(fm map[string]any, old, newTag string) ([]string, bo
 		out = append(out, v)
 	}
 	return out, true
-}
-
-// frontmatterTags extracts the frontmatter "tags" field as a string slice,
-// handling the array form (tags: [a, b]) and the bare-string form (tags: a). It
-// deliberately reads only the frontmatter map, not the indexer's merged
-// frontmatter+inline view, because `tags rename` is frontmatter-only.
-func frontmatterTags(fm map[string]any) []string {
-	raw, ok := fm["tags"]
-	if !ok {
-		return nil
-	}
-	switch v := raw.(type) {
-	case []any:
-		tags := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				tags = append(tags, s)
-			}
-		}
-		return tags
-	case []string:
-		return v
-	case string:
-		if v == "" {
-			return nil
-		}
-		return []string{v}
-	default:
-		return nil
-	}
 }
 
 // writeTagsFrontmatter rewrites a document's frontmatter (the "tags" field was

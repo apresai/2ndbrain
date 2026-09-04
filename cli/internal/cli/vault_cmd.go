@@ -412,6 +412,21 @@ func reachDot(ok bool) string {
 	return "unavailable"
 }
 
+// VaultRegistrationResult is the structured record for the two commands that
+// put a vault in the recents list: `vault create` (which also initializes it)
+// and `vault set` (which only registers an existing one). Neither switches the
+// ACTIVE vault, which is why the record says what it did and not what is now
+// active: 2nb follows the vault Obsidian has open.
+type VaultRegistrationResult struct {
+	Action string `json:"action"`
+	Path   string `json:"path"`
+	Name   string `json:"name,omitempty"`
+	// Created is true only for `vault create`, which minted the sidecar.
+	Created bool `json:"created"`
+	// Registered is always true: both commands add the vault to recents.
+	Registered bool `json:"registered"`
+}
+
 func runVaultCreate(cmd *cobra.Command, args []string) error {
 	return createVaultAt(cmd, args[0])
 }
@@ -430,6 +445,14 @@ func runVaultSet(cmd *cobra.Command, args []string) error {
 	v.Close()
 
 	addRecentVault(absPath)
+
+	// `vault set` printed its confirmation as prose on STDOUT for every
+	// format, so `vault set <p> --json` handed a caller three sentences.
+	if done, err := emitStructured(cmd, VaultRegistrationResult{
+		Action: "set", Path: absPath, Registered: true,
+	}); done {
+		return err
+	}
 
 	if !flagPorcelain {
 		fmt.Printf("Registered %s in recent vaults.\n\n", absPath)
@@ -529,6 +552,15 @@ func createVaultAt(cmd *cobra.Command, path string) error {
 	writeVaultGitignore(v.Root)
 
 	slog.Info("vault initialized", "path", absPath)
+
+	// A WRITE (it mints a vault and a recents entry), so it emits what
+	// changed. It wrote nothing at all to stdout for every format, so
+	// `vault create <p> --json` reported success with nothing to parse.
+	if done, err := emitStructured(cmd, VaultRegistrationResult{
+		Action: "create", Path: v.Root, Name: v.Config.Name, Created: true, Registered: true,
+	}); done {
+		return err
+	}
 
 	fmt.Fprintf(cmd.ErrOrStderr(), "Initialized 2ndbrain vault at %s\n", v.Root)
 	if !flagPorcelain {

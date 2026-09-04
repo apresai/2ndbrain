@@ -41,6 +41,24 @@ import "github.com/apresai/2ndbrain/internal/store"
 //	     Fix: 2nb index. Deliberately NOT an EmbedGeneration bump: charging
 //	     every user for a whole-vault re-embed to repair a handful of notes is
 //	     the wrong trade when content drift already repairs them.
+//	  4  an UNQUOTED frontmatter date is read as a date. yaml.v3 resolves
+//	     `modified: 2020-01-01T00:00:00Z` (the shape Obsidian's own Date
+//	     property writes) to time.Time, and the old string assertion failed
+//	     silently, so documents.created_at/modified_at stayed EMPTY and `stale`
+//	     omitted the note. The same coercion fills title/type/status/id from a
+//	     scalar YAML read as a number, a boolean or a date, and keeps a
+//	     list entry of those types as a tag or alias. That half moves no text
+//	     at all: the content hash is computed from the parsed BODY, which
+//	     frontmatter cannot move, so no chunk and no vector is affected.
+//	     0.22.4 also fixed the CLOSING FENCE, and that half DOES move text:
+//	     a note whose body was truncated by a horizontal rule or a fence
+//	     carrying a trailing space now parses with its whole body, so its
+//	     content hash differs and a plain reindex re-chunks and re-embeds
+//	     exactly those notes. Still IndexGeneration and not EmbedGeneration,
+//	     for the reason entry 3 records: content drift already re-embeds the
+//	     affected notes, so charging every user for a whole-vault rebuild is
+//	     the wrong trade.
+//	     Fix: 2nb index.
 //
 // If you change the watched files (see `make check-index-generation`) but a
 // reindex is genuinely NOT needed, add a `Reindex-Not-Needed: <reason>` trailer
@@ -48,7 +66,7 @@ import "github.com/apresai/2ndbrain/internal/store"
 const (
 	// IndexGeneration bumps for index-only logic changes (FTS content, link/tag
 	// extraction) that do NOT alter chunk boundaries or embeddings. Fix: 2nb index.
-	IndexGeneration = 3
+	IndexGeneration = 4
 
 	// EmbedGeneration bumps for chunking OR embedding-production logic changes
 	// (chunk boundaries, purpose, pooling, normalization) at the SAME model and

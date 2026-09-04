@@ -78,7 +78,7 @@ func CollectLiveDocs(root string) ([]store.DocInfo, map[string][]string, error) 
 		if isMD {
 			if d, perr := document.ParseFile(path); perr == nil {
 				title = d.Title
-				for _, a := range document.ExtractAliases(d.Frontmatter) {
+				for _, a := range document.AliasesOf(d) {
 					aliasIndex[a] = append(aliasIndex[a], rel)
 				}
 			} else {

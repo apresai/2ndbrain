@@ -212,7 +212,7 @@ func init() {
 
 	modelsEnableStateCmd.Flags().StringVar(&enableStateProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
 	modelsEnableStateCmd.Flags().StringVar(&enableStateScope, "scope", "vault", "Scope: vault or global")
-	modelsEnableStateCmd.Flags().StringVar(&enableStateValue, "state", "", "State: default, enabled, disabled")
+	modelsEnableStateCmd.Flags().StringVar(&enableStateValue, "state", "", "State: default, enabled, disabled (required)")
 	_ = modelsEnableStateCmd.MarkFlagRequired("provider")
 	_ = modelsEnableStateCmd.MarkFlagRequired("state")
 	_ = modelsEnableStateCmd.RegisterFlagCompletionFunc("provider", completeProviders)
@@ -692,6 +692,34 @@ func formatContext(tokens int) string {
 	return fmt.Sprintf("%d", tokens)
 }
 
+// ModelsCatalogResult is the structured record for a user-catalog MUTATION:
+// `models add`, `models remove`, `models enable`, `models disable` and
+// `models enable-state`. They are WRITES, so they emit the same shape a write
+// emits everywhere else in this CLI (mcp install/uninstall/reap): what changed,
+// and the count where there is one.
+//
+// All five printed their confirmation to stderr as prose and wrote ZERO BYTES
+// to stdout for every format, so `models add --json` reported success with
+// nothing to parse. The single-model forms name `model`; a `--vendor` batch
+// names `vendor` and `models` instead, since it never touches one id.
+type ModelsCatalogResult struct {
+	Action   string `json:"action"`
+	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
+	Vendor   string `json:"vendor,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Scope    string `json:"scope"`
+	// State is the resulting enable tri-state (enabled, disabled, default) for
+	// the three toggles; empty for add and remove.
+	State string `json:"state,omitempty"`
+	// Rows is the number of CATALOG ROWS written or removed. A model can have
+	// several routes and each is its own row, so this is not always 1.
+	Rows int `json:"rows"`
+	// Models is the number of MODELS a --vendor batch covered; omitted for the
+	// single-model forms, where it is always 1.
+	Models int `json:"models,omitempty"`
+}
+
 // runModelsAdd persists a user-defined model entry to the global or per-vault
 // catalog. The vault scope requires an open vault; global works from anywhere.
 func runModelsAdd(cmd *cobra.Command, args []string) error {
@@ -773,6 +801,12 @@ func runModelsAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save: %w", err)
 	}
 	slog.Info("models add", "provider", entry.Provider, "model", entry.ID, "type", entry.Type, "scope", scope)
+	if done, err := emitStructured(cmd, ModelsCatalogResult{
+		Action: cmd.Name(), Provider: entry.Provider, Model: entry.ID,
+		Type: entry.Type, Scope: string(scope), Rows: 1,
+	}); done {
+		return err
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Added %s/%s to %s catalog\n", entry.Provider, entry.ID, scope)
 	return nil
 }
@@ -905,6 +939,12 @@ func runModelsRemove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("nothing matched %s in %s catalog", args[0], scope)
 	}
 	slog.Info("models remove", "provider", ref.Provider, "model", ref.ID, "plane", ref.Plane, "region", ref.Region, "removed", n, "scope", scope)
+	if done, err := emitStructured(cmd, ModelsCatalogResult{
+		Action: cmd.Name(), Provider: ref.Provider, Model: ref.ID,
+		Scope: string(scope), Rows: n,
+	}); done {
+		return err
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Removed %d matching catalog row(s) for %s from %s catalog\n", n, args[0], scope)
 	return nil
 }
@@ -1014,7 +1054,7 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 		userByModel[k] = append(userByModel[k], m)
 	}
 
-	count := 0
+	count, rows := 0, 0
 	for _, id := range modelIDs {
 		targets := userByModel[provider+"|"+id]
 		if len(targets) == 0 {
@@ -1031,6 +1071,7 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 			if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 				return fmt.Errorf("save %s: %w", id, err)
 			}
+			rows++
 		}
 		count++
 	}
@@ -1040,6 +1081,12 @@ func setVendorEnabled(cmd *cobra.Command, vendor, provider, scopeStr string, ena
 		verb = "disabled"
 	}
 	slog.Info("models vendor enable-state", "provider", provider, "vendor", vendor, "state", verb, "scope", scope, "count", count)
+	if done, err := emitStructured(cmd, ModelsCatalogResult{
+		Action: cmd.Name(), Provider: provider, Vendor: vendor,
+		Scope: string(scope), State: verb, Rows: rows, Models: count,
+	}); done {
+		return err
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s %d %s model(s) from %s in %s catalog\n", verb, count, provider, vendor, scope)
 	return nil
 }
@@ -1101,6 +1148,12 @@ func setModelEnabledPointer(cmd *cobra.Command, modelID, provider, scopeStr stri
 	}
 
 	slog.Info("models enable-state", "provider", provider, "model", modelID, "state", label, "scope", scope, "routes", len(targets))
+	if done, err := emitStructured(cmd, ModelsCatalogResult{
+		Action: cmd.Name(), Provider: provider, Model: modelID,
+		Scope: string(scope), State: label, Rows: len(targets),
+	}); done {
+		return err
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s/%s in %s catalog (every route)\n", label, provider, modelID, scope)
 	return nil
 }

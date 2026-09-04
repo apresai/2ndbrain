@@ -28,6 +28,14 @@ type Document struct {
 	Frontmatter map[string]any `json:"frontmatter"`
 	Body        string         `json:"body,omitempty"`
 	ContentHash string         `json:"content_hash,omitempty"`
+
+	// raw is the VERBATIM text of each top-level frontmatter key, kept because
+	// resolution is lossy for a text field: `2026-09-04` and
+	// `2026-09-04T00:00:00Z` decode to the same time.Time, so a title or a tag
+	// can only be reproduced from the node. Unexported, so it never reaches
+	// JSON; nil for a document not built by Parse, where every reader falls
+	// back to ScalarText. See frontmatter_scalar.go.
+	raw rawFrontmatter
 }
 
 // ComputeContentHash sets ContentHash to the SHA-256 of the normalized body.
@@ -70,7 +78,7 @@ func normalizeBody(body string) string {
 }
 
 func Parse(path string, content []byte) (*Document, error) {
-	meta, body, err := ParseFrontmatter(content)
+	meta, raw, body, err := parseFrontmatterFull(content)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -79,28 +87,40 @@ func Parse(path string, content []byte) (*Document, error) {
 		Path:        path,
 		Frontmatter: meta,
 		Body:        body,
+		raw:         raw,
 	}
 
+	// Every field below goes through a helper rather than a bare
+	// meta[key].(string), because an UNQUOTED YAML scalar is not a Go string:
+	// yaml.v3 resolves it to time.Time, bool, int or float64, and the assertion
+	// silently failed for all of them. See frontmatter_scalar.go.
+	//
+	// The parsed map is deliberately NOT normalized in place. Serialize
+	// re-marshals every key of Frontmatter through
+	// UpdateDocumentFrontmatterAST, so writing a string back over a time.Time
+	// would make an unrelated `meta --set`, `tag add` or `polish --write`
+	// requote a date line the user never touched. The struct fields the index
+	// reads are normalized; the note's bytes are left alone.
 	if meta != nil {
-		if id, ok := meta["id"].(string); ok {
+		if id, ok := frontmatterText(meta, raw, "id"); ok {
 			doc.ID = id
 		}
-		if title, ok := meta["title"].(string); ok {
+		if title, ok := frontmatterText(meta, raw, "title"); ok {
 			doc.Title = title
 		}
-		if typ, ok := meta["type"].(string); ok {
+		if typ, ok := frontmatterText(meta, raw, "type"); ok {
 			doc.Type = typ
 		}
-		if status, ok := meta["status"].(string); ok {
+		if status, ok := frontmatterText(meta, raw, "status"); ok {
 			doc.Status = status
 		}
-		if created, ok := meta["created"].(string); ok {
+		if created, ok := frontmatterTime(meta, "created"); ok {
 			doc.CreatedAt = created
 		}
-		if modified, ok := meta["modified"].(string); ok {
+		if modified, ok := frontmatterTime(meta, "modified"); ok {
 			doc.ModifiedAt = modified
 		}
-		doc.Tags = extractTags(meta)
+		doc.Tags = extractTags(meta, raw)
 	}
 
 	return doc, nil
@@ -203,24 +223,77 @@ func (d *Document) SetMeta(key string, value any) {
 		d.Frontmatter = make(map[string]any)
 	}
 	d.Frontmatter[key] = value
+	// The verbatim text of this key is now stale: it describes what the FILE
+	// said, and the caller just replaced it. Drop it so every reader falls back
+	// to the value actually set.
+	delete(d.raw, key)
 
-	// Keep struct fields in sync
+	// Keep struct fields in sync. EVERY field this struct mirrors from
+	// frontmatter is here: the index reads these, not the map, so one that is
+	// missing leaves a stale value flowing into the database and the chunk
+	// tables. `id` was missing outright, and title/type/status used a strict
+	// value.(string), so setting any of them to a non-string scalar left the
+	// field unpopulated. The struct's frontmatter-mirroring fields are ID,
+	// Title, Type, Status, Tags, CreatedAt and ModifiedAt; adding a new one
+	// means adding a case here.
 	switch key {
+	case "id":
+		if s, ok := setMetaField(value); ok {
+			d.ID = s
+		}
 	case "title":
-		if s, ok := value.(string); ok {
+		if s, ok := setMetaField(value); ok {
 			d.Title = s
 		}
 	case "type":
-		if s, ok := value.(string); ok {
+		if s, ok := setMetaField(value); ok {
 			d.Type = s
 		}
 	case "status":
-		if s, ok := value.(string); ok {
+		if s, ok := setMetaField(value); ok {
 			d.Status = s
 		}
 	case "tags":
-		d.Tags = extractTags(d.Frontmatter)
+		d.Tags = extractTags(d.Frontmatter, d.raw)
+	case "created":
+		// The DATE fields normalize, because the index compares them as
+		// instants: a value set here lands in the column in the same form a
+		// parse would have produced. A nil clears, for the same reason it
+		// clears a text field.
+		d.CreatedAt = setMetaDate(value, d.Frontmatter, "created", d.CreatedAt)
+	case "modified":
+		d.ModifiedAt = setMetaDate(value, d.Frontmatter, "modified", d.ModifiedAt)
 	}
+}
+
+// setMetaField reports the value a mirrored string field should take after a
+// SetMeta, and whether to assign it at all.
+//
+// A NIL CLEARS the field. nil is how a property is emptied (kb_update_meta
+// passes a JSON null straight through), and leaving the struct field holding
+// the old value while the map says the property is gone is the same stale-field
+// bug as the missing `id` case: the index reads the field, not the map.
+//
+// A scalar renders as its text. Anything else (a list, a mapping) is not a
+// value a string field can hold, so the field is left as it was rather than
+// blanked on a write that says nothing about it.
+func setMetaField(value any) (string, bool) {
+	if value == nil {
+		return "", true
+	}
+	return ScalarText(value)
+}
+
+// setMetaDate is setMetaField for a DATE field: nil clears, a readable date
+// normalizes, and anything else leaves the column as it was.
+func setMetaDate(value any, meta map[string]any, key, current string) string {
+	if value == nil {
+		return ""
+	}
+	if s, ok := frontmatterTime(meta, key); ok {
+		return s
+	}
+	return current
 }
 
 func (d *Document) WriteFile(dir string) (string, error) {
@@ -320,62 +393,112 @@ func PrependToBody(body, content string) string {
 	return content + "\n" + body
 }
 
-func extractTags(meta map[string]any) []string {
-	raw, ok := meta["tags"]
+func extractTags(meta map[string]any, raw rawFrontmatter) []string {
+	return scalarList(meta, raw, "tags")
+}
+
+// scalarList reads a list-valued frontmatter field (tags, aliases) as the note
+// WROTE it. Each element is its verbatim node text, so an unquoted entry YAML
+// resolves to a date, a number or a boolean stays the text the file carries:
+// `- 2026-09-04` is the tag `2026-09-04`, not `2026-09-04T00:00:00Z` and not,
+// as before this, dropped from the note entirely. An element that is not a
+// scalar (a nested list or mapping) is not a tag and is still dropped.
+func scalarList(meta map[string]any, raw rawFrontmatter, key string) []string {
+	value, ok := meta[key]
 	if !ok {
 		return nil
 	}
 
-	switch v := raw.(type) {
+	switch v := value.(type) {
 	case []any:
-		tags := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				tags = append(tags, s)
+		out := make([]string, 0, len(v))
+		for i, item := range v {
+			// The node's text wins; ScalarText on the resolved element is the
+			// fallback where there is no node (a map built in code).
+			if s, ok := raw.item(key, i); ok {
+				out = append(out, s)
+				continue
+			}
+			if s, ok := ScalarText(item); ok {
+				out = append(out, s)
 			}
 		}
-		return tags
+		return out
 	case []string:
 		return v
-	case string:
-		// `tags: foo` in YAML parses as a bare string; treat it as one tag.
-		if v == "" {
+	default:
+		// `tags: foo` in YAML parses as a bare scalar; treat it as one entry.
+		s, ok := raw.scalar(key)
+		if !ok {
+			s, ok = ScalarText(v)
+		}
+		if !ok || s == "" {
 			return nil
 		}
-		return []string{v}
-	default:
-		return nil
+		return []string{s}
 	}
 }
 
+// MetaText returns the VERBATIM text of a top-level frontmatter SCALAR, as the
+// note wrote it, reporting false when the key is absent, is not a scalar, or
+// has no node behind it (a document built in code). Use it wherever a field is
+// SHOWN rather than compared: the resolved value cannot reproduce the note's
+// text for a date (see frontmatter_scalar.go).
+func (d *Document) MetaText(key string) (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.raw.scalar(key)
+}
+
+// ForgetMetaText drops the note's verbatim text for one key, for a caller that
+// REMOVES a key from Frontmatter directly rather than through SetMeta (which
+// invalidates it itself). Leaving it behind would let a stale reading shadow a
+// later write of the same key on this document.
+func (d *Document) ForgetMetaText(key string) {
+	if d != nil {
+		delete(d.raw, key)
+	}
+}
+
+// MetaTextItem is MetaText for one element of a top-level frontmatter LIST,
+// index-aligned with the decoded []any.
+func (d *Document) MetaTextItem(key string, i int) (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.raw.item(key, i)
+}
+
+// TagsOf reads a document's frontmatter tags as the note wrote them. Prefer it
+// over reading the map wherever a *Document is in hand: a caller that asserted
+// item.(string) DROPPED every unquoted date, integer and boolean tag, and the
+// tag commands then wrote that shortened list back to the file.
+func TagsOf(d *Document) []string {
+	if d == nil {
+		return nil
+	}
+	return scalarList(d.Frontmatter, d.raw, "tags")
+}
+
+// AliasesOf reads a document's frontmatter aliases as the note wrote them.
+// Prefer it over ExtractAliases wherever a *Document is in hand: it carries the
+// verbatim node text, so an unquoted alias YAML resolves to a date keeps the
+// text the file shows rather than a normalized timestamp.
+func AliasesOf(d *Document) []string {
+	if d == nil {
+		return nil
+	}
+	return scalarList(d.Frontmatter, d.raw, "aliases")
+}
+
+// ExtractAliases is the map-only reading, for a caller with no Document (and so
+// no node text). A resolved scalar renders through ScalarText.
 func ExtractAliases(meta map[string]any) []string {
 	if meta == nil {
 		return nil
 	}
-	raw, ok := meta["aliases"]
-	if !ok {
-		return nil
-	}
-
-	switch v := raw.(type) {
-	case []any:
-		aliases := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				aliases = append(aliases, s)
-			}
-		}
-		return aliases
-	case []string:
-		return v
-	case string:
-		if v == "" {
-			return nil
-		}
-		return []string{v}
-	default:
-		return nil
-	}
+	return scalarList(meta, nil, "aliases")
 }
 
 func slugify(s string) string {

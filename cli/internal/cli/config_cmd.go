@@ -139,6 +139,15 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// An explicit --format renders the VALUE as that format. getConfigValue
+	// returns the value already formatted as text, so json emits a quoted
+	// string (`"bedrock"`, `"1024"`) rather than guessing a type back out of
+	// it. The bare and --porcelain forms are untouched and still print the raw
+	// scalar, which is the scripting contract `$(2nb config get ai.provider)`
+	// depends on; --porcelain sets no format, so getFormat returns "" for it.
+	if done, err := emitStructured(cmd, value); done {
+		return err
+	}
 	fmt.Println(value)
 	return nil
 }
@@ -192,10 +201,28 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		slog.Warn("ai config inconsistency", "key", key, "issue", issue)
 	}
 
+	// A WRITE, so it emits what changed. It wrote nothing at all to stdout for
+	// every format, so `config set ... --json` reported success with nothing to
+	// parse. The effective value is read back from the saved config rather than
+	// echoed from the argument: a model-slot write goes through
+	// applyModelSlotRoute, which can store a different string than was typed.
+	effective, err := getConfigValue(v.Config.AI, key)
+	if err != nil {
+		effective = value
+	}
+	if done, err := emitStructured(cmd, ConfigSetResult{Key: key, Value: fmt.Sprint(effective)}); done {
+		return err
+	}
 	if !flagPorcelain {
 		fmt.Fprintf(os.Stderr, "Set %s = %s\n", key, value)
 	}
 	return nil
+}
+
+// ConfigSetResult is the structured record for `config set`.
+type ConfigSetResult struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // resyncEmbeddingDimensions updates v.Config.AI.Dimensions to match the

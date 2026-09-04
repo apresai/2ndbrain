@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -228,5 +229,21 @@ func TestRunModelsDisable_ThenEnable_RoundTrip(t *testing.T) {
 	}
 	if models[0].Enabled == nil || !*models[0].Enabled {
 		t.Fatalf("expected Enabled=true after round-trip, got %v", models[0].Enabled)
+	}
+}
+
+// Cobra ENFORCES --state as required on `models enable-state` (MarkFlagRequired
+// in init), and --provider beside it says so in its help line. --state did not,
+// so the help text and the behavior disagreed: the flag looked optional and the
+// command refused without it.
+func TestEnableStateHelpMarksStateRequired(t *testing.T) {
+	for _, name := range []string{"provider", "state"} {
+		f := modelsEnableStateCmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("--%s is gone from models enable-state", name)
+		}
+		if !strings.Contains(f.Usage, "(required)") {
+			t.Errorf("--%s is enforced as required but its help does not say so: %q", name, f.Usage)
+		}
 	}
 }

@@ -480,8 +480,11 @@ func TestWriteDelimited_EmptyAndNilComposites(t *testing.T) {
 	if cell["nil_map"] != "null" {
 		t.Errorf("nil map cell = %q, want null so the column parses on every row", cell["nil_map"])
 	}
-	if cell["ptr"] != "<nil>" {
-		t.Errorf("nil pointer cell = %q, want the unchanged %%v rendering <nil>", cell["ptr"])
+	// A nil POINTER is an empty cell, not `<nil>`: Go syntax has no place in a
+	// delimited stream. A nil MAP keeps `null`, which is JSON, so the column
+	// parses the same way on every row.
+	if cell["ptr"] != "" {
+		t.Errorf("nil pointer cell = %q, want an empty cell", cell["ptr"])
 	}
 }
 
@@ -553,28 +556,34 @@ func TestWriteDelimited_TextMarshalerCellsAreUnquotedText(t *testing.T) {
 }
 
 // A nil pointer whose type implements TextMarshaler must not reach MarshalText
-// (that panics); it keeps the %v rendering every other nil cell has.
+// (that panics); it falls through to the dereference loop and comes back as the
+// empty cell every other nil renders as.
 func TestWriteDelimited_NilTextMarshalerPointer(t *testing.T) {
+	// Two columns, not one. A one-column row whose only cell is empty is
+	// written as a blank LINE, and encoding/csv's reader skips blank lines, so
+	// a single-column fixture would test the CSV format's own edge case rather
+	// than this rendering. Real rows carry other columns.
 	type row struct {
+		Name string     `json:"name"`
 		When *time.Time `json:"when"`
 	}
 	var buf bytes.Buffer
-	if err := Write(&buf, FormatCSV, []row{{}}); err != nil {
+	if err := Write(&buf, FormatCSV, []row{{Name: "n"}}); err != nil {
 		t.Fatalf("csv: %v", err)
 	}
 	recs, err := csv.NewReader(strings.NewReader(buf.String())).ReadAll()
 	if err != nil || len(recs) != 2 {
 		t.Fatalf("csv is not parseable (%v):\n%s", err, buf.String())
 	}
-	if recs[1][0] != "<nil>" {
-		t.Errorf("nil *time.Time cell = %q, want <nil>", recs[1][0])
+	if recs[1][1] != "" {
+		t.Errorf("nil *time.Time cell = %q, want an empty cell", recs[1][1])
 	}
 }
 
 // A NON-nil pointer to a scalar rendered as a heap address: the fallback ran
 // %v on the pointer rather than on what it points at, so ModelInfo's
-// `reachable` and `credentials` columns came out as `0x14000122a30`. A nil
-// pointer keeps its `<nil>`, which is a real answer; an address never is.
+// `reachable` and `credentials` columns came out as `0x14000122a30`. An address
+// is never an answer, and neither is `<nil>`: a nil pointer is an empty cell.
 func TestWriteDelimited_PointerCellsRenderTheirValue(t *testing.T) {
 	type row struct {
 		Reachable *bool   `json:"reachable"`
@@ -601,8 +610,8 @@ func TestWriteDelimited_PointerCellsRenderTheirValue(t *testing.T) {
 	if cell["reachable"] != "true" || cell["count"] != "7" {
 		t.Errorf("pointer cells = reachable %q count %q, want true and 7", cell["reachable"], cell["count"])
 	}
-	if cell["missing"] != "<nil>" {
-		t.Errorf("nil pointer cell = %q, want <nil>", cell["missing"])
+	if cell["missing"] != "" {
+		t.Errorf("nil pointer cell = %q, want an empty cell", cell["missing"])
 	}
 }
 

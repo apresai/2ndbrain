@@ -15,8 +15,13 @@ import (
 // be told to pay for a whole-vault re-embed: the content hash is computed from
 // the parsed body, so a plain reindex re-embeds exactly the affected notes.
 func TestIndexGenerationCoversTheFrontmatterBoundaryChange(t *testing.T) {
-	if IndexGeneration != 3 {
-		t.Fatalf("IndexGeneration = %d, want 3: the frontmatter boundary change needs its own generation", IndexGeneration)
+	// At or above 3, not exactly 3. The claim this test defends is that the
+	// boundary change got a generation of its OWN, past the 2 that shipped
+	// before it; pinning the exact value made every LATER index-logic bump fail
+	// a test about a change it has nothing to do with (0.22.4's frontmatter
+	// date fix was the first to trip it).
+	if IndexGeneration < 3 {
+		t.Fatalf("IndexGeneration = %d, want at least 3: the frontmatter boundary change needs its own generation", IndexGeneration)
 	}
 
 	db, err := store.Open(filepath.Join(t.TempDir(), "index.db"))

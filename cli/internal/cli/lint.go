@@ -189,6 +189,15 @@ func runLint(cmd *cobra.Command, args []string) error {
 					continue
 				}
 				if len(fieldDef.Enum) > 0 {
+					// A non-string value SKIPS the enum check rather than
+					// failing it. That is deliberate and it is a read-only
+					// gap, not the data loss its shape resembles: an unquoted
+					// `status: true` or `status: 2026-09-04` is simply not
+					// validated here, where the tag commands' identical
+					// assertion used to DROP such a value from the file. Using
+					// the note's own text (doc.MetaText) would flag those, at
+					// the cost of new findings on notes that lint clean today,
+					// so it is left as a decision rather than taken silently.
 					strVal, ok := val.(string)
 					if !ok {
 						continue
