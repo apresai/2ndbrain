@@ -365,3 +365,23 @@ func TestContract_TagAddKeepsEveryExistingTag(t *testing.T) {
 		}
 	}
 }
+
+// A DATE property under csv: `meta --get created --format csv` emitted
+// """2020-01-01T00:00:00Z""" because a time.Time is a struct and bypassed the
+// scalar cell.
+func TestContract_ADatePropertyIsOnePlainCell(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.WriteFile(filepath.Join(root, "n.md"), []byte(
+		"---\ntitle: T\ntype: note\nstatus: draft\ncreated: 2020-01-01T00:00:00Z\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"csv", "tsv"} {
+		out, err := runCLIArgs(t, root, "meta", "n.md", "--get", "created", "--format", format)
+		if err != nil {
+			t.Fatalf("meta --get created --format %s: %v\n%s", format, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != "2020-01-01T00:00:00Z" {
+			t.Errorf("--format %s = %q, want the plain instant", format, got)
+		}
+	}
+}

@@ -271,18 +271,40 @@ func TestParse_ANullPropertyIsAbsentNotTheWordNull(t *testing.T) {
 // An ALIAS reads the value it points at, not the anchor's NAME. An alias node's
 // own Value is the anchor name ("a"), so taking it verbatim would be worse than
 // the resolved fallback.
+//
+// A STRING alias always worked, by falling back to the resolved value, so that
+// case is a guard. An aliased DATE is where it bit: the fallback formats the
+// resolved time.Time, which is the corruption the whole text/date split exists
+// to prevent, so `title: *a` on an anchored `2026-09-04` read back as
+// `2026-09-04T00:00:00Z`.
 func TestParse_AnAliasReadsTheAnchoredValue(t *testing.T) {
-	doc, err := Parse("n.md", []byte(
-		"---\nanchor: &a hello\ntitle: *a\ntags: [*a, real]\n---\nbody\n"))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if doc.Title != "hello" {
-		t.Errorf("Title = %q, want the anchored value hello", doc.Title)
-	}
-	if len(doc.Tags) != 2 || doc.Tags[0] != "hello" {
-		t.Errorf("Tags = %v, want [hello real]", doc.Tags)
-	}
+	t.Run("a string alias", func(t *testing.T) {
+		doc, err := Parse("n.md", []byte(
+			"---\nanchor: &a hello\ntitle: *a\ntags: [*a, real]\n---\nbody\n"))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if doc.Title != "hello" {
+			t.Errorf("Title = %q, want the anchored value hello", doc.Title)
+		}
+		if len(doc.Tags) != 2 || doc.Tags[0] != "hello" {
+			t.Errorf("Tags = %v, want [hello real]", doc.Tags)
+		}
+	})
+
+	t.Run("a date alias keeps the anchored TEXT", func(t *testing.T) {
+		doc, err := Parse("n.md", []byte(
+			"---\nanchor: &a 2026-09-04\ntitle: *a\ntags: [*a]\n---\nbody\n"))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if doc.Title != "2026-09-04" {
+			t.Errorf("Title = %q, want the anchored text 2026-09-04", doc.Title)
+		}
+		if len(doc.Tags) != 1 || doc.Tags[0] != "2026-09-04" {
+			t.Errorf("Tags = %v, want [2026-09-04]", doc.Tags)
+		}
+	})
 }
 
 // SetMeta syncs the DATE struct fields, which the index reads instead of the

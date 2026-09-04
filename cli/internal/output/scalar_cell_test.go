@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A payload that is ONE scalar is one PLAIN cell.
@@ -64,5 +65,22 @@ func TestWriteDelimited_CompositePayloadStaysJSON(t *testing.T) {
 	}
 	if recs[0][0] != `{"a":1,"b":2}` {
 		t.Errorf("map cell = %q, want sorted-key compact JSON", recs[0][0])
+	}
+}
+
+// A value that renders ITSELF as text is a scalar too, and it is a STRUCT, so
+// the kind switch never saw it: `meta --get created --format csv` came out as
+// """2020-01-01T00:00:00Z""".
+func TestWriteDelimited_ATextMarshalerPayloadIsOnePlainCell(t *testing.T) {
+	when := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, format := range []Format{FormatCSV, FormatTSV} {
+		var buf bytes.Buffer
+		if err := Write(&buf, format, when); err != nil {
+			t.Fatalf("%s: %v", format, err)
+		}
+		got := strings.TrimSpace(buf.String())
+		if got != "2020-01-01T00:00:00Z" {
+			t.Errorf("%s cell = %q, want the plain instant", format, got)
+		}
 	}
 }

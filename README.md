@@ -572,7 +572,7 @@ modified: 2026-04-04T00:00:00Z
 Content with [[wikilinks]] to other documents.
 ```
 
-A value may be quoted or not: `modified: 2026-04-04T00:00:00Z` and `modified: "2026-04-04T00:00:00Z"` are the same instant to 2nb, which matters because Obsidian's own Date property writes the unquoted form while `2nb create` and `2nb meta` quote theirs. A `title`, `type`, `status`, `id`, tag or alias written the same way is read too, and it keeps the text your file shows: `title: 2026-09-04` is the title `2026-09-04`, not a timestamp. Only the date properties are normalized, because `stale` and `list --sort modified` compare instants. 2nb reads these values; it never requotes them in your file.
+A value may be quoted or not: `modified: 2026-04-04T00:00:00Z` and `modified: "2026-04-04T00:00:00Z"` are the same instant to 2nb, which matters because Obsidian's own Date property writes the unquoted form while `2nb create` and `2nb meta` quote theirs. A `title`, `type`, `status`, `id`, tag or alias written the same way is read too, and it keeps the text your file shows: `title: 2026-09-04` is the title `2026-09-04`, not a timestamp. Only the date properties are normalized, because `stale` and `list --sort modified` compare instants. 2nb reads these values, and a frontmatter-only command touches only the property you named: every other line comes back byte for byte, its spelling, quoting, list style and any comment intact. A note's closing `---` must be a line of exactly that (a trailing space or tab is fine); a horizontal rule like `----` is your text, not the end of your properties.
 
 ## Obsidian Compatible
 
