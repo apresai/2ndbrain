@@ -435,8 +435,9 @@ func delimitedCell(field reflect.Value) string {
 	// csv` printed """2026-09-03T13:22:25+02:00""" for every date. MarshalText
 	// gives the same RFC3339 instant as plain text, which is one clean cell.
 	if tm, ok := field.Interface().(encoding.TextMarshaler); ok {
-		// A nil pointer implementing the interface would panic in MarshalText;
-		// %v renders it as <nil>, which is what every other nil cell does.
+		// A nil pointer implementing the interface would panic in MarshalText,
+		// so it falls through to the dereference loop below and comes back as
+		// an empty cell like every other nil.
 		if field.Kind() != reflect.Ptr || !field.IsNil() {
 			if b, err := tm.MarshalText(); err == nil {
 				return string(b)
@@ -446,7 +447,13 @@ func delimitedCell(field reflect.Value) string {
 	v := field
 	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
 		if v.IsNil() {
-			return fmt.Sprintf("%v", field.Interface())
+			// EMPTY, not `<nil>`. `<nil>` is Go syntax, and this repo's
+			// contract for a delimited stream is that a cell is compact JSON
+			// and never Go syntax; json renders these same fields as `null`,
+			// and an empty cell is what a csv consumer reads a null as.
+			// `models list --csv` carried the literal 4-character `<nil>` in 16
+			// rows of a 91-row catalog (reachable, credentials, benchmark).
+			return ""
 		}
 		v = v.Elem()
 	}
@@ -469,8 +476,10 @@ func delimitedCell(field reflect.Value) string {
 	// v, not field: the loop above already dereferenced any pointer or
 	// interface, and %v on the POINTER prints a heap address. A `*bool` set to
 	// true rendered as `0x14000122a30` in csv, tsv and text alike (ModelInfo's
-	// `reachable` and `credentials` are the live ones). A nil pointer returned
-	// above with its `<nil>`, which is a real answer; an address never is.
+	// `reachable` and `credentials` are the live ones). An address is never an
+	// answer. A nil pointer returned above as an EMPTY cell, which is what json
+	// means by `null`; it used to return `<nil>`, which is a different way of
+	// putting Go syntax in the stream.
 	return fmt.Sprintf("%v", v.Interface())
 }
 

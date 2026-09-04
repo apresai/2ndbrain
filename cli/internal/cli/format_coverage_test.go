@@ -818,3 +818,26 @@ func clipboardHoldsText() error {
 	}
 	return nil
 }
+
+// `models list --csv` and `--format tsv` rendered a nil pointer as the literal
+// `<nil>`: 16 rows of a 91-row catalog carried it, in the reachable,
+// credentials and benchmark columns, while json rendered those same fields as
+// `null`. A cell in a delimited stream is compact JSON and never Go syntax, so
+// a nil is an empty cell. TestContract_TextFormatRendersReadableLines already
+// covered `--format text`, which drops nil FIELDS entirely; these two formats
+// keep every column and so had nowhere to hide it.
+func TestContract_ModelsListCarriesNoGoNilToken(t *testing.T) {
+	root, _ := newFormatCoverageVault(t)
+
+	for _, format := range []string{"csv", "tsv"} {
+		t.Run(format, func(t *testing.T) {
+			out, err := runCLIArgs(t, root, "models", "list", "--format", format)
+			if err != nil {
+				t.Fatalf("models list --format %s: %v\n%s", format, err, out)
+			}
+			if strings.Contains(string(out), "<nil>") {
+				t.Errorf("--format %s carries the Go token <nil>; a nil pointer is an empty cell", format)
+			}
+		})
+	}
+}
