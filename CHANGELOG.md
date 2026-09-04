@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.23.0] - 2026-09-04
+
 This release is about one thing: **your notes now look right in Obsidian.** Every date 2nb ever wrote showed up in the Properties panel as plain text, with no date picker, no date sorting and no date-based query. That is fixed for new notes, there is a one-command repair for the notes you already have, and `2nb index` stops complaining about your template files. After upgrading, run `2nb index` once: dates that never parsed before now do, so `2nb stale` and `2nb list --sort modified` change for the better.
 
 ### Added
