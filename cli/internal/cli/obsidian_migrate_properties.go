@@ -77,13 +77,28 @@ type MigratedNote struct {
 	// comment the rewrite does not keep. The surgical writer deliberately does
 	// not carry a comment onto a value it replaces (a comment described the OLD
 	// value, and `meta --set status=published` must not leave one asserting
-	// `draft`), and a respelling cannot opt out of that without an option on the
-	// most safety-critical function in the package.
+	// `draft`), and the writer cannot tell a respelling from a real edit:
+	// nodeHoldsValue compares SPELLING, and it is precisely because it returned
+	// false that the replace branch ran at all.
 	//
 	// So the loss is REPORTED instead, in the preview, before anything is
 	// written. OtherLinesChanged cannot carry it: it skips any line keyed by a
 	// migrated field, which is exactly the line the comment sat on, so the loss
 	// was silent.
+	//
+	// The deeper fix, deliberately not taken on a release-bound branch and
+	// recorded here so it is not re-derived: teach the writer to recognize a
+	// RESPELLING, an update whose new value denotes what the node already
+	// denoted and differs only in representation, and carry the comment there
+	// because the writer PROVED it still applies rather than because a caller
+	// promised. That is a generalization of nodeHoldsValue, not the per-caller
+	// flag that would let one caller override a documented invariant. It would
+	// also close the same silent loss in `meta --set modified=<same instant,
+	// different spelling>`, which has it today and reports nothing, and it
+	// would make this whole field redundant. That is why the report is a
+	// before/after COMPARISON rather than an assumption that the writer always
+	// drops: the day the writer carries one across, this goes quiet on its own
+	// instead of asserting a loss that did not happen.
 	CommentsDropped []DroppedComment `json:"comments_dropped,omitempty"`
 }
 
@@ -411,6 +426,31 @@ func droppedValueComments(before, after string, fields []string) []DroppedCommen
 // valueLineComments maps each frontmatter key to the comment attached to its
 // VALUE node, which is the one a replacement drops. A comment attached to the
 // KEY sits on the key node, which the writer never replaces.
+//
+// An ALIAS node is read directly and NOT resolved, which is the opposite of
+// what rawFrontmatterOf does with the same walk, and it is deliberate. The
+// question here is which comment is on THIS line. Verified: for
+// `base: &a <v> # on the anchor` plus `created: *a # on created`, reading the
+// alias node gives "# on created" and resolving gives "# on the anchor", a
+// comment from a different line entirely. rawFrontmatterOf resolves because it
+// wants the VALUE, which lives at the anchor. Do not "fix" this into a resolve.
+//
+// It re-parses rather than reading off the *Document the caller already holds,
+// because internal/document exposes no comment accessor and adding one means
+// touching the shared frontmatter reader.
+//
+// It slices the region with frontmatterRegion, a plain search for the first
+// "\n---" rather than the hardened boundary the document package uses, and the
+// two AGREE on everything that can reach here. A line that is exactly "---" at
+// column zero is a document separator to YAML itself, so it ends the properties
+// for the real reader too: a note written `desc: |` then `---` then
+// `created: ...` parses as the single property `desc`, `created` is body, and
+// the migration never touches it. Verified against the built binary. The
+// hardened boundary earns its complexity on the BODY side (`----`, a fence with
+// a trailing space, `---more`), which is past the closing fence and so past
+// everything this function reads. Should they ever disagree, the parse fails
+// and the map comes back empty, and empty means "no comment found", so the
+// failure is a report not made rather than a report that is wrong.
 func valueLineComments(content string) map[string]string {
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(frontmatterRegion(content)), &node); err != nil {

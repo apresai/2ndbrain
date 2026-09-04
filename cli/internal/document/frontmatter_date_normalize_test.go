@@ -140,9 +140,15 @@ func TestParse_LowercaseTAndMinutePrecisionAreDates(t *testing.T) {
 // A shorter layout must never CLAIM a longer value and silently drop what it
 // could not consume. time.Parse is anchored, so `2006-1-2T15:4` fails on a
 // value carrying seconds rather than truncating them, and `2006-1-2` fails on a
-// value carrying a time. This is the assertion that makes the table's ordering
-// defensive rather than load-bearing: if it ever regressed, every second and
-// every time-of-day Obsidian wrote would be quietly discarded.
+// value carrying a time. If that ever regressed, every second and every
+// time-of-day Obsidian wrote would be quietly discarded.
+//
+// This is a property of the layout SET, not of its order: the table was
+// re-tried in reverse and matched identically. It is asserted here against
+// ParseFrontmatterDate directly rather than through Parse, because that
+// function is also the WRITE-side vocabulary (vault.SchemaSet.CoerceDate), and
+// a truncation there would put a wrong instant on disk rather than only in the
+// index. Each case uses a different separator, so all three reach it.
 func TestParseFrontmatterDate_AShorterLayoutNeverTruncates(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"2026-09-04T12:34:56", "2026-09-04T12:34:56Z"},

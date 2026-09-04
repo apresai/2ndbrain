@@ -210,8 +210,17 @@ func frontmatterTime(meta map[string]any, key string) (string, bool) {
 }
 
 // dateTextLayouts are the spellings of a date that reach frontmatterTime as a
-// STRING, in the order they are tried. Most specific first, so a shorter layout
-// can never claim a value a longer one would have parsed.
+// STRING, in the order they are tried.
+//
+// ORDER IS NOT LOAD-BEARING, and the table used to claim it was. time.Parse is
+// anchored: a layout that does not consume the WHOLE value fails with "extra
+// text" rather than truncating it, so `2006-1-2T15:4` cannot claim
+// `2026-09-04T12:34:56` and `2006-1-2` cannot claim a value carrying a time.
+// The order here is most-specific-first only so the common shapes match early,
+// and TestParseFrontmatterDate_AShorterLayoutNeverTruncates pins the property
+// the order is NOT what provides. Stating it twice, once as the reason the
+// table is safe and once as a note that it is not, is how a reader ends up
+// trusting the wrong half.
 //
 // yaml.v3 resolves only four layouts to time.Time (resolve.go's
 // allowedTimestampFormats): RFC3339Nano with short fields, its lower-case "t"
@@ -220,34 +229,40 @@ func frontmatterTime(meta map[string]any, key string) (string, bool) {
 // shape. Both are dates, and both used to land in documents.created_at /
 // modified_at verbatim.
 //
-// Two entries look inert and are not. The space-separated one and the date-only
-// one are on yaml.v3's own list, so the UNQUOTED forms never reach the string
-// case. They reach it two other ways: QUOTED (`created: "2026-09-04"` is a plain
-// !!str, which is exactly the shape 2nb has been writing), and from setMetaDate
-// (document.go), which calls this on the raw CLI string a `meta --set
-// modified=...` supplied. Do not delete them as dead.
+// FOUR entries look inert and are not: yaml.v3's own four are all here
+// verbatim, so their UNQUOTED forms never reach the string case. They reach it
+// two other ways: QUOTED (`created: "2026-09-04"` is a plain !!str, which is
+// exactly the shape 2nb has been writing), and from setMetaDate (document.go),
+// which calls this on the raw CLI string a `meta --set modified=...` supplied.
+// Do not delete them as dead.
 //
 // The T-separated zone-less forms are the load-bearing ones: they are what
 // Obsidian's own datetime property editor writes, they are on NO yaml.v3 layout
 // list, and without them `stale` reported DaysStale 0 for every note Obsidian
 // had touched.
 //
-// EVERY entry has a named writer, and the table stops there rather than
-// implementing ISO-8601 in general. Two axes vary. The SEPARATOR: yaml.v3
-// accepts `T` and its lower-case twin `t`, and a space only without a zone, so
-// each layout it lists has its twin here (`meta --set created=2026-09-04t12:34:56Z`
-// reached CoerceDate, failed, and was stored as a quoted string, which is the
-// Text type this release exists to stop writing). The PRECISION: minutes as
-// well as seconds, because Obsidian's editor writes a minute-precision value
-// and neither `2026-09-04T12:34Z` nor `2026-09-04T12:34+02:00` is on any
-// yaml.v3 layout, so `stale` reported 0 days for those too.
+// The table stops at spellings it can justify rather than implementing
+// ISO-8601 in general. Two axes vary. The SEPARATOR: yaml.v3 accepts `T` and
+// its lower-case twin `t`, and a space only without a zone (`meta --set
+// created=2026-09-04t12:34:56Z` reached CoerceDate, failed, and was stored as a
+// quoted string, which is the Text type this release exists to stop writing).
+// The PRECISION: minutes as well as seconds, because Obsidian's editor writes a
+// minute-precision value and neither `2026-09-04T12:34Z` nor
+// `2026-09-04T12:34+02:00` is on any yaml.v3 layout, so `stale` reported 0 days
+// for those too.
+//
+// Eight of the ten entries name a writer that way. The two lower-case ZONE-LESS
+// entries do not, and are here for SYMMETRY rather than because anything is
+// known to emit them: yaml.v3's lower-case layout carries a zone and Obsidian
+// writes an upper-case `T`, so nothing produces `2026-09-04t12:34:56`. A reader
+// that accepts `t` with a zone and rejects the same `t` without one is a trap,
+// and the cost of closing it is one table row each. Saying they have a named
+// writer would be the kind of claim that quietly stops being true.
 //
 // The short field widths are yaml.v3's own spelling: `1`, `2`, `4` and `5`
 // accept a zero-padded value as well as a bare one, and a trailing
 // `.999999999` makes the fraction optional, so `2006-1-2T15:4:5.999999999Z07:00`
 // covers RFC3339 and every unpadded or fractional spelling of it in one entry.
-// Ordering is defensive only: time.Parse is anchored, so a layout that does not
-// consume the whole value fails with "extra text" rather than truncating it.
 var dateTextLayouts = []string{
 	"2006-1-2T15:4:5.999999999Z07:00", // yaml.v3, and RFC3339 with it
 	"2006-1-2t15:4:5.999999999Z07:00", // yaml.v3's lower-case twin

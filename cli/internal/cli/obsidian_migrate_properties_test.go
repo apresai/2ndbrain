@@ -386,3 +386,35 @@ func TestContract_MigrateProperties_VerifiesEveryFieldNotJustTheFirst(t *testing
 		t.Fatalf("both date fields should be reported as migrated: %+v", res.Notes)
 	}
 }
+
+// The comment reported for a key is the one on THAT key's line, even when the
+// value is a YAML alias pointing somewhere else. valueLineComments reads the
+// alias node directly and deliberately does not resolve it, which is the
+// opposite of what rawFrontmatterOf does with the same walk: that one wants the
+// VALUE, which lives at the anchor, while this one wants the comment, which
+// lives here. Resolving would report a comment from a different line entirely.
+//
+// Pinned because the divergence looks like a copy-paste omission and a future
+// reader would otherwise "fix" it into exactly that bug.
+func TestContract_MigrateProperties_ReportsTheCommentOnTheAliasLineNotTheAnchor(t *testing.T) {
+	_, root := newContractVault(t)
+	path := filepath.Join(root, "aliased.md")
+	original := "---\ntitle: Aliased\n" +
+		"base: &a \"2026-04-05T07:27:34Z\" # on the ANCHOR line\n" +
+		"created: *a # on the CREATED line\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := migrateJSON(t, root)
+	if len(res.Notes) != 1 {
+		t.Fatalf("notes = %d, want 1: %+v", len(res.Notes), res.Skipped)
+	}
+	dropped := res.Notes[0].CommentsDropped
+	if len(dropped) != 1 || dropped[0].Field != "created" {
+		t.Fatalf("comments_dropped = %+v, want one entry for created", dropped)
+	}
+	if !strings.Contains(dropped[0].Comment, "CREATED") {
+		t.Errorf("reported %q; resolving the alias would report the ANCHOR line's comment instead", dropped[0].Comment)
+	}
+}
