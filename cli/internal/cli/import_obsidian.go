@@ -275,8 +275,13 @@ func processObsidianFile(path string) (int, int, error) {
 		meta["status"] = "draft"
 	}
 
-	// Ensure created / modified timestamps.
-	now := time.Now().UTC().Format(time.RFC3339)
+	// Ensure created / modified timestamps. A time.Time, not a string, for the
+	// reason NewDocument gives: yaml.v3 quotes a string that would re-resolve
+	// to a timestamp, and Obsidian reads a quoted ISO value as Text. An
+	// imported note must land with the same property types a created one gets.
+	// Truncated to the second so the file matches the index column, since the
+	// encoder formats with RFC3339Nano.
+	now := time.Now().UTC().Truncate(time.Second)
 	if _, ok := meta["created"]; !ok {
 		meta["created"] = now
 	}

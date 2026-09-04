@@ -239,22 +239,38 @@ var dateTextLayouts = []string{
 	"2006-01-02",
 }
 
-// normalizeDateText parses a date spelled as text and reports it in RFC3339,
-// the one format the index column stores. It reports false for text that is not
-// a date, so the caller passes it through untouched rather than inventing a
-// value: normalizing is an improvement layered on the old behavior, never a
-// filter.
+// ParseFrontmatterDate parses a date spelled as frontmatter text, at SECOND
+// precision. It reports false for text that is not a date, so a caller passes
+// the text through untouched rather than inventing an instant.
+//
+// It is the single date vocabulary for both directions. Reading, it backs
+// normalizeDateText. WRITING, it is what turns the raw string a `meta --set` or
+// a `kb_update_meta` supplied into the time.Time the encoder emits UNQUOTED,
+// which is the form Obsidian's Properties panel types as Date and time
+// (vault.SchemaSet.CoerceDate is the write-side entry point).
 //
 // A zone-less layout parses as UTC, which is what time.Parse does with no zone
 // in the layout and what yaml.v3 already produces for its own two zone-less
-// layouts. Second precision is deliberate: the time.Time branch above formats
-// with time.RFC3339 and drops any fraction, so normalizing here is what makes
-// the two branches agree on one instant's spelling.
-func normalizeDateText(s string) (string, bool) {
+// layouts. The truncation matters on the WRITE side: yaml.v3's encoder formats
+// a time.Time with RFC3339Nano, so a sub-second value would be written to the
+// file at a precision the reader's time.RFC3339 format then drops, and the file
+// and the index column would disagree from the moment of the write.
+func ParseFrontmatterDate(s string) (time.Time, bool) {
 	for _, layout := range dateTextLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t.Format(time.RFC3339), true
+			return t.Truncate(time.Second), true
 		}
+	}
+	return time.Time{}, false
+}
+
+// normalizeDateText reports a date spelled as text in RFC3339, the one format
+// the index column stores, and false for text that is not a date. Normalizing
+// is an improvement layered on the old behavior, never a filter: unrecognized
+// text is passed through by the caller exactly as it was.
+func normalizeDateText(s string) (string, bool) {
+	if t, ok := ParseFrontmatterDate(s); ok {
+		return t.Format(time.RFC3339), true
 	}
 	return "", false
 }
