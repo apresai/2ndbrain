@@ -146,7 +146,7 @@ The human summary names up to five notes per list and points at `-v` only when i
 
 **`index --json` shape.** Every key is always present and every list is emitted empty rather than omitted, so a consumer never has to tell "absent" from "zero": `files_scanned`, `docs_indexed`, `chunks_created`, `links_found`, `errors`, `excluded_purged`, `embedded`, `embed_failed`, `embed_skipped`, `embed_retries`, `unparseable: [{path, error}]`, `unreadable: [{path, error}]`. The two lists MERGE the walk phase and the embed phase, deduplicated by path: before 0.22.3 the envelope was built from the walk's counters alone, so a note that only failed during the embed phase of `index --force-reembed --json` never appeared there at all. `errors` counts both kinds, unchanged in meaning. `index --doc` keeps its own smaller result (`path`, `embedded`, `duration_ms`), which the macOS app decodes.
 
-Obsidian's template folders are not indexed. 2nb reads them from Obsidian's own settings (`.obsidian/templates.json` `folder`, and Templater's `.obsidian/plugins/templater-obsidian/data.json` `templates_folder`) and skips those folders whole, on the walk and on `index --doc` alike (which names the folder in its refusal); a template's `{{date}}` placeholders are not YAML, so indexing them failed on every run. Matching is on whole path segments, so a `templates` exclusion never covers `templates-archive`. Rows already indexed under a folder that LATER becomes a template folder are purged before the walk and counted in `excluded_purged`: a walk that skips a folder can never clean up after itself, so those rows used to keep their chunks and vectors, answer searches, and be counted by `vault status` forever. `2nb vault status` names whatever is excluded. A vault that configures no template folder is unaffected.
+Obsidian's template folders are not indexed. 2nb reads them from Obsidian's own settings (`.obsidian/templates.json` `folder`, and Templater's `.obsidian/plugins/templater-obsidian/data.json` `templates_folder`) and, when neither declares one, falls back to a top-level `templates/` folder. That fallback is gated on `.obsidian/core-plugins.json` enabling `templates` AND on the folder existing, both failing closed, because `purgeStale` DELETES the rows, chunks and vectors under a newly excluded folder and an ungated convention would strip the index of a user who keeps real notes in a folder named `templates`. The gate matters because the config-only rule was inert on the common case: Obsidian writes `templates.json` only once you SAVE the Templates folder setting, so a vault with the plugin enabled and the default folder has no such file. `core-plugins.json` is read in both shapes Obsidian has shipped (an object of booleans, and an older array of enabled ids). The same resolution feeds `vault.CollectLiveDocs`, so a template is no longer a resolver candidate by title or alias for lint, `repair-links`, `relink`, `suggest-target` or the `move`/`rename` ambiguity guard. `vault.HasTemplatePlaceholders` is the file-level half, shared by lint (on the parse-failure path only) and `import-obsidian` (at any depth, because an import is a one-way copy). 2nb skips those folders whole, on the walk and on `index --doc` alike (which names the folder in its refusal); a template's `{{date}}` placeholders are not YAML, so indexing them failed on every run. Matching is on whole path segments, so a `templates` exclusion never covers `templates-archive`. Rows already indexed under a folder that LATER becomes a template folder are purged before the walk and counted in `excluded_purged`: a walk that skips a folder can never clean up after itself, so those rows used to keep their chunks and vectors, answer searches, and be counted by `vault status` forever. `2nb vault status` names whatever is excluded. A vault that configures no template folder is unaffected.
 
 ### search
 
@@ -651,3 +651,86 @@ In `csv` and `tsv`, a cell holding a map, slice or struct (a row's `frontmatter`
 `--copy` also writes a command's rendered output to the clipboard (macOS `pbcopy`; a clear unsupported error elsewhere): `read`/`print` (body), `meta`/`property:read` (value), and `daily`/`daily path` (path) copy in their default output, and any command run with a machine format (`--json`/`--csv`/`--format ...`, including `search`/`unresolved`/`list`) copies that rendered output.
 
 Parent-command defaults: `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`, `2nb metrics` → `metrics show`, `2nb instructions` → `instructions configured`. `--help` still works on every parent (Cobra intercepts before `RunE`).
+
+## `obsidian`
+
+Two opt-in, one-shot commands that exist to make a vault read correctly IN
+OBSIDIAN. Both preview by default and apply only with `--write`. `2nb obsidian`
+is deliberately NOT runnable on its own (it prints help): both subcommands can
+write, and a parent default that writes is a footgun the read-only parent
+defaults do not have.
+
+### `obsidian migrate-properties`
+
+Rewrites quoted date values into the plain form Obsidian types as **Date and
+time**. Obsidian infers a property's type from how the value is written and
+reads a quoted ISO value as **Text**: no date picker, no date sorting, no
+date-based query. Every `created` and `modified` written before 0.23.0 is
+quoted, because yaml.v3 quotes any Go string that would re-resolve to a
+timestamp.
+
+- Rewrites ONLY `created`, `modified`, and any field `.2ndbrain/schemas.yaml`
+  declares `date` or `datetime` (`vault.SchemaSet.IsDateField`, the same
+  predicate the `meta --set` / `kb_update_meta` coercion uses). Properties you
+  author are counted and reported under `user_date_fields`, never touched.
+- Calls `document.UpdateDocumentFrontmatterAST` DIRECTLY and treats an error as
+  "skip this note and report it". `Document.Serialize` silently falls back to
+  the whole-map re-marshal on an AST error, and that fallback alphabetizes keys
+  and drops comments; across a vault it is a large, silent reformat.
+- Reparses the bytes it would write before accepting them, and reads the
+  reported new spelling off those bytes rather than off the value handed in.
+- Idempotent: a value already plain reads back as a `time.Time` and is skipped,
+  the same comparison `nodeHoldsValue` makes, so a second run is a no-op.
+- `--write` snapshots each note through the shared `internal/polish` recovery
+  slot first, so `2nb polish <path> --undo` restores it, exactly as
+  `repair-links`, `relink` and `unlink` do.
+- A value that is not a parseable date is named and skipped; its parseable
+  siblings on the same note still migrate.
+- A YAML anchor in a replaced node makes the writer resolve aliases elsewhere in
+  the block (`materializeAliasesInto`). Correct, and more than the property
+  asked for, so those lines are listed under `other_lines_changed`.
+- Template folders and `.canvas`/`.base` files are skipped.
+
+JSON: `{scanned, changed, written, notes[], skipped[], user_date_fields[]}`.
+
+### `obsidian register-types`
+
+Declares 2nb's property types in `.obsidian/types.json`, so Obsidian shows the
+right editor even for a note where the property is empty. Writing the value in
+the right shape makes the type INFERRABLE; this makes it DECLARED.
+
+**This is the one place 2nb writes an Obsidian setting**, and the [write-surface
+guarantees](../CLAUDE.md) carry it as a narrow, named exception: one
+user-invoked command, one file, merge-only, backup-first, never automatic.
+
+| Property | Declared as |
+|---|---|
+| `created`, `modified` | `datetime` |
+| `title`, `type`, `status` | `text` |
+| `tags` | `tags` |
+| `aliases` | `aliases` |
+| schema fields typed `date` / `datetime` | that type |
+
+- MERGES and never clobbers: a property already declared keeps its type,
+  including one Obsidian wrote itself (a real vault carries
+  `"tags": "multitext"`; merge leaves it).
+- `status` is `text`, never `multitext`. Obsidian's list editor would write a
+  YAML sequence back, which `frontmatterText` reads as no status at all,
+  breaking every `--status` filter and `ValidateStatusTransition`.
+- `id` is deliberately NOT declared: it is a UUID nobody reads, identity is
+  path-based, and declaring it adds a visible Text row to every note carrying
+  one.
+- Backs the previous file up into `.2ndbrain/recovery/obsidian/`, never beside
+  the original, and writes atomically (temp plus rename).
+- REFUSES a `types.json` it cannot parse rather than replacing a settings file
+  it does not understand.
+- REFUSES to write while Obsidian holds the vault open, unless `--force`
+  (`vault.ObsidianHasVaultOpen`, which answers only on the explicit `open` flag
+  and reports separately whether the registry was readable at all, so an
+  unreadable registry warns rather than reading as permission).
+- REFUSES to write while any note still carries a quoted date, and names them:
+  declaring `created` a datetime then makes Obsidian show a type mismatch on
+  every one of them. Run `obsidian migrate-properties --write` first. The
+  PREVIEW still runs and says so.
+
+JSON: `{path, written, added, preserved, backup, blocked_by_unmigrated_notes, warnings}`.

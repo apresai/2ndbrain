@@ -57,9 +57,10 @@ The `.obsidian/` directory is used only as the vault marker; its configuration f
 * In-place frontmatter modifications when explicitly triggered by CLI metadata write commands (e.g., `2nb meta <path> --set key=value`). These operations utilize AST-based parsing to preserve comments and layout.
 * The root `.gitignore` file to add `.2ndbrain/` to the ignore list automatically.
 * The plugin's own bundle under `.obsidian/plugins/obsidian-2ndbrain/`, written only by the explicit `2nb plugin install` command (never notes, never Obsidian settings).
+* `.obsidian/types.json`, and ONLY that file, and only when you run `2nb obsidian register-types --write`. This is the single named exception to "never Obsidian settings", and it is bounded on every side: one user-invoked command, one file, MERGE-ONLY (a property already declared keeps its type, including one Obsidian wrote itself), the previous file copied into `.2ndbrain/recovery/obsidian/` first, an atomic temp-plus-rename write, a refusal on a `types.json` 2nb cannot parse, and a refusal while Obsidian holds the vault open unless you pass `--force`. Nothing writes it automatically, and no other command touches `.obsidian/` at all. Rationale and the full property mapping: [cli-reference.md](../cli-reference.md#obsidian-register-types).
 
 ### 2ndbrain Never Touches
-* Native `.obsidian/` configuration files (settings, workspace, themes); the only write under `.obsidian/` is the plugin bundle installed by an explicit `2nb plugin install`.
+* Native `.obsidian/` configuration files (settings, workspace, themes), with exactly two exceptions, both explicit commands and both listed above: the plugin bundle installed by `2nb plugin install`, and `types.json` merged by `2nb obsidian register-types --write`.
 * Original body content of markdown files.
 * Files matching system or user-defined ignore patterns.
 
