@@ -73,147 +73,7 @@ func runCLIArgs(t *testing.T, vaultRoot string, argv ...string) ([]byte, error) 
 	t.Helper()
 	fullArgv := append([]string{"--vault", vaultRoot}, argv...)
 
-	// Reset package-level flag state so each test starts fresh. Cobra
-	// only rebinds StringVar defaults at init(); subsequent calls keep
-	// whatever the last invocation set, so we reset explicitly here.
-	flagFormat = ""
-	flagPorcelain = false
-	flagVault = ""
-	flagVerbose = false
-	// The json/csv/yaml shorthands are unbound persistent bools; cobra
-	// keeps their values across Execute() calls, so clear them too.
-	_ = rootCmd.PersistentFlags().Set("json", "false")
-	_ = rootCmd.PersistentFlags().Set("csv", "false")
-	_ = rootCmd.PersistentFlags().Set("yaml", "false")
-	enableProvider, enableScope, enableVendor = "", "vault", ""
-	disableProvider, disableScope, disableVendor = "", "vault", ""
-	enableStateProvider, enableStateScope, enableStateValue = "", "vault", ""
-	policySetProvider, policySetEnableOnly, policySetScope = "", "", "vault"
-	policySetDryRun, policySetKeepOverrides = false, false
-	policyShowProvider = ""
-	policyClearProvider, policyClearScope = "", "vault"
-	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "vault"
-	modelsDiscover, modelsFreeOnly, modelsPromote = false, false, false
-	modelsRefresh = false
-	modelsCheckStatus, modelsEnabledOnly, modelsRecommended = false, false, false
-	modelsWorkingSet = false
-	modelsSort = ""
-	testProvider, testModelType, testSaveScope = "", "", "vault"
-	testSave = false
-	verifyProvider, verifyVendor, verifyScope = "", "", "vault"
-	verifyRecommended, verifyAll, verifyYes = false, false, false
-	verifyEnabledOnly, verifyEvents, verifyDiscover = false, false, false
-	verifyCostCap = 0.50
-	verifyMaxDuration = 30 * time.Minute
-	discoverRefresh, discoverValidate, discoverYes = false, false, false
-	discoverAdd = nil
-	discoverScope = "vault"
-	discoverCostCap = 0.50
-	costProvider, costProbeKind = "", "test"
-	costAll = false
-	costRefresh = false
-	wizardScope, wizardProvider = "vault", ""
-	wizardSkipDiscover, wizardJSON, wizardSetActive = false, false, false
-	wizardCostCap = 0.50
-	benchModelFlag, benchProbeFlag, benchProviderFlag = "", "", ""
-	benchSummaryScope = "global"
-	benchHistoryLimit = 20
-	// Eval flags (previously unreset; a prior test's --estimate/--n would
-	// leak into the next invocation).
-	evalN, evalRegen, evalYes, evalEstimate = 20, false, false, false
-	evalCostCap, evalSeed = 0.25, 0
-	evalJudges = nil
-	createType, createTitle, createAllowDuplicate = "note", "", false
-	createPath = ""
-	createOverwrite, createAppend = false, false
-	// Obsidian-compat globals + listing flags (this PR).
-	flagResolveMode, flagCopy = "", false
-	listTotal, unresolvedTotal, tasksTotal = false, false, false
-	readChunk = ""
-	metaSet = nil
-	metaGet = ""
-	metaRemove = nil
-	configGetEffective = false
-	bedrockSet, bedrockClearToken, bedrockTokenStdin = false, false, false
-	bedrockRegion, bedrockToken = "", ""
-	bedrockRegions, bedrockClearRegions = "", false
-	bedrockPreferStored, bedrockNoPrefer = false, false
-	for _, name := range []string{"set", "clear-token", "region", "token", "token-stdin", "regions", "clear-regions", "prefer-stored-token", "no-prefer-stored-token"} {
-		if f := configBedrockCmd.Flags().Lookup(name); f != nil {
-			_ = configBedrockCmd.Flags().Set(name, f.DefValue)
-			f.Changed = false
-		}
-	}
-	deleteForce = false
-	// export-context's filters are package state too: a test that passes
-	// --types to prove the no-matching-documents path left that filter set for
-	// every later export-context in the binary, which then bundled nothing.
-	exportTypes, exportStatus = "", ""
-	exportLimit = 50
-	initPath = ""
-	importObsidianTarget = ""
-	indexDocFlag, indexForceReembed = "", false
-	// migrate's --dry-run is package state too: without this reset a preview in
-	// one test made every later migrate in the binary a preview.
-	migrateDryRun = false
-	searchType, searchStatus, searchTag = "", "", ""
-	searchLimit, searchBM25Only, searchThreshold = 20, false, 0
-	askHistory = ""
-	listType, listStatus, listTag, listSort = "", "", "", "modified"
-	listLimit = 100
-	relatedDepth = 2
-	staleSince = 90
-	appendText, appendFile = "", ""
-	prependText, prependFile = "", ""
-	replaceSection, replaceText, replaceFile = "", "", ""
-	polishWrite, polishLinks, polishUndo, polishForce = false, false, false, false
-	polishSystemFlag, polishMaxTokens = "", 4096
-	repairLinksWrite, repairLinksTargets = false, nil
-	relinkFrom, relinkTo, relinkWrite = "", "", false
-	unlinkTarget, unlinkWrite = "", false
-	suggestTargetLimit = 6
-	suggestTargetSource = ""
-	suggestTargetLLM = false
-	suggestTargetVerdict = false
-	tagsRenameDryRun = false
-	dailyAppendText, dailyAppendFile = "", ""
-	moveDryRun, moveForce = false, false
-	// Multi-client setup / mcp install / mcp configured flags (this PR).
-	setupClient, setupScope, setupCommand = "claude-code", "user", "2nb"
-	setupAll, setupDryRun, setupForce = false, false, false
-	mcpInstallClient, mcpInstallScope, mcpInstallCommand = "claude-code", "user", "2nb"
-	mcpInstallDryRun = false
-	mcpUninstallClient, mcpUninstallScope, mcpUninstallDry = "claude-code", "user", false
-	mcpConfiguredClient, mcpConfiguredAll = "claude-code", false
-	instrClient, instrAll, instrDryRun, instrForce = "claude-code", false, false, false
-	// Body-write commands branch on cmd.Flags().Changed("text"); cobra keeps
-	// that per-flag bit set across Execute() calls, so a prior `append --text`
-	// would make the next `append` (stdin) wrongly take the --text branch.
-	// Clear the Changed bit on each body-write text/file flag.
-	for _, c := range []*cobra.Command{appendCmd, prependCmd, replaceCmd, dailyAppendCmd} {
-		for _, name := range []string{"text", "file"} {
-			if f := c.Flags().Lookup(name); f != nil {
-				f.Changed = false
-			}
-		}
-	}
-	// create's --overwrite/--append are mutually exclusive (MarkFlagsMutuallyExclusive
-	// checks the Changed bit, not the var), so reset both bits between invocations.
-	for _, name := range []string{"overwrite", "append"} {
-		if f := createCmd.Flags().Lookup(name); f != nil {
-			_ = createCmd.Flags().Set(name, "false")
-			f.Changed = false
-		}
-	}
-	// Phase 8 (tasks/task) package-level flag state + per-flag Changed bits.
-	tasksDone, tasksTodo, tasksPath = false, false, ""
-	taskState = ""
-	for _, name := range []string{"done", "todo", "toggle"} {
-		if f := taskCmd.Flags().Lookup(name); f != nil {
-			_ = taskCmd.Flags().Set(name, "false")
-			f.Changed = false
-		}
-	}
+	resetCLIFlags(t)
 
 	// Redirect os.Stdout so fmt.Printf in handlers lands in our buffer.
 	// Cobra's SetOut only covers its own output (help/usage text), not
@@ -987,4 +847,155 @@ func itoa(n int) string {
 		digits[i] = '-'
 	}
 	return string(digits[i:])
+}
+
+// resetCLIFlags restores every package-level flag variable (and every cobra
+// Changed bit the handlers branch on) to its declared default, so one
+// invocation in this binary cannot leak state into the next. Extracted from
+// runCLIArgs so a runner that captures stdout and stderr SEPARATELY can share
+// exactly this reset rather than keeping a second copy of it that drifts.
+func resetCLIFlags(t *testing.T) {
+	t.Helper()
+	// Reset package-level flag state so each test starts fresh. Cobra
+	// only rebinds StringVar defaults at init(); subsequent calls keep
+	// whatever the last invocation set, so we reset explicitly here.
+	flagFormat = ""
+	flagPorcelain = false
+	flagVault = ""
+	flagVerbose = false
+	// The json/csv/yaml shorthands are unbound persistent bools; cobra
+	// keeps their values across Execute() calls, so clear them too.
+	_ = rootCmd.PersistentFlags().Set("json", "false")
+	_ = rootCmd.PersistentFlags().Set("csv", "false")
+	_ = rootCmd.PersistentFlags().Set("yaml", "false")
+	enableProvider, enableScope, enableVendor = "", "vault", ""
+	disableProvider, disableScope, disableVendor = "", "vault", ""
+	enableStateProvider, enableStateScope, enableStateValue = "", "vault", ""
+	policySetProvider, policySetEnableOnly, policySetScope = "", "", "vault"
+	policySetDryRun, policySetKeepOverrides = false, false
+	policyShowProvider = ""
+	policyClearProvider, policyClearScope = "", "vault"
+	modelsProvider, modelsTypeFilt, modelsPromoteScope = "", "", "vault"
+	modelsDiscover, modelsFreeOnly, modelsPromote = false, false, false
+	modelsRefresh = false
+	modelsCheckStatus, modelsEnabledOnly, modelsRecommended = false, false, false
+	modelsWorkingSet = false
+	modelsSort = ""
+	testProvider, testModelType, testSaveScope = "", "", "vault"
+	testSave = false
+	verifyProvider, verifyVendor, verifyScope = "", "", "vault"
+	verifyRecommended, verifyAll, verifyYes = false, false, false
+	verifyEnabledOnly, verifyEvents, verifyDiscover = false, false, false
+	verifyCostCap = 0.50
+	verifyMaxDuration = 30 * time.Minute
+	discoverRefresh, discoverValidate, discoverYes = false, false, false
+	discoverAdd = nil
+	discoverScope = "vault"
+	discoverCostCap = 0.50
+	costProvider, costProbeKind = "", "test"
+	costAll = false
+	costRefresh = false
+	wizardScope, wizardProvider = "vault", ""
+	wizardSkipDiscover, wizardJSON, wizardSetActive = false, false, false
+	wizardCostCap = 0.50
+	benchModelFlag, benchProbeFlag, benchProviderFlag = "", "", ""
+	benchSummaryScope = "global"
+	benchHistoryLimit = 20
+	// Eval flags (previously unreset; a prior test's --estimate/--n would
+	// leak into the next invocation).
+	evalN, evalRegen, evalYes, evalEstimate = 20, false, false, false
+	evalCostCap, evalSeed = 0.25, 0
+	evalJudges = nil
+	createType, createTitle, createAllowDuplicate = "note", "", false
+	createPath = ""
+	createOverwrite, createAppend = false, false
+	// Obsidian-compat globals + listing flags (this PR).
+	flagResolveMode, flagCopy = "", false
+	listTotal, unresolvedTotal, tasksTotal = false, false, false
+	readChunk = ""
+	metaSet = nil
+	metaGet = ""
+	metaRemove = nil
+	configGetEffective = false
+	bedrockSet, bedrockClearToken, bedrockTokenStdin = false, false, false
+	bedrockRegion, bedrockToken = "", ""
+	bedrockRegions, bedrockClearRegions = "", false
+	bedrockPreferStored, bedrockNoPrefer = false, false
+	for _, name := range []string{"set", "clear-token", "region", "token", "token-stdin", "regions", "clear-regions", "prefer-stored-token", "no-prefer-stored-token"} {
+		if f := configBedrockCmd.Flags().Lookup(name); f != nil {
+			_ = configBedrockCmd.Flags().Set(name, f.DefValue)
+			f.Changed = false
+		}
+	}
+	deleteForce = false
+	// export-context's filters are package state too: a test that passes
+	// --types to prove the no-matching-documents path left that filter set for
+	// every later export-context in the binary, which then bundled nothing.
+	exportTypes, exportStatus = "", ""
+	exportLimit = 50
+	initPath = ""
+	importObsidianTarget = ""
+	indexDocFlag, indexForceReembed = "", false
+	// migrate's --dry-run is package state too: without this reset a preview in
+	// one test made every later migrate in the binary a preview.
+	migrateDryRun = false
+	searchType, searchStatus, searchTag = "", "", ""
+	searchLimit, searchBM25Only, searchThreshold = 20, false, 0
+	askHistory = ""
+	listType, listStatus, listTag, listSort = "", "", "", "modified"
+	listLimit = 100
+	relatedDepth = 2
+	staleSince = 90
+	appendText, appendFile = "", ""
+	prependText, prependFile = "", ""
+	replaceSection, replaceText, replaceFile = "", "", ""
+	polishWrite, polishLinks, polishUndo, polishForce = false, false, false, false
+	polishSystemFlag, polishMaxTokens = "", 4096
+	repairLinksWrite, repairLinksTargets = false, nil
+	relinkFrom, relinkTo, relinkWrite = "", "", false
+	unlinkTarget, unlinkWrite = "", false
+	suggestTargetLimit = 6
+	suggestTargetSource = ""
+	suggestTargetLLM = false
+	suggestTargetVerdict = false
+	tagsRenameDryRun = false
+	dailyAppendText, dailyAppendFile = "", ""
+	moveDryRun, moveForce = false, false
+	// Multi-client setup / mcp install / mcp configured flags (this PR).
+	setupClient, setupScope, setupCommand = "claude-code", "user", "2nb"
+	setupAll, setupDryRun, setupForce = false, false, false
+	mcpInstallClient, mcpInstallScope, mcpInstallCommand = "claude-code", "user", "2nb"
+	mcpInstallDryRun = false
+	mcpUninstallClient, mcpUninstallScope, mcpUninstallDry = "claude-code", "user", false
+	mcpConfiguredClient, mcpConfiguredAll = "claude-code", false
+	instrClient, instrAll, instrDryRun, instrForce = "claude-code", false, false, false
+	// Body-write commands branch on cmd.Flags().Changed("text"); cobra keeps
+	// that per-flag bit set across Execute() calls, so a prior `append --text`
+	// would make the next `append` (stdin) wrongly take the --text branch.
+	// Clear the Changed bit on each body-write text/file flag.
+	for _, c := range []*cobra.Command{appendCmd, prependCmd, replaceCmd, dailyAppendCmd} {
+		for _, name := range []string{"text", "file"} {
+			if f := c.Flags().Lookup(name); f != nil {
+				f.Changed = false
+			}
+		}
+	}
+	// create's --overwrite/--append are mutually exclusive (MarkFlagsMutuallyExclusive
+	// checks the Changed bit, not the var), so reset both bits between invocations.
+	for _, name := range []string{"overwrite", "append"} {
+		if f := createCmd.Flags().Lookup(name); f != nil {
+			_ = createCmd.Flags().Set(name, "false")
+			f.Changed = false
+		}
+	}
+	// Phase 8 (tasks/task) package-level flag state + per-flag Changed bits.
+	tasksDone, tasksTodo, tasksPath = false, false, ""
+	taskState = ""
+	for _, name := range []string{"done", "todo", "toggle"} {
+		if f := taskCmd.Flags().Lookup(name); f != nil {
+			_ = taskCmd.Flags().Set(name, "false")
+			f.Changed = false
+		}
+	}
+
 }
