@@ -1,15 +1,22 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/output"
+	"github.com/apresai/2ndbrain/internal/skills"
 )
 
 // A dozen report commands tested `getFormat(cmd) == output.FormatJSON` and fell
@@ -143,6 +150,60 @@ func TestContract_ReportCommandsHonorEveryFormat(t *testing.T) {
 					}
 				}
 			})
+		})
+	}
+}
+
+// `--format text` promises plain text and delivered Go's %v rendering of the
+// payload: `list --format text` printed `{cb9316a1-... resources/x.md Title
+// note draft 2026-...}`, `folders` printed `{(root) 1}`, `models list` printed
+// one such line per model, and `config show` printed a HEAP ADDRESS for its
+// nested config pointer. A row renders as named pairs now, and a single struct
+// as named lines.
+//
+// The discriminator is that a line must not START with "{" (that is the struct
+// dump); a "{" INSIDE a value is the compact JSON of a composite cell, which is
+// what `config show`'s nested config legitimately renders as.
+func TestContract_TextFormatRendersReadableLines(t *testing.T) {
+	root, _ := newFormatCoverageVault(t)
+
+	cases := []struct {
+		name   string
+		argv   []string
+		want   []string
+		absent []string
+	}{
+		{"list", []string{"list"}, []string{"path=doc.md", "title=Doc", "type=note"}, []string{"0x", "{"}},
+		{"folders", []string{"folders"}, []string{"folder=(root)", "count=1"}, []string{"0x", "{"}},
+		{"config show", []string{"config", "show"}, []string{"vault_root: ", "vault_name: "}, []string{"0x"}},
+		{"models list", []string{"models", "list"}, []string{"id=", "provider="}, []string{"0x", "<nil>"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runCLIArgs(t, root, append(append([]string{}, tc.argv...), "--format", "text")...)
+			if err != nil {
+				t.Fatalf("--format text: %v\n%s", err, out)
+			}
+			text := string(out)
+			if strings.TrimSpace(text) == "" {
+				t.Fatalf("--format text produced nothing")
+			}
+			for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+				if strings.HasPrefix(line, "{") {
+					t.Errorf("line is a Go struct dump, not text: %q", line)
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing %q in:\n%s", want, text)
+				}
+			}
+			for _, unwanted := range tc.absent {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("output still carries %q:\n%s", unwanted, text)
+				}
+			}
 		})
 	}
 }
@@ -363,6 +424,140 @@ func TestContract_GitDiffIsBodyShaped(t *testing.T) {
 	}
 }
 
+// export-context is the second body-shaped report command, and it honored no
+// format at all: runExport never called getFormat, so `--json`, `--csv` and
+// `--yaml` each printed the markdown bundle and exited 0. `2nb export-context
+// --json | jq .` was a parse error on a command reporting success. It takes the
+// git diff shape now: raw/md/text emit the bundle, json wraps it in a record,
+// and the row-set formats are refused by name.
+func TestContract_ExportContextIsBodyShaped(t *testing.T) {
+	root, _ := newFormatCoverageVault(t)
+
+	for _, format := range []string{"raw", "md", "text"} {
+		out, err := runCLIArgs(t, root, "export-context", "--format", format)
+		if err != nil {
+			t.Errorf("export-context --format %s: %v\n%s", format, err, out)
+			continue
+		}
+		if !strings.Contains(string(out), "# Knowledge Base Context") {
+			t.Errorf("export-context --format %s did not emit the bundle:\n%s", format, out)
+		}
+	}
+
+	out, err := runCLIArgs(t, root, "export-context", "--format", "json")
+	if err != nil {
+		t.Fatalf("export-context --format json: %v\n%s", err, out)
+	}
+	var rec struct {
+		Bundle string `json:"bundle"`
+		Docs   int    `json:"docs"`
+		Chars  int    `json:"chars"`
+	}
+	if err := json.Unmarshal(jsonPortion(out), &rec); err != nil {
+		t.Fatalf("export-context --format json is not parseable: %v\n%s", err, out)
+	}
+	if !strings.Contains(rec.Bundle, "# Knowledge Base Context") {
+		t.Errorf("json record does not carry the bundle: %+v", rec)
+	}
+	if rec.Docs != 1 || rec.Chars != len(rec.Bundle) {
+		t.Errorf("json record counts = docs %d chars %d, want 1 and %d", rec.Docs, rec.Chars, len(rec.Bundle))
+	}
+
+	for _, format := range []string{"csv", "tsv", "yaml"} {
+		out, err := runCLIArgs(t, root, "export-context", "--format", format)
+		if err == nil {
+			t.Errorf("export-context --format %s was accepted; a bundle is not a row set:\n%s", format, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "row set") {
+			t.Errorf("export-context --format %s refusal should say a bundle is not a row set, got: %v", format, err)
+		}
+	}
+
+	// The refusal must not depend on there being any documents to bundle: it is
+	// a property of the command, and it runs before the vault is even opened.
+	out, err = runCLIArgs(t, root, "export-context", "--types", "nosuchtypexyz", "--format", "csv")
+	if err == nil {
+		t.Errorf("export-context --format csv with no matching docs was accepted:\n%s", out)
+	}
+	// A zero-document bundle is still a JSON record, not an empty stream.
+	out, err = runCLIArgs(t, root, "export-context", "--types", "nosuchtypexyz", "--json")
+	if err != nil {
+		t.Fatalf("export-context --json with no matching docs: %v\n%s", err, out)
+	}
+	if err := json.Unmarshal(jsonPortion(out), &rec); err != nil {
+		t.Fatalf("empty export-context --json is not parseable: %v\n%s", err, out)
+	}
+	if rec.Docs != 0 || rec.Bundle != "" {
+		t.Errorf("empty bundle record = %+v, want zero docs and an empty bundle", rec)
+	}
+}
+
+// The bundle's own header states how many documents it contains, and it stated
+// the number the QUERY matched. A note whose file cannot be parsed is skipped
+// with a warning, so a vault with one unreadable note announced one more
+// document than the bundle held, and the `--json` record then carried that
+// header inside `bundle` while `docs` reported the real number: two counts of
+// the same thing, disagreeing, in one record.
+//
+// The fixture indexes three good notes and then corrupts one on disk, which is
+// how this happens for real: the index row survives, the file no longer parses.
+func TestContract_ExportContextCountsIncludedNotes(t *testing.T) {
+	_, root := newContractVault(t)
+	for _, name := range []string{"good-one.md", "good-two.md", "broken.md"} {
+		if err := os.WriteFile(filepath.Join(root, name),
+			[]byte("---\ntitle: "+name+"\ntype: note\nstatus: draft\n---\nbody of "+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v\n%s", err, out)
+	}
+	// Unterminated quoted scalar: valid enough to have been indexed a moment
+	// ago, invalid YAML now.
+	if err := os.WriteFile(filepath.Join(root, "broken.md"),
+		[]byte("---\ntitle: \"unterminated\ntype: note\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIArgs(t, root, "export-context", "--format", "json")
+	if err != nil {
+		t.Fatalf("export-context --json: %v\n%s", err, out)
+	}
+	var rec struct {
+		Bundle string `json:"bundle"`
+		Docs   int    `json:"docs"`
+		Chars  int    `json:"chars"`
+	}
+	if err := json.Unmarshal(jsonPortion(out), &rec); err != nil {
+		t.Fatalf("not parseable: %v\n%s", err, out)
+	}
+	if rec.Docs != 2 {
+		t.Errorf("docs = %d, want 2 (three matched, one could not be parsed): %s", rec.Docs, rec.Bundle)
+	}
+	if !strings.Contains(rec.Bundle, "2 documents included") {
+		t.Errorf("the bundle header disagrees with the docs count:\n%s", rec.Bundle)
+	}
+	if strings.Contains(rec.Bundle, "3 documents included") {
+		t.Errorf("the header still counts the notes the query matched:\n%s", rec.Bundle)
+	}
+	if strings.Contains(rec.Bundle, "broken.md") {
+		t.Errorf("the unparseable note was counted into the bundle:\n%s", rec.Bundle)
+	}
+	if rec.Chars != len(rec.Bundle) {
+		t.Errorf("chars = %d, want %d", rec.Chars, len(rec.Bundle))
+	}
+
+	// The body form carries the same header, since both render one bundle.
+	body, err := runCLIArgs(t, root, "export-context", "--format", "raw")
+	if err != nil {
+		t.Fatalf("export-context --format raw: %v\n%s", err, body)
+	}
+	if !strings.Contains(string(body), "2 documents included") {
+		t.Errorf("the body form's header disagrees:\n%s", body)
+	}
+}
+
 // The up-front guard in runPolish is the only raw/md gate on either polish
 // path. It has to fire before any provider work, so this must hold on a machine
 // with no credentials at all: polish is a paid generation call, and --undo
@@ -393,4 +588,233 @@ func TestContract_PolishRefusesBodylessFormatsUpFront(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The two reports a human is likeliest to point `--format text` at both embed
+// an anonymous struct: DoctorReport embeds SuiteStatus, SkillDoctorReport
+// embeds skills.Verification (which itself embeds InstallStatus). json FLATTENS
+// an untagged anonymous field, the formatter did not, so `2nb skills doctor
+// --format text` printed one `Verification: {"slug":...}` JSON blob keyed by a
+// Go type name that appears nowhere in the json view, and `2nb doctor --format
+// text` printed a `SuiteStatus:` blob the same way. The promise those formats
+// carry is that text, json and csv agree about what a field is called.
+//
+// Rendered through output.Write, which is the path both commands take, so no
+// model is called: `2nb doctor` probes the active models for real.
+func TestContract_EmbeddedReportsFlattenLikeJSON(t *testing.T) {
+	reports := []struct {
+		name    string
+		value   any
+		absent  []string
+		present []string
+	}{
+		{
+			name: "doctor",
+			value: DoctorReport{
+				SuiteStatus: SuiteStatus{Latest: "0.22.3", Checked: true, Detail: "d", InSync: true},
+				OK:          true,
+			},
+			absent:  []string{"SuiteStatus", "ProductState"},
+			present: []string{"latest", "checked", "in_sync", "ok"},
+		},
+		{
+			name: "skills doctor",
+			value: SkillDoctorReport{
+				Verification: skills.Verification{
+					InstallStatus: skills.InstallStatus{Slug: "claude-code", Name: "Claude Code"},
+					Installed:     true,
+				},
+				OK: true,
+			},
+			absent:  []string{"Verification", "InstallStatus"},
+			present: []string{"slug", "name", "installed", "ok"},
+		},
+	}
+
+	for _, rep := range reports {
+		t.Run(rep.name, func(t *testing.T) {
+			var textBuf bytes.Buffer
+			if err := output.Write(&textBuf, output.FormatText, rep.value); err != nil {
+				t.Fatalf("render text: %v", err)
+			}
+			text := textBuf.String()
+			for _, bad := range rep.absent {
+				if strings.Contains(text, bad+":") {
+					t.Errorf("--format text still nests a blob under the Go type name %q:\n%s", bad, text)
+				}
+			}
+			for _, want := range rep.present {
+				if !strings.Contains(text, want+": ") {
+					t.Errorf("--format text is missing the promoted field %q:\n%s", want, text)
+				}
+			}
+
+			// Every name text printed is a name json actually emits.
+			raw, err := json.Marshal(rep.value)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var keys map[string]any
+			if err := json.Unmarshal(raw, &keys); err != nil {
+				t.Fatalf("unmarshal %s: %v", raw, err)
+			}
+			for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+				name, _, ok := strings.Cut(line, ": ")
+				if !ok {
+					continue
+				}
+				if _, isJSONKey := keys[name]; !isJSONKey {
+					t.Errorf("--format text names a field %q that the json view does not have (keys: %s)", name, raw)
+				}
+			}
+		})
+	}
+}
+
+// The same defect end to end, through the command a user actually runs.
+// `skills doctor` calls no model, so this is credential-free; it exits non-zero
+// when the skill is not installed for the probed agent, which says nothing
+// about the rendering and is deliberately ignored.
+func TestContract_SkillsDoctorTextNamesItsFields(t *testing.T) {
+	_, root := newContractVault(t)
+	out, _ := runCLIArgs(t, root, "skills", "doctor", "--format", "text")
+	text := string(out)
+	if strings.TrimSpace(text) == "" {
+		t.Fatal("skills doctor --format text produced nothing")
+	}
+	for _, bad := range []string{"Verification:", "InstallStatus:"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("skills doctor --format text still prints a %s blob:\n%s", bad, text)
+		}
+	}
+	if !strings.Contains(text, "slug: ") {
+		t.Errorf("skills doctor --format text lost its promoted fields:\n%s", text)
+	}
+}
+
+// `--copy` on a machine format: the rendered output goes to stdout AND to the
+// clipboard, which is the combination `export-context --copy --json` needs (the
+// bundle is what a user wants to paste into an agent). Nothing covered it.
+//
+// Real clipboard, no stub, so the test is OPT-IN: it is skipped unless
+// 2NB_TEST_CLIPBOARD is set. It writes to the developer's own clipboard, and
+// the save/restore below can only carry a TEXT flavor, so a routine `make test`
+// must never run it. The gate costs no coverage: CI is Linux, where --copy is
+// refused by name and clipboardSupported skips this test anyway.
+//
+// Behind the gate, a flavor guard. pbpaste returns EMPTY at exit 0 for a
+// clipboard holding only an image, so the save looks like it succeeded and the
+// restore silently puts back nothing; the clobber happens at --copy time, where
+// no restore can help. clipboardHoldsText reads the flavor list first and skips
+// unless the clipboard is empty or has text to save.
+//
+// The residual the guard cannot close: a clipboard carrying BOTH a text and a
+// non-text flavor passes the check, and the pbcopy/pbpaste round trip puts back
+// only the text.
+func TestContract_ExportContextCopiesItsRenderedJSON(t *testing.T) {
+	if err := clipboardSupported(runtime.GOOS); err != nil {
+		t.Skipf("no clipboard integration here: %v", err)
+	}
+	if os.Getenv("2NB_TEST_CLIPBOARD") == "" {
+		t.Skip("opt-in: this test overwrites the real clipboard; set 2NB_TEST_CLIPBOARD=1 to run it")
+	}
+	for _, bin := range []string{"pbcopy", "pbpaste"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not on PATH: %v", bin, err)
+		}
+	}
+	if err := clipboardHoldsText(); err != nil {
+		t.Skipf("refusing a clipboard this test could not put back: %v", err)
+	}
+	saved, perr := exec.Command("pbpaste").Output()
+	if perr != nil {
+		t.Skipf("cannot read the clipboard to restore it afterwards: %v", perr)
+	}
+	t.Cleanup(func() {
+		restore := exec.Command("pbcopy")
+		restore.Stdin = bytes.NewReader(saved)
+		_ = restore.Run()
+	})
+
+	root, _ := newFormatCoverageVault(t)
+	out, err := runCLIArgs(t, root, "export-context", "--copy", "--json")
+	if err != nil {
+		t.Fatalf("export-context --copy --json: %v\n%s", err, out)
+	}
+	stdout := jsonPortion(out)
+	var rec struct {
+		Bundle string `json:"bundle"`
+		Docs   int    `json:"docs"`
+	}
+	if err := json.Unmarshal(stdout, &rec); err != nil {
+		t.Fatalf("--copy must not disturb the JSON on stdout: %v\n%s", err, out)
+	}
+	if !strings.Contains(rec.Bundle, "# Knowledge Base Context") || rec.Docs != 1 {
+		t.Errorf("stdout record = %+v, want the bundle and one doc", rec)
+	}
+
+	pasted, err := exec.Command("pbpaste").Output()
+	if err != nil {
+		t.Fatalf("pbpaste: %v", err)
+	}
+	if strings.TrimSpace(string(pasted)) != strings.TrimSpace(string(stdout)) {
+		t.Errorf("the clipboard did not receive the rendered JSON:\n%s", pasted)
+	}
+}
+
+// clipboardTextFlavors are the `clipboard info` class names whose content a
+// pbpaste save and a pbcopy restore can actually carry. They are AppleScript
+// class names, not UTIs. A flavor absent from this set is treated as non-text,
+// which is the fail-closed direction: the worst an unlisted text flavor costs
+// is a skipped test.
+var clipboardTextFlavors = map[string]bool{
+	"string":       true,
+	"text":         true,
+	"Unicode text": true,
+	"«class utf8»": true,
+	"«class ut16»": true,
+	"«class utxt»": true,
+	"«class TEXT»": true,
+	"«class ustr»": true,
+}
+
+// clipboardHoldsText reports whether the pasteboard is one this test may
+// overwrite: empty, or carrying at least one text flavor that the pbpaste save
+// can capture and the pbcopy restore can put back. `clipboard info` lists the
+// flavors and their sizes without touching the pasteboard, so the check itself
+// is read-only.
+//
+// It FAILS CLOSED. An osascript error, a non-zero exit, or output this cannot
+// parse is an error, never a pass, so "the clipboard is empty" and "osascript
+// failed" can never collapse into the same branch.
+func clipboardHoldsText() error {
+	out, err := exec.Command("osascript", "-e", "clipboard info").Output()
+	if err != nil {
+		return fmt.Errorf("clipboard info failed, so the flavors are unknown: %w", err)
+	}
+	info := strings.TrimSpace(string(out))
+	if info == "" {
+		// An empty clipboard has nothing to lose.
+		return nil
+	}
+	// Flat comma-separated flavor/size pairs, for example:
+	// «class utf8», 61, «class ut16», 124, string, 61, Unicode text, 122
+	fields := strings.Split(info, ",")
+	if len(fields)%2 != 0 {
+		return fmt.Errorf("cannot parse clipboard info %q", info)
+	}
+	text := false
+	for i := 0; i < len(fields); i += 2 {
+		flavor := strings.TrimSpace(fields[i])
+		if _, err := strconv.Atoi(strings.TrimSpace(fields[i+1])); err != nil {
+			return fmt.Errorf("cannot parse clipboard info %q", info)
+		}
+		if clipboardTextFlavors[flavor] {
+			text = true
+		}
+	}
+	if !text {
+		return fmt.Errorf("clipboard carries no text flavor that pbcopy could restore: %q", info)
+	}
+	return nil
 }

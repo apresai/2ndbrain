@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/document"
+	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -29,7 +30,31 @@ func init() {
 	rootCmd.AddCommand(exportCmd)
 }
 
+// exportBundle is the `--json` record for a context bundle: the bundle itself
+// plus the two counts a caller would otherwise have to derive by parsing it.
+type exportBundle struct {
+	Bundle string `json:"bundle"`
+	Docs   int    `json:"docs"`
+	Chars  int    `json:"chars"`
+}
+
 func runExport(cmd *cobra.Command, args []string) error {
+	// export-context's output IS a document body (a markdown bundle), so it has
+	// the same shape as `git diff`: raw/md/text emit it, json wraps it in a
+	// record, and the row-set formats have nothing to render. runExport never
+	// called getFormat at all, so `--json`, `--csv` and `--yaml` each printed
+	// the markdown bundle and exited 0: piping `export-context --json` to jq
+	// was a parse error on a command that reported success. Refused up front,
+	// before the vault open, so the answer never depends on how many documents
+	// matched. refuseNonJSONStream is deliberately not used: it would refuse
+	// raw/md/text too, and those are exactly the formats that work here.
+	format := getFormat(cmd)
+	switch format {
+	case output.FormatCSV, output.FormatTSV, output.FormatYAML:
+		return exitWithError(ExitValidation, fmt.Sprintf(
+			"error: a context bundle is a document body, not a row set; --format %s has nothing to render (use --json for a record, or raw/md/text for the bundle itself)", format))
+	}
+
 	v, err := openVault()
 	if err != nil {
 		return fmt.Errorf("open vault: %w", err)
@@ -77,15 +102,28 @@ func runExport(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(docs) == 0 {
+		if format == output.FormatJSON {
+			// A machine consumer still owes stdout a parseable record: "no
+			// documents matched" is an ordinary outcome, not an error.
+			return writeOut(cmd, format, exportBundle{})
+		}
 		fmt.Fprintln(os.Stderr, "No documents match the filters.")
 		return nil
 	}
 
-	// Generate CLAUDE.md-compatible output
-	fmt.Println("# Knowledge Base Context")
-	fmt.Println()
-	fmt.Printf("Generated from 2ndbrain vault. %d documents included.\n\n", len(docs))
-
+	// Generate CLAUDE.md-compatible output. Built into a buffer rather than
+	// printed as we go, so the json record can carry the same bytes the body
+	// formats emit.
+	//
+	// The per-note sections are built FIRST, because the header states a count
+	// only the loop can know. It used to state len(docs), the number of notes
+	// the QUERY matched, while a note whose file cannot be parsed is skipped
+	// with a warning: a vault with one unreadable note announced "3 documents
+	// included" over a bundle holding 2. The --json `docs` field would have
+	// disagreed with the header of the bundle sitting next to it in the same
+	// record.
+	var sections strings.Builder
+	included := 0
 	for _, d := range docs {
 		absPath := v.AbsPath(d.path)
 		doc, err := document.ParseFile(absPath)
@@ -93,14 +131,27 @@ func runExport(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "warning: skip %s: %v\n", d.path, err)
 			continue
 		}
+		included++
 
-		fmt.Printf("## %s\n\n", d.title)
-		fmt.Printf("**Type**: %s | **Status**: %s | **Path**: `%s`\n\n", d.docType, d.status, d.path)
-		fmt.Println(strings.TrimSpace(doc.Body))
-		fmt.Println()
-		fmt.Println("---")
-		fmt.Println()
+		fmt.Fprintf(&sections, "## %s\n\n", d.title)
+		fmt.Fprintf(&sections, "**Type**: %s | **Status**: %s | **Path**: `%s`\n\n", d.docType, d.status, d.path)
+		fmt.Fprintln(&sections, strings.TrimSpace(doc.Body))
+		fmt.Fprintln(&sections)
+		fmt.Fprintln(&sections, "---")
+		fmt.Fprintln(&sections)
 	}
 
-	return nil
+	var b strings.Builder
+	fmt.Fprintln(&b, "# Knowledge Base Context")
+	fmt.Fprintln(&b)
+	fmt.Fprintf(&b, "Generated from 2ndbrain vault. %d documents included.\n\n", included)
+	b.WriteString(sections.String())
+
+	bundle := b.String()
+	if format == output.FormatJSON {
+		return writeOut(cmd, format, exportBundle{Bundle: bundle, Docs: included, Chars: len(bundle)})
+	}
+	// Empty, raw, md and text all emit the bundle itself; --copy goes through
+	// the same writer so it copies the bundle rather than nothing.
+	return writeOut(cmd, output.FormatRaw, bundle)
 }

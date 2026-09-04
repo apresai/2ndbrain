@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -102,22 +103,40 @@ func TestWrite_CSV(t *testing.T) {
 	}
 }
 
+// A zero-row listing is a csv document with a header and no data rows. It used
+// to fall through to the JSON-record fallback, which wrote the literal `[]`
+// (empty slice) or `null` (nil slice) as the one and only cell: a JSON value
+// inside a csv stream, which is the corruption the delimited formats exist to
+// avoid. Both spellings of "no rows" now render the same way.
 func TestWrite_CSV_EmptySlice(t *testing.T) {
-	var buf bytes.Buffer
-	items := []testItem{}
-
-	if err := Write(&buf, FormatCSV, items); err != nil {
-		t.Fatalf("Write(CSV, empty slice) returned error: %v", err)
-	}
-
-	// Empty slice hits the fallback JSON-line path; result must not be multi-line
-	// structural CSV (no header row written). The output should be non-panicking
-	// and reasonably short.
-	out := buf.String()
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	// Expect at most 1 line (the fallback JSON marshal of [])
-	if len(lines) > 1 {
-		t.Errorf("empty slice produced unexpected multi-line output: %q", out)
+	for _, tc := range []struct {
+		name  string
+		items []testItem
+	}{
+		{"empty slice", []testItem{}},
+		{"nil slice", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, format := range []Format{FormatCSV, FormatTSV} {
+				var buf bytes.Buffer
+				if err := Write(&buf, format, tc.items); err != nil {
+					t.Fatalf("Write(%s): %v", format, err)
+				}
+				out := buf.String()
+				for _, bad := range []string{"null", "[]"} {
+					if strings.Contains(out, bad) {
+						t.Errorf("%s emitted the JSON record %q into a delimited stream: %q", format, bad, out)
+					}
+				}
+				lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+				if len(lines) != 1 {
+					t.Fatalf("%s: want the header row alone, got %d lines: %q", format, len(lines), out)
+				}
+				if !strings.Contains(lines[0], "name") || !strings.Contains(lines[0], "value") {
+					t.Errorf("%s header does not carry the columns: %q", format, lines[0])
+				}
+			}
+		})
 	}
 }
 
@@ -159,6 +178,124 @@ func TestWrite_Text(t *testing.T) {
 			t.Errorf("text slice = %q, want %q", buf.String(), "a\nb\n")
 		}
 	})
+}
+
+// textRow carries the four shapes that made the old %v renderer unreadable: a
+// nil pointer, a time, a nested map, and an omitempty string left empty.
+type textRow struct {
+	Path      string         `json:"path"`
+	Reachable *bool          `json:"reachable"`
+	Modified  time.Time      `json:"modified"`
+	Meta      map[string]any `json:"meta"`
+	Note      string         `json:"note,omitempty"`
+	Count     int            `json:"count"`
+}
+
+// The reported defect: `--format text` printed Go's %v rendering of a struct.
+// `2nb list --format text` emitted `{cb9316a1-... resources/x.md Title note
+// draft 2026-...}`: no field names, positional, unparseable, and for a struct
+// holding a pointer (`config show`) a HEAP ADDRESS. A row renders as named
+// pairs now.
+func TestWrite_TextStructSliceIsNamedPairs(t *testing.T) {
+	yes := true
+	rows := []textRow{
+		{
+			Path:     "a.md",
+			Modified: time.Date(2026, 9, 3, 13, 22, 25, 0, time.UTC),
+			Meta:     map[string]any{"zeta": 1, "alpha": "one"},
+		},
+		{Path: "b.md", Reachable: &yes, Count: 2},
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatText, rows); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	out := buf.String()
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want one line per row, got %d:\n%s", len(lines), out)
+	}
+	// A line that STARTS with "{" is the Go struct dump; a "{" inside a value
+	// is the compact JSON of a composite cell, which is the intended shape.
+	for i, line := range lines {
+		if strings.HasPrefix(line, "{") {
+			t.Errorf("line %d is still a Go struct dump: %q", i, line)
+		}
+	}
+	if strings.Contains(out, "0x") {
+		t.Errorf("text output carries a heap address:\n%s", out)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Errorf("a nil field was rendered rather than omitted:\n%s", out)
+	}
+
+	// Row 1: names present, time as RFC3339, map as sorted-key JSON.
+	for _, want := range []string{"path=a.md", "modified=2026-09-03T13:22:25Z", `meta={"alpha":"one","zeta":1}`, "count=0"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("row 1 missing %q: %q", want, lines[0])
+		}
+	}
+	// A nil pointer and an omitempty zero are omitted; a plain zero is not
+	// (count=0 above), because the json view keeps it too.
+	if strings.Contains(lines[0], "reachable=") {
+		t.Errorf("nil pointer field was not omitted: %q", lines[0])
+	}
+	if strings.Contains(lines[0], "note=") {
+		t.Errorf("omitempty empty string was not omitted: %q", lines[0])
+	}
+	// Row 2: a non-nil pointer is its VALUE, which is the case that printed an
+	// address.
+	if !strings.Contains(lines[1], "reachable=true") {
+		t.Errorf("row 2 should render the pointed-to value: %q", lines[1])
+	}
+}
+
+// A single struct (the `config show` shape) renders one field per line, and a
+// nested pointer renders as its content rather than as its address.
+func TestWrite_TextSingleStructIsNamedLines(t *testing.T) {
+	type inner struct {
+		A string `json:"a"`
+		B int    `json:"b"`
+	}
+	type outer struct {
+		Name string `json:"name"`
+		Cfg  *inner `json:"cfg"`
+		Gone *inner `json:"gone"`
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatText, outer{Name: "vault", Cfg: &inner{A: "one", B: 2}}); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "0x") {
+		t.Fatalf("nested pointer rendered as a heap address:\n%s", out)
+	}
+	if !strings.Contains(out, "name: vault") {
+		t.Errorf("missing `name: vault`:\n%s", out)
+	}
+	if !strings.Contains(out, `cfg: {"a":"one","b":2}`) {
+		t.Errorf("nested struct should render as compact JSON:\n%s", out)
+	}
+	if strings.Contains(out, "gone:") {
+		t.Errorf("nil pointer field was not omitted:\n%s", out)
+	}
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if strings.HasPrefix(line, "{") {
+			t.Errorf("line is a Go struct dump: %q", line)
+		}
+	}
+}
+
+// A map renders sorted, so the same value always prints the same way (Go's %v
+// on a map has no ordering guarantee at all).
+func TestWrite_TextMapIsSorted(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatText, map[string]any{"zeta": 1, "alpha": "one", "mid": true}); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	if got, want := buf.String(), "alpha: one\nmid: true\nzeta: 1\n"; got != want {
+		t.Errorf("map text = %q, want %q", got, want)
+	}
 }
 
 func TestWrite_MD_IsRaw(t *testing.T) {
@@ -434,6 +571,41 @@ func TestWriteDelimited_NilTextMarshalerPointer(t *testing.T) {
 	}
 }
 
+// A NON-nil pointer to a scalar rendered as a heap address: the fallback ran
+// %v on the pointer rather than on what it points at, so ModelInfo's
+// `reachable` and `credentials` columns came out as `0x14000122a30`. A nil
+// pointer keeps its `<nil>`, which is a real answer; an address never is.
+func TestWriteDelimited_PointerCellsRenderTheirValue(t *testing.T) {
+	type row struct {
+		Reachable *bool   `json:"reachable"`
+		Count     *int    `json:"count"`
+		Missing   *string `json:"missing"`
+	}
+	yes, n := true, 7
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatCSV, []row{{Reachable: &yes, Count: &n}}); err != nil {
+		t.Fatalf("csv: %v", err)
+	}
+	raw := buf.String()
+	if strings.Contains(raw, "0x") {
+		t.Fatalf("csv rendered a pointer as a heap address:\n%s", raw)
+	}
+	recs, err := csv.NewReader(strings.NewReader(raw)).ReadAll()
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("csv is not parseable (%v):\n%s", err, raw)
+	}
+	cell := map[string]string{}
+	for i, h := range recs[0] {
+		cell[h] = recs[1][i]
+	}
+	if cell["reachable"] != "true" || cell["count"] != "7" {
+		t.Errorf("pointer cells = reachable %q count %q, want true and 7", cell["reachable"], cell["count"])
+	}
+	if cell["missing"] != "<nil>" {
+		t.Errorf("nil pointer cell = %q, want <nil>", cell["missing"])
+	}
+}
+
 // yamlItem exercises the three things yaml.v3 got wrong on its own: a
 // multi-word json name, omitempty, and a numeric-looking STRING.
 type yamlItem struct {
@@ -505,6 +677,14 @@ func TestWrite_YAMLHonorsOmitempty(t *testing.T) {
 // The degenerate payloads. An empty listing is a bare `[]` (every --json
 // listing returns one), and a nil payload parses to a node with no Kind, which
 // the yaml encoder refuses outright.
+//
+// The nil-slice case flipped from `null` to `[]` in 0.22.3: a listing command
+// hands its slice straight to the writer, and a vault with no orphans has a NIL
+// slice, so `2nb orphans --yaml` printed `null` while `2nb orphans --json`
+// printed `[]` and `2nb tasks --yaml` printed `[]` (its slice is merely built
+// non-nil). An empty result is an empty collection in both views now. An
+// UNTYPED nil is still `null`: it is not a listing, it is the absence of a
+// value.
 func TestWrite_YAMLDegeneratePayloads(t *testing.T) {
 	cases := []struct {
 		name string
@@ -512,7 +692,8 @@ func TestWrite_YAMLDegeneratePayloads(t *testing.T) {
 		want string
 	}{
 		{"empty slice", []yamlItem{}, "[]\n"},
-		{"nil slice", []yamlItem(nil), "null\n"},
+		{"nil slice", []yamlItem(nil), "[]\n"},
+		{"nil map", map[string]string(nil), "{}\n"},
 		{"nil", nil, "null\n"},
 		{"scalar string", "hello", "hello\n"},
 		{"scalar int", 42, "42\n"},
@@ -528,4 +709,613 @@ func TestWrite_YAMLDegeneratePayloads(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The embedded-struct shapes. These types are EXPORTED because an embedded
+// field takes its type's name: an unexported type would make the field
+// unexported, and every renderer here skips unexported fields.
+type EmbedLeaf struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type EmbedMiddle struct {
+	EmbedLeaf
+	Installed bool `json:"installed"`
+}
+
+// EmbedOuter is the shape DoctorReport and SkillDoctorReport have: an anonymous
+// struct carrying the fields callers have always seen at the top level, plus a
+// couple of additive ones. Hidden is `json:"-"`, Tagged is a NAMED struct field
+// (one value, never flattened).
+type EmbedOuter struct {
+	EmbedMiddle
+	OK     bool      `json:"ok"`
+	Hidden string    `json:"-"`
+	Tagged EmbedLeaf `json:"tagged"`
+}
+
+// An anonymous field WITH a json name is one key, not a flattening.
+type EmbedNamed struct {
+	EmbedLeaf `json:"leaf"`
+	OK        bool `json:"ok"`
+}
+
+// An embedded POINTER: json promotes its fields, and a nil one contributes
+// none. Reading through it must not panic.
+type EmbedPtr struct {
+	*EmbedLeaf
+	OK bool `json:"ok"`
+}
+
+// jsonKeys is the key set json.Marshal actually produces for a value, which is
+// the thing text and csv have to agree with.
+func jsonKeys(t *testing.T, v any) map[string]bool {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal %s: %v", raw, err)
+	}
+	keys := make(map[string]bool, len(m))
+	for k := range m {
+		keys[k] = true
+	}
+	return keys
+}
+
+func nameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
+}
+
+// The reported defect: fieldSpecs skipped only unexported fields, so an
+// ANONYMOUS embedded struct came out as a single cell keyed by its Go TYPE name
+// while json flattened it. `2nb skills doctor --format text` printed
+// `Verification: {"slug":...}` as one JSON blob, and `2nb doctor --format text`
+// printed a `SuiteStatus:` blob, on exactly the two commands a human is
+// likeliest to point --format text at. A `json:"-"` field was not skipped
+// either: it fell through the `tag != "-"` guard and was emitted under its Go
+// name, so text and csv showed a field json omits entirely.
+//
+// The guarantee is asserted against json.Marshal's own key set, so the three
+// views cannot drift apart again.
+func TestFieldNames_MatchJSONKeysThroughEmbedding(t *testing.T) {
+	// Every field non-zero: an omitempty field json legitimately omits would
+	// otherwise show up as a difference against the static csv header.
+	full := EmbedOuter{
+		EmbedMiddle: EmbedMiddle{
+			EmbedLeaf: EmbedLeaf{Slug: "claude-code", Name: "Claude Code"},
+			Installed: true,
+		},
+		OK:     true,
+		Hidden: "never rendered",
+		Tagged: EmbedLeaf{Slug: "inner", Name: "Inner"},
+	}
+
+	got := nameSet(fieldNames(reflect.TypeOf(full)))
+	want := jsonKeys(t, full)
+	for k := range want {
+		if !got[k] {
+			t.Errorf("json emits %q but the csv/text header does not", k)
+		}
+	}
+	for k := range got {
+		if !want[k] {
+			t.Errorf("the csv/text header carries %q, which json does not emit", k)
+		}
+	}
+	if got["EmbedMiddle"] || got["EmbedLeaf"] {
+		t.Errorf("an embedded struct is still a single cell keyed by its Go type name: %v", got)
+	}
+	if got["Hidden"] || got["-"] {
+		t.Errorf(`a json:"-" field reached the output: %v`, got)
+	}
+
+	// text: the promoted fields are top-level `name: value` lines.
+	var textBuf bytes.Buffer
+	if err := Write(&textBuf, FormatText, full); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	text := textBuf.String()
+	for _, want := range []string{"slug: claude-code", "name: Claude Code", "installed: true", "ok: true"} {
+		if !strings.Contains(text, want+"\n") {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	for _, bad := range []string{"EmbedMiddle:", "EmbedLeaf:", "Hidden:", "never rendered"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("text still carries %q:\n%s", bad, text)
+		}
+	}
+
+	// csv: one column per promoted field, in json's own order.
+	var csvBuf bytes.Buffer
+	if err := Write(&csvBuf, FormatCSV, []EmbedOuter{full}); err != nil {
+		t.Fatalf("Write(csv): %v", err)
+	}
+	recs, err := csv.NewReader(&csvBuf).ReadAll()
+	if err != nil {
+		t.Fatalf("csv is not parseable: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("want a header and one row, got %d records: %v", len(recs), recs)
+	}
+	wantHeader := []string{"slug", "name", "installed", "ok", "tagged"}
+	if strings.Join(recs[0], ",") != strings.Join(wantHeader, ",") {
+		t.Errorf("csv header = %v, want %v", recs[0], wantHeader)
+	}
+	if recs[1][0] != "claude-code" || recs[1][2] != "true" {
+		t.Errorf("csv row lost its promoted values: %v", recs[1])
+	}
+	if recs[1][4] != `{"slug":"inner","name":"Inner"}` {
+		t.Errorf("a NAMED struct field should stay one JSON cell, got %q", recs[1][4])
+	}
+}
+
+// An anonymous field carrying a json NAME is one key in json, so it stays one
+// cell here too.
+func TestFieldNames_NamedAnonymousFieldStaysOneKey(t *testing.T) {
+	v := EmbedNamed{EmbedLeaf: EmbedLeaf{Slug: "s", Name: "n"}, OK: true}
+	got := nameSet(fieldNames(reflect.TypeOf(v)))
+	want := jsonKeys(t, v)
+	if len(got) != len(want) || !got["leaf"] || !got["ok"] {
+		t.Errorf("header = %v, want the json keys %v", got, want)
+	}
+}
+
+// A nil embedded POINTER has no fields to read. reflect.Value.FieldByIndex
+// would panic walking through it; the renderers must not.
+func TestFieldSpecs_NilEmbeddedPointerRendersEmpty(t *testing.T) {
+	var textBuf bytes.Buffer
+	if err := Write(&textBuf, FormatText, EmbedPtr{OK: true}); err != nil {
+		t.Fatalf("Write(text): %v", err)
+	}
+	if got := textBuf.String(); got != "ok: true\n" {
+		t.Errorf("text = %q, want only the field that exists", got)
+	}
+
+	var csvBuf bytes.Buffer
+	if err := Write(&csvBuf, FormatCSV, []EmbedPtr{{OK: true}}); err != nil {
+		t.Fatalf("Write(csv): %v", err)
+	}
+	recs, err := csv.NewReader(&csvBuf).ReadAll()
+	if err != nil {
+		t.Fatalf("csv is not parseable: %v", err)
+	}
+	if len(recs) != 2 || len(recs[1]) != len(recs[0]) {
+		t.Fatalf("want a header and one row of the same width, got %v", recs)
+	}
+	if strings.Join(recs[0], ",") != "slug,name,ok" {
+		t.Fatalf("csv header = %v, want the promoted fields plus ok", recs[0])
+	}
+	if recs[1][0] != "" || recs[1][1] != "" {
+		t.Errorf("a nil embedded pointer should leave empty cells, got %v", recs[1])
+	}
+	if recs[1][2] != "true" {
+		t.Errorf("the outer field is missing from the row: %v", recs[1])
+	}
+}
+
+// The shapes where fieldSpecs used to disagree with encoding/json. All of them
+// are collisions between promoted names, or promotion out of an embedded
+// UNEXPORTED struct, and every one is now resolved json's way.
+//
+// Names are EFFECTIVE names: a `json:"n"` field and a bare field named N never
+// collide, because those are two different names. So every pair below shares an
+// effective name deliberately.
+
+// A repeated json tag is EXACTLY what the collision cases are about, and `go
+// vet`'s structtag analyzer rejects one written in source ("struct field B
+// repeats json tag \"same\""). CI runs `go vet ./...`, so the shapes that
+// literally repeat a tag are built at RUNTIME instead, where vet cannot see
+// them. Only those; every other fixture below stays an ordinary declaration,
+// which is far easier to read. reflect.StructOf panics on an unexported field
+// name and synthesizes no methods, so every generated field is exported and
+// method-free.
+func taggedLeaf(field, tag string) reflect.Type {
+	return reflect.StructOf([]reflect.StructField{
+		{Name: field, Type: reflect.TypeOf(""), Tag: reflect.StructTag(`json:"` + tag + `"`)},
+	})
+}
+
+func anonField(name string, t reflect.Type) reflect.StructField {
+	return reflect.StructField{Name: name, Type: t, Anonymous: true}
+}
+
+// Equal depth, both tagged with the same name: json calls it a conflict.
+var clashBothTaggedType = reflect.StructOf([]reflect.StructField{
+	anonField("ClashA", taggedLeaf("A", "same")),
+	anonField("ClashB", taggedLeaf("B", "same")),
+	{Name: "OK", Type: reflect.TypeOf(false), Tag: `json:"ok"`},
+})
+
+func clashBothTaggedValue() any {
+	v := reflect.New(clashBothTaggedType).Elem()
+	v.Field(0).Field(0).SetString("from A")
+	v.Field(1).Field(0).SetString("from B")
+	v.Field(2).SetBool(true)
+	return v.Interface()
+}
+
+// Equal depth, neither tagged, same Go name: also a conflict.
+type ClashBareA struct{ Same string }
+type ClashBareB struct{ Same string }
+type ClashNeitherTagged struct {
+	ClashBareA
+	ClashBareB
+	OK bool `json:"ok"`
+}
+
+// Equal depth, exactly one tagged with the other's name: the tagged one wins.
+type ClashTagNamedN struct {
+	Other string `json:"N"`
+}
+type ClashBareN struct{ N string }
+type ClashTagWins struct {
+	ClashTagNamedN
+	ClashBareN
+}
+
+// A tagged field at depth 1 against the same name at depth 2: shallower wins,
+// which is the case output structs actually hit.
+type ClashDeep struct {
+	V string `json:"same"`
+}
+type ClashDeepMid struct{ ClashDeep }
+type ClashShallowWins struct {
+	ClashDeepMid
+	Top string `json:"same"`
+}
+
+// A conflict at depth 2, then a winner at depth 1, then ANOTHER conflict at
+// depth 2. The depth-1 field must survive: a later deep pair must not revive a
+// conflict the shallow field already settled. Runtime-built for the same vet
+// reason as clashBothTaggedType.
+var clashOrderingType = reflect.StructOf([]reflect.StructField{
+	anonField("ClashA", taggedLeaf("A", "same")),
+	anonField("ClashB", taggedLeaf("B", "same")),
+	{Name: "Top", Type: reflect.TypeOf(""), Tag: `json:"same"`},
+	anonField("ClashC", taggedLeaf("C", "same")),
+	anonField("ClashD", taggedLeaf("D", "same")),
+	{Name: "OK", Type: reflect.TypeOf(false), Tag: `json:"ok"`},
+})
+
+func clashOrderingValue() any {
+	v := reflect.New(clashOrderingType).Elem()
+	v.Field(0).Field(0).SetString("deep A")
+	v.Field(1).Field(0).SetString("deep B")
+	v.Field(2).SetString("shallow")
+	v.Field(3).Field(0).SetString("deep C")
+	v.Field(4).Field(0).SetString("deep D")
+	v.Field(5).SetBool(true)
+	return v.Interface()
+}
+
+// An embedded UNEXPORTED struct. json promotes its exported fields; fieldSpecs
+// used to skip it whole.
+type hiddenLeaf struct {
+	Slug string `json:"slug"`
+}
+type HiddenOuter struct {
+	hiddenLeaf
+	OK bool `json:"ok"`
+}
+
+// THREE levels, two of them unexported, so a promoted value is read through two
+// embedded read-only hops. reflect.Value.Field does not propagate the embedded
+// read-only flag, so the exported leaf is still interfaceable; if that were
+// wrong, rendering would panic rather than fail an assertion.
+type hiddenL3 struct {
+	Deep string `json:"deep"`
+}
+type hiddenL2 struct {
+	hiddenL3
+	Mid string `json:"mid"`
+}
+type HiddenL1 struct {
+	hiddenL2
+	Top string `json:"top"`
+}
+
+// A nil embedded POINTER underneath an unexported embed: the deref happens
+// after the unexported hop, and Value.Elem DOES propagate the read-only flag,
+// so this is the path most likely to panic if the walk is wrong.
+type hiddenPtrLeaf struct {
+	Slug string `json:"slug"`
+}
+type hiddenPtrMid struct {
+	*hiddenPtrLeaf
+	Note string `json:"note"`
+}
+type HiddenPtrOuter struct {
+	hiddenPtrMid
+	OK bool `json:"ok"`
+}
+
+// fieldSpecs used to diverge from encoding/json in two ways, both of them in
+// the function whose entire job is that the json, text and csv views agree
+// about what a field is called. It kept the FIRST field on an equal-depth
+// collision where json drops the name, and it skipped an embedded unexported
+// struct whole where json promotes its exported fields. Both now follow json.
+//
+// json's rule, read off json.Marshal rather than off the spec: group by
+// EFFECTIVE name; shallower depth wins outright; at equal depth a tagged field
+// beats an untagged one; at equal depth with both tagged or neither, the name is
+// dropped entirely.
+//
+// Every case reads json's own key set from json.Marshal, so a change to the
+// standard library's conflict rule fails here rather than splitting the views.
+func TestFieldNames_MatchJSONThroughCollisionsAndUnexportedEmbeds(t *testing.T) {
+	cases := []struct {
+		name string
+		// value must have every field non-zero where it matters: jsonKeys comes
+		// from a real marshal, and an omitempty field json legitimately omits
+		// would read as a disagreement with the static csv header.
+		value any
+		want  string // the expected header, json's key set in index order
+	}{
+		{"equal depth, both tagged: json drops the name", clashBothTaggedValue(), "ok"},
+		{"equal depth, neither tagged: json drops the name", ClashNeitherTagged{OK: true}, "ok"},
+		{"equal depth, one tagged: the tagged field wins", ClashTagWins{ClashTagNamedN: ClashTagNamedN{Other: "tagged"}}, "N"},
+		{"shallower wins over deeper", ClashShallowWins{Top: "shallow"}, "same"},
+		{"a shallow winner survives a later deep conflict", clashOrderingValue(), "same,ok"},
+		{"an embedded unexported struct is promoted", HiddenOuter{hiddenLeaf: hiddenLeaf{Slug: "s"}, OK: true}, "slug,ok"},
+		{"promotion reaches through two unexported levels", HiddenL1{hiddenL2: hiddenL2{hiddenL3: hiddenL3{Deep: "d"}, Mid: "m"}, Top: "t"}, "deep,mid,top"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fieldNames(reflect.TypeOf(tc.value))
+			if strings.Join(got, ",") != tc.want {
+				t.Errorf("fieldNames = %v, want %v", got, strings.Split(tc.want, ","))
+			}
+			// The real assertion: the header IS json's key set.
+			want := jsonKeys(t, tc.value)
+			gotSet := nameSet(got)
+			for k := range want {
+				if !gotSet[k] {
+					t.Errorf("json emits %q but the csv/text header does not", k)
+				}
+			}
+			for k := range gotSet {
+				if !want[k] {
+					t.Errorf("the csv/text header carries %q, which json does not emit", k)
+				}
+			}
+		})
+	}
+
+	// Values, not just names: a promoted field must be READABLE through the
+	// unexported hops, and the winner of a tie must be the field json picked.
+	t.Run("promoted values are readable", func(t *testing.T) {
+		row := HiddenL1{hiddenL2: hiddenL2{hiddenL3: hiddenL3{Deep: "d"}, Mid: "m"}, Top: "t"}
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatCSV, []HiddenL1{row}); err != nil {
+			t.Fatalf("Write(csv): %v", err)
+		}
+		recs, err := csv.NewReader(&buf).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("csv did not render a header and one row (%v): %v", err, recs)
+		}
+		if strings.Join(recs[1], ",") != "d,m,t" {
+			t.Errorf("row = %v, want the values read through two unexported embeds", recs[1])
+		}
+	})
+
+	t.Run("the tie winner is the field json picked", func(t *testing.T) {
+		row := ClashTagWins{ClashTagNamedN: ClashTagNamedN{Other: "tagged"}, ClashBareN: ClashBareN{N: "bare"}}
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatText, row); err != nil {
+			t.Fatalf("Write(text): %v", err)
+		}
+		if got := buf.String(); got != "N: tagged\n" {
+			t.Errorf("text = %q, want the TAGGED field's value under N", got)
+		}
+	})
+
+	// A nil embedded pointer is the one shape where key-set equality does NOT
+	// apply, and deliberately so: json's marshal omits a key it cannot reach,
+	// while the csv header is static and must keep the column so every row has
+	// the same width. Assert the header and the empty cell instead.
+	t.Run("a nil embedded pointer under an unexported embed keeps its column", func(t *testing.T) {
+		if keys := jsonKeys(t, HiddenPtrOuter{OK: true}); keys["slug"] {
+			t.Fatalf("json started emitting a key behind a nil embedded pointer: %v", keys)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, FormatCSV, []HiddenPtrOuter{{OK: true}}); err != nil {
+			t.Fatalf("Write(csv): %v", err)
+		}
+		recs, err := csv.NewReader(&buf).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("csv did not render a header and one row (%v): %v", err, recs)
+		}
+		if strings.Join(recs[0], ",") != "slug,note,ok" {
+			t.Errorf("header = %v, want the promoted columns kept", recs[0])
+		}
+		if recs[1][0] != "" || recs[1][1] != "" || recs[1][2] != "true" {
+			t.Errorf("row = %v, want an empty cell for the unreachable field", recs[1])
+		}
+		// Non-nil, and now the key sets DO agree.
+		full := HiddenPtrOuter{hiddenPtrMid: hiddenPtrMid{hiddenPtrLeaf: &hiddenPtrLeaf{Slug: "s"}, Note: "n"}, OK: true}
+		want := jsonKeys(t, full)
+		for k := range nameSet(fieldNames(reflect.TypeOf(full))) {
+			if !want[k] {
+				t.Errorf("the header carries %q, which json does not emit for a populated value", k)
+			}
+		}
+	})
+}
+
+// A TAGGED anonymous field whose type is an unexported struct. json emits it as
+// a nested OBJECT under the tag name; it used to VANISH from text and csv,
+// because the embed cannot be passed to Interface() and the whole field was
+// dropped rather than assembled from the leaves underneath it.
+type hidObjLeaf struct {
+	X  string `json:"x"`
+	Hi string `json:"hi"`
+}
+type TagObjOuter struct {
+	hidObjLeaf `json:"mid"`
+	OK         bool `json:"ok"`
+}
+
+// json renders an embed with no exported fields as `{}`, not as nothing.
+type hidObjEmpty struct{ notExported string }
+type TagObjEmptyOuter struct {
+	hidObjEmpty `json:"mid"`
+	OK          bool `json:"ok"`
+}
+
+// A tagged unexported POINTER embed.
+type hidObjPtr struct {
+	X string `json:"x"`
+}
+type TagObjPtrOuter struct {
+	*hidObjPtr `json:"mid"`
+	OK         bool `json:"ok"`
+}
+
+// A tagged unexported embed INSIDE another one: the object nests.
+type hidObjInner struct {
+	Deep string `json:"deep"`
+}
+type hidObjNest struct {
+	hidObjInner `json:"inner"`
+	Mid         string `json:"mid"`
+}
+type TagObjNestOuter struct {
+	hidObjNest `json:"outerMid"`
+	OK         bool `json:"ok"`
+}
+
+// A tagged unexported embed of NON-struct type: json drops it, and so must this.
+type hidObjInt int
+type TagObjNonStruct struct {
+	hidObjInt `json:"mid"`
+	OK        bool `json:"ok"`
+}
+
+// An unexported embed that renders ITSELF. Go promotes MarshalJSON to the OUTER
+// type, so json collapses the whole record to that one value.
+type hidObjMarshaler struct{ X string }
+
+func (hidObjMarshaler) MarshalJSON() ([]byte, error) { return []byte(`"I render myself"`), nil }
+
+type TagObjMarshalerOuter struct {
+	hidObjMarshaler `json:"mid"`
+	OK              bool `json:"ok"`
+}
+
+// A tagged unexported embed used to be dropped outright, so `--format text` and
+// csv silently lost a column the json view has. Dropping was defensible only
+// while the alternative was calling Interface() on the embed and panicking; it
+// is not, because the exported leaves BENEATH the embed are interfaceable, and
+// the untagged case already promotes exactly those leaves. A tag only decides
+// whether they land at the parent level or inside one cell.
+func TestFieldNames_TaggedUnexportedEmbedIsOneObjectCell(t *testing.T) {
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"a tagged unexported embed is a column", TagObjOuter{hidObjLeaf: hidObjLeaf{X: "val", Hi: "there"}, OK: true}, "mid,ok"},
+		{"no exported fields is still a column", TagObjEmptyOuter{OK: true}, "mid,ok"},
+		{"a tagged unexported POINTER embed", TagObjPtrOuter{hidObjPtr: &hidObjPtr{X: "v"}, OK: true}, "mid,ok"},
+		{"the object nests", TagObjNestOuter{hidObjNest: hidObjNest{hidObjInner: hidObjInner{Deep: "d"}, Mid: "m"}, OK: true}, "outerMid,ok"},
+		{"a NON-struct embed is dropped, as json drops it", TagObjNonStruct{hidObjInt: 7, OK: true}, "ok"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fieldNames(reflect.TypeOf(tc.value))
+			if strings.Join(got, ",") != tc.want {
+				t.Errorf("fieldNames = %v, want %v", got, strings.Split(tc.want, ","))
+			}
+			want := jsonKeys(t, tc.value)
+			gotSet := nameSet(got)
+			for k := range want {
+				if !gotSet[k] {
+					t.Errorf("json emits %q but the csv/text header does not", k)
+				}
+			}
+			for k := range gotSet {
+				if !want[k] {
+					t.Errorf("the csv/text header carries %q, which json does not emit", k)
+				}
+			}
+		})
+	}
+
+	// The CELL: one compact-JSON object holding the promoted leaves. Keys are
+	// sorted, because it is assembled as a map and every composite cell in this
+	// formatter marshals that way; json.Marshal would use declaration order.
+	t.Run("the cell is the nested object", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			value any
+			want  string
+		}{
+			{"leaves", TagObjOuter{hidObjLeaf: hidObjLeaf{X: "val", Hi: "there"}, OK: true}, "mid: {\"hi\":\"there\",\"x\":\"val\"}\nok: true\n"},
+			{"no exported fields", TagObjEmptyOuter{OK: true}, "mid: {}\nok: true\n"},
+			{"through a pointer", TagObjPtrOuter{hidObjPtr: &hidObjPtr{X: "v"}, OK: true}, "mid: {\"x\":\"v\"}\nok: true\n"},
+			// json writes `null` for a nil embed; an assembled object has no way
+			// to say null, and `{}` keeps the cell parseable.
+			{"a nil pointer embed is an empty object", TagObjPtrOuter{OK: true}, "mid: {}\nok: true\n"},
+			{"nested", TagObjNestOuter{hidObjNest: hidObjNest{hidObjInner: hidObjInner{Deep: "d"}, Mid: "m"}, OK: true},
+				"outerMid: {\"inner\":{\"deep\":\"d\"},\"mid\":\"m\"}\nok: true\n"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				if err := Write(&buf, FormatText, tc.value); err != nil {
+					t.Fatalf("Write(text): %v", err)
+				}
+				if got := buf.String(); got != tc.want {
+					t.Errorf("text =\n%q\nwant\n%q", got, tc.want)
+				}
+			})
+		}
+	})
+
+	// csv gets the same cell, quoted by the csv writer rather than escaped by hand.
+	t.Run("csv carries the object in one cell", func(t *testing.T) {
+		var buf bytes.Buffer
+		row := TagObjOuter{hidObjLeaf: hidObjLeaf{X: "val", Hi: "there"}, OK: true}
+		if err := Write(&buf, FormatCSV, []TagObjOuter{row}); err != nil {
+			t.Fatalf("Write(csv): %v", err)
+		}
+		recs, err := csv.NewReader(&buf).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("csv did not render a header and one row (%v): %v", err, recs)
+		}
+		if strings.Join(recs[0], ",") != "mid,ok" {
+			t.Errorf("header = %v, want the embed's tag as a column", recs[0])
+		}
+		if recs[1][0] != `{"hi":"there","x":"val"}` {
+			t.Errorf("cell = %q, want the nested object", recs[1][0])
+		}
+	})
+
+	// The ONE exception, pinned so it stays deliberate. Go promotes the embed's
+	// MarshalJSON to the OUTER type, so json collapses the entire record to that
+	// value and discards every sibling; a row-shaped format cannot represent
+	// that, and the embed's own value cannot be read, so the row renders without
+	// it. Nothing in internal/ has this shape.
+	t.Run("an embedded Marshaler is the exception", func(t *testing.T) {
+		raw, err := json.Marshal(TagObjMarshalerOuter{OK: true})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if string(raw) != `"I render myself"` {
+			t.Fatalf("json no longer collapses the record to the embed's value: %s", raw)
+		}
+		if got := fieldNames(reflect.TypeOf(TagObjMarshalerOuter{})); strings.Join(got, ",") != "ok" {
+			t.Errorf("fieldNames = %v, want the row's other fields with the unreadable embed dropped", got)
+		}
+	})
 }
