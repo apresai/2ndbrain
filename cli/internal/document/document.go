@@ -228,28 +228,37 @@ func (d *Document) SetMeta(key string, value any) {
 	// to the value actually set.
 	delete(d.raw, key)
 
-	// Keep struct fields in sync
+	// Keep struct fields in sync. EVERY field this struct mirrors from
+	// frontmatter is here: the index reads these, not the map, so one that is
+	// missing leaves a stale value flowing into the database and the chunk
+	// tables. `id` was missing outright, and title/type/status used a strict
+	// value.(string), so setting any of them to a non-string scalar left the
+	// field unpopulated. The struct's frontmatter-mirroring fields are ID,
+	// Title, Type, Status, Tags, CreatedAt and ModifiedAt; adding a new one
+	// means adding a case here.
 	switch key {
+	case "id":
+		if s, ok := setMetaText(value); ok {
+			d.ID = s
+		}
 	case "title":
-		if s, ok := value.(string); ok {
+		if s, ok := setMetaText(value); ok {
 			d.Title = s
 		}
 	case "type":
-		if s, ok := value.(string); ok {
+		if s, ok := setMetaText(value); ok {
 			d.Type = s
 		}
 	case "status":
-		if s, ok := value.(string); ok {
+		if s, ok := setMetaText(value); ok {
 			d.Status = s
 		}
 	case "tags":
 		d.Tags = extractTags(d.Frontmatter, d.raw)
 	case "created":
-		// The DATE fields need syncing for the same reason the others do: the
-		// index reads these struct fields, not the map, so `meta --set
-		// modified=...` followed by a reindex wrote the OLD timestamp. They go
-		// through the same normalization the reader uses, so a value set here
-		// lands in the column in the same form a parse would have produced.
+		// The DATE fields normalize, because the index compares them as
+		// instants: a value set here lands in the column in the same form a
+		// parse would have produced.
 		if s, ok := frontmatterTime(d.Frontmatter, "created"); ok {
 			d.CreatedAt = s
 		}
@@ -258,6 +267,13 @@ func (d *Document) SetMeta(key string, value any) {
 			d.ModifiedAt = s
 		}
 	}
+}
+
+// setMetaText renders a value handed to SetMeta as the text a string-typed
+// struct field wants. There is no node behind a programmatic write, so
+// ScalarText is the right reading here, unlike on the parse path.
+func setMetaText(value any) (string, bool) {
+	return ScalarText(value)
 }
 
 func (d *Document) WriteFile(dir string) (string, error) {

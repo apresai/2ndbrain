@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,16 +35,16 @@ func IsSensitiveKey(key string) bool {
 // index, and one such note was enough to fail a whole force-reembed and roll
 // 313 good embeddings back.
 func emptyFrontmatterBlock(rest string) (body string, ok bool) {
-	switch {
-	case strings.HasPrefix(rest, "---\r\n"):
-		return rest[len("---\r\n"):], true
-	case strings.HasPrefix(rest, "---\n"):
-		return rest[len("---\n"):], true
-	case rest == "---":
-		// Closing delimiter at end of file, no trailing newline.
-		return "", true
+	// The SAME predicate the closing fence uses. Demanding an exact "---" here
+	// while closingFence tolerated a trailing space is what made an empty block
+	// with one read as unterminated: the note became all body, and the next
+	// write prepended a fresh block in front of the original, leaving the note
+	// with two frontmatter blocks and the old fence stranded in its text.
+	n, ok := fenceLineLen(rest)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return rest[n:], true
 }
 
 // isFrontmatterSpace reports whether a rune is invisible filler on an otherwise
@@ -165,27 +166,70 @@ func closingFence(rest string) (idx, length int) {
 	return -1, 0
 }
 
-// fenceLineLen reports whether s BEGINS with a closing-fence line, and how many
-// bytes that line occupies with its terminating newline included. A fence at
-// end of file needs no newline.
+// fenceLineLen reports whether s BEGINS with a fence line, and how many bytes
+// that line occupies with its terminating newline included. A fence at end of
+// file needs no newline.
+//
+// It is THE fence predicate. Every fence decision in this file goes through it:
+// the opening fence, the closing fence, the empty-block check and the surgical
+// writer's own opening check. Four of those used to test string prefixes
+// themselves, and the disagreement cost data twice over. Teaching the CLOSING
+// fence to tolerate a trailing space while emptyFrontmatterBlock still demanded
+// an exact match made an empty block read as UNTERMINATED, so the whole note
+// became body and a write prepended a second frontmatter block in front of the
+// first. And an opening fence carrying the same invisible character was not
+// recognized at all, so every property fell into the body. Two definitions of
+// one boundary is the shape this file has now been fixed for three times.
+//
+// Invisible filler after the "---" is accepted, and INVISIBLE means what
+// isBlankLine means by it: unicode.IsSpace plus the zero-width format
+// characters, minus the line terminators, which end the line rather than pad
+// it. isFrontmatterSpace is shared with isBlankLine deliberately: a fence and a
+// blank line disagreeing about which characters are invisible is exactly how
+// the tab bug came back in cycle 3.
 func fenceLineLen(s string) (int, bool) {
 	if !strings.HasPrefix(s, "---") {
 		return 0, false
 	}
-	i := 3
-	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
-		i++
+	for i := 3; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == '\n':
+			return i + size, true
+		case r == '\r':
+			// The CR of a CRLF ending, or a lone CR at end of file.
+			if i+size < len(s) && s[i+size] == '\n' {
+				return i + size + 1, true
+			}
+			if i+size == len(s) {
+				return i + size, true
+			}
+			return 0, false
+		case isFrontmatterHorizontalSpace(r):
+			i += size
+		default:
+			return 0, false
+		}
 	}
-	if i < len(s) && s[i] == '\r' {
-		i++
+	return len(s), true
+}
+
+// isFrontmatterHorizontalSpace reports whether r is invisible filler WITHIN a
+// line: everything isFrontmatterSpace calls invisible, minus the terminators
+// that end a line instead of padding it.
+func isFrontmatterHorizontalSpace(r rune) bool {
+	switch r {
+	case '\n', '\r', '\u2028', '\u2029':
+		return false
 	}
-	switch {
-	case i == len(s):
-		return i, true
-	case s[i] == '\n':
-		return i + 1, true
-	}
-	return 0, false
+	return isFrontmatterSpace(r)
+}
+
+// openingFenceLen reports the length of the note's OPENING fence, or (0, false)
+// when the note does not open with one. Same predicate as the closing fence, so
+// a trailing space is tolerated at both ends or at neither.
+func openingFenceLen(s string) (int, bool) {
+	return fenceLineLen(s)
 }
 
 // legacyDoubledDelimiterFrontmatter re-reads a doubled opening delimiter the way
@@ -218,13 +262,8 @@ func fenceLineLen(s string) (int, bool) {
 // the worse of the two failures, so that is the side the tie falls on, and it is
 // pinned by test rather than left accidental.
 func doubledFenceKeyBlock(rest string) (block, body string, ok bool) {
-	var afterOpen int
-	switch {
-	case strings.HasPrefix(rest, "---\r\n"):
-		afterOpen = len("---\r\n")
-	case strings.HasPrefix(rest, "---\n"):
-		afterOpen = len("---\n")
-	default:
+	afterOpen, ok := fenceLineLen(rest)
+	if !ok || afterOpen >= len(rest) {
 		// A second delimiter at end of file: an empty block, nothing behind it.
 		return "", "", false
 	}
@@ -284,13 +323,8 @@ func parseFrontmatterFull(content []byte) (meta map[string]any, raw rawFrontmatt
 	// uses. Skipping a fixed 4 bytes for a "---\r\n" opening leaves a stray
 	// "\n" at the start of the YAML region — harmless today (YAML tolerates
 	// leading whitespace) but throws off every offset downstream.
-	var openLen int
-	switch {
-	case strings.HasPrefix(s, "---\r\n"):
-		openLen = 5
-	case strings.HasPrefix(s, "---\n"):
-		openLen = 4
-	default:
+	openLen, ok := openingFenceLen(s)
+	if !ok {
 		return nil, nil, s, nil
 	}
 
@@ -396,6 +430,82 @@ func FilterSensitive(meta map[string]any) map[string]any {
 	return filtered
 }
 
+// materializeAliasesInto rewrites every alias that points ANYWHERE into the
+// subtree rooted at doomed, replacing it with a copy of the value it names, so
+// that removing or replacing that subtree cannot leave a dangling alias.
+//
+// This is the surgical writer's hardest case and it produced an INVALID note.
+// `status: &s draft` with `other: *s` edited to status=published wrote
+// `status: published` while leaving `other: *s`, and the anchor that defined
+// `s` was gone: the file no longer parses, so the note fails every future read,
+// drops out of the index, and `meta`/`tag` on it error out. Worse than the
+// wholesale re-marshal it replaced, which resolved the alias and stayed valid.
+//
+// RESOLVING the alias is the deliberate choice over carrying the anchor onto
+// the replacement. Carrying it would make `other` follow `status` to
+// "published", silently changing the value of a key the user did not touch,
+// which is the very thing the surgical write exists to prevent. Resolving keeps
+// `other: draft`, its VALUE, and loses only the anchor structure. That also
+// matches what the released build did.
+//
+// An alias pointing at a node NESTED inside doomed counts, which is why the
+// whole subtree is collected rather than just the node itself. Editing the
+// ALIAS rather than the anchor needs nothing: an anchor with no remaining
+// reference is valid YAML.
+func materializeAliasesInto(root, doomed *yaml.Node) {
+	if root == nil || doomed == nil {
+		return
+	}
+	doomedNodes := map[*yaml.Node]bool{}
+	var collect func(*yaml.Node)
+	collect = func(n *yaml.Node) {
+		if n == nil || doomedNodes[n] {
+			return
+		}
+		doomedNodes[n] = true
+		for _, c := range n.Content {
+			collect(c)
+		}
+	}
+	collect(doomed)
+
+	var walk func(*yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n == nil {
+			return
+		}
+		for i, c := range n.Content {
+			if c == nil {
+				continue
+			}
+			if c.Kind == yaml.AliasNode && doomedNodes[c.Alias] {
+				n.Content[i] = cloneNode(c.Alias)
+				continue
+			}
+			walk(c)
+		}
+	}
+	walk(root)
+}
+
+// cloneNode deep-copies a node, dropping the anchor so a materialized copy
+// never redefines a name whose definition is on its way out.
+func cloneNode(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
+	}
+	c := *n
+	c.Anchor = ""
+	c.Alias = nil
+	if n.Content != nil {
+		c.Content = make([]*yaml.Node, len(n.Content))
+		for i, child := range n.Content {
+			c.Content[i] = cloneNode(child)
+		}
+	}
+	return &c
+}
+
 // valueNode marshals one frontmatter value into the AST node that represents it.
 func valueNode(v any) (*yaml.Node, error) {
 	b, err := yaml.Marshal(v)
@@ -440,13 +550,8 @@ func nodeHoldsValue(node *yaml.Node, value any) bool {
 // preserving comments, formatting, and key order for all untouched fields.
 func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, body string) ([]byte, error) {
 	s := string(original)
-	var openLen int
-	switch {
-	case strings.HasPrefix(s, "---\r\n"):
-		openLen = 5
-	case strings.HasPrefix(s, "---\n"):
-		openLen = 4
-	default:
+	openLen, ok := openingFenceLen(s)
+	if !ok {
 		return SerializeDocument(updatedMeta, body)
 	}
 
@@ -528,6 +633,10 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 			if err != nil {
 				return nil, err
 			}
+			// Any alias pointing into the node about to go must be resolved
+			// FIRST, using that node's current value, or the file stops
+			// parsing.
+			materializeAliasesInto(root, root.Content[i+1])
 			// A comment sitting on the OLD value described the old value, so it
 			// is deliberately not carried onto the new one. A comment attached
 			// to the KEY is on the key node, which is never replaced.
@@ -554,7 +663,11 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 		keyNode := root.Content[i]
 		if _, exists := updatedMeta[keyNode.Value]; exists {
 			newContent = append(newContent, root.Content[i], root.Content[i+1])
+			continue
 		}
+		// Removing a key that carried an anchor leaves the same dangling alias
+		// a replacement would.
+		materializeAliasesInto(root, root.Content[i+1])
 	}
 	root.Content = newContent
 
@@ -566,11 +679,32 @@ func UpdateDocumentFrontmatterAST(original []byte, updatedMeta map[string]any, b
 	}
 	enc.Close()
 
+	// The note's OWN line endings. The yaml encoder emits LF, so a CRLF note
+	// came back with LF fences and LF between its keys while its body kept
+	// CRLF: one file, two conventions, from an edit that touched one property.
+	// The opening fence is the note's own statement of which it uses.
+	newline := "\n"
+	if strings.HasSuffix(s[:openLen], "\r\n") {
+		newline = "\r\n"
+	}
+
 	var docBuf bytes.Buffer
-	docBuf.WriteString("---\n")
-	docBuf.Write(buf.Bytes())
-	docBuf.WriteString("---\n")
+	docBuf.WriteString("---")
+	docBuf.WriteString(newline)
+	docBuf.WriteString(withNewline(buf.String(), newline))
+	docBuf.WriteString("---")
+	docBuf.WriteString(newline)
 	docBuf.WriteString(body)
 
 	return docBuf.Bytes(), nil
+}
+
+// withNewline re-emits LF-separated text with the note's line ending. The
+// encoder always writes LF, so the text is normalized first and a CRLF note
+// cannot end up with doubled carriage returns.
+func withNewline(text, newline string) string {
+	if newline == "\n" {
+		return text
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\n", newline)
 }
