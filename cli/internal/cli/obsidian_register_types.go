@@ -43,10 +43,12 @@ automatic.
   - Refused while Obsidian holds the vault open, unless --force. Obsidian caches
     its settings in memory and rewrites types.json on its own schedule, so a
     write underneath it can simply be overwritten.
-  - Refused (for --write) while any note still carries a quoted date. Declaring
-    "created" a datetime while the notes hold text makes Obsidian show a type
-    mismatch on every one of them. Run "2nb obsidian migrate-properties --write"
-    first; a preview here still runs and says so.
+  - Refused (for --write) while any note holds a date "migrate-properties" would
+    rewrite: a QUOTED one, which Obsidian shows as Text, or a zone-less one 2nb
+    normalizes to explicit UTC. Declaring "created" a datetime while notes still
+    hold text makes Obsidian show a type mismatch on every one of them. Run
+    "2nb obsidian migrate-properties --write" first; a preview here still runs
+    and names the notes.
 
 "status" is declared as text. Obsidian has no enum type, and its list editor
 ("multitext") would write a YAML sequence back, which 2nb reads as no status at
@@ -90,9 +92,11 @@ type RegisterTypesResult struct {
 	Added     map[string]string `json:"added"`
 	Preserved map[string]string `json:"preserved"`
 	Backup    string            `json:"backup,omitempty"`
-	// Blocked names the notes still carrying a quoted date. A non-empty list
-	// blocks --write: declaring created a datetime while the notes hold text
-	// makes Obsidian show a type mismatch on every one of them.
+	// Blocked names every note holding a date migrate-properties would rewrite,
+	// which is broader than "quoted": a quoted value is the one Obsidian shows
+	// as Text, and a zone-less one is the one 2nb normalizes to explicit UTC.
+	// A non-empty list blocks --write, because declaring created a datetime
+	// while notes still hold text shows a type mismatch on every one of them.
 	Blocked  []string `json:"blocked_by_unmigrated_notes"`
 	Warnings []string `json:"warnings"`
 }
@@ -141,10 +145,10 @@ func runObsidianRegisterTypes(cmd *cobra.Command, args []string) error {
 		result.Added[key] = want[key]
 	}
 
-	result.Blocked = notesWithQuotedDates(v)
+	result.Blocked = notesUnmigrated(v)
 	if len(result.Blocked) > 0 {
 		result.Warnings = append(result.Warnings, fmt.Sprintf(
-			"%d note(s) still carry a quoted date; run `2nb obsidian migrate-properties --write` first, or Obsidian will show a type mismatch on every one of them",
+			"%d note(s) hold a date property migrate-properties would rewrite (a QUOTED value, which Obsidian shows as Text, or a zone-less one 2nb normalizes to UTC); run `2nb obsidian migrate-properties --write` first",
 			len(result.Blocked)))
 	}
 
@@ -168,7 +172,7 @@ func runObsidianRegisterTypes(cmd *cobra.Command, args []string) error {
 func writeObsidianTypes(v *vault.Vault, typesPath string, existing, want map[string]string, result *RegisterTypesResult) error {
 	if len(result.Blocked) > 0 {
 		return exitWithError(ExitValidation, fmt.Sprintf(
-			"error: %d note(s) still carry a quoted date, so declaring these types would make Obsidian show a type mismatch on every one of them.\n"+
+			"error: %d note(s) hold a date property migrate-properties would rewrite, so declaring these types now would make Obsidian show a type mismatch on every one that is still quoted.\n"+
 				"  Run: 2nb obsidian migrate-properties --write\n"+
 				"  Then rerun this command. (`2nb obsidian register-types` with no --write previews the merge meanwhile.)",
 			len(result.Blocked)))
@@ -290,10 +294,18 @@ func desiredObsidianTypes(schemas *vault.SchemaSet) map[string]string {
 	return want
 }
 
-// notesWithQuotedDates returns the vault-relative path of every note still
-// holding a date property as TEXT, sorted. It reuses the migration's own
-// predicate, so the two commands cannot disagree about what "unmigrated" means.
-func notesWithQuotedDates(v *vault.Vault) []string {
+// notesUnmigrated returns the vault-relative path of every note holding a date
+// property that migrate-properties would rewrite, sorted. It reuses that
+// command's own predicate, so the two cannot disagree about what "unmigrated"
+// means.
+//
+// That is deliberately broader than "quoted", which is why it is not named for
+// it: a QUOTED value is the one Obsidian shows as Text, and a zone-less
+// `2026-09-04T12:34:56` (which Obsidian's own editor writes) is one 2nb
+// normalizes to explicit UTC so the file says what the index reads. Both are
+// things the migration moves, so both must be settled before types are
+// declared.
+func notesUnmigrated(v *vault.Vault) []string {
 	var out []string
 	excluded := vault.ObsidianTemplateFolders(v.Root)
 	_ = filepath.Walk(v.Root, func(path string, info os.FileInfo, werr error) error {

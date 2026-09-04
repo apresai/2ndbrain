@@ -155,9 +155,20 @@ func TestContract_RegisterTypes_PreviewWritesNothing(t *testing.T) {
 // datetime while notes still hold quoted text makes Obsidian show a type
 // mismatch on every one of them. The WRITE is refused; the PREVIEW still runs
 // and says why, so the user is not left guessing.
+//
+// "Unmigrated" is broader than "quoted", and the second note here is why: a
+// zone-less `2026-09-04T12:34:56` is what Obsidian's OWN datetime editor
+// writes, it is not quoted, and the migration still rewrites it (to explicit
+// UTC, so the file says what the index reads). Both must be settled before
+// types are declared, which is why the predicate is shared with the migration
+// rather than restated as a quoting check.
 func TestContract_RegisterTypes_RefusesBeforeTheMigration(t *testing.T) {
 	_, root := newContractVault(t)
 	if err := os.WriteFile(filepath.Join(root, "quoted.md"), []byte(quotedNote), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zoneless.md"),
+		[]byte("---\ntitle: Zoneless\ntype: note\ncreated: 2026-09-04T12:34:56\n---\nbody\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,8 +176,8 @@ func TestContract_RegisterTypes_RefusesBeforeTheMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the preview must still run: %v", err)
 	}
-	if len(res.Blocked) != 1 || res.Blocked[0] != "quoted.md" {
-		t.Errorf("the preview did not name the unmigrated note: %+v", res.Blocked)
+	if len(res.Blocked) != 2 || res.Blocked[0] != "quoted.md" || res.Blocked[1] != "zoneless.md" {
+		t.Errorf("the preview did not name both unmigrated notes: %+v", res.Blocked)
 	}
 
 	if _, err := runCLIArgs(t, root, "obsidian", "register-types", "--write"); err == nil {
