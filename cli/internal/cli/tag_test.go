@@ -268,3 +268,42 @@ func propertiesBlock(t *testing.T, note string) string {
 	}
 	return note[:len("---\n")+closeIdx+len("\n---\n")]
 }
+
+// TestTagAdd_KeepsRealPropertiesBehindWhitespaceFiller is the write path for the
+// worst version of this defect. A tab-only line between the doubled fence and
+// the properties was recognized as blank by the classifier but left in the
+// region handed to YAML, which forbids tab indentation: the parse failed, the
+// fallback treated the note as having none, and `tag add` rewrote the file with
+// the user's title and tags thrown into the body.
+func TestTagAdd_KeepsRealPropertiesBehindWhitespaceFiller(t *testing.T) {
+	_, root := newContractVault(t)
+	const original = "---\n---\n\t\ntitle: Real Note\ntags: [a, b]\n---\nBody content\n"
+	notePath := filepath.Join(root, "tabbed-props.md")
+	if err := os.WriteFile(notePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "index"); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "tag", "add", "tabbed-props.md", "alpha"); err != nil {
+		t.Fatalf("tag add: %v", err)
+	}
+
+	got := readNote(t, notePath)
+	props := propertiesBlock(t, got)
+	if !strings.Contains(props, "title: Real Note") {
+		t.Errorf("the note's real title was discarded from its properties:\n%s", got)
+	}
+	for _, tag := range []string{"a", "b", "alpha"} {
+		if !strings.Contains(props, tag) {
+			t.Errorf("tag %q missing from the properties block:\n%s", tag, props)
+		}
+	}
+	body := got[len(props):]
+	if strings.Contains(body, "title: Real Note") {
+		t.Errorf("the note's properties were moved into its body:\n%s", got)
+	}
+	if !strings.Contains(body, "Body content") {
+		t.Errorf("the note lost its body:\n%s", got)
+	}
+}
