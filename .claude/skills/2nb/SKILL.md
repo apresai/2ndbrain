@@ -171,7 +171,7 @@ Build the command from this table instead of probing `--help`. **Global flags on
 | `polish` | `--write` `--links` `--repair-links` `--undo` `--force` `--system` `--max-tokens` |
 | `index` | `--doc <path>` `--force-reembed` |
 | `stale` | `--since <days>` (an integer number of days, e.g. `--since 7`; NOT a duration string). Reads `documents.modified_at`, so a note only appears once it has been indexed by 0.22.4 or later; run `2nb index` once after upgrading |
-| `meta --set`, `tag add\|remove`, `tags rename` | Frontmatter-only writes. They touch ONLY the property named: every other line comes back byte for byte, and a note's body is never rewritten. A note's closing `---` must be a line of exactly that; a `----` rule is body |
+| `meta --set`, `tag add\|remove`, `tags rename` | Frontmatter-only writes. They touch ONLY the property named: every other line comes back byte for byte, and a note's body is never rewritten. A note's `---` lines must be exactly that at both ends (trailing invisible whitespace is fine); a `----` rule is body. An anchored property stays valid YAML after an edit, and CRLF notes keep CRLF |
 | `related` | `--depth N` |
 | `git activity` | `--since <duration>` (a duration string, e.g. `--since 7d`) |
 
