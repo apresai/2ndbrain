@@ -150,33 +150,75 @@ func runSkillsInstall(cmd *cobra.Command, args []string) error {
 	// single-agent install stays allowed (a deliberate override).
 	skipMirrors := all && !user && skills.IsSourceRepoRoot(baseDir)
 
+	// One row per target, built BEFORE anything is printed, so the structured
+	// record and the human lines are the same outcome rendered twice rather
+	// than two independent descriptions of it. `skills install` printed
+	// "Installed ..." on stdout for every format, so --json handed a caller
+	// prose.
+	results := []SkillChangeResult{}
 	for _, a := range targets {
-		if skipMirrors && isRepoMirrorSlug(a.Slug) {
-			fmt.Fprintf(os.Stderr, "skip %s: committed mirror in the 2ndbrain source tree; run `make sync-skills` instead\n", a.Name)
-			continue
-		}
-		backup, err := skills.InstallWithBackup(baseDir, a, user, force)
-		if err != nil {
-			if errors.Is(err, skills.ErrAlreadyInstalled) {
-				fmt.Fprintf(os.Stderr, "skip %s: already installed (--force to overwrite)\n", a.Name)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "error installing %s: %v\n", a.Name, err)
-			continue
-		}
-		path := a.ProjectPath
+		res := SkillChangeResult{Slug: a.Slug, Agent: a.Name, Scope: scope, Note: a.Note}
+		res.Path = a.ProjectPath
 		if user {
-			path = "~/" + a.UserPath
+			res.Path = "~/" + a.UserPath
 		}
-		fmt.Printf("Installed %s (%s) → %s\n", a.Name, scope, path)
-		if backup != "" {
-			fmt.Fprintf(os.Stderr, "  Backed up previous SKILL.md to %s\n", backup)
+		switch {
+		case skipMirrors && isRepoMirrorSlug(a.Slug):
+			res.Skipped = "committed mirror in the 2ndbrain source tree; run `make sync-skills` instead"
+		default:
+			backup, err := skills.InstallWithBackup(baseDir, a, user, force)
+			switch {
+			case errors.Is(err, skills.ErrAlreadyInstalled):
+				res.Skipped = "already installed (--force to overwrite)"
+			case err != nil:
+				res.Error = err.Error()
+			default:
+				res.Changed = true
+				res.BackupPath = backup
+			}
 		}
-		if a.Note != "" {
-			fmt.Fprintf(os.Stderr, "  Note: %s\n", a.Note)
+		results = append(results, res)
+	}
+
+	if done, err := emitStructured(cmd, results); done {
+		return err
+	}
+
+	for _, res := range results {
+		switch {
+		case res.Skipped != "":
+			fmt.Fprintf(os.Stderr, "skip %s: %s\n", res.Agent, res.Skipped)
+		case res.Error != "":
+			fmt.Fprintf(os.Stderr, "error installing %s: %s\n", res.Agent, res.Error)
+		default:
+			fmt.Printf("Installed %s (%s) → %s\n", res.Agent, res.Scope, res.Path)
+			if res.BackupPath != "" {
+				fmt.Fprintf(os.Stderr, "  Backed up previous SKILL.md to %s\n", res.BackupPath)
+			}
+			if res.Note != "" {
+				fmt.Fprintf(os.Stderr, "  Note: %s\n", res.Note)
+			}
 		}
 	}
 	return nil
+}
+
+// SkillChangeResult is one agent's outcome from `skills install` or
+// `skills uninstall`. It matches mcp.InstallResult's shape: what changed, where,
+// and why nothing did. A batch (--all) returns one row per agent, so a single
+// failure never hides the rest.
+type SkillChangeResult struct {
+	Slug  string `json:"slug"`
+	Agent string `json:"agent"`
+	Scope string `json:"scope"`
+	Path  string `json:"path"`
+	// Changed is true only when the SKILL.md was actually written or removed.
+	Changed    bool   `json:"changed"`
+	BackupPath string `json:"backup_path,omitempty"`
+	// Skipped says why nothing happened; empty when something did.
+	Skipped string `json:"skipped,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Note    string `json:"note,omitempty"`
 }
 
 // isRepoMirrorSlug reports whether a skill slug maps to one of the repo's
@@ -205,22 +247,43 @@ func runSkillsUninstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	results := []SkillChangeResult{}
 	for _, a := range targets {
-		if !skills.IsInstalled(baseDir, a, user) {
-			if !all {
-				fmt.Fprintf(os.Stderr, "skip %s: not installed at %s level\n", a.Name, scope)
-			}
-			continue
-		}
-		if err := skills.Uninstall(baseDir, a, user); err != nil {
-			fmt.Fprintf(os.Stderr, "error uninstalling %s: %v\n", a.Name, err)
-			continue
-		}
-		path := a.ProjectPath
+		res := SkillChangeResult{Slug: a.Slug, Agent: a.Name, Scope: scope}
+		res.Path = a.ProjectPath
 		if user {
-			path = "~/" + a.UserPath
+			res.Path = "~/" + a.UserPath
 		}
-		fmt.Printf("Uninstalled %s (%s) ← %s\n", a.Name, scope, path)
+		switch {
+		case !skills.IsInstalled(baseDir, a, user):
+			res.Skipped = "not installed at " + scope + " level"
+		default:
+			if err := skills.Uninstall(baseDir, a, user); err != nil {
+				res.Error = err.Error()
+			} else {
+				res.Changed = true
+			}
+		}
+		results = append(results, res)
+	}
+
+	if done, err := emitStructured(cmd, results); done {
+		return err
+	}
+
+	for _, res := range results {
+		switch {
+		case res.Skipped != "":
+			// A batch stays quiet about agents that had nothing installed;
+			// a single named agent is told.
+			if !all {
+				fmt.Fprintf(os.Stderr, "skip %s: %s\n", res.Agent, res.Skipped)
+			}
+		case res.Error != "":
+			fmt.Fprintf(os.Stderr, "error uninstalling %s: %s\n", res.Agent, res.Error)
+		default:
+			fmt.Printf("Uninstalled %s (%s) ← %s\n", res.Agent, res.Scope, res.Path)
+		}
 	}
 	return nil
 }

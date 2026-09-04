@@ -611,7 +611,9 @@ func runBenchHistory(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, runs)
+		// jsonSafeList: an empty history was the bare token `null`, which is
+		// what every other listing in this CLI stopped emitting.
+		return output.Write(os.Stdout, format, jsonSafeList(format, runs))
 	}
 
 	if len(runs) == 0 {
@@ -652,7 +654,7 @@ func runBenchCompare(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	if format != "" {
-		return output.Write(os.Stdout, format, runs)
+		return output.Write(os.Stdout, format, jsonSafeList(format, runs))
 	}
 
 	if len(runs) == 0 {
