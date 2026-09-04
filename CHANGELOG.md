@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **`2nb obsidian migrate-properties` added a time of day to dates that never had one.** A property written as a plain day, like `incident-date: "2026-07-14"`, came back as `2026-07-14T00:00:00Z`: a midnight nobody typed, from a command whose whole promise is that it removes quotes and changes nothing else. Obsidian then shows that property as **Date and time** instead of **Date**. It applies to any date property that was written as a plain day, which means a property your `.2ndbrain/schemas.yaml` declares `date` or `datetime`, and `created` or `modified` on a note that carried them that way (one you hand-edited, or imported from another tool; notes 2nb created itself always carry a full timestamp, so a vault of only those has nothing to repair). `2nb meta --set` and the MCP `kb_update_meta` had the same fault and are fixed with it
+- **If you already ran the migration on 0.23.0, upgrading does not undo it.** Once the midnight is written it is a real timestamp, indistinguishable from one you meant, so rerunning the migration correctly leaves it alone. To put a note back, use `2nb polish <path> --undo`, which works as long as nothing has rewritten that note since: there is ONE undo snapshot per note and `polish --write`, `repair-links`, `relink` and `unlink` share it, so a later write of any of those replaces the migration's. Otherwise the repair is to retype the day yourself. To find affected notes, look for `T00:00:00Z` on a property you only ever gave a day to
+- A date property carrying a time but no timezone (`2026-07-19T17:07:29`, the shape Obsidian's own datetime editor writes) is normalized to `2026-07-19T17:07:29Z` rather than kept as typed, even though nothing was quoted about it. That is deliberate: it states the timezone 2nb was already assuming, it does not change how Obsidian types the property, and it is the only spelling that settles. Kept as typed it would read back as text on the next pass, so the migration would rewrite that note again and `2nb obsidian register-types`, which refuses while any note still looks unmigrated, would stay blocked behind it
 
 ## [0.23.0] - 2026-09-04
 

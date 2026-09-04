@@ -193,7 +193,7 @@ func TestContract_MigrateProperties_HonorsSchemaDatesAndReportsTheRest(t *testin
 
 	res := migrateJSON(t, root, "--write")
 	after := readNote(t, filepath.Join(root, "standup.md"))
-	if !strings.Contains(after, "held: 2026-04-05T00:00:00Z\n") {
+	if !strings.Contains(after, "held: 2026-04-05\n") {
 		t.Errorf("the schema-declared date field was not migrated:\n%s", after)
 	}
 	if !strings.Contains(after, `reviewed: "2026-04-06"`) {
@@ -416,5 +416,58 @@ func TestContract_MigrateProperties_ReportsTheCommentOnTheAliasLineNotTheAnchor(
 	}
 	if !strings.Contains(dropped[0].Comment, "CREATED") {
 		t.Errorf("reported %q; resolving the alias would report the ANCHOR line's comment instead", dropped[0].Comment)
+	}
+}
+
+// A CALENDAR DATE keeps the day it names and gains no time of day. 0.23.0
+// rewrote `incident-date: "2026-07-14"`, a field the default postmortem schema
+// declares `date`, to `2026-07-14T00:00:00Z`, which states a midnight nobody
+// typed and makes Obsidian type the property as Date and time rather than Date.
+// Found by running the shipped migration over a real vault, where exactly one
+// note carried a date-only schema field.
+//
+// The zone-less DATETIME beside it is the other half of the rule, and it is
+// what makes this idempotent: no yaml.v3 layout is T-separated without a zone,
+// so preserving that spelling would leave it a string, the next run would see a
+// string again and rewrite the same bytes forever, and `register-types` would
+// stay blocked behind a note that never finishes migrating.
+func TestContract_MigrateProperties_ACalendarDateGainsNoTimeOfDay(t *testing.T) {
+	_, root := newContractVault(t)
+	schemas := "types:\n  postmortem:\n    name: Postmortem\n    fields:\n      incident-date:\n        type: date\n    required: []\n"
+	if err := os.WriteFile(filepath.Join(root, ".2ndbrain", "schemas.yaml"), []byte(schemas), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "pm.md")
+	original := "---\ntitle: PM\ntype: postmortem\n" +
+		"created: \"2026-07-19T17:07:29Z\"\n" +
+		"incident-date: \"2026-07-14\"\n" +
+		"seen-at: \"2026-07-19T17:07:29\"\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if res := migrateJSON(t, root, "--write"); res.Changed != 1 {
+		t.Fatalf("changed = %d, want 1: %+v", res.Changed, res.Skipped)
+	}
+	after := readNote(t, path)
+	if !strings.Contains(after, "incident-date: 2026-07-14\n") {
+		t.Errorf("the calendar date did not keep its own day, or gained a time:\n%s", after)
+	}
+	if strings.Contains(after, "2026-07-14T00:00:00Z") {
+		t.Errorf("a midnight was invented on a date-only value:\n%s", after)
+	}
+	if !strings.Contains(after, "created: 2026-07-19T17:07:29Z\n") {
+		t.Errorf("the instant field was not migrated:\n%s", after)
+	}
+	// `seen-at` is not declared a date, so the migration never touches it and it
+	// keeps its quotes. That is the user's own field, reported and left alone.
+	if !strings.Contains(after, `seen-at: "2026-07-19T17:07:29"`) {
+		t.Errorf("an undeclared property was rewritten:\n%s", after)
+	}
+
+	// Idempotent: a second run finds nothing, which is what keeps
+	// register-types from being blocked forever by a note it cannot finish.
+	if res := migrateJSON(t, root); res.Changed != 0 {
+		t.Errorf("a second run would rewrite %d note(s); the migration is not idempotent: %+v", res.Changed, res.Notes)
 	}
 }

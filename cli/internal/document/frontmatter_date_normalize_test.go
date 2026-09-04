@@ -3,6 +3,8 @@ package document
 import (
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Obsidian's own datetime property editor writes `2026-09-04T12:34:56`: no
@@ -163,5 +165,72 @@ func TestParseFrontmatterDate_AShorterLayoutNeverTruncates(t *testing.T) {
 		if s := got.Format(time.RFC3339); s != tc.want {
 			t.Errorf("ParseFrontmatterDate(%q) = %s, want %s (a shorter layout truncated it)", tc.in, s, tc.want)
 		}
+	}
+}
+
+// PlainDate must emit a PLAIN, UNTAGGED scalar. Tagging it `!!timestamp` is the
+// obvious-looking choice and it corrupts notes: yaml.v3's resolver takes only
+// four layouts, so for any other spelling the encoder writes the tag EXPLICITLY
+// (`modified: !!timestamp 2026-09-04T12:34:56`) and the next read fails with
+// "cannot decode !!str as a !!timestamp", which makes the note unparseable and
+// drops it from the index.
+//
+// Pinned directly rather than only through the CLI contract tests, because this
+// is one line in MarshalYAML and the failure it causes is total.
+func TestPlainDate_EmitsAPlainUntaggedScalarThatReadsBack(t *testing.T) {
+	for _, tc := range []struct {
+		in       string
+		wantLine string
+	}{
+		{"2026-09-04", "d: 2026-09-04\n"},
+		{"2026-09-04T12:34:56Z", "d: 2026-09-04T12:34:56Z\n"},
+		{"2026-09-04T12:34:56", "d: 2026-09-04T12:34:56\n"},
+		{"2026-09-04t12:34", "d: 2026-09-04t12:34\n"},
+	} {
+		out, err := yaml.Marshal(map[string]any{"d": PlainDate(tc.in)})
+		if err != nil {
+			t.Fatalf("marshal %q: %v", tc.in, err)
+		}
+		if string(out) != tc.wantLine {
+			t.Errorf("PlainDate(%q) emitted %q, want %q (a tag or quotes here breaks the note)", tc.in, out, tc.wantLine)
+		}
+		var back map[string]any
+		if err := yaml.Unmarshal(out, &back); err != nil {
+			t.Errorf("PlainDate(%q) emitted YAML that will not read back: %v", tc.in, err)
+		}
+		// Whatever Go type yaml resolves it to, the date reader must still get
+		// the same instant out of it.
+		text, ok := ScalarText(back["d"])
+		if !ok {
+			t.Fatalf("PlainDate(%q) read back as a non-scalar %T", tc.in, back["d"])
+		}
+		if _, ok := ParseFrontmatterDate(text); !ok {
+			t.Errorf("PlainDate(%q) read back as %q, which is not a date", tc.in, text)
+		}
+	}
+}
+
+// The migration decides by the value's SHAPE, not by the field's declared type:
+// a calendar-date field holding a value that carries a time still normalizes,
+// because preserving a zone-less spelling is what would never settle.
+func TestParseFrontmatterDateText_ShapeDecidesNotTheField(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"2026-07-14", "2026-07-14"},                     // calendar date: kept
+		{"2026-7-4", "2026-7-4"},                         // still a calendar date, unpadded
+		{"2026-07-14T09:00:00", "2026-07-14T09:00:00Z"},  // carries a time: normalized
+		{"2026-07-14T09:00:00Z", "2026-07-14T09:00:00Z"}, // already an instant
+		{"2026-07-14T09:00", "2026-07-14T09:00:00Z"},     // minute precision is still a time
+		{"2026-07-14T09:00:00.75Z", "2026-07-14T09:00:00Z"},
+	} {
+		got, ok := ParseFrontmatterDateText(tc.in)
+		if !ok {
+			t.Fatalf("ParseFrontmatterDateText(%q) refused", tc.in)
+		}
+		if string(got) != tc.want {
+			t.Errorf("ParseFrontmatterDateText(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if _, ok := ParseFrontmatterDateText("not a date"); ok {
+		t.Error("ParseFrontmatterDateText accepted text that is not a date")
 	}
 }

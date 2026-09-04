@@ -276,10 +276,12 @@ func updateMeta(cmd *cobra.Command, v *vault.Vault, doc *document.Document, absP
 			}
 		}
 
-		// A DATE field is stored as a time.Time so the writer emits it
-		// UNQUOTED, which is what Obsidian types as Date and time. Writing the
-		// raw CLI string here is what would silently requote a date node
-		// `2nb create` had just written plain, one note at a time. Validation
+		// A DATE field is stored as a document.PlainDate so the writer emits it
+		// UNQUOTED, which is what Obsidian types as a date. Writing the raw CLI
+		// string here is what would silently requote a date node `2nb create`
+		// had just written plain, one note at a time. The type carries the
+		// precision the caller typed, so a calendar date does not come back
+		// with a midnight attached. Validation
 		// runs on the text the user typed, above; only the STORED value
 		// changes. Text that is not a date falls through and is stored
 		// verbatim, exactly as before.

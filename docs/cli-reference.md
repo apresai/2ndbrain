@@ -679,8 +679,26 @@ timestamp.
   and drops comments; across a vault it is a large, silent reformat.
 - Reparses the bytes it would write before accepting them, and reads the
   reported new spelling off those bytes rather than off the value handed in.
+- **A CALENDAR DATE keeps the day it names and gains no time of day.** A field
+  the schema declares `date`, written `"2026-07-14"`, becomes `2026-07-14`, not
+  `2026-07-14T00:00:00Z`. 0.23.0 wrote the midnight, so Obsidian typed that property Date
+  and time rather than Date; `document.ParseFrontmatterDateText`
+  is the shared rule and `vault.SchemaSet.IsCalendarDateField` decides which
+  fields it applies to on the `meta --set` / `kb_update_meta` path (`created` and
+  `modified` are instants 2nb writes itself, never calendar dates).
+- A value carrying a time but no zone is normalized to RFC3339 rather than kept
+  verbatim, and that asymmetry is what makes the command idempotent: no yaml.v3
+  layout is T-separated without a zone, so a preserved `2026-07-19T17:07:29`
+  reads back as a STRING, every later run would see a string and rewrite the
+  same bytes, and `register-types` (which refuses while any note looks
+  unmigrated) would never unblock. A date-only value reads back as a `time.Time`,
+  so preserving that one is safe.
 - Idempotent: a value already plain reads back as a `time.Time` and is skipped,
-  the same comparison `nodeHoldsValue` makes, so a second run is a no-op.
+  the same comparison `nodeHoldsValue` makes, so a second run is a no-op. The
+  post-write check asks whether each migrated value reads back as a DATE, via
+  `ScalarText` plus `ParseFrontmatterDate`, not whether it reads back as a
+  `time.Time`: the latter would refuse every note Obsidian's datetime editor has
+  touched.
 - `--write` snapshots each note through the shared `internal/polish` recovery
   slot first, so `2nb polish <path> --undo` restores it, exactly as
   `repair-links`, `relink` and `unlink` do.
