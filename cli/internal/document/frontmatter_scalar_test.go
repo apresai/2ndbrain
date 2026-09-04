@@ -5,12 +5,18 @@ import (
 	"testing"
 )
 
-// An unquoted ISO-8601 date in frontmatter is a DATE, not a missing field.
-// gopkg.in/yaml.v3 resolves such a scalar to time.Time, and Parse's old
-// meta["modified"].(string) assertion failed silently for it, so CreatedAt and
-// ModifiedAt stayed empty and the note vanished from `stale`. Obsidian's own
-// Date property writes exactly this shape.
-func TestParse_UnquotedFrontmatterDateIsStillADate(t *testing.T) {
+// A frontmatter value has two readings, and these tests pin which field gets
+// which. A DATE field normalizes to RFC3339, because that is the format the
+// index column stores and `stale` parses back, and every way of writing the
+// same instant must land there identically. A TEXT field keeps the note's own
+// text, because resolution is LOSSY: `2026-09-04` and `2026-09-04T00:00:00Z`
+// decode to the same time.Time, so no formatting choice can reproduce both.
+
+// DATE fields: every legitimate spelling of an instant normalizes to the same
+// RFC3339 string. The unquoted forms are what Obsidian's own Date property
+// writes; before this they left the column EMPTY and `stale` (which filters
+// `modified_at != ''`) omitted the note however old it was.
+func TestParse_DateFieldsNormalizeToRFC3339(t *testing.T) {
 	cases := []struct {
 		name     string
 		fm       string
@@ -59,59 +65,144 @@ func TestParse_UnquotedFrontmatterDateIsStillADate(t *testing.T) {
 	}
 }
 
-// The neighbours of the date fields: id, title, type and status carried the
-// same bare .(string) assertion, and a YAML scalar resolves to a narrower Go
-// type for a bare number, a bare boolean and a bare date alike. A note titled
-// `title: 2026-09-04` (the shape a daily note takes) indexed with an EMPTY
-// title, so it could not be found by name and rendered nameless in every
-// listing.
-func TestParse_UnquotedScalarStringFields(t *testing.T) {
-	doc, err := Parse("n.md", []byte(
-		"---\nid: 007\ntitle: 2026-09-04\ntype: 3\nstatus: true\n---\nbody\n"))
+// The two intents in ONE note, which is the case that makes the distinction
+// concrete: a daily note titled by its date, dated by the same date. The title
+// must read back exactly as written, and the date must normalize.
+func TestParse_ADailyNoteKeepsItsTitleAndNormalizesItsDate(t *testing.T) {
+	doc, err := Parse("2026-09-04.md", []byte(
+		"---\ntitle: 2026-09-04\nmodified: 2026-09-04\n---\nstandup\n"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if doc.ID != "7" {
-		t.Errorf("ID = %q, want %q", doc.ID, "7")
+	if doc.Title != "2026-09-04" {
+		t.Errorf("Title = %q, want the text the note carries, 2026-09-04", doc.Title)
 	}
-	if doc.Title != "2026-09-04T00:00:00Z" {
-		t.Errorf("Title = %q, want the normalized date", doc.Title)
-	}
-	if doc.Type != "3" {
-		t.Errorf("Type = %q, want %q", doc.Type, "3")
-	}
-	if doc.Status != "true" {
-		t.Errorf("Status = %q, want %q", doc.Status, "true")
+	if doc.ModifiedAt != "2026-09-04T00:00:00Z" {
+		t.Errorf("ModifiedAt = %q, want the normalized 2026-09-04T00:00:00Z", doc.ModifiedAt)
 	}
 }
 
-// A list entry YAML reads as a date, a number or a boolean is still a tag (and
-// still an alias). extractTags and ExtractAliases dropped every such entry.
-func TestExtractTagsAndAliases_CoerceScalarEntries(t *testing.T) {
+// TEXT fields: id, title, type and status read back as the note wrote them,
+// quoted or not. yaml.v3 resolves an unquoted scalar to its own Go type, and a
+// bare .(string) assertion left every one of these EMPTY, so a note titled with
+// a bare date or a bare number could not be found by name and rendered nameless
+// in every listing. Formatting the RESOLVED value instead was the other half of
+// the bug: it turned `title: 2026-09-04` into `2026-09-04T00:00:00Z`, which is
+// not what the file says.
+func TestParse_TextFieldsKeepTheNotesOwnText(t *testing.T) {
+	cases := []struct {
+		name                       string
+		fm                         string
+		id, title, docType, status string
+	}{
+		{
+			name:   "unquoted scalars keep their text",
+			fm:     "id: 007\ntitle: 2026-09-04\ntype: 3\nstatus: true\n",
+			id:     "007",
+			title:  "2026-09-04",
+			status: "true",
+		},
+		{
+			name:   "quoted scalars are unchanged",
+			fm:     "id: \"007\"\ntitle: \"2026-09-04\"\ntype: \"3\"\nstatus: \"true\"\n",
+			id:     "007",
+			title:  "2026-09-04",
+			status: "true",
+		},
+		{
+			name:   "an unquoted full timestamp title keeps its own spelling",
+			fm:     "id: a\ntitle: 2026-09-04T00:00:00Z\ntype: note\nstatus: draft\n",
+			id:     "a",
+			title:  "2026-09-04T00:00:00Z",
+			status: "draft",
+		},
+		{
+			name:   "a trailing zero survives",
+			fm:     "id: b\ntitle: 3.50\ntype: note\nstatus: draft\n",
+			id:     "b",
+			title:  "3.50",
+			status: "draft",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docType := tc.docType
+			if docType == "" {
+				docType = "3"
+				if tc.status == "draft" {
+					docType = "note"
+				}
+			}
+			doc, err := Parse("n.md", []byte("---\n"+tc.fm+"---\nbody\n"))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if doc.ID != tc.id {
+				t.Errorf("ID = %q, want %q", doc.ID, tc.id)
+			}
+			if doc.Title != tc.title {
+				t.Errorf("Title = %q, want %q", doc.Title, tc.title)
+			}
+			if doc.Type != docType {
+				t.Errorf("Type = %q, want %q", doc.Type, docType)
+			}
+			if doc.Status != tc.status {
+				t.Errorf("Status = %q, want %q", doc.Status, tc.status)
+			}
+		})
+	}
+}
+
+// A tag or an alias is TEXT: a bare date stays the date the note shows, a bare
+// number stays its digits, and the quoted form of each is identical. Every one
+// of these was dropped from the note entirely before, and then rendered as a
+// normalized timestamp by the first attempt at fixing that.
+func TestExtractTagsAndAliases_KeepTheNotesOwnText(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fm   string
+	}{
+		{"unquoted", "tags:\n  - 2026-09-04\n  - 42\n  - true\n  - real\naliases:\n  - 2026-09-04\n  - plain\n"},
+		{"quoted", "tags:\n  - \"2026-09-04\"\n  - \"42\"\n  - \"true\"\n  - \"real\"\naliases:\n  - \"2026-09-04\"\n  - \"plain\"\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := Parse("n.md", []byte("---\ntitle: N\n"+tc.fm+"---\nbody\n"))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			wantTags := []string{"2026-09-04", "42", "true", "real"}
+			if !slices.Equal(doc.Tags, wantTags) {
+				t.Errorf("Tags = %v, want %v", doc.Tags, wantTags)
+			}
+			wantAliases := []string{"2026-09-04", "plain"}
+			if got := AliasesOf(doc); !slices.Equal(got, wantAliases) {
+				t.Errorf("aliases = %v, want %v", got, wantAliases)
+			}
+		})
+	}
+}
+
+// An element that is not a scalar is not a tag, and is still dropped.
+func TestExtractTags_DropsANestedComposite(t *testing.T) {
 	doc, err := Parse("n.md", []byte(
-		"---\ntitle: N\ntags:\n  - 2026-09-04\n  - 42\n  - true\n  - real\naliases:\n  - 2026-09-04\n  - plain\n---\nbody\n"))
+		"---\ntitle: N\ntags:\n  - real\n  - [nested]\n  - {k: v}\n  - alsoreal\n---\nbody\n"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	wantTags := []string{"2026-09-04T00:00:00Z", "42", "true", "real"}
-	if !slices.Equal(doc.Tags, wantTags) {
-		t.Errorf("Tags = %v, want %v", doc.Tags, wantTags)
-	}
-	wantAliases := []string{"2026-09-04T00:00:00Z", "plain"}
-	if got := ExtractAliases(doc.Frontmatter); !slices.Equal(got, wantAliases) {
-		t.Errorf("aliases = %v, want %v", got, wantAliases)
+	want := []string{"real", "alsoreal"}
+	if !slices.Equal(doc.Tags, want) {
+		t.Errorf("Tags = %v, want %v", doc.Tags, want)
 	}
 }
 
-// A bare scalar in place of a list is one entry, whatever type YAML gave it.
-// `tags: foo` already worked; `tags: 2026-09-04` did not.
+// A bare scalar in place of a list is one entry, in the note's own text.
 func TestExtractTags_BareScalar(t *testing.T) {
 	for _, tc := range []struct {
 		fm   string
 		want []string
 	}{
 		{"tags: foo\n", []string{"foo"}},
-		{"tags: 2026-09-04\n", []string{"2026-09-04T00:00:00Z"}},
+		{"tags: 2026-09-04\n", []string{"2026-09-04"}},
 		{"tags: 42\n", []string{"42"}},
 		{"tags:\n", nil},
 		{"tags: \"\"\n", nil},
@@ -127,12 +218,27 @@ func TestExtractTags_BareScalar(t *testing.T) {
 }
 
 // frontmatterTime accepts only the two shapes a date legitimately arrives in.
-// A number under `modified:` is not a date, and coercing it would put an
-// unparseable value in a timestamp column instead of leaving it empty.
+// A number, a boolean, a list, a mapping or a null under `modified:` is not a
+// date, and coercing one would put an unparseable value in a timestamp column
+// instead of leaving it empty.
 func TestFrontmatterTime_RefusesNonDates(t *testing.T) {
-	for _, v := range []any{42, true, 3.5, []any{"a"}, nil} {
+	for _, v := range []any{42, true, 3.5, []any{"a"}, map[string]any{"k": "v"}, nil} {
 		if got, ok := frontmatterTime(map[string]any{"modified": v}, "modified"); ok {
 			t.Errorf("frontmatterTime(%v) = (%q, true), want not ok", v, got)
+		}
+	}
+}
+
+// The same shapes on a real note leave the date columns empty rather than
+// inventing a value.
+func TestParse_NonDateInADateFieldLeavesTheColumnEmpty(t *testing.T) {
+	for _, fm := range []string{"modified:\n", "modified: [a, b]\n", "modified:\n  k: v\n"} {
+		doc, err := Parse("n.md", []byte("---\ntitle: N\n"+fm+"---\nbody\n"))
+		if err != nil {
+			t.Fatalf("parse %q: %v", fm, err)
+		}
+		if doc.ModifiedAt != "" {
+			t.Errorf("%q -> ModifiedAt = %q, want empty", fm, doc.ModifiedAt)
 		}
 	}
 }
@@ -143,8 +249,39 @@ func TestFrontmatterHelpers_MissingKey(t *testing.T) {
 	if _, ok := frontmatterTime(empty, "modified"); ok {
 		t.Error("frontmatterTime found a missing key")
 	}
-	if _, ok := frontmatterText(empty, "title"); ok {
+	if _, ok := frontmatterText(empty, nil, "title"); ok {
 		t.Error("frontmatterText found a missing key")
+	}
+}
+
+// With no node behind the map (a document built in code, a synthetic
+// .canvas/.base view, a SetMeta write), the readers fall back to ScalarText on
+// the resolved value rather than losing the field.
+func TestFrontmatterText_FallsBackWithoutANode(t *testing.T) {
+	meta := map[string]any{"title": 12345, "status": true}
+	if got, ok := frontmatterText(meta, nil, "title"); !ok || got != "12345" {
+		t.Errorf("frontmatterText(title) = (%q, %v), want (\"12345\", true)", got, ok)
+	}
+	if got, ok := frontmatterText(meta, nil, "status"); !ok || got != "true" {
+		t.Errorf("frontmatterText(status) = (%q, %v), want (\"true\", true)", got, ok)
+	}
+}
+
+// SetMeta replaces a value, so the note's old text for that key must stop being
+// used. Without the invalidation the stale node text would win over the value
+// just written.
+func TestSetMeta_InvalidatesTheNotesOldText(t *testing.T) {
+	doc, err := Parse("n.md", []byte("---\ntitle: 2026-09-04\ntags:\n  - 2026-09-04\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	doc.SetMeta("title", "Renamed")
+	if doc.Title != "Renamed" {
+		t.Errorf("Title = %q after SetMeta, want Renamed", doc.Title)
+	}
+	doc.SetMeta("tags", []any{"fresh"})
+	if !slices.Equal(doc.Tags, []string{"fresh"}) {
+		t.Errorf("Tags = %v after SetMeta, want [fresh]", doc.Tags)
 	}
 }
 

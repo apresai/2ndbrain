@@ -28,6 +28,14 @@ type Document struct {
 	Frontmatter map[string]any `json:"frontmatter"`
 	Body        string         `json:"body,omitempty"`
 	ContentHash string         `json:"content_hash,omitempty"`
+
+	// raw is the VERBATIM text of each top-level frontmatter key, kept because
+	// resolution is lossy for a text field: `2026-09-04` and
+	// `2026-09-04T00:00:00Z` decode to the same time.Time, so a title or a tag
+	// can only be reproduced from the node. Unexported, so it never reaches
+	// JSON; nil for a document not built by Parse, where every reader falls
+	// back to ScalarText. See frontmatter_scalar.go.
+	raw rawFrontmatter
 }
 
 // ComputeContentHash sets ContentHash to the SHA-256 of the normalized body.
@@ -70,7 +78,7 @@ func normalizeBody(body string) string {
 }
 
 func Parse(path string, content []byte) (*Document, error) {
-	meta, body, err := ParseFrontmatter(content)
+	meta, raw, body, err := parseFrontmatterFull(content)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -79,6 +87,7 @@ func Parse(path string, content []byte) (*Document, error) {
 		Path:        path,
 		Frontmatter: meta,
 		Body:        body,
+		raw:         raw,
 	}
 
 	// Every field below goes through a helper rather than a bare
@@ -93,16 +102,16 @@ func Parse(path string, content []byte) (*Document, error) {
 	// requote a date line the user never touched. The struct fields the index
 	// reads are normalized; the note's bytes are left alone.
 	if meta != nil {
-		if id, ok := frontmatterText(meta, "id"); ok {
+		if id, ok := frontmatterText(meta, raw, "id"); ok {
 			doc.ID = id
 		}
-		if title, ok := frontmatterText(meta, "title"); ok {
+		if title, ok := frontmatterText(meta, raw, "title"); ok {
 			doc.Title = title
 		}
-		if typ, ok := frontmatterText(meta, "type"); ok {
+		if typ, ok := frontmatterText(meta, raw, "type"); ok {
 			doc.Type = typ
 		}
-		if status, ok := frontmatterText(meta, "status"); ok {
+		if status, ok := frontmatterText(meta, raw, "status"); ok {
 			doc.Status = status
 		}
 		if created, ok := frontmatterTime(meta, "created"); ok {
@@ -111,7 +120,7 @@ func Parse(path string, content []byte) (*Document, error) {
 		if modified, ok := frontmatterTime(meta, "modified"); ok {
 			doc.ModifiedAt = modified
 		}
-		doc.Tags = extractTags(meta)
+		doc.Tags = extractTags(meta, raw)
 	}
 
 	return doc, nil
@@ -214,6 +223,10 @@ func (d *Document) SetMeta(key string, value any) {
 		d.Frontmatter = make(map[string]any)
 	}
 	d.Frontmatter[key] = value
+	// The verbatim text of this key is now stale: it describes what the FILE
+	// said, and the caller just replaced it. Drop it so every reader falls back
+	// to the value actually set.
+	delete(d.raw, key)
 
 	// Keep struct fields in sync
 	switch key {
@@ -230,7 +243,7 @@ func (d *Document) SetMeta(key string, value any) {
 			d.Status = s
 		}
 	case "tags":
-		d.Tags = extractTags(d.Frontmatter)
+		d.Tags = extractTags(d.Frontmatter, d.raw)
 	}
 }
 
@@ -331,29 +344,45 @@ func PrependToBody(body, content string) string {
 	return content + "\n" + body
 }
 
-func extractTags(meta map[string]any) []string {
-	raw, ok := meta["tags"]
+func extractTags(meta map[string]any, raw rawFrontmatter) []string {
+	return scalarList(meta, raw, "tags")
+}
+
+// scalarList reads a list-valued frontmatter field (tags, aliases) as the note
+// WROTE it. Each element is its verbatim node text, so an unquoted entry YAML
+// resolves to a date, a number or a boolean stays the text the file carries:
+// `- 2026-09-04` is the tag `2026-09-04`, not `2026-09-04T00:00:00Z` and not,
+// as before this, dropped from the note entirely. An element that is not a
+// scalar (a nested list or mapping) is not a tag and is still dropped.
+func scalarList(meta map[string]any, raw rawFrontmatter, key string) []string {
+	value, ok := meta[key]
 	if !ok {
 		return nil
 	}
 
-	switch v := raw.(type) {
+	switch v := value.(type) {
 	case []any:
-		tags := make([]string, 0, len(v))
-		for _, item := range v {
-			// ScalarText, not item.(string): an unquoted list entry that YAML
-			// reads as a date, a number or a boolean (`- 2026-09-04`) was
-			// dropped from the note's tags without a word.
+		out := make([]string, 0, len(v))
+		for i, item := range v {
+			// The node's text wins; ScalarText on the resolved element is the
+			// fallback where there is no node (a map built in code).
+			if s, ok := raw.item(key, i); ok {
+				out = append(out, s)
+				continue
+			}
 			if s, ok := ScalarText(item); ok {
-				tags = append(tags, s)
+				out = append(out, s)
 			}
 		}
-		return tags
+		return out
 	case []string:
 		return v
 	default:
-		// `tags: foo` in YAML parses as a bare scalar; treat it as one tag.
-		s, ok := ScalarText(v)
+		// `tags: foo` in YAML parses as a bare scalar; treat it as one entry.
+		s, ok := raw.scalar(key)
+		if !ok {
+			s, ok = ScalarText(v)
+		}
 		if !ok || s == "" {
 			return nil
 		}
@@ -361,35 +390,45 @@ func extractTags(meta map[string]any) []string {
 	}
 }
 
+// MetaText returns the VERBATIM text of a top-level frontmatter SCALAR, as the
+// note wrote it, reporting false when the key is absent, is not a scalar, or
+// has no node behind it (a document built in code). Use it wherever a field is
+// SHOWN rather than compared: the resolved value cannot reproduce the note's
+// text for a date (see frontmatter_scalar.go).
+func (d *Document) MetaText(key string) (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.raw.scalar(key)
+}
+
+// MetaTextItem is MetaText for one element of a top-level frontmatter LIST,
+// index-aligned with the decoded []any.
+func (d *Document) MetaTextItem(key string, i int) (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.raw.item(key, i)
+}
+
+// AliasesOf reads a document's frontmatter aliases as the note wrote them.
+// Prefer it over ExtractAliases wherever a *Document is in hand: it carries the
+// verbatim node text, so an unquoted alias YAML resolves to a date keeps the
+// text the file shows rather than a normalized timestamp.
+func AliasesOf(d *Document) []string {
+	if d == nil {
+		return nil
+	}
+	return scalarList(d.Frontmatter, d.raw, "aliases")
+}
+
+// ExtractAliases is the map-only reading, for a caller with no Document (and so
+// no node text). A resolved scalar renders through ScalarText.
 func ExtractAliases(meta map[string]any) []string {
 	if meta == nil {
 		return nil
 	}
-	raw, ok := meta["aliases"]
-	if !ok {
-		return nil
-	}
-
-	switch v := raw.(type) {
-	case []any:
-		aliases := make([]string, 0, len(v))
-		for _, item := range v {
-			// Same coercion as tags: an unquoted alias YAML reads as a date or
-			// a number is still an alias.
-			if s, ok := ScalarText(item); ok {
-				aliases = append(aliases, s)
-			}
-		}
-		return aliases
-	case []string:
-		return v
-	default:
-		s, ok := ScalarText(v)
-		if !ok || s == "" {
-			return nil
-		}
-		return []string{s}
-	}
+	return scalarList(meta, nil, "aliases")
 }
 
 func slugify(s string) string {

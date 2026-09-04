@@ -326,7 +326,7 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 	}
 
 	// Aliases
-	aliases := document.ExtractAliases(doc.Frontmatter)
+	aliases := document.AliasesOf(doc)
 	if err := db.UpsertAliasesTx(tx, doc.ID, aliases); err != nil {
 		return fmt.Errorf("upsert aliases: %w", err)
 	}

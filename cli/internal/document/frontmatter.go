@@ -211,19 +211,33 @@ func doubledFenceKeyBlock(rest string) (block, body string, ok bool) {
 // used to derive its own region, and one that merely skipped the leading blank
 // lines rather than stripping them handed YAML filler the reader had already
 // removed, which threw a note's properties away on a `meta --set`.
-func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, string, bool) {
+func legacyDoubledDelimiterFrontmatter(rest string) (map[string]any, rawFrontmatter, string, bool) {
 	block, body, ok := doubledFenceKeyBlock(rest)
 	if !ok {
-		return nil, "", false
+		return nil, nil, "", false
 	}
 	meta := make(map[string]any)
 	if err := yaml.Unmarshal([]byte(block), &meta); err != nil || len(meta) == 0 {
-		return nil, "", false
+		return nil, nil, "", false
 	}
-	return meta, body, true
+	return meta, rawFrontmatterOf(block), body, true
 }
 
+// ParseFrontmatter returns the RESOLVED frontmatter map and the body. Use
+// parseFrontmatterFull when the ORIGINAL text of a value matters (see
+// frontmatter_scalar.go); this wrapper exists because most callers only read
+// or rewrite the map.
 func ParseFrontmatter(content []byte) (meta map[string]any, body string, err error) {
+	meta, _, body, err = parseFrontmatterFull(content)
+	return meta, body, err
+}
+
+// parseFrontmatterFull is ParseFrontmatter plus the verbatim text of every
+// top-level key, read from the SAME region the map was decoded from. Deriving
+// the region twice is the shape of a bug this file has been fixed for twice
+// already, so there is exactly one boundary search and both readings come out
+// of it.
+func parseFrontmatterFull(content []byte) (meta map[string]any, raw rawFrontmatter, body string, err error) {
 	s := string(content)
 
 	// Length of the opening delimiter depends on which line ending the file
@@ -237,7 +251,7 @@ func ParseFrontmatter(content []byte) (meta map[string]any, body string, err err
 	case strings.HasPrefix(s, "---\n"):
 		openLen = 4
 	default:
-		return nil, s, nil
+		return nil, nil, s, nil
 	}
 
 	rest := s[openLen:]
@@ -250,10 +264,10 @@ func ParseFrontmatter(content []byte) (meta map[string]any, body string, err err
 		// below found the THIRD delimiter and YAML accepted the leading "---" as
 		// a document start), so taking the first reading unconditionally moved a
 		// note's real metadata into its body.
-		if meta, legacyBody, ok := legacyDoubledDelimiterFrontmatter(rest); ok {
-			return meta, legacyBody, nil
+		if meta, raw, legacyBody, ok := legacyDoubledDelimiterFrontmatter(rest); ok {
+			return meta, raw, legacyBody, nil
 		}
-		return map[string]any{}, emptyBody, nil
+		return map[string]any{}, nil, emptyBody, nil
 	}
 	idx := strings.Index(rest, "\n---\n")
 	if idx == -1 {
@@ -263,41 +277,46 @@ func ParseFrontmatter(content []byte) (meta map[string]any, body string, err err
 			// Try CRLF at EOF
 			idx = strings.Index(rest, "\r\n---")
 			if idx != -1 && idx+len("\r\n---") == len(rest) {
-				yamlStr := rest[:idx]
-				meta = make(map[string]any)
-				if err := yaml.Unmarshal([]byte(yamlStr), &meta); err != nil {
-					return nil, s, fmt.Errorf("malformed YAML frontmatter: %w", err)
+				meta, raw, err := decodeFrontmatterYAML(rest[:idx])
+				if err != nil {
+					return nil, nil, s, err
 				}
-				return meta, "", nil
+				return meta, raw, "", nil
 			}
 			// Try LF at EOF
 			idx = strings.Index(rest, "\n---")
 			if idx == -1 {
-				return nil, s, nil
+				return nil, nil, s, nil
 			}
-			yamlStr := rest[:idx]
-			meta = make(map[string]any)
-			if err := yaml.Unmarshal([]byte(yamlStr), &meta); err != nil {
-				return nil, s, fmt.Errorf("malformed YAML frontmatter: %w", err)
+			meta, raw, err := decodeFrontmatterYAML(rest[:idx])
+			if err != nil {
+				return nil, nil, s, err
 			}
-			return meta, "", nil
+			return meta, raw, "", nil
 		}
-		yamlStr := rest[:idx]
-		meta = make(map[string]any)
-		if err := yaml.Unmarshal([]byte(yamlStr), &meta); err != nil {
-			return nil, s, fmt.Errorf("malformed YAML frontmatter: %w", err)
+		meta, raw, err := decodeFrontmatterYAML(rest[:idx])
+		if err != nil {
+			return nil, nil, s, err
 		}
-		body = rest[idx+len("\r\n---\r\n"):]
-		return meta, body, nil
+		return meta, raw, rest[idx+len("\r\n---\r\n"):], nil
 	}
 
-	yamlStr := rest[:idx]
-	meta = make(map[string]any)
-	if err := yaml.Unmarshal([]byte(yamlStr), &meta); err != nil {
-		return nil, s, fmt.Errorf("malformed YAML frontmatter: %w", err)
+	meta, raw, err = decodeFrontmatterYAML(rest[:idx])
+	if err != nil {
+		return nil, nil, s, err
 	}
-	body = rest[idx+len("\n---\n"):]
-	return meta, body, nil
+	return meta, raw, rest[idx+len("\n---\n"):], nil
+}
+
+// decodeFrontmatterYAML decodes ONE frontmatter region both ways: the resolved
+// map every caller reads, and the verbatim text of its top-level values. Both
+// come from the same string, so they cannot describe different regions.
+func decodeFrontmatterYAML(yamlStr string) (map[string]any, rawFrontmatter, error) {
+	meta := make(map[string]any)
+	if err := yaml.Unmarshal([]byte(yamlStr), &meta); err != nil {
+		return nil, nil, fmt.Errorf("malformed YAML frontmatter: %w", err)
+	}
+	return meta, rawFrontmatterOf(yamlStr), nil
 }
 
 func SerializeFrontmatter(meta map[string]any) ([]byte, error) {
