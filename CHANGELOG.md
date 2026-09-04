@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.22.4] - 2026-09-04
+
 This release is mostly about one thing: **2nb was rewriting parts of your notes it had no business touching.** In three
 cases that cost you content or left a note unreadable. If you keep horizontal rules in your notes, or tags that look
 like dates or numbers, reindex after upgrading and check those notes first.
