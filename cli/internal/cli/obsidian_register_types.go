@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -120,11 +121,12 @@ func runObsidianRegisterTypes(cmd *cobra.Command, args []string) error {
 	setupFileLogging(v)
 
 	typesPath := filepath.Join(v.Root, ".obsidian", "types.json")
-	existing, err := readObsidianTypes(typesPath)
+	doc, err := readObsidianTypesDoc(typesPath)
 	if err != nil {
 		return exitWithError(ExitValidation, fmt.Sprintf(
-			"error: %s could not be read as JSON (%v); refusing to replace a settings file 2nb cannot understand", typesPath, err))
+			"error: %s could not be read as a JSON object (%v); refusing to replace a settings file 2nb cannot understand", typesPath, err))
 	}
+	existing := doc.types
 
 	want := desiredObsidianTypes(v.Schemas)
 	result := RegisterTypesResult{
@@ -153,7 +155,7 @@ func runObsidianRegisterTypes(cmd *cobra.Command, args []string) error {
 	}
 
 	if registerTypesWrite {
-		if err := writeObsidianTypes(v, typesPath, existing, want, &result); err != nil {
+		if err := writeObsidianTypes(v, typesPath, doc, want, &result); err != nil {
 			return err
 		}
 	}
@@ -169,7 +171,7 @@ func runObsidianRegisterTypes(cmd *cobra.Command, args []string) error {
 }
 
 // writeObsidianTypes performs the gated, backed-up, atomic merge.
-func writeObsidianTypes(v *vault.Vault, typesPath string, existing, want map[string]string, result *RegisterTypesResult) error {
+func writeObsidianTypes(v *vault.Vault, typesPath string, doc *obsidianTypesDoc, want map[string]string, result *RegisterTypesResult) error {
 	if len(result.Blocked) > 0 {
 		return exitWithError(ExitValidation, fmt.Sprintf(
 			"error: %d note(s) hold a date property migrate-properties would rewrite, so declaring these types now would make Obsidian show a type mismatch on every one that is still quoted.\n"+
@@ -190,8 +192,8 @@ func writeObsidianTypes(v *vault.Vault, typesPath string, existing, want map[str
 			"could not read Obsidian's vault registry, so whether Obsidian has this vault open is unknown; if it is, reopen the vault after this write")
 	}
 
-	merged := make(map[string]string, len(existing)+len(want))
-	for k, val := range existing {
+	merged := make(map[string]string, len(doc.types)+len(result.Added))
+	for k, val := range doc.types {
 		merged[k] = val
 	}
 	for k, val := range result.Added {
@@ -201,7 +203,7 @@ func writeObsidianTypes(v *vault.Vault, typesPath string, existing, want map[str
 	// Back up into 2nb's OWN sidecar, never beside the original: a stray .bak
 	// inside .obsidian/ would be a second, unannounced write to Obsidian's
 	// config directory.
-	if len(existing) > 0 {
+	if doc.exists {
 		backupDir := filepath.Join(v.DotDir, "recovery", "obsidian")
 		if err := os.MkdirAll(backupDir, 0o755); err != nil {
 			return fmt.Errorf("create recovery dir: %w", err)
@@ -218,13 +220,10 @@ func writeObsidianTypes(v *vault.Vault, typesPath string, existing, want map[str
 		result.Backup = v.RelPath(backup)
 	}
 
-	data, err := json.MarshalIndent(struct {
-		Types map[string]string `json:"types"`
-	}{Types: merged}, "", "  ")
+	data, err := doc.encode(merged)
 	if err != nil {
 		return fmt.Errorf("marshal types.json: %w", err)
 	}
-	data = append(data, '\n')
 
 	if err := os.MkdirAll(filepath.Dir(typesPath), 0o755); err != nil {
 		return fmt.Errorf("create .obsidian: %w", err)
@@ -241,31 +240,153 @@ func writeObsidianTypes(v *vault.Vault, typesPath string, existing, want map[str
 	return nil
 }
 
-// readObsidianTypes reads the property-type map out of types.json. A MISSING
-// file is an empty map and not an error (a vault that never declared a type),
-// but an UNPARSEABLE one is: replacing a settings file 2nb cannot understand is
-// exactly the write this command must never make.
-func readObsidianTypes(path string) (map[string]string, error) {
+// obsidianTypesDoc is the WHOLE of types.json, not just its "types" sub-map.
+//
+// Reading only "types" and re-marshalling a struct that holds nothing else
+// DELETED every other top-level key on write, and that is the one file the
+// write-surface exception grants 2nb permission to touch. Obsidian owns this
+// file and may add siblings to "types" in any release; a settings file that
+// comes back missing keys makes a documented exception indefensible.
+//
+// So every top-level value is kept as json.RawMessage, verbatim, and the key
+// ORDER the file wrote is kept too. Only the "types" entry is ever replaced.
+type obsidianTypesDoc struct {
+	// exists is false for a file that is absent or empty, which is a vault
+	// that never declared a property type. It is what decides whether there is
+	// anything to back up.
+	exists bool
+	// order is the top-level keys as the file wrote them, deduplicated on first
+	// occurrence. A key 2nb adds goes on the end.
+	order []string
+	// raw is every top-level value, byte for byte.
+	raw map[string]json.RawMessage
+	// types is the decoded "types" sub-map, the only thing this command edits.
+	types map[string]string
+}
+
+// readObsidianTypesDoc reads types.json whole.
+//
+// A MISSING or empty file is an empty document and not an error: that is a
+// vault that never declared a property type. Anything that is not a JSON
+// OBJECT, or whose "types" is not an object of strings, IS an error, because
+// replacing a settings file 2nb cannot understand is exactly the write this
+// command must never make.
+func readObsidianTypesDoc(path string) (*obsidianTypesDoc, error) {
+	doc := &obsidianTypesDoc{raw: map[string]json.RawMessage{}, types: map[string]string{}}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]string{}, nil
+			return doc, nil
 		}
 		return nil, err
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return map[string]string{}, nil
+		return doc, nil
 	}
-	var root struct {
-		Types map[string]string `json:"types"`
-	}
-	if err := json.Unmarshal(data, &root); err != nil {
+	doc.exists = true
+	if err := json.Unmarshal(data, &doc.raw); err != nil {
 		return nil, err
 	}
-	if root.Types == nil {
-		root.Types = map[string]string{}
+	order, err := topLevelKeyOrder(data)
+	if err != nil {
+		return nil, err
 	}
-	return root.Types, nil
+	doc.order = order
+	if rawTypes, ok := doc.raw["types"]; ok && len(strings.TrimSpace(string(rawTypes))) > 0 {
+		if err := json.Unmarshal(rawTypes, &doc.types); err != nil {
+			return nil, fmt.Errorf(`"types" is not an object of strings: %w`, err)
+		}
+		if doc.types == nil { // a literal `"types": null`
+			doc.types = map[string]string{}
+		}
+	}
+	return doc, nil
+}
+
+// encode re-emits the document with "types" replaced by merged and every other
+// top-level key carried through UNCHANGED, in the order the file wrote them.
+//
+// Sibling VALUES are copied as their original bytes, so a number keeps its
+// literal form and a string keeps its escapes; only whitespace is normalized,
+// by the final json.Indent. Keys 2nb never saw are never inspected, let alone
+// rewritten.
+func (d *obsidianTypesDoc) encode(merged map[string]string) ([]byte, error) {
+	types, err := json.Marshal(merged)
+	if err != nil {
+		return nil, err
+	}
+	values := make(map[string]json.RawMessage, len(d.raw)+1)
+	for k, val := range d.raw {
+		values[k] = val
+	}
+	values["types"] = types
+
+	order := append([]string(nil), d.order...)
+	if _, had := d.raw["types"]; !had {
+		// A file with siblings but no "types" gets it appended rather than
+		// hoisted to the front: nothing the user had moves.
+		order = append(order, "types")
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range order {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		key, kerr := json.Marshal(k)
+		if kerr != nil {
+			return nil, kerr
+		}
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(values[k])
+	}
+	buf.WriteByte('}')
+
+	var out bytes.Buffer
+	if err := json.Indent(&out, buf.Bytes(), "", "  "); err != nil {
+		return nil, err
+	}
+	out.WriteByte('\n')
+	return out.Bytes(), nil
+}
+
+// topLevelKeyOrder returns the object's keys in the order the bytes wrote them,
+// keeping the FIRST position of a duplicated key (json.Unmarshal keeps the LAST
+// value for one, which is what the raw map already holds, so the pair agrees
+// with how every JSON parser reads the file).
+func topLevelKeyOrder(data []byte) ([]string, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return nil, fmt.Errorf("top level is not a JSON object")
+	}
+	var keys []string
+	seen := map[string]bool{}
+	for dec.More() {
+		kt, kerr := dec.Token()
+		if kerr != nil {
+			return nil, kerr
+		}
+		key, ok := kt.(string)
+		if !ok {
+			return nil, fmt.Errorf("object key is not a string")
+		}
+		var skip json.RawMessage
+		if derr := dec.Decode(&skip); derr != nil {
+			return nil, derr
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	return keys, nil
 }
 
 // desiredObsidianTypes is 2nb's own mapping plus every field the vault's schemas

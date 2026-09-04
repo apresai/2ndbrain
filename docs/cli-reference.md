@@ -711,9 +711,14 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
 | `aliases` | `aliases` |
 | schema fields typed `date` / `datetime` | that type |
 
-- MERGES and never clobbers: a property already declared keeps its type,
-  including one Obsidian wrote itself (a real vault carries
-  `"tags": "multitext"`; merge leaves it).
+- MERGES and never clobbers, at BOTH levels. A property already declared keeps
+  its type, including one Obsidian wrote itself (a real vault carries
+  `"tags": "multitext"`; merge leaves it). And every top-level key BESIDE
+  `types` comes back with its value byte for byte: the file is Obsidian's and
+  may grow siblings in any release, so it is read whole as
+  `map[string]json.RawMessage` with its key order kept, and only the `types`
+  entry is replaced. A `types` key that is absent is APPENDED, so nothing the
+  user already had changes position.
 - `status` is `text`, never `multitext`. Obsidian's list editor would write a
   YAML sequence back, which `frontmatterText` reads as no status at all,
   breaking every `--status` filter and `ValidateStatusTransition`.
@@ -722,8 +727,9 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
   one.
 - Backs the previous file up into `.2ndbrain/recovery/obsidian/`, never beside
   the original, and writes atomically (temp plus rename).
-- REFUSES a `types.json` it cannot parse rather than replacing a settings file
-  it does not understand.
+- REFUSES a `types.json` it cannot parse, whose top level is not a JSON object,
+  or whose `types` is not an object of strings, rather than replacing a settings
+  file it does not understand.
 - REFUSES to write while Obsidian holds the vault open, unless `--force`
   (`vault.ObsidianHasVaultOpen`, which answers only on the explicit `open` flag
   and reports separately whether the registry was readable at all, so an

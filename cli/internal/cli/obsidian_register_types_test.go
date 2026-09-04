@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -197,6 +198,119 @@ func TestContract_RegisterTypes_RefusesBeforeTheMigration(t *testing.T) {
 	}
 	if !after.Written {
 		t.Errorf("the write was still refused after the migration: %+v", after)
+	}
+}
+
+// types.json is Obsidian's file, and "types" is only one of the top-level keys
+// it may hold. Reading only that key and re-marshalling a struct that holds
+// nothing else DELETED every sibling on write. This is the single file the
+// write-surface exception grants 2nb permission to touch, so it has to come
+// back with everything except the keys we deliberately add.
+//
+// Asserted by REPARSING the written file and comparing sibling VALUES, not by
+// string matching key names: a key that survives with a mangled value is the
+// same defect wearing a disguise.
+func TestContract_RegisterTypes_PreservesUnknownTopLevelKeys(t *testing.T) {
+	_, root := newContractVault(t)
+	original := `{"types":{"tags":"multitext"},"siblingKey":"must survive","another":{"nested":1,"deep":["a","b"]},"count":42,"flag":false,"nothing":null}`
+	if err := os.WriteFile(filepath.Join(root, ".obsidian", "types.json"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := registerTypesJSON(t, root, "--write"); err != nil {
+		t.Fatalf("register-types --write: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".obsidian", "types.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(data, &after); err != nil {
+		t.Fatalf("the written file is not parseable JSON: %v\n%s", err, data)
+	}
+	var before map[string]any
+	if err := json.Unmarshal([]byte(original), &before); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every sibling key survives with its VALUE intact, scalar and nested alike.
+	for key, want := range before {
+		if key == "types" {
+			continue
+		}
+		got, present := after[key]
+		if !present {
+			t.Errorf("top-level key %q was DELETED; types.json is the one Obsidian setting 2nb may touch:\n%s", key, data)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("top-level key %q changed value: got %#v, want %#v", key, got, want)
+		}
+	}
+	// A null sibling is a value too, and `present` above is what catches it
+	// disappearing: reflect.DeepEqual(nil, nil) would pass on a missing key.
+	if _, present := after["nothing"]; !present {
+		t.Error("a null-valued sibling was dropped")
+	}
+	// And the merge still happened.
+	types, _ := after["types"].(map[string]any)
+	if types["created"] != "datetime" || types["tags"] != "multitext" {
+		t.Errorf("the types merge did not happen or clobbered an existing entry: %#v", types)
+	}
+}
+
+// A file that PARSES as JSON but is not an object cannot have a "types" key
+// merged into it, and guessing what the user meant is not this command's job.
+func TestContract_RegisterTypes_RefusesAJSONArray(t *testing.T) {
+	_, root := newContractVault(t)
+	original := []byte(`["not", "an", "object"]`)
+	if err := os.WriteFile(filepath.Join(root, ".obsidian", "types.json"), original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLIArgs(t, root, "obsidian", "register-types", "--write"); err == nil {
+		t.Fatal("a JSON array was accepted as types.json")
+	}
+	got, err := os.ReadFile(filepath.Join(root, ".obsidian", "types.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Errorf("the array file was modified:\n%s", got)
+	}
+}
+
+// A vault with siblings but NO "types" key gets it appended, so nothing the
+// user already had moves position.
+func TestContract_RegisterTypes_AddsTypesWithoutDisturbingSiblings(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.WriteFile(filepath.Join(root, ".obsidian", "types.json"),
+		[]byte(`{"somethingElse":{"a":1}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := registerTypesJSON(t, root, "--write"); err != nil {
+		t.Fatalf("register-types --write: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".obsidian", "types.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(data, &after); err != nil {
+		t.Fatalf("not parseable: %v\n%s", err, data)
+	}
+	sibling, ok := after["somethingElse"].(map[string]any)
+	if !ok || sibling["a"] != float64(1) {
+		t.Errorf("the sibling was lost or changed: %#v", after["somethingElse"])
+	}
+	if types, ok := after["types"].(map[string]any); !ok || types["created"] != "datetime" {
+		t.Errorf("types was not added: %#v", after["types"])
+	}
+	// Appended, not hoisted: the sibling keeps the first position it had.
+	if idx := strings.Index(string(data), `"somethingElse"`); idx < 0 || idx > strings.Index(string(data), `"types"`) {
+		t.Errorf("the existing key was moved; a new key goes on the end:\n%s", data)
 	}
 }
 
