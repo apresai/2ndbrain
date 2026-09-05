@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -696,19 +698,148 @@ func loadCachedHTTPBody(ctx context.Context, url, cacheName string) ([]byte, err
 		return data, nil
 	}
 
+	// A recent FAILURE is remembered as well as a success, and this is the whole
+	// reason the cooldown exists. Only successes were cached before, so every
+	// caller re-paid the entire network stall: the AmazonBedrock offer file is
+	// 16MB against pricingHTTPClient's 15s deadline, so on any link slower than
+	// roughly 1MB/s to that endpoint the fetch CANNOT finish, and `models list`
+	// blocked about 30s (two offers) on every single invocation rather than
+	// once. In one test binary that turned one stall into twelve and pushed the
+	// package past Go's 10m timeout.
+	//
+	// It is a cooldown and not a permanent negative entry because a long-lived
+	// process (the MCP server) has to pick pricing up again once the network
+	// recovers, and because the stamp is on DISK the next CLI invocation is
+	// covered too, which an in-memory one would miss entirely.
+	// Two layers, because they cover different things and neither is enough
+	// alone: the on-disk stamp carries a failure to the NEXT process, which is
+	// what the CLI needs since every invocation is a fresh one, and the
+	// in-memory map covers repeated calls inside one process, which is what a
+	// long-lived server and a test binary need. BOTH are keyed by URL, never by
+	// cache path: the offer URLs carry no region while their cache filenames do,
+	// so a path-keyed stamp would let a second configured region re-pay the full
+	// stall against a URL the first had already proved was failing.
+	if until, cooling := pricingFetchCooling(url); cooling {
+		if data, ok := readPricingCache(path, false); ok {
+			slog.Debug("using stale pricing cache during fetch cooldown", "path", path, "until", until)
+			return data, nil
+		}
+		return nil, fmt.Errorf("pricing fetch for %s failed recently, not retrying until %s", cacheName, until.Format(time.RFC3339))
+	}
+
 	data, err := fetchHTTPBody(ctx, url)
 	if err == nil {
 		if writeErr := writePricingCache(path, data); writeErr != nil {
 			slog.Debug("pricing cache write failed", "path", path, "err", writeErr)
 		}
+		clearPricingFetchFailure(url)
 		return data, nil
 	}
+	notePricingFetchFailure(url)
 
 	if data, ok := readPricingCache(path, false); ok {
 		slog.Debug("using stale pricing cache", "path", path, "err", err)
 		return data, nil
 	}
 	return nil, err
+}
+
+// pricingFetchCooldown is how long a failed pricing fetch suppresses another
+// attempt for the same offer file. Long enough that a command run in a loop
+// does not re-stall, short enough that a recovered network is picked up without
+// the user doing anything.
+var pricingFetchCooldown = 10 * time.Minute
+
+// pricingFailurePath is the stamp for one offer URL, inside the pricing cache
+// directory. It is named from the URL and NOT from the cache entry's filename:
+// the two Bedrock offer URLs carry no region while their cache filenames do
+// (`bedrock-us-east-1.json` and `bedrock-us-west-2.json` are the same bytes), so
+// a stamp named after the entry would be keyed on a dimension the URL does not
+// have, and a second configured region would re-pay the full stall against a URL
+// the first had already proved was failing.
+//
+// The empty string means the cache directory could not be resolved, in which
+// case there is nowhere to keep a stamp and only the in-memory layer applies.
+func pricingFailurePath(url string) string {
+	dir, err := pricingCacheDir()
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(url))
+	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".failed")
+}
+
+// pricingFetchFailures is the in-memory half, keyed by URL like the stamp.
+var pricingFetchFailures struct {
+	mu sync.Mutex
+	at map[string]time.Time
+}
+
+// pricingFetchCooling reports whether the last attempt for this offer failed
+// recently enough that retrying would just repeat the stall, and when that stops
+// being true. The LATER of the two deadlines wins, so neither layer can shorten
+// the other's cooldown: a fresh process reads only the disk stamp, and a process
+// that has already failed in memory must not have that shortened by an older
+// stamp left by an earlier run.
+func pricingFetchCooling(url string) (time.Time, bool) {
+	var until time.Time
+
+	pricingFetchFailures.mu.Lock()
+	if at, ok := pricingFetchFailures.at[url]; ok {
+		until = at.Add(pricingFetchCooldown)
+	}
+	pricingFetchFailures.mu.Unlock()
+
+	if stamp := pricingFailurePath(url); stamp != "" {
+		if info, err := os.Stat(stamp); err == nil {
+			if disk := info.ModTime().Add(pricingFetchCooldown); disk.After(until) {
+				until = disk
+			}
+		}
+	}
+
+	if until.IsZero() {
+		return time.Time{}, false
+	}
+	return until, time.Now().Before(until)
+}
+
+func notePricingFetchFailure(url string) {
+	// In memory FIRST, so a cache directory that cannot be written (read-only,
+	// or unresolvable) still gets protection for the rest of this process.
+	pricingFetchFailures.mu.Lock()
+	if pricingFetchFailures.at == nil {
+		pricingFetchFailures.at = map[string]time.Time{}
+	}
+	pricingFetchFailures.at[url] = time.Now()
+	pricingFetchFailures.mu.Unlock()
+
+	stamp := pricingFailurePath(url)
+	if stamp == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(stamp), 0o755); err != nil {
+		slog.Debug("pricing failure stamp not written", "path", stamp, "err", err)
+		return
+	}
+	// The mtime carries the time; the body is only for a human who finds it.
+	if err := os.WriteFile(stamp, []byte("the last fetch for this pricing offer failed\n"), 0o644); err != nil {
+		slog.Debug("pricing failure stamp not written", "path", stamp, "err", err)
+	}
+}
+
+func clearPricingFetchFailure(url string) {
+	pricingFetchFailures.mu.Lock()
+	delete(pricingFetchFailures.at, url)
+	pricingFetchFailures.mu.Unlock()
+
+	stamp := pricingFailurePath(url)
+	if stamp == "" {
+		return
+	}
+	if err := os.Remove(stamp); err != nil && !os.IsNotExist(err) {
+		slog.Debug("pricing failure stamp not cleared", "path", stamp, "err", err)
+	}
 }
 
 func fetchHTTPBody(ctx context.Context, url string) ([]byte, error) {

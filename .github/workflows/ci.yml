@@ -63,9 +63,11 @@ jobs:
       # also runs the doc gates, which the blocking docs-currency workflow
       # already covers.
       #
-      # 2NB_BEDROCK_SKIP_KEYCHAIN (the runner has no unlocked Keychain to read)
-      # is set with `env` rather than in the job's `env:` block because its name
-      # starts with a digit, which is not a valid shell identifier and so cannot
-      # be a `VAR=1 cmd` prefix. `env` takes the name verbatim.
+      # The target is hermetic on its own now (it unsets the provider
+      # credentials, skips the Keychain, and redirects HOME, XDG_CONFIG_HOME and
+      # XDG_CACHE_HOME), which is the point: CI and a developer's machine run the
+      # SAME suite. So this step no longer sets 2NB_BEDROCK_SKIP_KEYCHAIN itself.
+      # If that ever has to come back, note the name starts with a digit and so
+      # cannot be a `VAR=1 cmd` prefix; use `env`, which takes it verbatim.
       - name: go test
-        run: env 2NB_BEDROCK_SKIP_KEYCHAIN=1 make -C cli test
+        run: make -C cli test
