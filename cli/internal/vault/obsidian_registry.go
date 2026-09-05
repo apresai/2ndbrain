@@ -154,18 +154,6 @@ func ObsidianKnownVaults() []string {
 	return out
 }
 
-// ObsidianHasVaultOpen reports whether Obsidian currently has the vault at root
-// open, and whether that question could be ANSWERED at all.
-//
-// The second return is the point. A missing, empty or unparseable registry
-// (Obsidian never installed, or a shape this build does not know) yields
-// (false, false), which is "unknown", not "closed". A caller gating a write on
-// this must not read an unreadable registry as permission: it warns instead.
-//
-// Only an entry explicitly flagged `open` counts. ObsidianActiveVault falls back
-// to the most-recently-opened vault when nothing is flagged, which is right for
-// RESOLVING a target and wrong here: a vault Obsidian merely opened last week is
-// not a vault Obsidian is holding now.
 // ObsidianVaultState is what could be established about whether Obsidian is
 // holding a vault open. It is an enum rather than a pair of bools because the
 // caller REFUSES on it and then has to say why, and "open" and "probably open"
@@ -188,20 +176,6 @@ const (
 	// different fact.
 	ObsidianOpenUnconfirmed
 )
-
-// ObsidianHasVaultOpen reports the state as two bools for a caller that only
-// needs to gate: open is true for both confirmed and unconfirmed, known is
-// false only when nothing could be established.
-func ObsidianHasVaultOpen(root string) (open, known bool) {
-	switch ObsidianVaultOpenState(root) {
-	case ObsidianOpen, ObsidianOpenUnconfirmed:
-		return true, true
-	case ObsidianClosed:
-		return false, true
-	default:
-		return false, false
-	}
-}
 
 // ObsidianVaultOpenState answers from TWO facts, and needs both. The registry
 // says WHICH vault Obsidian opens; only a running process says it is still
@@ -263,7 +237,10 @@ var obsidianProcessAlive = func() (alive, known bool) {
 			return false, true
 		}
 		// Present but unreadable (a permission bit, or a regular file where a
-		// symlink was expected). No answer, rather than a guess.
+		// symlink was expected). No answer, rather than a guess, and worth a
+		// trace: the caller refuses on it, and a silent refusal is what made the
+		// old guard hard to argue with.
+		slog.Debug("obsidian singleton lock present but unreadable", "path", lock, "err", err)
 		return false, false
 	}
 	// The target is `<hostname>-<pid>`, and the hostname itself contains dashes
@@ -282,8 +259,21 @@ var obsidianProcessAlive = func() (alive, known bool) {
 	// live here, belonging to something unrelated. Chromium encodes the host
 	// precisely so this can be checked. A mismatch is UNKNOWN, never "running"
 	// and never "closed".
+	//
+	// The two spellings do agree, which is worth recording rather than assuming,
+	// because they need not: measured on macOS, os.Hostname() gave
+	// "apres-ai-124299.local" and the lock read "apres-ai-124299.local-99064",
+	// while `scutil --get LocalHostName` gave the bare "apres-ai-124299". Both
+	// Chromium and Go take the gethostname(2) form, so they match.
+	//
+	// If they ever stop matching (a machine renamed since Obsidian launched, by
+	// DHCP or an MDM), every answer becomes UNKNOWN and the command refuses with
+	// the "could not be determined" wording plus --force. That is the same place
+	// the old flag-only guard left everyone, so the failure degrades to no worse
+	// than the bug this replaced, and it degrades honestly.
 	host, herr := os.Hostname()
 	if herr != nil || target[:dash] != host {
+		slog.Debug("obsidian singleton lock names another host", "lock_host", target[:dash], "this_host", host, "err", herr)
 		return false, false
 	}
 	// A lock left behind by a crash names a pid that is gone. That is a

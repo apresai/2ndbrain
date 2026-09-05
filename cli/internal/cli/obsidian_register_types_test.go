@@ -93,9 +93,7 @@ func TestContract_RegisterTypes_MergesAndNeverClobbers(t *testing.T) {
 		}
 	}
 	// Resolved the other way in 0.23.2: every property 2nb writes is declared,
-	// id included. Obsidian shows the property whether or not a type is
-	// declared, so omitting it bought no tidiness and left one property 2nb
-	// writes typed by inference.
+	// id included, so there is no exception to remember.
 	if got := types["id"]; got != "text" {
 		t.Errorf("types.json[id] = %q, want text; every property 2nb writes is declared", got)
 	}
@@ -365,7 +363,7 @@ func TestContract_RegisterTypes_DeclaresSchemaDateFields(t *testing.T) {
 	}
 }
 
-// obsidianConfigDirs returns every place ObsidianHasVaultOpen might look for
+// obsidianConfigDirs returns every place ObsidianVaultOpenState might look for
 // Obsidian's registry under the test's redirected HOME. Both are written so the
 // test is not macOS-only; the resolver reads whichever its platform picks.
 func obsidianConfigDirs(t *testing.T, home string) []string {
@@ -385,6 +383,9 @@ func obsidianConfigDirs(t *testing.T, home string) []string {
 // WIRING rather than of a stub.
 func fakeObsidianState(t *testing.T, home, vaultRoot string, running bool) {
 	t.Helper()
+	// The guard is inert under 2NB_TEST. Without clearing it an ambient value
+	// would make every assertion below pass without the guard ever running.
+	t.Setenv("2NB_TEST", "")
 	registry := `{"vaults":{"a":{"path":` + strconv.Quote(vaultRoot) + `,"ts":100,"open":true}}}`
 	for _, dir := range obsidianConfigDirs(t, home) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -498,4 +499,39 @@ func mustRegisterTypes(t *testing.T, root string) RegisterTypesResult {
 		t.Fatalf("register-types preview: %v", err)
 	}
 	return res
+}
+
+// The third state, and the one whose WORDING is the point. When the registry
+// names this vault but liveness cannot be established, the refusal must not
+// claim Obsidian is running: that asserts the single thing just found to be
+// unknowable, which is the fault the guard was rebuilt to stop making.
+//
+// Reached here without any substitution, by leaving a regular file where the
+// singleton lock belongs so Readlink fails with something other than ENOENT.
+func TestContract_RegisterTypes_UnconfirmedLivenessRefusesHonestly(t *testing.T) {
+	_, root := newContractVault(t)
+	home := os.Getenv("HOME")
+	fakeObsidianState(t, home, root, false)
+	for _, dir := range obsidianConfigDirs(t, home) {
+		lock := filepath.Join(dir, "SingletonLock")
+		os.Remove(lock)
+		if err := os.WriteFile(lock, []byte("not a symlink"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := runCLIArgs(t, root, "obsidian", "register-types", "--write")
+	if err == nil {
+		t.Fatal("--write was allowed while liveness was unconfirmed")
+	}
+	msg := string(out)
+	if strings.Contains(msg, "Obsidian is running with this vault open") {
+		t.Errorf("the refusal claims Obsidian is running, which could not be established:\n%s", msg)
+	}
+	if !strings.Contains(msg, "could not determine whether Obsidian is RUNNING") {
+		t.Errorf("the refusal does not say what was actually unknown:\n%s", msg)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".obsidian", "types.json")); !os.IsNotExist(statErr) {
+		t.Errorf("the refused write created types.json anyway (stat err = %v)", statErr)
+	}
 }

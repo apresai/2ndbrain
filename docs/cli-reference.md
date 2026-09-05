@@ -735,7 +735,7 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
 | Property | Declared as |
 |---|---|
 | `created`, `modified` | `datetime` |
-| `title`, `type`, `status` | `text` |
+| `title`, `type`, `status`, `id` | `text` |
 | `tags` | `tags` |
 | `aliases` | `aliases` |
 | schema fields typed `date` / `datetime` | that type |
@@ -751,20 +751,20 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
 - `status` is `text`, never `multitext`. Obsidian's list editor would write a
   YAML sequence back, which `frontmatterText` reads as no status at all,
   breaking every `--status` filter and `ValidateStatusTransition`.
-- `id` IS declared, as text. 0.23.0 and 0.23.1 omitted it; Obsidian shows the
-  property whether or not a type is declared, so omitting it bought no tidiness
-  and left one property 2nb writes typed by inference. Identity is
-  path-based, and declaring it adds a visible Text row to every note carrying
-  one.
+- `id` IS declared, as text, as of 0.23.2. 0.23.0 and 0.23.1 omitted it. The
+  rule is now that EVERY property 2nb writes has a declared type, with no
+  exception to remember or explain; identity stays path-based either way, and an
+  undeclared property is one whose editor Obsidian picks by inference.
 - Backs the previous file up into `.2ndbrain/recovery/obsidian/`, never beside
   the original, and writes atomically (temp plus rename).
 - REFUSES a `types.json` it cannot parse, whose top level is not a JSON object,
   or whose `types` is not an object of strings, rather than replacing a settings
   file it does not understand.
 - REFUSES to write while Obsidian is RUNNING with the vault open, unless
-  `--force` (`vault.ObsidianHasVaultOpen`, which reports separately whether the
-  question was answerable at all, so an unreadable registry warns rather than
-  reading as permission). It needs BOTH facts and the registry supplies only
+  `--force` (`vault.ObsidianVaultOpenState`, whose four states let the refusal say what is
+  actually known: an unreadable registry warns rather than reading as permission,
+  and a flagged-but-unconfirmable one refuses in different words from a confirmed
+  one). It needs BOTH facts and the registry supplies only
   one: Obsidian's `open` flag says WHICH vault it opens, and Obsidian sets it on
   open and **never clears it on quit** (measured: quit, flag still true, file two
   days untouched), so on the flag alone this refused everyone who had ever

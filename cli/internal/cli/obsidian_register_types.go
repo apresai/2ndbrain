@@ -58,12 +58,11 @@ automatic.
 ("multitext") would write a YAML sequence back, which 2nb reads as no status at
 all: every --status filter and every status-transition check would break.
 
-"id" IS declared, as text. 0.23.0 and 0.23.1 left it out on the grounds that it
-is a UUID nobody reads and that declaring it adds a visible row to the
-Properties panel of every note carrying one. Both are true, and the row appears
-either way: Obsidian shows a property it finds whether or not a type is
-declared, so leaving it out bought no tidiness and only meant one property 2nb
-writes was typed by guesswork.
+"id" IS declared, as text, as of 0.23.2. 0.23.0 and 0.23.1 left it out because
+it is a UUID nobody reads. The rule is now simply that every property 2nb writes
+has a declared type, with no exception to remember: identity stays path-based
+either way, and an undeclared property is one whose editor Obsidian chooses by
+inference rather than from what 2nb actually writes there.
 
 PREVIEWS by default; --write applies.`,
 	Args: cobra.NoArgs,
@@ -217,10 +216,17 @@ func writeObsidianTypes(v *vault.Vault, typesPath string, doc *obsidianTypesDoc,
 			// Say what is actually known. Claiming Obsidian "is running" here
 			// would assert the one thing that could not be established, which
 			// is the fault this guard was rebuilt to stop making.
+			//
+			// Deliberately NOT phrased as a platform limit. This fires on
+			// Windows, where there is no such signal, and equally on a local
+			// condition that may well be fixable: a lock that is not a symlink,
+			// a target this build cannot parse, or a host renamed since Obsidian
+			// launched. "This system cannot" would be the same overclaim in a
+			// smaller font.
 			if !registerTypesForce {
 				return exitWithError(ExitValidation,
-					"error: this is the vault Obsidian has open, and whether Obsidian is RUNNING could not be determined on this system.\n"+
-						"  If Obsidian is running it caches settings in memory and may overwrite this write.\n"+
+					"error: this is the vault Obsidian has open, and 2nb could not determine whether Obsidian is RUNNING.\n"+
+						"  If it is, it caches settings in memory and may overwrite this write.\n"+
 						"  Quit Obsidian and rerun, or pass --force to write anyway.")
 			}
 		case vault.ObsidianStateUnknown:

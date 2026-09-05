@@ -18,96 +18,91 @@ func fakeObsidianLiveness(t *testing.T, alive, known bool) {
 	t.Cleanup(func() { obsidianProcessAlive = prev })
 }
 
-// ObsidianHasVaultOpen gates a WRITE into Obsidian's own config directory, so
-// its second return ("was this knowable at all") carries as much weight as the
-// first. An unreadable registry must never read as permission to write.
+// ObsidianVaultOpenState gates a WRITE into Obsidian's own config directory, so
+// "could not be established" carries as much weight as "open": an unreadable
+// registry must never read as permission to write.
 //
-// It answers from TWO facts, and needs both: the registry says which vault
+// It answers from TWO facts and needs both: the registry says WHICH vault
 // Obsidian opens, and only a live process says it is still there. The registry
 // alone cannot, because Obsidian never clears `open` on quit.
-func TestObsidianHasVaultOpen(t *testing.T) {
+//
+// Asserted on the STATE rather than on a pair of bools, which is the point of
+// the enum: confirmed-open and flagged-but-unconfirmable are different answers
+// and the caller refuses in different words.
+func TestObsidianVaultOpenState(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		registry    string
 		root        string
 		alive, live bool // what the process probe reports (alive, known)
-		wantOpen    bool
-		wantKnown   bool
+		want        ObsidianVaultState
 	}{
 		{
-			name:      "flagged open AND Obsidian is running",
-			registry:  `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100,"open":true}}}`,
-			root:      "/Users/x/obsidian",
-			alive:     true,
-			live:      true,
-			wantOpen:  true,
-			wantKnown: true,
+			name:     "flagged open AND Obsidian is running",
+			registry: `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100,"open":true}}}`,
+			root:     "/Users/x/obsidian",
+			alive:    true,
+			live:     true,
+			want:     ObsidianOpen,
 		},
 		{
 			// The bug this guard was rebuilt for. Obsidian sets `open` on open
 			// and never clears it on quit, so the flag alone refused a user who
 			// had just quit because the command told them to.
-			name:      "flagged open but Obsidian has QUIT",
-			registry:  `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100,"open":true}}}`,
-			root:      "/Users/x/obsidian",
-			alive:     false,
-			live:      true,
-			wantOpen:  false,
-			wantKnown: true,
+			name:     "flagged open but Obsidian has QUIT",
+			registry: `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100,"open":true}}}`,
+			root:     "/Users/x/obsidian",
+			alive:    false,
+			live:     true,
+			want:     ObsidianClosed,
 		},
 		{
 			// No liveness signal (Windows uses a named mutex, not the lock).
 			// Absence of a signal is not permission: keep the old refusal.
-			name:      "flagged open and liveness cannot be determined",
-			registry:  `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100,"open":true}}}`,
-			root:      "/Users/x/obsidian",
-			alive:     false,
-			live:      false,
-			wantOpen:  true,
-			wantKnown: true,
+			name:     "flagged open and liveness cannot be determined",
+			registry: `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100,"open":true}}}`,
+			root:     "/Users/x/obsidian",
+			alive:    false,
+			live:     false,
+			want:     ObsidianOpenUnconfirmed,
 		},
 		{
 			// A running Obsidian holding a DIFFERENT vault must not block this
 			// one: the registry decides which, the process only decides whether.
-			name:      "Obsidian is running but this vault is not the open one",
-			registry:  `{"vaults":{"a":{"path":"/Users/x/other","ts":100,"open":true},"b":{"path":"/Users/x/obsidian","ts":90}}}`,
-			root:      "/Users/x/obsidian",
-			alive:     true,
-			live:      true,
-			wantOpen:  false,
-			wantKnown: true,
+			name:     "Obsidian is running but this vault is not the open one",
+			registry: `{"vaults":{"a":{"path":"/Users/x/other","ts":100,"open":true},"b":{"path":"/Users/x/obsidian","ts":90}}}`,
+			root:     "/Users/x/obsidian",
+			alive:    true,
+			live:     true,
+			want:     ObsidianClosed,
 		},
 		{
-			name:      "a DIFFERENT vault is open",
-			registry:  `{"vaults":{"a":{"path":"/Users/x/other","ts":100,"open":true},"b":{"path":"/Users/x/obsidian","ts":90}}}`,
-			root:      "/Users/x/obsidian",
-			wantOpen:  false,
-			wantKnown: true,
+			name:     "a DIFFERENT vault is open",
+			registry: `{"vaults":{"a":{"path":"/Users/x/other","ts":100,"open":true},"b":{"path":"/Users/x/obsidian","ts":90}}}`,
+			root:     "/Users/x/obsidian",
+			want:     ObsidianClosed,
 		},
 		{
 			// The distinction ObsidianActiveVault deliberately blurs and this
 			// must not: a vault Obsidian opened last week is not one Obsidian
 			// is holding now, and refusing a write on that basis would refuse
 			// nearly every write.
-			name:      "known but nothing flagged open",
-			registry:  `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100}}}`,
-			root:      "/Users/x/obsidian",
-			wantOpen:  false,
-			wantKnown: true,
+			name:     "known but nothing flagged open",
+			registry: `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100}}}`,
+			root:     "/Users/x/obsidian",
+			want:     ObsidianClosed,
 		},
 		{
-			name:      "unparseable registry is UNKNOWN, not closed",
-			registry:  `{not json`,
-			root:      "/Users/x/obsidian",
-			wantOpen:  false,
-			wantKnown: false,
+			name:     "unparseable registry is UNKNOWN, not closed",
+			registry: `{not json`,
+			root:     "/Users/x/obsidian",
+			want:     ObsidianStateUnknown,
 		},
 		{
-			name:      "empty registry is UNKNOWN, not closed",
-			registry:  `{"vaults":{}}`,
-			root:      "/Users/x/obsidian",
-			wantOpen:  false,
-			wantKnown: false,
+			name:     "empty registry is UNKNOWN, not closed",
+			registry: `{"vaults":{}}`,
+			root:     "/Users/x/obsidian",
+			want:     ObsidianStateUnknown,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,9 +110,8 @@ func TestObsidianHasVaultOpen(t *testing.T) {
 			t.Setenv("HOME", home)
 			fakeObsidianLiveness(t, tc.alive, tc.live)
 			writeObsidianRegistry(t, home, tc.registry)
-			open, known := ObsidianHasVaultOpen(tc.root)
-			if open != tc.wantOpen || known != tc.wantKnown {
-				t.Errorf("ObsidianHasVaultOpen(%q) = (%v, %v), want (%v, %v)", tc.root, open, known, tc.wantOpen, tc.wantKnown)
+			if got := ObsidianVaultOpenState(tc.root); got != tc.want {
+				t.Errorf("ObsidianVaultOpenState(%q) = %v, want %v", tc.root, got, tc.want)
 			}
 		})
 	}
@@ -139,6 +133,7 @@ func TestObsidianProcessAlive_ReadsTheSingletonLock(t *testing.T) {
 		useOwnPID   bool
 		useStalePID bool
 		foreignHost bool
+		regularFile bool
 	}{
 		{
 			name:      "no lock means Obsidian is not running",
@@ -179,8 +174,24 @@ func TestObsidianProcessAlive_ReadsTheSingletonLock(t *testing.T) {
 			// ANOTHER machine sharing this home directory can be spotted. Its
 			// pid means nothing here and could well belong to something live
 			// and unrelated, so the honest answer is that we cannot tell.
+			//
+			// This case can only prove the comparison happens, not that Go and
+			// Chromium spell a hostname the same way, since both sides here are
+			// os.Hostname(). That equivalence is a live-machine fact, measured
+			// and recorded beside the check itself: they read one kernel value
+			// (sysctl kern.hostname on darwin, uname Nodename on linux), which
+			// is what gethostname(2) hands Chromium.
 			name:        "a lock from a DIFFERENT machine is unknown",
 			foreignHost: true,
+			wantAlive:   false,
+			wantKnown:   false,
+		},
+		{
+			// Present but not a symlink at all, so Readlink fails with
+			// something other than ENOENT. Absence is an answer; an unreadable
+			// lock is not, and must not be mistaken for one.
+			name:        "a lock that is not a symlink is unknown, not absent",
+			regularFile: true,
 			wantAlive:   false,
 			wantKnown:   false,
 		},
@@ -210,7 +221,12 @@ func TestObsidianProcessAlive_ReadsTheSingletonLock(t *testing.T) {
 			case tc.foreignHost:
 				target = "some-other-machine.local-" + strconv.Itoa(os.Getpid())
 			}
-			if target != "" {
+			switch {
+			case tc.regularFile:
+				if err := os.WriteFile(lock, []byte("not a symlink"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case target != "":
 				if err := os.Symlink(target, lock); err != nil {
 					t.Fatal(err)
 				}
@@ -226,11 +242,11 @@ func TestObsidianProcessAlive_ReadsTheSingletonLock(t *testing.T) {
 // With no registry at all the answer is UNKNOWN. A caller that read this as
 // "closed" would write under a running Obsidian on any machine whose registry
 // it could not find.
-func TestObsidianHasVaultOpen_NoRegistryIsUnknown(t *testing.T) {
+func TestObsidianVaultOpenState_NoRegistryIsUnknown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home+"/.config")
-	if open, known := ObsidianHasVaultOpen("/Users/x/obsidian"); open || known {
-		t.Errorf("ObsidianHasVaultOpen with no registry = (%v, %v), want (false, false)", open, known)
+	if got := ObsidianVaultOpenState("/Users/x/obsidian"); got != ObsidianStateUnknown {
+		t.Errorf("ObsidianVaultOpenState with no registry = %v, want ObsidianStateUnknown", got)
 	}
 }
