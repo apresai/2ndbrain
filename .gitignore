@@ -27,6 +27,10 @@ dist/
 # legacy repo-root location and the retired pre-0.9.x .zip format so any leftover
 # stays ignored.
 /build/
+# The CLI's own BUILD_DIR (cli/bin lives here, and `make -C cli test` puts its
+# hermetic HOME here too). The /build/ rule above is root-anchored and never
+# covered it.
+/cli/build/
 SecondBrain-*-arm64.zip
 SecondBrain-*-arm64.dmg
 *.dmg

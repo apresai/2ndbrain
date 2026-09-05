@@ -76,7 +76,8 @@ open app/.build/arm64-apple-macosx/debug/SecondBrain.app
 ## Testing
 
 ```bash
-make test               # Doc + release-script gates, then Go unit tests
+make test               # Doc + release-script gates, then Go unit tests (hermetic: no ambient credentials)
+make test-live          # The same Go tests against whatever this machine can reach; spends money
 make test-battery       # Golden-path E2E battery (cli/battery_test.go)
 make test-usage         # MCP write->query index round-trips + real-binary E2E battery; catches index-consistency regressions (AI steps skip without creds)
 make test-swift         # Swift unit tests
@@ -95,7 +96,7 @@ Go tests use `t.TempDir()` for isolated vaults; run with `cd cli && make test` (
 - OpenRouter: real `OPENROUTER_API_KEY`
 - Ollama: real server at localhost:11434
 
-**Skip on capability, not configuration.** A test that needs a provider probes once per test binary and skips when the provider cannot actually serve a request. Gating on "is the env var set" makes a configured-but-unusable provider FAIL the test instead of skipping it, which is how transient noise once read as a product regression. Helpers: `requireEmbedding` / `requireEmbeddingHostHome` (`cli/capability_test.go`), `requireEmbeddings` (in-package). CI runs the suite credential-free on every PR, so this is enforced.
+**Skip on capability, not configuration.** A test that needs a provider probes once per test binary and skips when the provider cannot actually serve a request. Gating on "is the env var set" makes a configured-but-unusable provider FAIL the test instead of skipping it, which is how transient noise once read as a product regression. Helpers: `requireEmbedding` / `requireEmbeddingHostHome` (`cli/capability_test.go`), `requireEmbeddings` (in-package). CI runs the suite credential-free on every PR, so this is enforced. **`make test` is HERMETIC for the same reason the skip is on capability:** capability is a property of the MACHINE, so a developer's real credentials make `make test` run a strictly larger suite than CI against real endpoints at real latency, and the release gate then passes or fails on what happens to be in the environment. The target unsets the AWS credential vars, sets `2NB_BEDROCK_SKIP_KEYCHAIN`, redirects `HOME` (because `~/.config/2nb/bedrock.json` sits ABOVE the Keychain in the auth precedence and would put them straight back) and sets `AWS_EC2_METADATA_DISABLED` (with no credentials the SDK falls through to the EC2 metadata service, unreachable off EC2, burning its full timeout on every probe); each is load-bearing and dropping one silently restores the non-determinism. `make test-live` is the opt-in that reaches whatever the machine can, and the one that spends money. This is not theoretical: on 2026-09-05 the non-hermetic target ran `internal/ai` and `internal/cli` past Go's 10m per-package timeout and failed the 0.23.2 release, while CI ran the same target green in two minutes on the same commit.
 - Pure logic tests (string classification, price parsing) that don't call any API are fine
 
 ### GUI Test Automation
@@ -222,7 +223,7 @@ Full per-command reference (flags, JSON shapes, invariants): **[docs/cli-referen
 
 ### AI Providers
 
-Default provider is **AWS Bedrock**: generation Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`), embeddings Amazon Nova-2 (`amazon.nova-2-multimodal-embeddings-v1:0`, 1024 dims). Defaults live in `DefaultAIConfig()` (`cli/internal/ai/config.go`). Full provider reference (auth mechanics, invoke strategies, Marengo shapes, pricing cache, compatibility gates, builtin catalog, cost estimator): **[docs/ai-providers.md](docs/ai-providers.md)**.
+Default provider is **AWS Bedrock**: generation Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`), embeddings Amazon Nova-2 (`amazon.nova-2-multimodal-embeddings-v1:0`, 1024 dims). Defaults live in `DefaultAIConfig()` (`cli/internal/ai/config.go`). Full provider reference (auth mechanics, invoke strategies, Marengo shapes, pricing cache, compatibility gates, builtin catalog, cost estimator): **[docs/ai-providers.md](docs/ai-providers.md)**. **A failed live-pricing fetch is cached like a successful one.** Caching only success meant a fetch that could not finish was repeated in full by every later caller: the `AmazonBedrock` offer file is 16MB against a 15s client deadline, so under about 1MB/s it never completes and `models list` stalled ~30s on EVERY run, and one test binary paid that twelve times and blew Go's 10m package timeout. `loadCachedHTTPBody` (not its two callers, which had the identical shape) stamps the failure and holds off for `pricingFetchCooldown`, on DISK beside the entry so the next CLI process is covered and in MEMORY keyed by URL so a redirected `HOME` cannot defeat it; the later deadline wins and a success clears both.
 
 **Bedrock auth:** a Bedrock API key (bearer token) or the AWS SDK credential chain. Precedence: `AWS_BEARER_TOKEN_BEDROCK` env, then `~/.config/2nb/bedrock.json`, then the macOS Keychain, then SigV4; the SDK prefers a bearer token over SigV4, so a stored key overrides `~/.aws` for Bedrock. `prefer_stored_token: true` in bedrock.json inverts env-vs-stored for 2nb only (with no stored key the env var still applies). The token is never written into vault `config.yaml`; a world-readable file is refused. This is how the macOS app reaches Bedrock without shell credentials.
 

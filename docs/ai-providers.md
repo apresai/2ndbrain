@@ -176,6 +176,10 @@ Beyond builtin models, the Bedrock embedder supports TwelveLabs Marengo embed vi
 
 `models list`, `ai status`, and `index` fetch pricing from OpenRouter `/models` and AWS pricing offer files, with a 24h disk cache at `$XDG_CACHE_HOME/2nb/pricing` (macOS: `~/Library/Caches/2nb/pricing`). Fetches carry a 15s timeout; an air-gapped machine falls back to the stale cache, then to builtin metadata.
 
+**A FAILED fetch is cached too, and that is load-bearing.** Only successes were stored, so a fetch that could not finish was retried in full by the next caller, and the one after that. The `AmazonBedrock` offer file is 16MB against that 15s deadline, so on any link slower than roughly 1MB/s to `pricing.us-east-1.amazonaws.com` it CANNOT complete: `models list` paid about 30s (two offer files, neither cached) on every invocation rather than once, and one test binary paid it twelve times and blew Go's 10m package timeout. `loadCachedHTTPBody` now stamps a failure and suppresses another attempt for `pricingFetchCooldown` (10 minutes), still preferring a stale cache over a wait. The fix lives in that one function rather than in `loadBedrockPricing` and `loadOpenRouterPricing`, which had the identical `if pricing.ready` shape and would have drifted.
+
+The cooldown is recorded in TWO places because neither covers the other: an on-disk `<entry>.failed` stamp beside the cache entry carries it to the next process, which is what the CLI needs since every invocation is a fresh one; and an in-memory map keyed by URL survives a caller that redirects `HOME` and so lands on a different cache directory, which is what every test in the package does through `setupHome`. The later of the two deadlines wins, and a success clears both, so a recovered network is picked up without user action.
+
 ## Invoke strategies
 
 Catalog entries carry an `InvokeStrategy` naming the API dialect. Strategies (in `cli/internal/ai/invoke_strategy.go`):

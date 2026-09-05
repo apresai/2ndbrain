@@ -696,19 +696,120 @@ func loadCachedHTTPBody(ctx context.Context, url, cacheName string) ([]byte, err
 		return data, nil
 	}
 
+	// A recent FAILURE is remembered as well as a success, and this is the whole
+	// reason the cooldown exists. Only successes were cached before, so every
+	// caller re-paid the entire network stall: the AmazonBedrock offer file is
+	// 16MB against pricingHTTPClient's 15s deadline, so on any link slower than
+	// roughly 1MB/s to that endpoint the fetch CANNOT finish, and `models list`
+	// blocked about 30s (two offers) on every single invocation rather than
+	// once. In one test binary that turned one stall into twelve and pushed the
+	// package past Go's 10m timeout.
+	//
+	// It is a cooldown and not a permanent negative entry because a long-lived
+	// process (the MCP server) has to pick pricing up again once the network
+	// recovers, and because the stamp is on DISK the next CLI invocation is
+	// covered too, which an in-memory one would miss entirely.
+	// Two layers, because they cover different things and neither is enough
+	// alone: the on-disk stamp carries a failure to the NEXT process (the CLI is
+	// a fresh process per invocation, so this is what stops `models list`
+	// stalling every time), and the in-memory one is keyed by URL rather than by
+	// path so it survives a caller that redirects HOME (every test here does,
+	// via setupHome, which gives each one its own cache directory and would
+	// otherwise defeat the disk stamp entirely).
+	if until, cooling := pricingFetchCooling(url, path); cooling {
+		if data, ok := readPricingCache(path, false); ok {
+			slog.Debug("using stale pricing cache during fetch cooldown", "path", path, "until", until)
+			return data, nil
+		}
+		return nil, fmt.Errorf("pricing fetch for %s failed recently, not retrying until %s", cacheName, until.Format(time.RFC3339))
+	}
+
 	data, err := fetchHTTPBody(ctx, url)
 	if err == nil {
 		if writeErr := writePricingCache(path, data); writeErr != nil {
 			slog.Debug("pricing cache write failed", "path", path, "err", writeErr)
 		}
+		clearPricingFetchFailure(url, path)
 		return data, nil
 	}
+	notePricingFetchFailure(url, path)
 
 	if data, ok := readPricingCache(path, false); ok {
 		slog.Debug("using stale pricing cache", "path", path, "err", err)
 		return data, nil
 	}
 	return nil, err
+}
+
+// pricingFetchCooldown is how long a failed pricing fetch suppresses another
+// attempt for the same offer file. Long enough that a command run in a loop
+// does not re-stall, short enough that a recovered network is picked up without
+// the user doing anything.
+var pricingFetchCooldown = 10 * time.Minute
+
+// pricingFailurePath is the stamp beside the cache entry it refers to, so the
+// two are found, cleaned and reasoned about together.
+func pricingFailurePath(cachePath string) string { return cachePath + ".failed" }
+
+// pricingFetchFailures is the in-memory half, keyed by URL so it is independent
+// of where the cache directory happens to point.
+var pricingFetchFailures struct {
+	mu sync.Mutex
+	at map[string]time.Time
+}
+
+// pricingFetchCooling reports whether the last attempt for this offer failed
+// recently enough that retrying would just repeat the stall, and when that stops
+// being true. The LATER of the two deadlines wins, so neither layer can shorten
+// the other's cooldown.
+func pricingFetchCooling(url, cachePath string) (time.Time, bool) {
+	var until time.Time
+
+	pricingFetchFailures.mu.Lock()
+	if at, ok := pricingFetchFailures.at[url]; ok {
+		until = at.Add(pricingFetchCooldown)
+	}
+	pricingFetchFailures.mu.Unlock()
+
+	if info, err := os.Stat(pricingFailurePath(cachePath)); err == nil {
+		if disk := info.ModTime().Add(pricingFetchCooldown); disk.After(until) {
+			until = disk
+		}
+	}
+
+	if until.IsZero() {
+		return time.Time{}, false
+	}
+	return until, time.Now().Before(until)
+}
+
+func notePricingFetchFailure(url, cachePath string) {
+	pricingFetchFailures.mu.Lock()
+	if pricingFetchFailures.at == nil {
+		pricingFetchFailures.at = map[string]time.Time{}
+	}
+	pricingFetchFailures.at[url] = time.Now()
+	pricingFetchFailures.mu.Unlock()
+
+	stamp := pricingFailurePath(cachePath)
+	if err := os.MkdirAll(filepath.Dir(stamp), 0o755); err != nil {
+		slog.Debug("pricing failure stamp not written", "path", stamp, "err", err)
+		return
+	}
+	// The mtime carries the time; the body is only for a human who finds it.
+	if err := os.WriteFile(stamp, []byte("the last fetch for this pricing offer failed\n"), 0o644); err != nil {
+		slog.Debug("pricing failure stamp not written", "path", stamp, "err", err)
+	}
+}
+
+func clearPricingFetchFailure(url, cachePath string) {
+	pricingFetchFailures.mu.Lock()
+	delete(pricingFetchFailures.at, url)
+	pricingFetchFailures.mu.Unlock()
+
+	if err := os.Remove(pricingFailurePath(cachePath)); err != nil && !os.IsNotExist(err) {
+		slog.Debug("pricing failure stamp not cleared", "path", pricingFailurePath(cachePath), "err", err)
+	}
 }
 
 func fetchHTTPBody(ctx context.Context, url string) ([]byte, error) {
