@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.23.2] - 2026-09-05
+
 ### Fixed
 - **`2nb obsidian register-types --write` refused even after you closed Obsidian.** It decided from a flag in Obsidian's own settings that says which vault is open, and **Obsidian sets that flag when you open a vault and never clears it when you quit**. So the command refused anyone who had ever opened the vault, including someone who had just quit because the command told them to, and the only way through was `--force`, which reads like you are overriding a real risk when you are not. It now checks whether Obsidian is actually running, so on macOS and Linux closing it is enough. Where 2nb cannot determine that, it still refuses and says plainly that it could not tell, rather than claiming Obsidian is open. That is Windows, which uses a mechanism 2nb does not read, and a few rarer cases where the file it checks is unreadable or was written by another machine sharing your home directory. While Obsidian IS running it still refuses, because Obsidian keeps its settings in memory and would overwrite the change
 - **`id` is now declared too.** 0.23.0 and 0.23.1 deliberately left it out of `.obsidian/types.json` because it is a UUID nobody reads. The rule is now simpler: every property 2nb writes has a declared type, with no exception to explain. Rerun `2nb obsidian register-types --write` to pick it up
