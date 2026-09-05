@@ -774,11 +774,13 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
   target is `<hostname>-<pid>`; the pid is what follows the LAST dash (hostnames
   carry their own) and is probed via `procutil.Alive`. Absent means not running,
   a lock naming a dead pid is a crash leftover and also means not running, and
-  an unreadable one, one whose hostname is not this machine's (Chromium encodes
-  it so a lock written by another machine on a shared home can be spotted, and
-  its pid means nothing here), or a platform without the mechanism (Windows uses
-  a named mutex) is UNKNOWN, which keeps the old refusal rather than inventing
-  permission from an absence.
+  everything else is UNKNOWN, which keeps the old refusal rather than inventing
+  permission from an absence: a lock that cannot be read at all (not a symlink,
+  or no permission), a target this build cannot parse (no dash, or a pid that is
+  not a number), one whose hostname is not this machine's (Chromium encodes it
+  so a lock written by another machine on a shared home can be spotted, and that
+  pid means nothing here, and may well be live), and a platform without the
+  mechanism at all (Windows uses a named mutex).
 - `preserved` names EVERY type the file already declares, all of which the merge
   keeps, not only the ones 2nb would have declared itself. Scoping it to 2nb's
   own set made a real vault preview as `preserved: {aliases, tags}` while its
