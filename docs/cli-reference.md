@@ -774,8 +774,10 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
   target is `<hostname>-<pid>`; the pid is what follows the LAST dash (hostnames
   carry their own) and is probed via `procutil.Alive`. Absent means not running,
   a lock naming a dead pid is a crash leftover and also means not running, and
-  an unreadable one or a platform without the mechanism (Windows uses a named
-  mutex) is UNKNOWN, which keeps the old refusal rather than inventing
+  an unreadable one, one whose hostname is not this machine's (Chromium encodes
+  it so a lock written by another machine on a shared home can be spotted, and
+  its pid means nothing here), or a platform without the mechanism (Windows uses
+  a named mutex) is UNKNOWN, which keeps the old refusal rather than inventing
   permission from an absence.
 - `preserved` names EVERY type the file already declares, all of which the merge
   keeps, not only the ones 2nb would have declared itself. Scoping it to 2nb's
