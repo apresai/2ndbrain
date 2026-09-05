@@ -58,9 +58,12 @@ automatic.
 ("multitext") would write a YAML sequence back, which 2nb reads as no status at
 all: every --status filter and every status-transition check would break.
 
-"id" is deliberately NOT declared. It is a UUID nobody reads, the vault's
-identity model is path-based, and declaring it would add a visible Text row to
-the Properties panel of every note that carries one.
+"id" IS declared, as text. 0.23.0 and 0.23.1 left it out on the grounds that it
+is a UUID nobody reads and that declaring it adds a visible row to the
+Properties panel of every note carrying one. Both are true, and the row appears
+either way: Obsidian shows a property it finds whether or not a type is
+declared, so leaving it out bought no tidiness and only meant one property 2nb
+writes was typed by guesswork.
 
 PREVIEWS by default; --write applies.`,
 	Args: cobra.NoArgs,
@@ -77,10 +80,11 @@ func init() {
 
 // obsidianPropertyTypes is what 2nb declares for the properties it writes.
 //
-// Every value here is one of Obsidian's own property types. "id" is absent on
-// purpose; see the command's help.
+// Every value here is one of Obsidian's own property types, and every property
+// 2nb writes is here: no exceptions to remember, and none to explain.
 var obsidianPropertyTypes = map[string]string{
 	"created":  "datetime",
+	"id":       "text",
 	"modified": "datetime",
 	"title":    "text",
 	"type":     "text",

@@ -92,10 +92,12 @@ func TestContract_RegisterTypes_MergesAndNeverClobbers(t *testing.T) {
 			t.Errorf("types.json[%q] = %q, want %q", key, types[key], want)
 		}
 	}
-	// NEEDS-DECISION, resolved as "omit": declaring id would add a visible Text
-	// row to the Properties panel of every note that carries one.
-	if _, ok := types["id"]; ok {
-		t.Errorf("id was declared; it is deliberately omitted: %+v", types)
+	// Resolved the other way in 0.23.2: every property 2nb writes is declared,
+	// id included. Obsidian shows the property whether or not a type is
+	// declared, so omitting it bought no tidiness and left one property 2nb
+	// writes typed by inference.
+	if got := types["id"]; got != "text" {
+		t.Errorf("types.json[id] = %q, want text; every property 2nb writes is declared", got)
 	}
 	// status must never be multitext: Obsidian's list editor would write a YAML
 	// sequence back, which reads as no status at all.
