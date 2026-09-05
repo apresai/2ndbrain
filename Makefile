@@ -1,4 +1,4 @@
-.PHONY: test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-app-status release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-release-script test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
+.PHONY: test-live test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-app-status release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-release-script test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -183,6 +183,11 @@ test: check-claude-md-size check-docs-links test-release-script
 # (vault lifecycle, document CRUD, index rebuild, threshold, MCP lifecycle,
 # skills roundtrip). Faster to diagnose than the full test suite when one
 # of these flows regresses.
+# The money-spending counterpart to `test`: same Go tests, but against whatever
+# providers this machine can actually reach.
+test-live:
+	$(MAKE) -C cli test-live
+
 test-battery:
 	$(MAKE) -C cli test-battery
 

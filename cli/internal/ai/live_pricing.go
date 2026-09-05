@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -710,13 +712,14 @@ func loadCachedHTTPBody(ctx context.Context, url, cacheName string) ([]byte, err
 	// recovers, and because the stamp is on DISK the next CLI invocation is
 	// covered too, which an in-memory one would miss entirely.
 	// Two layers, because they cover different things and neither is enough
-	// alone: the on-disk stamp carries a failure to the NEXT process (the CLI is
-	// a fresh process per invocation, so this is what stops `models list`
-	// stalling every time), and the in-memory one is keyed by URL rather than by
-	// path so it survives a caller that redirects HOME (every test here does,
-	// via setupHome, which gives each one its own cache directory and would
-	// otherwise defeat the disk stamp entirely).
-	if until, cooling := pricingFetchCooling(url, path); cooling {
+	// alone: the on-disk stamp carries a failure to the NEXT process, which is
+	// what the CLI needs since every invocation is a fresh one, and the
+	// in-memory map covers repeated calls inside one process, which is what a
+	// long-lived server and a test binary need. BOTH are keyed by URL, never by
+	// cache path: the offer URLs carry no region while their cache filenames do,
+	// so a path-keyed stamp would let a second configured region re-pay the full
+	// stall against a URL the first had already proved was failing.
+	if until, cooling := pricingFetchCooling(url); cooling {
 		if data, ok := readPricingCache(path, false); ok {
 			slog.Debug("using stale pricing cache during fetch cooldown", "path", path, "until", until)
 			return data, nil
@@ -729,10 +732,10 @@ func loadCachedHTTPBody(ctx context.Context, url, cacheName string) ([]byte, err
 		if writeErr := writePricingCache(path, data); writeErr != nil {
 			slog.Debug("pricing cache write failed", "path", path, "err", writeErr)
 		}
-		clearPricingFetchFailure(url, path)
+		clearPricingFetchFailure(url)
 		return data, nil
 	}
-	notePricingFetchFailure(url, path)
+	notePricingFetchFailure(url)
 
 	if data, ok := readPricingCache(path, false); ok {
 		slog.Debug("using stale pricing cache", "path", path, "err", err)
@@ -747,12 +750,26 @@ func loadCachedHTTPBody(ctx context.Context, url, cacheName string) ([]byte, err
 // the user doing anything.
 var pricingFetchCooldown = 10 * time.Minute
 
-// pricingFailurePath is the stamp beside the cache entry it refers to, so the
-// two are found, cleaned and reasoned about together.
-func pricingFailurePath(cachePath string) string { return cachePath + ".failed" }
+// pricingFailurePath is the stamp for one offer URL, inside the pricing cache
+// directory. It is named from the URL and NOT from the cache entry's filename:
+// the two Bedrock offer URLs carry no region while their cache filenames do
+// (`bedrock-us-east-1.json` and `bedrock-us-west-2.json` are the same bytes), so
+// a stamp named after the entry would be keyed on a dimension the URL does not
+// have, and a second configured region would re-pay the full stall against a URL
+// the first had already proved was failing.
+//
+// The empty string means the cache directory could not be resolved, in which
+// case there is nowhere to keep a stamp and only the in-memory layer applies.
+func pricingFailurePath(url string) string {
+	dir, err := pricingCacheDir()
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(url))
+	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".failed")
+}
 
-// pricingFetchFailures is the in-memory half, keyed by URL so it is independent
-// of where the cache directory happens to point.
+// pricingFetchFailures is the in-memory half, keyed by URL like the stamp.
 var pricingFetchFailures struct {
 	mu sync.Mutex
 	at map[string]time.Time
@@ -761,8 +778,10 @@ var pricingFetchFailures struct {
 // pricingFetchCooling reports whether the last attempt for this offer failed
 // recently enough that retrying would just repeat the stall, and when that stops
 // being true. The LATER of the two deadlines wins, so neither layer can shorten
-// the other's cooldown.
-func pricingFetchCooling(url, cachePath string) (time.Time, bool) {
+// the other's cooldown: a fresh process reads only the disk stamp, and a process
+// that has already failed in memory must not have that shortened by an older
+// stamp left by an earlier run.
+func pricingFetchCooling(url string) (time.Time, bool) {
 	var until time.Time
 
 	pricingFetchFailures.mu.Lock()
@@ -771,9 +790,11 @@ func pricingFetchCooling(url, cachePath string) (time.Time, bool) {
 	}
 	pricingFetchFailures.mu.Unlock()
 
-	if info, err := os.Stat(pricingFailurePath(cachePath)); err == nil {
-		if disk := info.ModTime().Add(pricingFetchCooldown); disk.After(until) {
-			until = disk
+	if stamp := pricingFailurePath(url); stamp != "" {
+		if info, err := os.Stat(stamp); err == nil {
+			if disk := info.ModTime().Add(pricingFetchCooldown); disk.After(until) {
+				until = disk
+			}
 		}
 	}
 
@@ -783,7 +804,9 @@ func pricingFetchCooling(url, cachePath string) (time.Time, bool) {
 	return until, time.Now().Before(until)
 }
 
-func notePricingFetchFailure(url, cachePath string) {
+func notePricingFetchFailure(url string) {
+	// In memory FIRST, so a cache directory that cannot be written (read-only,
+	// or unresolvable) still gets protection for the rest of this process.
 	pricingFetchFailures.mu.Lock()
 	if pricingFetchFailures.at == nil {
 		pricingFetchFailures.at = map[string]time.Time{}
@@ -791,7 +814,10 @@ func notePricingFetchFailure(url, cachePath string) {
 	pricingFetchFailures.at[url] = time.Now()
 	pricingFetchFailures.mu.Unlock()
 
-	stamp := pricingFailurePath(cachePath)
+	stamp := pricingFailurePath(url)
+	if stamp == "" {
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(stamp), 0o755); err != nil {
 		slog.Debug("pricing failure stamp not written", "path", stamp, "err", err)
 		return
@@ -802,13 +828,17 @@ func notePricingFetchFailure(url, cachePath string) {
 	}
 }
 
-func clearPricingFetchFailure(url, cachePath string) {
+func clearPricingFetchFailure(url string) {
 	pricingFetchFailures.mu.Lock()
 	delete(pricingFetchFailures.at, url)
 	pricingFetchFailures.mu.Unlock()
 
-	if err := os.Remove(pricingFailurePath(cachePath)); err != nil && !os.IsNotExist(err) {
-		slog.Debug("pricing failure stamp not cleared", "path", pricingFailurePath(cachePath), "err", err)
+	stamp := pricingFailurePath(url)
+	if stamp == "" {
+		return
+	}
+	if err := os.Remove(stamp); err != nil && !os.IsNotExist(err) {
+		slog.Debug("pricing failure stamp not cleared", "path", stamp, "err", err)
 	}
 }
 

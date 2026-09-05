@@ -2,7 +2,6 @@ package ai
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -18,17 +17,17 @@ import (
 // No server is stood up here: the cooldown is bookkeeping over a stamp file and
 // a map, so it is testable as the pure logic it is.
 func TestPricingFetchCooldown(t *testing.T) {
+	setupHome(t) // keep the stamp out of the developer's real pricing cache
 	const url = "https://example.invalid/offers/current/index.json"
-	cachePath := filepath.Join(t.TempDir(), "nested", "offer.json")
 
-	if _, cooling := pricingFetchCooling(url, cachePath); cooling {
+	if _, cooling := pricingFetchCooling(url); cooling {
 		t.Fatal("a fetch that has never failed must not be in cooldown")
 	}
 
-	notePricingFetchFailure(url, cachePath)
-	t.Cleanup(func() { clearPricingFetchFailure(url, cachePath) })
+	notePricingFetchFailure(url)
+	t.Cleanup(func() { clearPricingFetchFailure(url) })
 
-	until, cooling := pricingFetchCooling(url, cachePath)
+	until, cooling := pricingFetchCooling(url)
 	if !cooling {
 		t.Fatal("a fetch that just failed must be in cooldown")
 	}
@@ -36,34 +35,89 @@ func TestPricingFetchCooldown(t *testing.T) {
 		t.Errorf("cooldown until %s is further out than the %s window", until, pricingFetchCooldown)
 	}
 
-	// The stamp is written beside the entry it refers to, creating the directory
-	// if the failure beat the first successful write to it.
-	if _, err := os.Stat(pricingFailurePath(cachePath)); err != nil {
+	// The stamp is written into the pricing cache directory, creating it if the
+	// failure beat the first successful write.
+	if _, err := os.Stat(pricingFailurePath(url)); err != nil {
 		t.Errorf("failure stamp not written: %v", err)
 	}
 
-	clearPricingFetchFailure(url, cachePath)
-	if _, cooling := pricingFetchCooling(url, cachePath); cooling {
+	clearPricingFetchFailure(url)
+	if _, cooling := pricingFetchCooling(url); cooling {
 		t.Error("a success must clear the cooldown, or pricing never recovers")
 	}
 }
 
-// The in-memory half is keyed by URL rather than by cache path precisely so it
-// survives a caller that redirects HOME. Every test in this package does exactly
-// that through setupHome, giving each its own cache directory, which is why the
-// on-disk stamp alone did not stop the repeated stalls.
-func TestPricingFetchCooldown_SurvivesADifferentCacheDirectory(t *testing.T) {
-	const url = "https://example.invalid/offers/current/index.json"
-	first := filepath.Join(t.TempDir(), "offer.json")
-	second := filepath.Join(t.TempDir(), "offer.json") // a different HOME entirely
+// The stamp is named from the URL, not from the cache entry. The two Bedrock
+// offer URLs carry no region while their cache filenames do, so a path-keyed
+// stamp would be keyed on a dimension the URL does not have and a second
+// configured region would re-pay a stall the first had already proved.
+func TestPricingFetchCooldown_IsKeyedByURLNotRegion(t *testing.T) {
+	setupHome(t)
+	// Deliberately NOT the real offer URLs. Other tests in this binary reach the
+	// real ones for real, and on a machine where those fetches fail they stamp
+	// the shared in-memory map, so a test naming them would assert on whatever
+	// the rest of the package happened to do first.
+	const url = "https://example.invalid/offers/v1.0/aws/AmazonBedrock/current/index.json"
+	const other = "https://example.invalid/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
 
-	notePricingFetchFailure(url, first)
+	notePricingFetchFailure(url)
 	t.Cleanup(func() {
-		clearPricingFetchFailure(url, first)
-		clearPricingFetchFailure(url, second)
+		clearPricingFetchFailure(url)
+		clearPricingFetchFailure(other)
 	})
 
-	if _, cooling := pricingFetchCooling(url, second); !cooling {
-		t.Error("the same offer URL must stay in cooldown under a fresh cache directory")
+	// The same URL is still cooling however the caller names its cache entry,
+	// which is what a second configured region amounts to.
+	if _, cooling := pricingFetchCooling(url); !cooling {
+		t.Error("the failed offer URL must stay in cooldown")
+	}
+	// A DIFFERENT offer must not be suppressed by its sibling's failure.
+	if _, cooling := pricingFetchCooling(other); cooling {
+		t.Error("a different offer URL must not inherit the cooldown")
+	}
+}
+
+// The two layers exist because neither covers the other, and the LATER deadline
+// has to win. Asserted with genuinely divergent timestamps: with both stamped at
+// one instant, a regression that always preferred one source would still pass.
+func TestPricingFetchCooldown_LaterDeadlineWins(t *testing.T) {
+	setupHome(t)
+	const url = "https://example.invalid/offers/divergent/index.json"
+
+	notePricingFetchFailure(url)
+	t.Cleanup(func() { clearPricingFetchFailure(url) })
+
+	stamp := pricingFailurePath(url)
+	if stamp == "" {
+		t.Fatal("no pricing cache directory resolved")
+	}
+
+	// Disk is made OLD, so it is already outside the window. Memory is fresh, so
+	// the answer must still be "cooling": an old stamp may not cut the in-process
+	// cooldown short.
+	old := time.Now().Add(-2 * pricingFetchCooldown)
+	if err := os.Chtimes(stamp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	until, cooling := pricingFetchCooling(url)
+	if !cooling {
+		t.Fatal("a stale disk stamp must not shorten the in-memory cooldown")
+	}
+	if !until.After(time.Now().Add(pricingFetchCooldown - time.Minute)) {
+		t.Errorf("deadline %s came from the OLD disk stamp, not the fresh memory entry", until)
+	}
+
+	// Now the mirror image: memory cleared, disk fresh. A process that never
+	// failed itself must still honor the stamp an earlier one left.
+	pricingFetchFailures.mu.Lock()
+	delete(pricingFetchFailures.at, url)
+	pricingFetchFailures.mu.Unlock()
+
+	now := time.Now()
+	if err := os.Chtimes(stamp, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, cooling := pricingFetchCooling(url); !cooling {
+		t.Error("a fresh disk stamp must cool a process with nothing in memory")
 	}
 }

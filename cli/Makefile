@@ -1,4 +1,4 @@
-.PHONY: build install clean test test-e2e test-battery test-usage dev
+.PHONY: build install clean clean-test-home test test-live test-e2e test-battery test-usage dev
 
 BINARY := 2nb
 VERSION := $(shell cat ../VERSION | tr -d '\n')
@@ -21,7 +21,15 @@ install: build
 
 clean:
 	rm -rf $(BUILD_DIR)
+	$(MAKE) clean-test-home
 	go clean
+
+# The hermetic HOME is not removable by a plain rm -rf once anything has put a
+# Go module cache under it: the module cache is deliberately read-only, so the
+# recursive delete fails partway and, chained with &&, silently takes the rest
+# of the command with it. Make it writable first.
+clean-test-home:
+	@if [ -d "$(TEST_HOME)" ]; then chmod -R u+w "$(TEST_HOME)"; rm -rf "$(TEST_HOME)"; fi
 
 # The release gate and CI must agree, and neither may depend on what happens to
 # be sitting in the environment. Provider tests skip on CAPABILITY, so a machine
@@ -36,6 +44,15 @@ clean:
 #   - HOME is redirected because ~/.config/2nb/bedrock.json sits ABOVE the
 #     Keychain in the auth precedence and would put the credentials straight
 #     back;
+#   - XDG_CONFIG_HOME must go with HOME, never instead of it: globalConfigDir()
+#     reads $XDG_CONFIG_HOME/2nb FIRST and only falls back to $HOME/.config/2nb,
+#     so on a machine that exports it (XDG dotfiles, chezmoi) redirecting HOME
+#     alone still reads the developer's real bedrock.json. Every test helper in
+#     this repo that isolates HOME already clears it too;
+#   - XDG_CACHE_HOME keeps the live-pricing cache and its failure stamps out of
+#     the developer's real ~/Library/Caches/2nb, since a test run that fails a
+#     pricing fetch would otherwise leave a cooldown stamp their next `2nb
+#     models list` reads;
 #   - AWS_EC2_METADATA_DISABLED matters only once the others work: with no
 #     credentials the SDK falls through to the EC2 metadata service, which is
 #     unreachable off EC2 and burns its full timeout on EVERY probe, turning a
@@ -54,12 +71,12 @@ REAL_GOMODCACHE := $(shell go env GOMODCACHE)
 REAL_GOPATH := $(shell go env GOPATH)
 
 test:
-	@mkdir -p $(TEST_HOME)
+	@mkdir -p "$(TEST_HOME)"
 	env -u AWS_BEARER_TOKEN_BEDROCK -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
 	    -u AWS_SESSION_TOKEN -u AWS_PROFILE -u OPENROUTER_API_KEY \
 	    AWS_EC2_METADATA_DISABLED=true 2NB_BEDROCK_SKIP_KEYCHAIN=1 \
-	    HOME=$(TEST_HOME) \
-	    GOCACHE=$(REAL_GOCACHE) GOMODCACHE=$(REAL_GOMODCACHE) GOPATH=$(REAL_GOPATH) \
+	    HOME="$(TEST_HOME)" XDG_CONFIG_HOME="$(TEST_HOME)/config" XDG_CACHE_HOME="$(TEST_HOME)/cache" \
+	    GOCACHE="$(REAL_GOCACHE)" GOMODCACHE="$(REAL_GOMODCACHE)" GOPATH="$(REAL_GOPATH)" \
 	    go test -race ./...
 
 test-live:
