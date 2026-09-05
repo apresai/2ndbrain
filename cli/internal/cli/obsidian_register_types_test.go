@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -360,4 +361,139 @@ func TestContract_RegisterTypes_DeclaresSchemaDateFields(t *testing.T) {
 	if _, ok := types["summary"]; ok {
 		t.Errorf("a schema text field was declared; the mapping covers dates and 2nb's own properties only: %+v", types)
 	}
+}
+
+// obsidianConfigDirs returns every place ObsidianHasVaultOpen might look for
+// Obsidian's registry under the test's redirected HOME. Both are written so the
+// test is not macOS-only; the resolver reads whichever its platform picks.
+func obsidianConfigDirs(t *testing.T, home string) []string {
+	t.Helper()
+	return []string{
+		filepath.Join(home, "Library", "Application Support", "obsidian"),
+		filepath.Join(home, ".config", "obsidian"),
+	}
+}
+
+// fakeObsidianState plants the two facts the guard consults: the registry entry
+// naming this vault as the open one, and (when running) the Chromium singleton
+// lock whose symlink target is `<hostname>-<pid>`.
+//
+// Nothing is substituted here: the real registry reader and the real liveness
+// probe run, against a redirected HOME. That is what makes this a test of the
+// WIRING rather than of a stub.
+func fakeObsidianState(t *testing.T, home, vaultRoot string, running bool) {
+	t.Helper()
+	registry := `{"vaults":{"a":{"path":` + strconv.Quote(vaultRoot) + `,"ts":100,"open":true}}}`
+	for _, dir := range obsidianConfigDirs(t, home) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "obsidian.json"), []byte(registry), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		lock := filepath.Join(dir, "SingletonLock")
+		os.Remove(lock)
+		if running {
+			// This test process is the pid guaranteed to be alive.
+			host, herr := os.Hostname()
+			if herr != nil {
+				t.Fatal(herr)
+			}
+			target := host + "-" + strconv.Itoa(os.Getpid())
+			if err := os.Symlink(target, lock); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// The guard needs BOTH facts, and this is the case that made it wrong: Obsidian
+// sets `open` on open and never clears it on quit, so on the flag alone a user
+// who had just quit was refused anyway, and the only way through was --force.
+// A guard that fires for someone who did exactly what it asked teaches people
+// to reach around it.
+func TestContract_RegisterTypes_WritesWhenObsidianHasQuit(t *testing.T) {
+	_, root := newContractVault(t)
+	home := os.Getenv("HOME")
+	fakeObsidianState(t, home, root, false) // registry still says open; process gone
+
+	res, err := registerTypesJSON(t, root, "--write")
+	if err != nil {
+		t.Fatalf("register-types --write with Obsidian quit: %v", err)
+	}
+	if !res.Written {
+		t.Errorf("the write was refused although Obsidian is not running: %+v", res)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".obsidian", "types.json")); statErr != nil {
+		t.Errorf("types.json was not written: %v", statErr)
+	}
+}
+
+// Still refused while Obsidian is actually there, which is the case the guard
+// exists for: Obsidian caches settings in memory and would overwrite the write.
+func TestContract_RegisterTypes_RefusesWhileObsidianIsRunning(t *testing.T) {
+	_, root := newContractVault(t)
+	home := os.Getenv("HOME")
+	fakeObsidianState(t, home, root, true)
+
+	if _, err := runCLIArgs(t, root, "obsidian", "register-types", "--write"); err == nil {
+		t.Fatal("--write was allowed while Obsidian is running")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".obsidian", "types.json")); !os.IsNotExist(statErr) {
+		t.Errorf("the refused write created types.json anyway (stat err = %v)", statErr)
+	}
+
+	// --force is the deliberate override, and it must still work.
+	res, err := registerTypesJSON(t, root, "--write", "--force")
+	if err != nil {
+		t.Fatalf("register-types --write --force: %v", err)
+	}
+	if !res.Written {
+		t.Errorf("--force did not override the running-Obsidian refusal: %+v", res)
+	}
+}
+
+// `preserved` must name everything the merge leaves alone, not just the
+// properties 2nb happens to declare itself. A real vault previewed as
+// `preserved: {aliases, tags}` while its `cssclasses` went unmentioned, even
+// though the write kept it perfectly. The preview is the safety mechanism here
+// (it is what you read before allowing a write into Obsidian's own config), so
+// under-reporting what it keeps undermines it exactly where it matters.
+func TestContract_RegisterTypes_PreservedNamesEveryEntryItKeeps(t *testing.T) {
+	_, root := newContractVault(t)
+	obs := filepath.Join(root, ".obsidian")
+	if err := os.MkdirAll(obs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// cssclasses is Obsidian's own and is not a property 2nb declares.
+	seed := `{"types":{"aliases":"aliases","cssclasses":"multitext","tags":"multitext"}}`
+	if err := os.WriteFile(filepath.Join(obs, "types.json"), []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := mustRegisterTypes(t, root)
+	for _, key := range []string{"aliases", "cssclasses", "tags"} {
+		if _, ok := res.Preserved[key]; !ok {
+			t.Errorf("preserved omits %q, which the write keeps: %+v", key, res.Preserved)
+		}
+	}
+	if got := res.Preserved["cssclasses"]; got != "multitext" {
+		t.Errorf("preserved[cssclasses] = %q, want multitext", got)
+	}
+	// A preserved entry is never also an addition.
+	for key := range res.Preserved {
+		if _, dup := res.Added[key]; dup {
+			t.Errorf("%q is reported as both preserved and added", key)
+		}
+	}
+}
+
+// mustRegisterTypes runs a PREVIEW and fails the test on error.
+func mustRegisterTypes(t *testing.T, root string) RegisterTypesResult {
+	t.Helper()
+	res, err := registerTypesJSON(t, root)
+	if err != nil {
+		t.Fatalf("register-types preview: %v", err)
+	}
+	return res
 }

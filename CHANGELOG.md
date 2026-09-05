@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **`2nb obsidian register-types --write` refused even after you closed Obsidian.** It decided from a flag in Obsidian's own settings that says which vault is open, and **Obsidian sets that flag when you open a vault and never clears it when you quit**. So the command refused anyone who had ever opened the vault, including someone who had just quit because the command told them to, and the only way through was `--force`, which reads like you are overriding a real risk when you are not. It now checks whether Obsidian is actually running, so closing it is enough. While Obsidian IS running it still refuses, because Obsidian keeps its settings in memory and would overwrite the change
+- **The `register-types` preview did not list everything it keeps.** It reported only the properties 2nb declares itself, so a type you or Obsidian had set that 2nb knows nothing about (`cssclasses`, for one) was missing from the preview even though the write preserved it perfectly. Nothing was ever lost; the preview just did not say so, which is the wrong place to be quiet, since reading it is how you decide whether to allow a write into Obsidian's config at all
 
 ## [0.23.1] - 2026-09-05
 

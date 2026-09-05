@@ -41,9 +41,12 @@ automatic.
   - The previous file is copied to .2ndbrain/recovery/obsidian/ first, inside
     2nb's own sidecar rather than beside the original, so this never leaves a
     stray .bak inside Obsidian's config directory.
-  - Refused while Obsidian holds the vault open, unless --force. Obsidian caches
-    its settings in memory and rewrites types.json on its own schedule, so a
-    write underneath it can simply be overwritten.
+  - Refused while Obsidian is RUNNING with this vault open, unless --force.
+    Obsidian caches its settings in memory and rewrites types.json on its own
+    schedule, so a write underneath it can simply be overwritten. Quitting
+    Obsidian is enough: the check asks whether the process is actually there,
+    not just what Obsidian's settings say, because Obsidian records which vault
+    it opened and never unrecords it on quit.
   - Refused (for --write) while any note holds a date "migrate-properties" would
     rewrite: a QUOTED one, which Obsidian shows as Text, or a zone-less one 2nb
     normalizes to explicit UTC. Declaring "created" a datetime while notes still
@@ -136,12 +139,21 @@ func runObsidianRegisterTypes(cmd *cobra.Command, args []string) error {
 		Blocked:   []string{},
 		Warnings:  []string{},
 	}
+	// Preserved is EVERY entry the file already declares, because every one of
+	// them survives the merge below untouched. It used to be seeded by walking
+	// `want`, 2nb's own properties, so a type the file declared that 2nb knows
+	// nothing about was never recorded: a real vault previewed as
+	// `preserved: {aliases, tags}` while its `cssclasses` went unmentioned, even
+	// though the write kept it perfectly. A preview whose whole job is to show
+	// what changes must not under-report what it keeps.
+	for key, have := range existing {
+		result.Preserved[key] = have
+	}
 	for _, key := range sortedKeys(want) {
-		if have, ok := existing[key]; ok {
+		if _, ok := existing[key]; ok {
 			// MERGE: what is already declared keeps its type, whatever it is.
 			// Obsidian writes some of these itself (a real vault had
 			// "tags": "multitext"), and a user may have chosen deliberately.
-			result.Preserved[key] = have
 			continue
 		}
 		result.Added[key] = want[key]
@@ -183,13 +195,34 @@ func writeObsidianTypes(v *vault.Vault, typesPath string, doc *obsidianTypesDoc,
 		result.Warnings = append(result.Warnings, "every property 2nb writes is already declared; nothing to write")
 		return nil
 	}
-	if open, ok := vault.ObsidianHasVaultOpen(v.Root); open && !registerTypesForce {
-		return exitWithError(ExitValidation,
-			"error: Obsidian currently has this vault open. It caches settings in memory and rewrites types.json on its own schedule, so a write now can simply be overwritten.\n"+
-				"  Close the vault in Obsidian and rerun, or pass --force to write anyway.")
-	} else if !ok {
-		result.Warnings = append(result.Warnings,
-			"could not read Obsidian's vault registry, so whether Obsidian has this vault open is unknown; if it is, reopen the vault after this write")
+	// Inert under 2NB_TEST, the same isolation every registry read in root.go
+	// carries: a binary test running under the developer's real HOME must not
+	// have its outcome decided by whether they happen to have Obsidian open.
+	// This call site never had that gate, which was survivable while the answer
+	// came from a registry a test could redirect, and is not now that it also
+	// consults a live process.
+	if os.Getenv("2NB_TEST") == "" {
+		switch state := vault.ObsidianVaultOpenState(v.Root); state {
+		case vault.ObsidianOpen:
+			if !registerTypesForce {
+				return exitWithError(ExitValidation,
+					"error: Obsidian is running with this vault open. It caches settings in memory and rewrites types.json on its own schedule, so a write now can simply be overwritten.\n"+
+						"  Quit Obsidian and rerun, or pass --force to write anyway.")
+			}
+		case vault.ObsidianOpenUnconfirmed:
+			// Say what is actually known. Claiming Obsidian "is running" here
+			// would assert the one thing that could not be established, which
+			// is the fault this guard was rebuilt to stop making.
+			if !registerTypesForce {
+				return exitWithError(ExitValidation,
+					"error: this is the vault Obsidian has open, and whether Obsidian is RUNNING could not be determined on this system.\n"+
+						"  If Obsidian is running it caches settings in memory and may overwrite this write.\n"+
+						"  Quit Obsidian and rerun, or pass --force to write anyway.")
+			}
+		case vault.ObsidianStateUnknown:
+			result.Warnings = append(result.Warnings,
+				"could not read Obsidian's vault registry, so whether Obsidian has this vault open is unknown; if it is, reopen the vault after this write")
+		}
 	}
 
 	merged := make(map[string]string, len(doc.types)+len(result.Added))

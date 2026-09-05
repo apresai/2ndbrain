@@ -759,10 +759,27 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
 - REFUSES a `types.json` it cannot parse, whose top level is not a JSON object,
   or whose `types` is not an object of strings, rather than replacing a settings
   file it does not understand.
-- REFUSES to write while Obsidian holds the vault open, unless `--force`
-  (`vault.ObsidianHasVaultOpen`, which answers only on the explicit `open` flag
-  and reports separately whether the registry was readable at all, so an
-  unreadable registry warns rather than reading as permission).
+- REFUSES to write while Obsidian is RUNNING with the vault open, unless
+  `--force` (`vault.ObsidianHasVaultOpen`, which reports separately whether the
+  question was answerable at all, so an unreadable registry warns rather than
+  reading as permission). It needs BOTH facts and the registry supplies only
+  one: Obsidian's `open` flag says WHICH vault it opens, and Obsidian sets it on
+  open and **never clears it on quit** (measured: quit, flag still true, file two
+  days untouched), so on the flag alone this refused everyone who had ever
+  opened the vault, including a user who had just quit because the command asked
+  them to, leaving `--force` as the only way through. Liveness comes from the
+  Chromium `SingletonLock` Obsidian keeps beside its registry, a symlink whose
+  target is `<hostname>-<pid>`; the pid is what follows the LAST dash (hostnames
+  carry their own) and is probed via `procutil.Alive`. Absent means not running,
+  a lock naming a dead pid is a crash leftover and also means not running, and
+  an unreadable one or a platform without the mechanism (Windows uses a named
+  mutex) is UNKNOWN, which keeps the old refusal rather than inventing
+  permission from an absence.
+- `preserved` names EVERY type the file already declares, all of which the merge
+  keeps, not only the ones 2nb would have declared itself. Scoping it to 2nb's
+  own set made a real vault preview as `preserved: {aliases, tags}` while its
+  `cssclasses` went unmentioned, in the one report you read before allowing a
+  write into Obsidian's config.
 - REFUSES to write while any note still carries a quoted date, and names them:
   declaring `created` a datetime then makes Obsidian show a type mismatch on
   every one of them. Run `obsidian migrate-properties --write` first. The
