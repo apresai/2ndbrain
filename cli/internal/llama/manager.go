@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/apresai/2ndbrain/internal/procutil"
 )
 
 const (
@@ -318,13 +320,8 @@ func freePort() (int, error) {
 }
 
 // pidAlive reports whether a process with the given PID exists (signal 0 probe).
+// The probe lives in internal/procutil, its one home; this name stays so the
+// call sites in this file read unchanged.
 func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return procutil.Alive(pid)
 }
