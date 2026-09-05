@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/apresai/2ndbrain/internal/procutil"
 )
 
 // obsidianRegistryEntry mirrors one entry in Obsidian's vault registry. The
@@ -150,30 +154,154 @@ func ObsidianKnownVaults() []string {
 	return out
 }
 
-// ObsidianHasVaultOpen reports whether Obsidian currently has the vault at root
-// open, and whether that question could be ANSWERED at all.
-//
-// The second return is the point. A missing, empty or unparseable registry
-// (Obsidian never installed, or a shape this build does not know) yields
-// (false, false), which is "unknown", not "closed". A caller gating a write on
-// this must not read an unreadable registry as permission: it warns instead.
-//
-// Only an entry explicitly flagged `open` counts. ObsidianActiveVault falls back
-// to the most-recently-opened vault when nothing is flagged, which is right for
-// RESOLVING a target and wrong here: a vault Obsidian merely opened last week is
-// not a vault Obsidian is holding now.
-func ObsidianHasVaultOpen(root string) (open, known bool) {
+// ObsidianVaultState is what could be established about whether Obsidian is
+// holding a vault open. It is an enum rather than a pair of bools because the
+// caller REFUSES on it and then has to say why, and "open" and "probably open"
+// are not the same sentence. Claiming the first when only the second is known
+// is the fault this whole guard was rewritten for, one layer up.
+type ObsidianVaultState int
+
+const (
+	// ObsidianStateUnknown: unanswerable (no registry, or one this build cannot
+	// parse). Never read as permission to write.
+	ObsidianStateUnknown ObsidianVaultState = iota
+	// ObsidianClosed: Obsidian is not holding this vault.
+	ObsidianClosed
+	// ObsidianOpen: confirmed. The registry names this vault AND the process is
+	// running.
+	ObsidianOpen
+	// ObsidianOpenUnconfirmed: the registry names this vault, but whether
+	// Obsidian is RUNNING could not be determined. Treated as open, because an
+	// absence of evidence is not permission; said differently, because it is a
+	// different fact.
+	ObsidianOpenUnconfirmed
+)
+
+// ObsidianVaultOpenState answers from TWO facts, and needs both. The registry
+// says WHICH vault Obsidian opens; only a running process says it is still
+// there.
+func ObsidianVaultOpenState(root string) ObsidianVaultState {
 	entries := readObsidianRegistry()
 	if len(entries) == 0 {
-		return false, false
+		return ObsidianStateUnknown
 	}
 	want := canonicalVaultPath(root)
+	flagged := false
 	for _, e := range entries {
 		if e.Open && canonicalVaultPath(e.Path) == want {
-			return true, true
+			flagged = true
+			break
 		}
 	}
-	return false, true
+	if !flagged {
+		return ObsidianClosed
+	}
+	// The registry names WHICH vault; it cannot say whether Obsidian is still
+	// there. Obsidian sets `open` when a vault is opened and never clears it on
+	// quit: measured with Obsidian fully quit, the flag was still true and the
+	// file two days untouched. On that alone this refused every user who had
+	// ever opened the vault, including one who had just quit BECAUSE the command
+	// asked them to, and the only way past was --force. A guard that fires
+	// wrongly for nearly everyone teaches people to reach around it.
+	alive, liveKnown := obsidianProcessAlive()
+	if !liveKnown {
+		// No liveness signal here. Keep the cautious answer rather than
+		// inventing permission from an absence, but say which answer it is.
+		return ObsidianOpenUnconfirmed
+	}
+	if alive {
+		return ObsidianOpen
+	}
+	return ObsidianClosed
+}
+
+// obsidianProcessAlive reports whether Obsidian is RUNNING, and whether that
+// question could be answered at all.
+//
+// It is a var so tests can substitute it. That is the repo's own pattern for a
+// probe that would otherwise reach outside the test (see procCommand in
+// internal/mcp/reap.go), and it matters more here than usual: the register-types
+// call site has none of the 2NB_TEST isolation every registry read in root.go
+// carries, so without substitution a developer who happens to have Obsidian
+// open would get different test results from one who does not.
+var obsidianProcessAlive = func() (alive, known bool) {
+	lock := obsidianSingletonLockPath()
+	if lock == "" {
+		return false, false
+	}
+	target, err := os.Readlink(lock)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Chromium removes the lock on a clean exit, so an absent one is a
+			// real answer: nothing is holding the profile.
+			return false, true
+		}
+		// Present but unreadable (a permission bit, or a regular file where a
+		// symlink was expected). No answer, rather than a guess, and worth a
+		// trace: the caller refuses on it, and a silent refusal is what made the
+		// old guard hard to argue with.
+		slog.Debug("obsidian singleton lock present but unreadable", "path", lock, "err", err)
+		return false, false
+	}
+	// The target is `<hostname>-<pid>`, and the hostname itself contains dashes
+	// (`apres-ai-124299.local-99064`), so the pid is what follows the LAST one.
+	dash := strings.LastIndexByte(target, '-')
+	if dash < 0 {
+		return false, false
+	}
+	pid, err := strconv.Atoi(target[dash+1:])
+	if err != nil {
+		return false, false
+	}
+	// The hostname is in there for a reason, and ignoring it is how a shared or
+	// networked home directory turns into a wrong answer: a lock written by a
+	// DIFFERENT machine names a pid that means nothing locally and could well be
+	// live here, belonging to something unrelated. Chromium encodes the host
+	// precisely so this can be checked. A mismatch is UNKNOWN, never "running"
+	// and never "closed".
+	//
+	// The two spellings do agree, which is worth recording rather than assuming,
+	// because they need not: measured on macOS, os.Hostname() gave
+	// "apres-ai-124299.local" and the lock read "apres-ai-124299.local-99064",
+	// while `scutil --get LocalHostName` gave the bare "apres-ai-124299". Both
+	// Chromium and Go take the gethostname(2) form, so they match.
+	//
+	// If they ever stop matching (a machine renamed since Obsidian launched, by
+	// DHCP or an MDM), every answer becomes UNKNOWN and the command refuses with
+	// the "could not be determined" wording plus --force. That is the same place
+	// the old flag-only guard left everyone, so the failure degrades to no worse
+	// than the bug this replaced, and it degrades honestly.
+	host, herr := os.Hostname()
+	if herr != nil || target[:dash] != host {
+		slog.Debug("obsidian singleton lock names another host", "lock_host", target[:dash], "this_host", host, "err", herr)
+		return false, false
+	}
+	// A lock left behind by a crash names a pid that is gone. That is a
+	// definite "not running", not an unknown.
+	//
+	// One accepted race: if Obsidian writes the registry flag before it takes
+	// this lock, a launch caught mid-flight reads as not-running. The write it
+	// would then allow is merge-only, backed up first and atomically renamed,
+	// so the cost is a change Obsidian may overwrite, and rerunning fixes it.
+	return procutil.Alive(pid), true
+}
+
+// obsidianSingletonLockPath returns the Chromium singleton lock that Obsidian,
+// an Electron app, keeps beside its registry while it runs. Empty when this
+// platform does not use that mechanism or the config dir cannot be resolved.
+//
+// Windows is deliberately empty: Chromium uses a named mutex there, so an
+// absent file would prove nothing and reading one as "not running" would hand
+// out permission the signal never gave.
+func obsidianSingletonLockPath() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	reg := obsidianRegistryPath()
+	if reg == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(reg), "SingletonLock")
 }
 
 // canonicalVaultPath normalizes a vault path for comparison: symlinks resolved

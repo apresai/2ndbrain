@@ -154,7 +154,7 @@ Hybrid BM25 plus semantic search. Filters: `--type --status --tag --limit`. `--t
 
 `--json` returns the envelope `{mode, warnings, results}`, not a bare array. All three keys are always present and never `null`; `mode` is `hybrid` or `keyword`, and `warnings` carries the `semantic search disabled: ` line when the vector channel is unusable. A query that matches nothing still returns the envelope with `results: []` (see "Global flags and output formats"), so a caller can always tell "nothing matched" apart from "semantic search is off". Full contract and the degraded-mode playbook: [agent-teaching.md](agent-teaching.md).
 
-**Row shape.** Every row carries `doc_id`, `path`, `title`, `chunk_id`, `heading_path`, `content`, `score`, `type`, `status`, and `frontmatter` (the note's parsed frontmatter map; omitted when it is empty). An **enumerate-by-filter** query, the documented blank-query-plus-filter form such as `search "type:adr"`, returns the same shape: its `content` is the first 200 characters of the note's FIRST chunk, with that chunk's `chunk_id` and `heading_path`. Before 0.22.1 those rows carried empty chunk fields and the note's frontmatter JSON as `content`.
+**Row shape.** Every row carries `doc_id`, `path`, `title`, `chunk_id`, `heading_path`, `content`, `score`, `type`, `status`, and `frontmatter` (the note's parsed frontmatter map; omitted when it is empty). **That map holds RESOLVED values, so a date renders as the instant it parses to, not as the note wrote it:** a file saying `created: 2026-07-14` comes back `"2026-07-14T00:00:00Z"` here. This is deliberate and it is the same map that gets written back to disk (see the frontmatter rules in CLAUDE.md); the row is decoded from the `documents.frontmatter` JSON column, which is written at index time from that map, so no per-key original text survives to search time. `meta --get <key>` is what answers with the note's own text. An **enumerate-by-filter** query, the documented blank-query-plus-filter form such as `search "type:adr"`, returns the same shape: its `content` is the first 200 characters of the note's FIRST chunk, with that chunk's `chunk_id` and `heading_path`. Before 0.22.1 those rows carried empty chunk fields and the note's frontmatter JSON as `content`.
 
 A **vector-only** hit, one the keyword leg never returned, carries the same three fields, filled in after rank fusion so every consumer of the hybrid pipeline (the CLI, `ask`, MCP `kb_search`, the eval harness) sees them. `content` is the first 200 characters of the MATCHED chunk on the per-chunk vec0 path, and of the note's first chunk on the brute-force fallback, which scores whole-document embeddings and knows no chunk. Before 0.22.2 those rows came back with an empty `content`, so the results semantic search exists to find were the ones with nothing to read. A note with no body has no chunks, so it still comes back with those three fields empty.
 
@@ -735,7 +735,7 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
 | Property | Declared as |
 |---|---|
 | `created`, `modified` | `datetime` |
-| `title`, `type`, `status` | `text` |
+| `title`, `type`, `status`, `id` | `text` |
 | `tags` | `tags` |
 | `aliases` | `aliases` |
 | schema fields typed `date` / `datetime` | that type |
@@ -751,18 +751,41 @@ user-invoked command, one file, merge-only, backup-first, never automatic.
 - `status` is `text`, never `multitext`. Obsidian's list editor would write a
   YAML sequence back, which `frontmatterText` reads as no status at all,
   breaking every `--status` filter and `ValidateStatusTransition`.
-- `id` is deliberately NOT declared: it is a UUID nobody reads, identity is
-  path-based, and declaring it adds a visible Text row to every note carrying
-  one.
+- `id` IS declared, as text, as of 0.23.2. 0.23.0 and 0.23.1 omitted it. The
+  rule is now that EVERY property 2nb writes has a declared type, with no
+  exception to remember or explain; identity stays path-based either way, and an
+  undeclared property is one whose editor Obsidian picks by inference.
 - Backs the previous file up into `.2ndbrain/recovery/obsidian/`, never beside
   the original, and writes atomically (temp plus rename).
 - REFUSES a `types.json` it cannot parse, whose top level is not a JSON object,
   or whose `types` is not an object of strings, rather than replacing a settings
   file it does not understand.
-- REFUSES to write while Obsidian holds the vault open, unless `--force`
-  (`vault.ObsidianHasVaultOpen`, which answers only on the explicit `open` flag
-  and reports separately whether the registry was readable at all, so an
-  unreadable registry warns rather than reading as permission).
+- REFUSES to write while Obsidian is RUNNING with the vault open, unless
+  `--force` (`vault.ObsidianVaultOpenState`, whose four states let the refusal say what is
+  actually known: an unreadable registry warns rather than reading as permission,
+  and a flagged-but-unconfirmable one refuses in different words from a confirmed
+  one). It needs BOTH facts and the registry supplies only
+  one: Obsidian's `open` flag says WHICH vault it opens, and Obsidian sets it on
+  open and **never clears it on quit** (measured: quit, flag still true, file two
+  days untouched), so on the flag alone this refused everyone who had ever
+  opened the vault, including a user who had just quit because the command asked
+  them to, leaving `--force` as the only way through. Liveness comes from the
+  Chromium `SingletonLock` Obsidian keeps beside its registry, a symlink whose
+  target is `<hostname>-<pid>`; the pid is what follows the LAST dash (hostnames
+  carry their own) and is probed via `procutil.Alive`. Absent means not running,
+  a lock naming a dead pid is a crash leftover and also means not running, and
+  everything else is UNKNOWN, which keeps the old refusal rather than inventing
+  permission from an absence: a lock that cannot be read at all (not a symlink,
+  or no permission), a target this build cannot parse (no dash, or a pid that is
+  not a number), one whose hostname is not this machine's (Chromium encodes it
+  so a lock written by another machine on a shared home can be spotted, and that
+  pid means nothing here, and may well be live), and a platform without the
+  mechanism at all (Windows uses a named mutex).
+- `preserved` names EVERY type the file already declares, all of which the merge
+  keeps, not only the ones 2nb would have declared itself. Scoping it to 2nb's
+  own set made a real vault preview as `preserved: {aliases, tags}` while its
+  `cssclasses` went unmentioned, in the one report you read before allowing a
+  write into Obsidian's config.
 - REFUSES to write while any note still carries a quoted date, and names them:
   declaring `created` a datetime then makes Obsidian show a type mismatch on
   every one of them. Run `obsidian migrate-properties --write` first. The

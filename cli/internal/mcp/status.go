@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
+	"github.com/apresai/2ndbrain/internal/procutil"
 	"github.com/apresai/2ndbrain/internal/vault"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -185,14 +185,13 @@ func cleanupStale(dir string) {
 }
 
 // pidAlive returns true when a process with the given PID is still running.
-// On Unix, signal 0 is the standard "does this process exist" probe.
+//
+// The probe itself lives in internal/procutil, which is its one home: this file
+// and internal/llama carried byte-identical copies, and internal/vault was about
+// to need a third. The local name stays so every call site here reads the same.
+// Liveness is not identity, and this package is careful about the difference:
+// StaleServers pairs it with looksLikeMCPServer before anything is killed,
+// because a reused PID must never be mistaken for an orphaned server.
 func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return procutil.Alive(pid)
 }
