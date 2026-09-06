@@ -2,20 +2,12 @@ package procutil
 
 import (
 	"os"
-	"runtime"
 	"testing"
 )
 
 // The probe answers about a pid, and the two answers that matter are the ones
 // callers act on: this process is alive, and a pid nothing owns is not.
 func TestAlive(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		// Alive is documented as always false there: os.Process.Signal refuses
-		// every signal but Kill, so there is no signal-0 probe to make. Asserting
-		// the running process reads as alive would fail for that reason alone and
-		// say nothing about this code.
-		t.Skip("no signal-0 probe on windows; see Alive's doc comment")
-	}
 	if !Alive(os.Getpid()) {
 		t.Error("Alive(os.Getpid()) = false; the running test process must read as alive")
 	}
@@ -41,9 +33,6 @@ func TestAlive(t *testing.T) {
 // and always running. As a non-root user, signalling it gives EPERM rather than
 // success, so a build that only checked for a nil error would call it dead.
 func TestAlive_EPERMIsAlive(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no signal-0 probe on windows; see Alive's doc comment")
-	}
 	if os.Getuid() == 0 {
 		// As root the signal succeeds outright, so the EPERM path is never taken
 		// and the assertion would prove nothing.

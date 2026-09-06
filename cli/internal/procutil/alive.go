@@ -25,14 +25,10 @@ import (
 // looksLikeMCPServer). A caller that only wants to know whether some process is
 // there, and fails safe either way, can use this alone.
 //
-// WINDOWS: this always reports false, and callers must not read that as "dead".
-// os.Process.Signal refuses every signal but Kill there (syscall.EWINDOWS), so
-// there is no signal-0 probe to make. Answering honestly needs OpenProcess plus
-// GetExitCodeProcess, which is not written here because it cannot be exercised
-// on the machines this is developed and released from, and an unverified syscall
-// path is worse than a documented gap. The product is macOS-only today (Homebrew
-// formula and cask), and the one Windows-reachable consumer, the MCP sidecar
-// reaper, deletes status files for pids this calls dead.
+// Unix only, which is the whole of it: .goreleaser.yaml builds goos darwin and
+// nothing else, so signal 0 is always available. On Windows os.Process.Signal
+// refuses everything but Kill and this would answer false for a live process,
+// which is why that is not a platform to add without also fixing this.
 func Alive(pid int) bool {
 	if pid <= 0 {
 		return false

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -369,22 +368,10 @@ func TestContract_RegisterTypes_DeclaresSchemaDateFields(t *testing.T) {
 // test is not macOS-only; the resolver reads whichever its platform picks.
 func obsidianConfigDirs(t *testing.T, home string) []string {
 	t.Helper()
-	dirs := []string{
+	return []string{
 		filepath.Join(home, "Library", "Application Support", "obsidian"),
 		filepath.Join(home, ".config", "obsidian"),
 	}
-	if runtime.GOOS == "windows" {
-		// Obsidian keeps its registry under %APPDATA% there, and the helper
-		// planting a registry the code never reads would leave the guard at
-		// ObsidianStateUnknown: the refusal test would fail, and the
-		// writes-when-quit test would pass without liveness ever being consulted,
-		// which is worse. CI is macOS-only today, so this exists to keep the
-		// helper honest if that ever changes rather than because it runs.
-		if appData := os.Getenv("APPDATA"); appData != "" {
-			dirs = append(dirs, filepath.Join(appData, "obsidian"))
-		}
-	}
-	return dirs
 }
 
 // fakeObsidianState plants the two facts the guard consults: the registry entry
