@@ -32,6 +32,23 @@ func TestAlive(t *testing.T) {
 // pid 1 is the probe: on macOS and Linux it is launchd or init, owned by root,
 // and always running. As a non-root user, signalling it gives EPERM rather than
 // success, so a build that only checked for a nil error would call it dead.
+func TestAliveState_EPERMIsAliveButNotCertain(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root: signalling pid 1 succeeds, so this cannot exercise EPERM")
+	}
+	alive, certain := AliveState(1)
+	if !alive {
+		t.Error("AliveState(1) alive = false; pid 1 is running, and EPERM must not read as dead")
+	}
+	if certain {
+		t.Error("AliveState(1) certain = true; an EPERM answer proves existence, not identity")
+	}
+	// The ordinary case is both true, and must stay distinguishable from it.
+	if alive, certain := AliveState(os.Getpid()); !alive || !certain {
+		t.Errorf("AliveState(self) = (%v, %v), want (true, true)", alive, certain)
+	}
+}
+
 func TestAlive_EPERMIsAlive(t *testing.T) {
 	if os.Getuid() == 0 {
 		// As root the signal succeeds outright, so the EPERM path is never taken

@@ -29,6 +29,13 @@ type obsidianRegistryEntry struct {
 //   - macOS:   ~/Library/Application Support/obsidian/obsidian.json
 //   - Linux:   $XDG_CONFIG_HOME/obsidian/obsidian.json (or ~/.config/obsidian/…)
 //
+// Any OTHER platform returns "", and that is deliberate rather than tidy: this
+// used to fall through to the unix layout, so a platform 2nb does not build for
+// got a syntactically fine path that cannot exist. The lock probe then read the
+// resulting ENOENT as "Obsidian is definitely not running" and register-types
+// wrote UNDER a live Obsidian. Guessing a layout is how a liveness check turns
+// into a fail-open, so an unknown platform is answered with "I do not know".
+//
 // Returns "" when the home/config dir can't be determined; an absent file is
 // handled by the caller (ObsidianOpenVault returns "").
 func obsidianRegistryPath() string {
@@ -39,7 +46,7 @@ func obsidianRegistryPath() string {
 			return ""
 		}
 		return filepath.Join(home, "Library", "Application Support", "obsidian", "obsidian.json")
-	default: // linux and other unixes
+	case "linux":
 		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 			return filepath.Join(xdg, "obsidian", "obsidian.json")
 		}
@@ -48,6 +55,8 @@ func obsidianRegistryPath() string {
 			return ""
 		}
 		return filepath.Join(home, ".config", "obsidian", "obsidian.json")
+	default:
+		return ""
 	}
 }
 
@@ -278,7 +287,16 @@ var obsidianProcessAlive = func() (alive, known bool) {
 	// this lock, a launch caught mid-flight reads as not-running. The write it
 	// would then allow is merge-only, backed up first and atomically renamed,
 	// so the cost is a change Obsidian may overwrite, and rerunning fixes it.
-	return procutil.Alive(pid), true
+	//
+	// An alive-but-UNCERTAIN pid (EPERM: it belongs to another user) is reported
+	// as undeterminable rather than as running. The hostname above already
+	// proved the lock is this machine's, so a same-user Obsidian never lands
+	// here; what does is a pid owned by someone else, which is either another
+	// account's Obsidian or a reused pid, and neither is a thing to assert. The
+	// command refuses on both answers, so this only changes whether it claims to
+	// KNOW Obsidian is running.
+	alive, certain := procutil.AliveState(pid)
+	return alive, certain
 }
 
 // obsidianSingletonLockPath returns the Chromium singleton lock that Obsidian,

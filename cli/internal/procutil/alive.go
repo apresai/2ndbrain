@@ -27,26 +27,39 @@ import (
 //
 // 2nb ships for macOS only, so signal 0 is always available here.
 func Alive(pid int) bool {
+	alive, _ := AliveState(pid)
+	return alive
+}
+
+// AliveState is Alive plus how firm the answer is, for a caller that reports
+// what it knows rather than only acting on it.
+//
+// certain is false in exactly one case: the process EXISTS but belongs to
+// another user, so the kernel refused the signal with EPERM. That is an alive
+// answer (reading it as dead fails OPEN on any liveness guard, which is
+// precisely the Obsidian register-types guard, and it is reachable through a
+// shared home directory or a pid since reused by a privileged process), but it
+// is not the same fact as "this is the process I was asking about". Chromium's
+// own singleton code draws the line the same way, treating anything but ESRCH
+// as alive.
+//
+// A caller that only needs to act can use Alive and get the safe reading. A
+// caller that PRINTS its conclusion should use this, so it does not assert
+// "Obsidian is running" about a process it could not identify.
+func AliveState(pid int) (alive, certain bool) {
 	if pid <= 0 {
-		return false
+		return false, true
 	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return false
+		return false, true
 	}
-	err = proc.Signal(syscall.Signal(0))
-	if err == nil {
-		return true
+	switch err = proc.Signal(syscall.Signal(0)); {
+	case err == nil:
+		return true, true
+	case errors.Is(err, syscall.EPERM):
+		return true, false
+	default:
+		return false, true
 	}
-	// EPERM is an ALIVE answer, not a dead one: the kernel found the process and
-	// then refused us permission to signal it. Reading it as dead fails OPEN on
-	// every caller that guards on liveness, which is precisely the Obsidian
-	// register-types guard. It is reachable whenever the pid belongs to another
-	// user: a shared or NFS home directory, or a lock left behind by a pid that
-	// has since been reused by a privileged process. Chromium's own singleton
-	// code makes the same distinction, treating anything but ESRCH as alive.
-	if errors.Is(err, syscall.EPERM) {
-		return true
-	}
-	return false
 }
