@@ -39,7 +39,19 @@ type obsidianRegistryEntry struct {
 // Returns "" when the home/config dir can't be determined; an absent file is
 // handled by the caller (ObsidianOpenVault returns "").
 func obsidianRegistryPath() string {
-	switch runtime.GOOS {
+	return obsidianRegistryPathFor(runtime.GOOS)
+}
+
+// obsidianRegistryPathFor is obsidianRegistryPath with the platform passed in,
+// so the per-OS decision can be TESTED. It could not be before: runtime.GOOS is
+// fixed for the life of the binary, so the branch that matters most, the one
+// taken by a platform this does not support, was unreachable from any test. That
+// is exactly where a fail-open hid. Deleting the Windows case once let the
+// switch fall through to the unix layout, which handed back a path that cannot
+// exist; the caller read that ENOENT as "Obsidian is definitely not running" and
+// the register-types guard permitted a write under a live Obsidian.
+func obsidianRegistryPathFor(goos string) string {
+	switch goos {
 	case "darwin":
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -229,7 +241,17 @@ func ObsidianVaultOpenState(root string) ObsidianVaultState {
 // directly and would otherwise get different results on a developer's machine
 // depending on whether Obsidian happened to be open.
 var obsidianProcessAlive = func() (alive, known bool) {
-	lock := obsidianSingletonLockPath()
+	return obsidianProcessAliveAt(obsidianSingletonLockPath())
+}
+
+// obsidianProcessAliveAt is obsidianProcessAlive with the lock path passed in,
+// so the "no lock path at all" branch can be TESTED. It could not be before:
+// the path is derived from HOME on darwin and therefore always resolves there,
+// so on the only platform this ships for the branch was unreachable, and a test
+// written against it could only skip. That branch is what an unsupported
+// platform relies on to fail closed, which makes it exactly the wrong thing to
+// leave unexercised.
+func obsidianProcessAliveAt(lock string) (alive, known bool) {
 	if lock == "" {
 		return false, false
 	}

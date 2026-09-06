@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **Two safety rules that had no test now have one.** The check that stops `2nb obsidian register-types --write` from writing while Obsidian is open is only useful if it refuses whenever it cannot tell, and twice this year a change made it answer "not running" when it actually had no idea. Nothing could catch that, because the code decided per operating system and a test only ever runs on one. The decision now takes the platform as an argument, so the case that matters (a platform 2nb does not build for) is checked directly, alongside a table stating the rule itself: a write is allowed only on a confirmed answer. Separately, `make test` and the test helpers keep their own lists of the credentials they hide, and the two had silently drifted apart; a test now reads both and fails if the helper hides something the gate does not, which is the direction that leaves credentials reachable
 
 ## [0.23.4] - 2026-09-06
 
