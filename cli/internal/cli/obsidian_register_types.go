@@ -73,7 +73,7 @@ func init() {
 	obsidianRegisterTypesCmd.Flags().BoolVar(&registerTypesWrite, "write", false,
 		"Apply the merge to .obsidian/types.json (opt-in; default previews only)")
 	obsidianRegisterTypesCmd.Flags().BoolVar(&registerTypesForce, "force", false,
-		"Write even though Obsidian currently has this vault open (it may overwrite the change)")
+		"Write even though Obsidian may be running with this vault open (it may overwrite the change)")
 	obsidianCmd.AddCommand(obsidianRegisterTypesCmd)
 }
 

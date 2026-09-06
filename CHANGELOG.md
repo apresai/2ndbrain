@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **A guard could decide a running program was not running, and let a write through.** 2nb asks the operating system whether a process is alive by signalling it, and read "you are not allowed to signal that" as "it is not there". Those are different answers: the second one only comes back when the process EXISTS and belongs to someone else. It reaches you on a shared or network home directory, or when a leftover lock names a process id the system has since given to something privileged. The one place it mattered is `2nb obsidian register-types --write`, which is supposed to refuse while Obsidian holds the vault, and would instead have gone ahead. Now only a genuine "no such process" counts as not running
+- **`make test` was not as sealed off as it claimed.** It is meant to run with no credentials at all, so the suite behaves the same on your machine as in CI. It cleared the obvious variables but not the ones that point AT a file (`AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`), nor role, web-identity or container credentials, so on a machine that sets any of those the tests quietly reached live AWS again. It now covers the same surface the test helpers already did. `make test-live`, the deliberate opposite, keeps its own pricing cache directory so a failed fetch there cannot quiet your next `2nb models list`
 
 ## [0.23.3] - 2026-09-06
 

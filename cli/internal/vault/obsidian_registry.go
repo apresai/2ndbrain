@@ -220,10 +220,11 @@ func ObsidianVaultOpenState(root string) ObsidianVaultState {
 //
 // It is a var so tests can substitute it. That is the repo's own pattern for a
 // probe that would otherwise reach outside the test (see procCommand in
-// internal/mcp/reap.go), and it matters more here than usual: the register-types
-// call site has none of the 2NB_TEST isolation every registry read in root.go
-// carries, so without substitution a developer who happens to have Obsidian
-// open would get different test results from one who does not.
+// internal/mcp/reap.go). The register-types call site is gated by 2NB_TEST like
+// every registry read in root.go, so a BINARY test cannot reach a live Obsidian;
+// substitution is what covers the in-package tests here, which call this
+// directly and would otherwise get different results on a developer's machine
+// depending on whether Obsidian happened to be open.
 var obsidianProcessAlive = func() (alive, known bool) {
 	lock := obsidianSingletonLockPath()
 	if lock == "" {
