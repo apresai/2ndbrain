@@ -28,7 +28,6 @@ type obsidianRegistryEntry struct {
 // every platform the CLI runs on, not just macOS:
 //   - macOS:   ~/Library/Application Support/obsidian/obsidian.json
 //   - Linux:   $XDG_CONFIG_HOME/obsidian/obsidian.json (or ~/.config/obsidian/…)
-//   - Windows: %APPDATA%/obsidian/obsidian.json
 //
 // Returns "" when the home/config dir can't be determined; an absent file is
 // handled by the caller (ObsidianOpenVault returns "").
@@ -40,11 +39,6 @@ func obsidianRegistryPath() string {
 			return ""
 		}
 		return filepath.Join(home, "Library", "Application Support", "obsidian", "obsidian.json")
-	case "windows":
-		if appData := os.Getenv("APPDATA"); appData != "" {
-			return filepath.Join(appData, "obsidian", "obsidian.json")
-		}
-		return ""
 	default: // linux and other unixes
 		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 			return filepath.Join(xdg, "obsidian", "obsidian.json")
@@ -290,14 +284,7 @@ var obsidianProcessAlive = func() (alive, known bool) {
 // obsidianSingletonLockPath returns the Chromium singleton lock that Obsidian,
 // an Electron app, keeps beside its registry while it runs. Empty when this
 // platform does not use that mechanism or the config dir cannot be resolved.
-//
-// Windows is deliberately empty: Chromium uses a named mutex there, so an
-// absent file would prove nothing and reading one as "not running" would hand
-// out permission the signal never gave.
 func obsidianSingletonLockPath() string {
-	if runtime.GOOS == "windows" {
-		return ""
-	}
 	reg := obsidianRegistryPath()
 	if reg == "" {
 		return ""

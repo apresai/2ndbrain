@@ -251,9 +251,9 @@ var (
 	osExecutable    = os.Executable
 )
 
-// claudeDesktopConfigPath returns the OS-specific Claude Desktop MCP config path
-// and its display form. Claude Desktop ships only on macOS and Windows; other
-// platforms return an error so callers degrade cleanly rather than panic.
+// claudeDesktopConfigPath returns the Claude Desktop MCP config path and its
+// display form. 2nb ships for macOS only; any other platform returns an error so
+// callers degrade cleanly rather than panic.
 func claudeDesktopConfigPath() (path, display string, err error) {
 	switch runtime.GOOS {
 	case "darwin":
@@ -263,12 +263,6 @@ func claudeDesktopConfigPath() (path, display string, err error) {
 		}
 		p := filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
 		return p, "~/Library/Application Support/Claude/claude_desktop_config.json", nil
-	case "windows":
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			return "", "", fmt.Errorf("APPDATA is not set; cannot locate the Claude Desktop config")
-		}
-		return filepath.Join(appData, "Claude", "claude_desktop_config.json"), `%APPDATA%\Claude\claude_desktop_config.json`, nil
 	default:
 		return "", "", fmt.Errorf("Claude Desktop has no supported config location on %s", runtime.GOOS)
 	}

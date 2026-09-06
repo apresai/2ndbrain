@@ -252,8 +252,10 @@ func (v *Vault) ContainsPath(absPath string) bool {
 	if err != nil {
 		return false
 	}
-	// !IsAbs is a Windows safety net: filepath.Rel returns an absolute
-	// path when source and dest sit on different drives.
+	// The IsAbs half is belt and braces: filepath.Rel cannot return an
+	// absolute path here when it reports no error. Kept because this decides
+	// whether a path is INSIDE the vault, and a cheap redundant assertion is
+	// the right trade on a containment check.
 	return !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
 }
 

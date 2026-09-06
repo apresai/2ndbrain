@@ -57,8 +57,10 @@ func TestObsidianVaultOpenState(t *testing.T) {
 			want:     ObsidianClosed,
 		},
 		{
-			// No liveness signal (Windows uses a named mutex, not the lock).
-			// Absence of a signal is not permission: keep the old refusal.
+			// No usable liveness signal: a lock that is not a symlink, a
+			// target this build cannot parse, or one written by another
+			// machine. Absence of a signal is not permission, so the refusal
+			// stands.
 			name:     "flagged open and liveness cannot be determined",
 			registry: `{"vaults":{"a":{"path":"/Users/x/obsidian","ts":100,"open":true}}}`,
 			root:     "/Users/x/obsidian",

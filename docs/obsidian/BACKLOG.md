@@ -28,7 +28,7 @@ MEDIUM/LOW findings from the chad-review of the 0.5.0 Obsidian-compliance work. 
 
 ## Provider-simplification + plugin-binary follow-ups (deferred)
 - **Gemini provider** — explicitly out of scope for now (decided: don't add a provider that isn't already present). Revisit if a non-AWS, single-API-key default is wanted.
-- **Cross-platform CLI builds** — the release is macOS-only (darwin amd64/arm64), so the plugin's "Download CLI" is macOS-only. Add Windows/Linux GoReleaser builds to extend it (note: CGO + sqlite/fts5 needs care on those targets).
+- **Cross-platform CLI builds**: dropped. 2nb is macOS-only by decision, so the plugin's "Download CLI" is too. Reopening this means more than a GoReleaser target: `procutil.Alive` has no signal-0 probe on Windows, and the Obsidian registry and Chromium singleton-lock paths are per-OS.
 - **macOS notarization** — not done (no Apple Developer account in CI). The plugin ad-hoc signs + strips quarantine, which works for an exec'd CLI; notarizing the release would remove even that step. Forks/local builds are unaffected.
 - **Community Plugin store submission** — currently BRAT / manual install. Store review scrutinizes binary-downloading plugins; keep the download consent-gated.
 - **Auto-index / watch** — the plugin still requires a manual "Index now" / Rebuild; a debounced incremental reindex on vault changes would remove that friction.

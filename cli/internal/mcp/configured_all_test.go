@@ -85,14 +85,11 @@ func TestConfiguredFor_CodexHeaderScan(t *testing.T) {
 }
 
 func TestConfiguredFor_ClaudeDesktopConfigured(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-		t.Skip("Claude Desktop config path is only defined on macOS/Windows")
+	if runtime.GOOS != "darwin" {
+		t.Skip("Claude Desktop config path is only defined on macOS")
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if runtime.GOOS == "windows" {
-		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
-	}
 	v, err := vault.Init(t.TempDir())
 	if err != nil {
 		t.Fatalf("init: %v", err)
@@ -112,7 +109,7 @@ func TestConfiguredFor_ClaudeDesktopConfigured(t *testing.T) {
 }
 
 func TestConfiguredFor_ClaudeDesktopUnsupportedOS(t *testing.T) {
-	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+	if runtime.GOOS == "darwin" {
 		t.Skip("this exercises the unsupported-OS path")
 	}
 	v, err := vault.Init(t.TempDir())

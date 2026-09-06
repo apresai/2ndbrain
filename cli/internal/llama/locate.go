@@ -154,10 +154,5 @@ func isExecutableFile(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
-	// On Unix, require an executable bit; on other OSes os.Stat can't tell, so
-	// presence is enough (LocateEngine's PATH branch handles the rest).
-	if runtime.GOOS == "windows" {
-		return true
-	}
 	return info.Mode()&0111 != 0
 }

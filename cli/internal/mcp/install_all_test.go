@@ -26,7 +26,7 @@ func resultByClient(results []InstallResult, client string) (InstallResult, bool
 }
 
 func TestInstallAll_AllClients(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+	if runtime.GOOS != "darwin" {
 		t.Skip("asserts claude-desktop configured, which requires a supported OS")
 	}
 	t.Setenv("HOME", t.TempDir())
@@ -91,7 +91,7 @@ func TestInstallAll_OneFailureDoesNotAbort(t *testing.T) {
 
 // UninstallAll returns every client and removes the entries that InstallAll wrote.
 func TestUninstallAll(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+	if runtime.GOOS != "darwin" {
 		t.Skip("claude-desktop step requires a supported OS")
 	}
 	t.Setenv("HOME", t.TempDir())

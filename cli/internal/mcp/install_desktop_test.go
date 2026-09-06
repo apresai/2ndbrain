@@ -21,14 +21,11 @@ func stubDesktopLookPath(t *testing.T, abs string) {
 }
 
 func TestInstallClaudeDesktop(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-		t.Skip("Claude Desktop config path is only defined on macOS/Windows")
+	if runtime.GOOS != "darwin" {
+		t.Skip("Claude Desktop config path is only defined on macOS")
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if runtime.GOOS == "windows" {
-		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
-	}
 	stubDesktopLookPath(t, "/abs/2nb")
 
 	v, err := vault.Init(t.TempDir())
@@ -108,14 +105,11 @@ func TestInstallClaudeDesktop(t *testing.T) {
 
 // Installing must back up the original and preserve other servers byte-for-byte.
 func TestInstallClaudeDesktop_BackupAndPreserve(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-		t.Skip("Claude Desktop config path is only defined on macOS/Windows")
+	if runtime.GOOS != "darwin" {
+		t.Skip("Claude Desktop config path is only defined on macOS")
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if runtime.GOOS == "windows" {
-		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
-	}
 	stubDesktopLookPath(t, "/abs/2nb")
 
 	cfgPath, _, _ := claudeDesktopConfigPath()

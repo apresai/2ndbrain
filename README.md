@@ -6,6 +6,10 @@
 
 AI companion for your Obsidian vault with semantic search. A Go CLI, MCP server, and native macOS dashboard share a SQLite index, making your knowledge base searchable by both you and your AI coding assistant. Obsidian stays your editor; 2ndbrain is the engine that indexes, searches, and answers underneath it.
 
+## Requirements
+
+**macOS only.** Both products ship for macOS and nothing else: the release builds `darwin` for Intel and Apple silicon, the dashboard is a native macOS app, and there are no Windows or Linux builds. The CLI is pure Go and will compile elsewhere, but that is not a supported configuration and platform-specific paths (Obsidian's registry, the process-liveness probe) assume macOS.
+
 ## Install
 
 ```bash

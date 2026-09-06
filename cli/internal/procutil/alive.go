@@ -25,10 +25,7 @@ import (
 // looksLikeMCPServer). A caller that only wants to know whether some process is
 // there, and fails safe either way, can use this alone.
 //
-// Unix only, which is the whole of it: .goreleaser.yaml builds goos darwin and
-// nothing else, so signal 0 is always available. On Windows os.Process.Signal
-// refuses everything but Kill and this would answer false for a live process,
-// which is why that is not a platform to add without also fixing this.
+// 2nb ships for macOS only, so signal 0 is always available here.
 func Alive(pid int) bool {
 	if pid <= 0 {
 		return false
