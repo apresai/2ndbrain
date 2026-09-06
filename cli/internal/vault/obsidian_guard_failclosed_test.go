@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -78,23 +79,23 @@ func TestObsidianVaultOpenState_PermitsOnlyOnAConfirmedAnswer(t *testing.T) {
 }
 
 // The same property one layer down: when the lock cannot be located at all, the
-// probe must report "cannot tell", never "not running". This is what the
-// unsupported-platform path relies on, and it is the half that was silently
-// wrong when the registry path was guessed instead of refused.
-func TestObsidianProcessAlive_NoLockPathIsUnknownNotAbsent(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	// No registry anywhere, so obsidianSingletonLockPath() has nothing to sit
-	// beside and returns "".
-	t.Setenv("XDG_CONFIG_HOME", home+"/nonexistent")
-
-	if path := obsidianSingletonLockPath(); path != "" {
-		// On darwin the path is derived from HOME and always resolves, so this
-		// case is about the contract rather than this machine.
-		t.Skipf("lock path resolves to %q on this platform; the unresolvable case is covered by the state table", path)
-	}
-	alive, known := obsidianProcessAlive()
+// probe must report "cannot tell", never "not running". That is what an
+// unsupported platform relies on to fail closed.
+//
+// The path is an argument because it has to be: obsidianSingletonLockPath()
+// derives it from HOME and so ALWAYS resolves on darwin, the only platform this
+// ships for. A test that called the real thing could only skip, which is a test
+// that reports success while asserting nothing.
+func TestObsidianProcessAliveAt_NoLockPathIsUnknownNotAbsent(t *testing.T) {
+	alive, known := obsidianProcessAliveAt("")
 	if alive || known {
-		t.Errorf("obsidianProcessAlive() = (%v, %v), want (false, false): an unlocatable lock is UNKNOWN, and reading it as absent is what permits a write", alive, known)
+		t.Errorf("obsidianProcessAliveAt(\"\") = (%v, %v), want (false, false): an unlocatable lock is UNKNOWN, and reading it as absent is what permits a write", alive, known)
+	}
+
+	// The contrast that keeps the assertion honest: a path that resolves but has
+	// no file is a real "not running" answer, so the two must not collapse.
+	absent := filepath.Join(t.TempDir(), "SingletonLock")
+	if alive, known := obsidianProcessAliveAt(absent); alive || !known {
+		t.Errorf("obsidianProcessAliveAt(absent) = (%v, %v), want (false, true): a lock that is genuinely gone means Obsidian quit", alive, known)
 	}
 }

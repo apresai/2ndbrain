@@ -241,7 +241,17 @@ func ObsidianVaultOpenState(root string) ObsidianVaultState {
 // directly and would otherwise get different results on a developer's machine
 // depending on whether Obsidian happened to be open.
 var obsidianProcessAlive = func() (alive, known bool) {
-	lock := obsidianSingletonLockPath()
+	return obsidianProcessAliveAt(obsidianSingletonLockPath())
+}
+
+// obsidianProcessAliveAt is obsidianProcessAlive with the lock path passed in,
+// so the "no lock path at all" branch can be TESTED. It could not be before:
+// the path is derived from HOME on darwin and therefore always resolves there,
+// so on the only platform this ships for the branch was unreachable, and a test
+// written against it could only skip. That branch is what an unsupported
+// platform relies on to fail closed, which makes it exactly the wrong thing to
+// leave unexercised.
+func obsidianProcessAliveAt(lock string) (alive, known bool) {
 	if lock == "" {
 		return false, false
 	}

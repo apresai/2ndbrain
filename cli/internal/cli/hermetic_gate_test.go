@@ -25,7 +25,12 @@ func TestHermeticGateCoversEveryCredentialSourceTheHelperDoes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading cli/Makefile: %v", err)
 	}
-	hermetic := hermeticEnvBlock(t, string(makefile))
+	// Collapsed to single spaces so the assertions below are about CONTENT, not
+	// layout. Make joins backslash-continued lines with a space and env reads
+	// each token independently, so "-u NAME" split across two physical lines is
+	// the same invocation; matching raw text would fail a Makefile that is
+	// correct but wrapped differently.
+	hermetic := strings.Join(strings.Fields(hermeticEnvBlock(t, string(makefile))), " ")
 
 	helper, err := os.ReadFile("models_verify_test.go")
 	if err != nil {
@@ -58,6 +63,38 @@ func TestHermeticGateCoversEveryCredentialSourceTheHelperDoes(t *testing.T) {
 	if !strings.Contains(hermetic, "AWS_EC2_METADATA_DISABLED=true") {
 		t.Error("HERMETIC_ENV must set AWS_EC2_METADATA_DISABLED=true, or a credential-free run stalls on IMDS instead of failing fast")
 	}
+
+	// A perfectly populated variable is worth nothing if the recipe stops using
+	// it. Without this, `test:` could drop $(HERMETIC_ENV) and go back to
+	// reaching live AWS while every assertion above still passed.
+	if !recipeUsesHermeticEnv(string(makefile)) {
+		t.Error("the `test:` recipe does not reference $(HERMETIC_ENV); the variable can be complete and the gate still not use it")
+	}
+}
+
+// recipeUsesHermeticEnv reports whether the `test:` target's recipe actually
+// references the variable. Recipe lines are the tab-indented ones after the
+// target, up to the next non-indented, non-blank line.
+func recipeUsesHermeticEnv(makefile string) bool {
+	lines := strings.Split(makefile, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "test:") {
+			continue
+		}
+		for _, recipe := range lines[i+1:] {
+			if strings.TrimSpace(recipe) == "" {
+				continue
+			}
+			if !strings.HasPrefix(recipe, "\t") {
+				break
+			}
+			if strings.Contains(recipe, "$(HERMETIC_ENV)") {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // hermeticEnvBlock returns the HERMETIC_ENV assignment, continuation lines
