@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.23.3] - 2026-09-06
+
 ### Fixed
 - **`2nb models list` could stall about 30 seconds on every single run.** It fetches AWS's published price list to show what each model costs, and one of those two files is 16MB against a 15 second deadline, so on any connection slower than roughly a megabyte a second to that endpoint the download cannot finish in time. That much was survivable; the bug was that only a SUCCESSFUL fetch was remembered, so the next run started the same doomed download from scratch, and so did the one after that. A failed fetch is now remembered for ten minutes and the command returns straight away, using the last prices it managed to store if it has them. Ten minutes rather than forever, so a connection that comes back is picked up on its own without you doing anything. Nothing about the prices themselves changed
 
