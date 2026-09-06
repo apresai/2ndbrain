@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.23.4] - 2026-09-06
+
 ### Fixed
 - **A guard could decide a running program was not running, and let a write through.** 2nb asks the operating system whether a process is alive by signalling it, and read "you are not allowed to signal that" as "it is not there". Those are different answers: the second one only comes back when the process EXISTS and belongs to someone else. It reaches you on a shared or network home directory, or when a leftover lock names a process id the system has since given to something privileged. The one place it mattered is `2nb obsidian register-types --write`, which is supposed to refuse while Obsidian holds the vault, and would instead have gone ahead. Now only a genuine "no such process" counts as not running
 - **2ndbrain is macOS only, and the code now says so.** Both products only ever shipped for macOS, but the CLI still carried Windows branches for the Obsidian registry, the process check, the Claude Desktop config path and the engine lookup. None of it was built, none of it could be tested, and one branch was quietly wrong (the process check would have called every running process dead). They are gone and the README says the requirement up front. Where a location genuinely differs per platform, an unrecognised one is now answered with nothing at all rather than a guess, because a guessed path that cannot exist looks exactly like proof that Obsidian is closed
