@@ -3,7 +3,6 @@ package llama
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -94,7 +93,7 @@ func TestIsExecutableFile(t *testing.T) {
 	if !isExecutableFile(exe) {
 		t.Error("expected exe to be executable")
 	}
-	if runtime.GOOS != "windows" && isExecutableFile(plain) {
+	if isExecutableFile(plain) {
 		t.Error("expected non-0111 file to be non-executable on unix")
 	}
 	if isExecutableFile(dir) {

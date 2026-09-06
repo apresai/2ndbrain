@@ -28,7 +28,13 @@ type obsidianRegistryEntry struct {
 // every platform the CLI runs on, not just macOS:
 //   - macOS:   ~/Library/Application Support/obsidian/obsidian.json
 //   - Linux:   $XDG_CONFIG_HOME/obsidian/obsidian.json (or ~/.config/obsidian/…)
-//   - Windows: %APPDATA%/obsidian/obsidian.json
+//
+// Any OTHER platform returns "", and that is deliberate rather than tidy: this
+// used to fall through to the unix layout, so a platform 2nb does not build for
+// got a syntactically fine path that cannot exist. The lock probe then read the
+// resulting ENOENT as "Obsidian is definitely not running" and register-types
+// wrote UNDER a live Obsidian. Guessing a layout is how a liveness check turns
+// into a fail-open, so an unknown platform is answered with "I do not know".
 //
 // Returns "" when the home/config dir can't be determined; an absent file is
 // handled by the caller (ObsidianOpenVault returns "").
@@ -40,12 +46,7 @@ func obsidianRegistryPath() string {
 			return ""
 		}
 		return filepath.Join(home, "Library", "Application Support", "obsidian", "obsidian.json")
-	case "windows":
-		if appData := os.Getenv("APPDATA"); appData != "" {
-			return filepath.Join(appData, "obsidian", "obsidian.json")
-		}
-		return ""
-	default: // linux and other unixes
+	case "linux":
 		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 			return filepath.Join(xdg, "obsidian", "obsidian.json")
 		}
@@ -54,6 +55,8 @@ func obsidianRegistryPath() string {
 			return ""
 		}
 		return filepath.Join(home, ".config", "obsidian", "obsidian.json")
+	default:
+		return ""
 	}
 }
 
@@ -220,10 +223,11 @@ func ObsidianVaultOpenState(root string) ObsidianVaultState {
 //
 // It is a var so tests can substitute it. That is the repo's own pattern for a
 // probe that would otherwise reach outside the test (see procCommand in
-// internal/mcp/reap.go), and it matters more here than usual: the register-types
-// call site has none of the 2NB_TEST isolation every registry read in root.go
-// carries, so without substitution a developer who happens to have Obsidian
-// open would get different test results from one who does not.
+// internal/mcp/reap.go). The register-types call site is gated by 2NB_TEST like
+// every registry read in root.go, so a BINARY test cannot reach a live Obsidian;
+// substitution is what covers the in-package tests here, which call this
+// directly and would otherwise get different results on a developer's machine
+// depending on whether Obsidian happened to be open.
 var obsidianProcessAlive = func() (alive, known bool) {
 	lock := obsidianSingletonLockPath()
 	if lock == "" {
@@ -283,20 +287,22 @@ var obsidianProcessAlive = func() (alive, known bool) {
 	// this lock, a launch caught mid-flight reads as not-running. The write it
 	// would then allow is merge-only, backed up first and atomically renamed,
 	// so the cost is a change Obsidian may overwrite, and rerunning fixes it.
-	return procutil.Alive(pid), true
+	//
+	// An alive-but-UNCERTAIN pid (EPERM: it belongs to another user) is reported
+	// as undeterminable rather than as running. The hostname above already
+	// proved the lock is this machine's, so a same-user Obsidian never lands
+	// here; what does is a pid owned by someone else, which is either another
+	// account's Obsidian or a reused pid, and neither is a thing to assert. The
+	// command refuses on both answers, so this only changes whether it claims to
+	// KNOW Obsidian is running.
+	alive, certain := procutil.AliveState(pid)
+	return alive, certain
 }
 
 // obsidianSingletonLockPath returns the Chromium singleton lock that Obsidian,
 // an Electron app, keeps beside its registry while it runs. Empty when this
 // platform does not use that mechanism or the config dir cannot be resolved.
-//
-// Windows is deliberately empty: Chromium uses a named mutex there, so an
-// absent file would prove nothing and reading one as "not running" would hand
-// out permission the signal never gave.
 func obsidianSingletonLockPath() string {
-	if runtime.GOOS == "windows" {
-		return ""
-	}
 	reg := obsidianRegistryPath()
 	if reg == "" {
 		return ""

@@ -10,7 +10,7 @@ func TestClipboardSupported(t *testing.T) {
 	if err := clipboardSupported("darwin"); err != nil {
 		t.Errorf("darwin should be supported, got %v", err)
 	}
-	for _, goos := range []string{"linux", "windows", "freebsd"} {
+	for _, goos := range []string{"linux", "freebsd"} {
 		err := clipboardSupported(goos)
 		if err == nil {
 			t.Errorf("%s should be unsupported", goos)

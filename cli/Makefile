@@ -70,17 +70,39 @@ REAL_GOCACHE := $(shell go env GOCACHE)
 REAL_GOMODCACHE := $(shell go env GOMODCACHE)
 REAL_GOPATH := $(shell go env GOPATH)
 
+# The credential surface is what internal/cli's own neutralizeAWSCredentials
+# already enumerates; keep the two in step. Unsetting the four obvious variables
+# is not enough, because the SDK chain also reads role/web-identity and container
+# credentials, and AWS_SHARED_CREDENTIALS_FILE / AWS_CONFIG_FILE point AT a file
+# and so survive a redirected HOME untouched. Those two are pointed at a path
+# under TEST_HOME that does not exist, rather than unset, so an ambient value
+# cannot resolve back to ~/.aws.
+HERMETIC_ENV = \
+	-u AWS_BEARER_TOKEN_BEDROCK -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+	-u AWS_SESSION_TOKEN -u AWS_PROFILE -u AWS_ROLE_ARN \
+	-u AWS_WEB_IDENTITY_TOKEN_FILE \
+	-u AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -u AWS_CONTAINER_CREDENTIALS_FULL_URI \
+	-u OPENROUTER_API_KEY \
+	AWS_EC2_METADATA_DISABLED=true 2NB_BEDROCK_SKIP_KEYCHAIN=1 \
+	AWS_CONFIG_FILE="$(TEST_HOME)/no-aws-config" \
+	AWS_SHARED_CREDENTIALS_FILE="$(TEST_HOME)/no-aws-credentials" \
+	HOME="$(TEST_HOME)" XDG_CONFIG_HOME="$(TEST_HOME)/config" XDG_CACHE_HOME="$(TEST_HOME)/cache" \
+	GOCACHE="$(REAL_GOCACHE)" GOMODCACHE="$(REAL_GOMODCACHE)" GOPATH="$(REAL_GOPATH)"
+
 test:
 	@mkdir -p "$(TEST_HOME)"
-	env -u AWS_BEARER_TOKEN_BEDROCK -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
-	    -u AWS_SESSION_TOKEN -u AWS_PROFILE -u OPENROUTER_API_KEY \
-	    AWS_EC2_METADATA_DISABLED=true 2NB_BEDROCK_SKIP_KEYCHAIN=1 \
-	    HOME="$(TEST_HOME)" XDG_CONFIG_HOME="$(TEST_HOME)/config" XDG_CACHE_HOME="$(TEST_HOME)/cache" \
-	    GOCACHE="$(REAL_GOCACHE)" GOMODCACHE="$(REAL_GOMODCACHE)" GOPATH="$(REAL_GOPATH)" \
-	    go test -race ./...
+	env $(HERMETIC_ENV) go test -race ./...
 
+# The same Go tests against whatever this machine can actually reach. This is the
+# one that spends money.
+#
+# It still redirects XDG_CACHE_HOME, and that part is not optional: a pricing
+# fetch that fails here writes a cooldown stamp, and into the REAL cache it would
+# silence the developer's own `2nb models list` for the length of the cooldown
+# with no hint that a test run caused it.
 test-live:
-	go test -race ./...
+	@mkdir -p "$(TEST_HOME)/cache"
+	env XDG_CACHE_HOME="$(TEST_HOME)/cache" go test -race ./...
 
 test-e2e:
 	go test -race -v -run TestE2E -timeout 120s .

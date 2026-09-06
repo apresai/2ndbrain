@@ -73,7 +73,7 @@ func init() {
 	obsidianRegisterTypesCmd.Flags().BoolVar(&registerTypesWrite, "write", false,
 		"Apply the merge to .obsidian/types.json (opt-in; default previews only)")
 	obsidianRegisterTypesCmd.Flags().BoolVar(&registerTypesForce, "force", false,
-		"Write even though Obsidian currently has this vault open (it may overwrite the change)")
+		"Write even though Obsidian may be running with this vault open (it may overwrite the change)")
 	obsidianCmd.AddCommand(obsidianRegisterTypesCmd)
 }
 
@@ -217,12 +217,11 @@ func writeObsidianTypes(v *vault.Vault, typesPath string, doc *obsidianTypesDoc,
 			// would assert the one thing that could not be established, which
 			// is the fault this guard was rebuilt to stop making.
 			//
-			// Deliberately NOT phrased as a platform limit. This fires on
-			// Windows, where there is no such signal, and equally on a local
-			// condition that may well be fixable: a lock that is not a symlink,
-			// a target this build cannot parse, or a host renamed since Obsidian
-			// launched. "This system cannot" would be the same overclaim in a
-			// smaller font.
+			// Deliberately NOT phrased as a platform limit. Every case that
+			// reaches here is local and may well be fixable: a lock that is not
+			// a symlink, a target this build cannot parse, or a host renamed
+			// since Obsidian launched. "This system cannot" would be the same
+			// overclaim in a smaller font.
 			if !registerTypesForce {
 				return exitWithError(ExitValidation,
 					"error: this is the vault Obsidian has open, and 2nb could not determine whether Obsidian is RUNNING.\n"+

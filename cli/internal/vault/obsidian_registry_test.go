@@ -92,11 +92,6 @@ func TestObsidianRegistryPath_PerOS(t *testing.T) {
 		if got, want := obsidianRegistryPath(), "/Users/u/Library/Application Support/obsidian/obsidian.json"; got != want {
 			t.Errorf("darwin path = %q, want %q", got, want)
 		}
-	case "windows":
-		t.Setenv("APPDATA", `C:\Users\u\AppData\Roaming`)
-		if got, want := obsidianRegistryPath(), filepath.Join(`C:\Users\u\AppData\Roaming`, "obsidian", "obsidian.json"); got != want {
-			t.Errorf("windows path = %q, want %q", got, want)
-		}
 	}
 	// Every supported OS returns a non-empty path ending in obsidian.json.
 	if got := obsidianRegistryPath(); got == "" || filepath.Base(got) != "obsidian.json" {

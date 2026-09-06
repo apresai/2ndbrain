@@ -1,7 +1,9 @@
 package ai
 
 import (
+	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,5 +121,46 @@ func TestPricingFetchCooldown_LaterDeadlineWins(t *testing.T) {
 	}
 	if _, cooling := pricingFetchCooling(url); !cooling {
 		t.Error("a fresh disk stamp must cool a process with nothing in memory")
+	}
+
+	// And the mtime must actually be READ. With memory still empty, age the stamp
+	// past the window: the answer has to flip to not-cooling. Without this, an
+	// implementation that returned "cooling" on the mere PRESENCE of the file
+	// would pass every other assertion here and then suppress pricing forever.
+	if err := os.Chtimes(stamp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, cooling := pricingFetchCooling(url); cooling {
+		t.Error("an EXPIRED disk stamp must not cool; the stamp's mtime is the deadline, not its existence")
+	}
+}
+
+// The cooldown only matters if loadCachedHTTPBody actually SKIPS the fetch, and
+// nothing above proves that: the helpers could be perfect while the caller
+// ignored them. This drives the real function.
+//
+// No mock server: the URL is unroutable, so the first call fails on its own and
+// the second must come back from the cooldown instead of trying again. The
+// second call being much faster than the first is the observable.
+func TestPricingFetchCooldown_LoadCachedHTTPBodySkipsTheFetch(t *testing.T) {
+	setupHome(t)
+	const url = "https://not-a-real-host.invalid/offers/v1.0/aws/Skip/current/index.json"
+
+	if _, err := loadCachedHTTPBody(context.Background(), url, "skip-test.json"); err == nil {
+		t.Fatal("an unroutable host must fail rather than return a body")
+	}
+
+	start := time.Now()
+	_, err := loadCachedHTTPBody(context.Background(), url, "skip-test.json")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("the second call must still report failure, not a body")
+	}
+	if !strings.Contains(err.Error(), "not retrying") {
+		t.Errorf("second call error = %q; want the cooldown refusal, which means the fetch was skipped", err)
+	}
+	// A real DNS attempt cannot complete in this budget; a map and a stat can.
+	if elapsed > 2*time.Second {
+		t.Errorf("second call took %s; the cooldown did not short-circuit the fetch", elapsed)
 	}
 }
