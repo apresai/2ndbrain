@@ -15,7 +15,6 @@ import (
 // vault path AND real Bedrock credentials, per the no-mock policy:
 //
 //	source ~/.secrets/shell.zsh
-//	export AWS_BEARER_TOKEN_BEDROCK="$SA_AWS_BEARER_TOKEN_BEDROCK"
 //	2NB_EVAL_VAULT=/path/to/vault go test ./internal/eval/ -run Asymmetric -v
 //
 // It asserts the asymmetric purpose does not REGRESS MRR@K (the flip's whole
