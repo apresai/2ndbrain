@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - **Two safety rules that had no test now have one.** The check that stops `2nb obsidian register-types --write` from writing while Obsidian is open is only useful if it refuses whenever it cannot tell, and twice this year a change made it answer "not running" when it actually had no idea. Nothing could catch that, because the code decided per operating system and a test only ever runs on one. The decision now takes the platform as an argument, so the case that matters (a platform 2nb does not build for) is checked directly, alongside a table stating the rule itself: a write is allowed only on a confirmed answer. Separately, `make test` and the test helpers keep their own lists of the credentials they hide, and the two had silently drifted apart; a test now reads both and fails if the helper hides something the gate does not, which is the direction that leaves credentials reachable
+- **Grok 4.6 on the Bedrock mantle plane no longer fails its access check.** `2nb models test` and `models verify` send a cheap smoke prompt with reasoning turned off, and `xai.grok-4.6` refuses the "off" setting outright, so a model your account can use was reported as an invalid request. When a model rejects that setting, 2nb now retries once at the "low" setting and remembers the refusal for the rest of the run, which also covers `eval`, `models bench` and `suggest-target --llm`, since they ask for the same setting
 
 ## [0.23.4] - 2026-09-06
 

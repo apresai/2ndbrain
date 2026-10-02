@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -548,4 +549,26 @@ func TestLiveMantleGrokProbe(t *testing.T) {
 		t.Error("passing probe should carry the response snippet")
 	}
 	t.Logf("live grok-4.3 probe: OK in %s (detail %q)", result.Latency, result.Detail)
+}
+
+// TestIsUnsupportedEffortError pins the retry trigger: only the plane's 400
+// unsupported_value on reasoning.effort qualifies (live shape, grok-4.6).
+func TestIsUnsupportedEffortError(t *testing.T) {
+	effortBody := `{"error":{"code":"unsupported_value","message":"Unsupported value: 'none' is not supported with the 'xai.grok-4.6' model.","param":"reasoning.effort"}}`
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"grok-4.6 effort rejection", mantleHTTPError("xai.grok-4.6", "u", 400, []byte(effortBody)), true},
+		{"wrapped", fmt.Errorf("probe: %w", mantleHTTPError("m", "u", 400, []byte(effortBody))), true},
+		{"other 400", mantleHTTPError("m", "u", 400, []byte(`{"error":{"code":"unsupported_value","param":"temperature"}}`)), false},
+		{"401 access_denied", mantleHTTPError("m", "u", 401, []byte(`{"error":{"code":"access_denied"}}`)), false},
+		{"non-HTTP", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		if got := isUnsupportedEffortError(tc.err); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
