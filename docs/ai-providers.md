@@ -124,7 +124,7 @@ The remediation is **mantle-aware**: because mantle models are invisible to the 
 
 ### Client
 
-The client is `cli/internal/ai/bedrock_mantle.go` (`BedrockMantleGenerator`, strategy `bedrock_mantle_responses`); `NewBedrockGeneration` dispatches to it by strategy, and a smoke probe sends `reasoning.effort: none` so default-on reasoning does not starve the answer. The resolved endpoint host is constrained to `https` plus `*.api.aws` so a poisoned vault-scoped `models.yaml` cannot exfiltrate the bearer token. Generation-only for now (no mantle embeddings or rerank).
+The client is `cli/internal/ai/bedrock_mantle.go` (`BedrockMantleGenerator`, strategy `bedrock_mantle_responses`); `NewBedrockGeneration` dispatches to it by strategy, and a smoke probe sends `reasoning.effort: none` so default-on reasoning does not starve the answer, and any call sending `none` (smoke probes, eval, bench) resends once with `low` when a model rejects it (`xai.grok-4.6` returns 400 `unsupported_value` on `reasoning.effort`); the generator remembers the refusal and sends `low` directly after that. The resolved endpoint host is constrained to `https` plus `*.api.aws` so a poisoned vault-scoped `models.yaml` cannot exfiltrate the bearer token. Generation-only for now (no mantle embeddings or rerank).
 
 ## Provider readiness: what "not ready" reports, and what gets cached
 

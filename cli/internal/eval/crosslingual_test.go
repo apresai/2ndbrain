@@ -13,7 +13,6 @@ import (
 // does. Credential-gated (real Bedrock, no mocks):
 //
 //	source ~/.secrets/shell.zsh
-//	export AWS_BEARER_TOKEN_BEDROCK="$SA_AWS_BEARER_TOKEN_BEDROCK"
 //	go test ./internal/eval/ -run CrossLingual -v
 func TestNovaCrossLingual_Bedrock(t *testing.T) {
 	cfg := ai.DefaultAIConfig()

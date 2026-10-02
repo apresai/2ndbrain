@@ -23,10 +23,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	neturl "net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -63,6 +65,9 @@ type BedrockMantleGenerator struct {
 	model   string
 	baseURL string
 	token   string
+	// noneRejected remembers that this model refused reasoning effort "none",
+	// so later calls (eval, bench, jury make many) skip the doomed request.
+	noneRejected atomic.Bool
 }
 
 var (
@@ -220,7 +225,27 @@ func (g *BedrockMantleGenerator) Generate(ctx context.Context, prompt string, op
 // GenerateWithUsage runs one Responses call and returns the answer plus the
 // provider-reported input/output token usage. Implements ai.UsageGenerator so
 // `ask` records real usage, like the Converse generator.
+//
+// Some models (xai.grok-4.6, live 2026-10-02) reject effort "none" with 400
+// unsupported_value. The call then resends once at "low", the cheapest
+// accepted value, which still keeps a smoke probe's answer from being
+// starved, and the generator remembers the rejection for later calls. Only
+// "none" falls back; a rejected configured effort still fails.
 func (g *BedrockMantleGenerator) GenerateWithUsage(ctx context.Context, prompt string, opts GenOpts) (string, GenUsage, error) {
+	if opts.ReasoningEffort == "none" && g.noneRejected.Load() {
+		opts.ReasoningEffort = "low"
+	}
+	text, usage, err := g.generateOnce(ctx, prompt, opts)
+	if err != nil && opts.ReasoningEffort == "none" && isUnsupportedEffortError(err) {
+		g.noneRejected.Store(true)
+		slog.Info("bedrock mantle effort fallback", "model", g.model, "from", opts.ReasoningEffort, "to", "low")
+		opts.ReasoningEffort = "low"
+		return g.generateOnce(ctx, prompt, opts)
+	}
+	return text, usage, err
+}
+
+func (g *BedrockMantleGenerator) generateOnce(ctx context.Context, prompt string, opts GenOpts) (string, GenUsage, error) {
 	reqBody, err := buildMantleRequest(g.model, prompt, opts)
 	if err != nil {
 		return "", GenUsage{}, err
@@ -230,6 +255,14 @@ func (g *BedrockMantleGenerator) GenerateWithUsage(ctx context.Context, prompt s
 		return "", GenUsage{}, err
 	}
 	return parseMantleResponse(g.model, respBody)
+}
+
+// isUnsupportedEffortError reports whether err is the plane's 400 rejecting
+// the requested reasoning.effort value for this model.
+func isUnsupportedEffortError(err error) bool {
+	var pe *ProviderHTTPError
+	return errors.As(err, &pe) && pe.StatusCode == http.StatusBadRequest &&
+		pe.Code == "unsupported_value" && strings.Contains(pe.Body, "reasoning.effort")
 }
 
 func (g *BedrockMantleGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
@@ -254,10 +287,11 @@ type mantleResponsesRequest struct {
 	Reasoning       *mantleReasoning `json:"reasoning,omitempty"`
 }
 
-// mantleReasoning tunes the reasoning stage ({"effort": "low"|"medium"|...}).
-// 2nb never sets it — the per-model defaults (grok "low", gpt-5.5 "medium")
-// are what mantleMinOutputTokens budgets for — but the field is modeled so a
-// future GenOpts knob needs no request-shape change.
+// mantleReasoning tunes the reasoning stage ({"effort": "none"|"low"|...}).
+// Real generation leaves it unset so the per-model default applies (grok "low",
+// gpt-5.5 "medium"), which is what mantleMinOutputTokens budgets for; smoke
+// probes set "none" via GenOpts.ReasoningEffort, falling back to "low" on
+// models that reject it.
 type mantleReasoning struct {
 	Effort string `json:"effort,omitempty"`
 }
