@@ -19,5 +19,8 @@
     "tslib": "^2.4.1",
     "typescript": "^6.0.0",
     "vitest": "^4.1.8"
+  },
+  "overrides": {
+    "moment": "2.31.0"
   }
 }
