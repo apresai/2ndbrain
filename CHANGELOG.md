@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.24.0] - 2026-11-18
+
 ### Added
 - **Google Gemini 4 and `gemini-embedding-2` as default cloud AI (BYOK / BYOP), plus hybrid per-slot providers.** New vaults default to `gemini-4-hydrogen` for generation (`gemini-4-argon` and `gemini-4-carbon` also available) and `gemini-embedding-2` (768 dimensions) for embeddings, authenticated with either your own `GEMINI_API_KEY` in the macOS Keychain (`GOOGLE_API_KEY` is ignored) or Vertex AI on your own GCP project (`ai.gemini.project` with Google ADC). Generation and Embeddings can now be assigned to separate providers (`ai.generation_provider` / `ai.embedding_provider` and **Settings > AI & Models**), so you can pair free on-device embeddings with cloud Gemini generation. AWS Bedrock, OpenRouter, and Ollama remain supported
 - **Bundled on-device Gemma embeddings (`embeddinggemma-2`) with zero Homebrew setup.** `SecondBrain.app` now bundles a signed `llama.cpp` arm64 Metal runtime and pins `embeddinggemma-2` (`Q8_0`, 310 MB, Apache-2.0, 768 dimensions) as the default local embedder (retaining `embeddinggemma-300m` support for existing vaults), with configurable Matryoshka dimensions (`128`, `256`, `512`, `768`), domain task presets (`ai.task_preset`: `search`, `code`, `qa`, `none`), and automatic on-demand process supervision
