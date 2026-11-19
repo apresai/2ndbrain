@@ -41,6 +41,49 @@ fi
 
 BG="$ROOT/app/Resources/dmg-background.png"
 VOLICON="$ROOT/app/Resources/AppIcon.icns"
+DS_STORE_TEMPLATE="$ROOT/app/Resources/dmg-DS_Store"
+
+finder_reachable() {
+  [ "${HEADLESS_DMG:-}" = "1" ] && return 1
+  python3 -c 'import subprocess, sys
+r = subprocess.run(
+  ["osascript", "-e", "with timeout of 2 seconds\ntell application \"Finder\" to get name\nend timeout"],
+  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3
+)
+sys.exit(r.returncode)' 2>/dev/null
+}
+
+run_create_dmg_styled() {
+  create-dmg \
+    --volname "SecondBrain" \
+    --volicon "$VOLICON" \
+    --background "$BG" \
+    --window-pos 200 120 \
+    --window-size 660 400 \
+    --icon-size 128 \
+    --icon "SecondBrain.app" 165 200 \
+    --app-drop-link 495 200 \
+    --hdiutil-quiet \
+    --no-internet-enable \
+    "$OUT_DMG" "$STAGE"
+}
+
+run_create_dmg_headless() {
+  rm -f "$OUT_DMG"
+  local extra_args=(--skip-jenkins)
+  if [ -f "$DS_STORE_TEMPLATE" ]; then
+    extra_args+=(--add-file ".DS_Store" "$DS_STORE_TEMPLATE" 760 100)
+  fi
+  create-dmg \
+    --volname "SecondBrain" \
+    --volicon "$VOLICON" \
+    --background "$BG" \
+    "${extra_args[@]}" \
+    --app-drop-link 495 200 \
+    --hdiutil-quiet \
+    --no-internet-enable \
+    "$OUT_DMG" "$STAGE"
+}
 
 # Stage the bundle alone in a temp dir; create-dmg copies the folder's whole
 # contents into the image. ditto (not cp) preserves the bundle's extended
@@ -57,19 +100,21 @@ rm -f "$OUT_DMG"
 # exits non-zero on the Finder AppleScript / hdiutil detach step even when the
 # DMG built fine (it already retries "Resource busy" up to 5x), so success is
 # judged by the output file, not the exit code.
+#
+# When running over SSH/headless sessions or when Finder AppleEvents time out,
+# fall back to `--skip-jenkins` so notarization and release never hang on Finder.
 rc=0
-create-dmg \
-  --volname "SecondBrain" \
-  --volicon "$VOLICON" \
-  --background "$BG" \
-  --window-pos 200 120 \
-  --window-size 660 400 \
-  --icon-size 128 \
-  --icon "SecondBrain.app" 165 200 \
-  --app-drop-link 495 200 \
-  --hdiutil-quiet \
-  --no-internet-enable \
-  "$OUT_DMG" "$STAGE" || rc=$?
+if finder_reachable; then
+  run_create_dmg_styled || rc=$?
+  if [ ! -f "$OUT_DMG" ]; then
+    echo "warning: styled create-dmg exited $rc without producing $OUT_DMG; retrying with --skip-jenkins" >&2
+    rc=0
+    run_create_dmg_headless || rc=$?
+  fi
+else
+  echo "==> Finder AppleEvents unavailable (headless/SSH session); building DMG with --skip-jenkins"
+  run_create_dmg_headless || rc=$?
+fi
 
 if [ ! -f "$OUT_DMG" ]; then
   echo "error: create-dmg did not produce $OUT_DMG (exit $rc)" >&2
