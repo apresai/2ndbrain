@@ -40,12 +40,13 @@ struct UpdateInfo: Decodable, Sendable {
     }
 }
 
-/// Dashboard "Updates" tab: shows the app, CLI, and Obsidian-plugin versions
+/// Updates status & actions: shows the app, CLI, and Obsidian-plugin versions
 /// against the latest published release (via `2nb update --json`), with one-click
 /// upgrades for the CLI and plugin and the copy-paste command for the app (which
 /// can't cleanly replace itself while running).
 struct UpdatesView: View {
     @Environment(AppState.self) var appState
+    var embedded: Bool = false
 
     @State private var info: UpdateInfo?
     @State private var checking = false
@@ -55,31 +56,41 @@ struct UpdatesView: View {
     @State private var actionIsError = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                Divider()
-
-                if checking && info == nil {
-                    ProgressView("Checking for updates…").padding(.vertical, 8)
-                } else if let info, info.checked, let latest = info.latest {
-                    componentList(info: info, latest: latest)
-                } else {
-                    Text(info?.detail ?? "Couldn't check for updates. Check your connection and try again.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let actionMessage {
-                    Text(actionMessage)
-                        .font(.caption)
-                        .foregroundStyle(actionIsError ? .red : .secondary)
+        Group {
+            if embedded {
+                content
+            } else {
+                ScrollView {
+                    content
+                        .padding(20)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task { await refresh() }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            Divider()
+
+            if checking && info == nil {
+                ProgressView("Checking for updates…").padding(.vertical, 8)
+            } else if let info, info.checked, let latest = info.latest {
+                componentList(info: info, latest: latest)
+            } else {
+                Text(info?.detail ?? "Couldn't check for updates. Check your connection and try again.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let actionMessage {
+                Text(actionMessage)
+                    .font(.caption)
+                    .foregroundStyle(actionIsError ? .red : .secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {

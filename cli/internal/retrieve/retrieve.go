@@ -76,7 +76,7 @@ type Retriever struct {
 // corpus with WithCorpusLoader (MCP) and the per-embed timeout with
 // WithEmbedTimeout.
 func New(v *vault.Vault) *Retriever {
-	embedder, embedderErr := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
+	embedder, embedderErr := ai.DefaultRegistry.Embedder(v.Config.AI.EffectiveEmbeddingProvider())
 	r := &Retriever{
 		v:           v,
 		engine:      search.NewEngine(v.DB.Conn()),
@@ -87,7 +87,7 @@ func New(v *vault.Vault) *Retriever {
 	// The rerank stage is optional (default off): resolve it only when enabled,
 	// so a disabled config leaves the RRF order untouched and adds no cloud call.
 	if v.Config.AI.RerankEnabled() {
-		r.reranker, _ = ai.DefaultRegistry.Reranker(v.Config.AI.Provider)
+		r.reranker, _ = ai.DefaultRegistry.Reranker(v.Config.AI.EffectiveRerankProvider())
 	}
 	return r
 }

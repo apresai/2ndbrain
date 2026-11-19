@@ -36,7 +36,7 @@ func GetAPIKey(provider string) (string, error) {
 		}
 	}
 
-	if runtime.GOOS == "darwin" {
+	if keychainLookupEnabled() {
 		if key, err := keychainGet(provider); err == nil && key != "" {
 			return key, nil
 		}

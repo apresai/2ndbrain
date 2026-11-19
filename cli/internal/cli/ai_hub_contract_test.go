@@ -949,8 +949,19 @@ func resetCLIFlags(t *testing.T) {
 	appendText, appendFile = "", ""
 	prependText, prependFile = "", ""
 	replaceSection, replaceText, replaceFile = "", "", ""
-	polishWrite, polishLinks, polishUndo, polishForce = false, false, false, false
-	polishSystemFlag, polishMaxTokens = "", 4096
+	polishWrite, polishLinks, polishRepairLinks, polishSchema, polishNoSchema = false, false, false, false, false
+	polishBacklinks, polishApplyBacklinks, polishUndo, polishForce = false, false, false, false
+	polishSystemFlag, polishGoalFlag, polishLensFlag, polishMaxTokens = "", "", "", 4096
+	for _, name := range []string{
+		"system", "goal", "lens", "max-tokens", "write", "links", "repair-links",
+		"schema", "no-schema", "backlinks", "apply-backlinks", "undo", "force",
+	} {
+		if f := polishCmd.Flags().Lookup(name); f != nil {
+			_ = polishCmd.Flags().Set(name, f.DefValue)
+			f.Changed = false
+		}
+	}
+	fixWrite, fixUndo, fixForce, fixAI, fixNoAI = false, false, false, false, false
 	repairLinksWrite, repairLinksTargets = false, nil
 	relinkFrom, relinkTo, relinkWrite = "", "", false
 	migratePropertiesWrite = false

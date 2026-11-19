@@ -22,6 +22,8 @@ import (
 // Credential-free by construction: BM25 runs with no AI provider configured,
 // so this executes on every PR.
 func TestBattery_EmptyResultsStillEmitJSON(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("TWONB_SKIP_ENGINE_AUTOSTART", "1")
 	home := isolatedHome(t)
 	vault := filepath.Join(home, "vault")
 	if out, code := runWithHome(t, home, "vault", "create", vault); code != 0 {

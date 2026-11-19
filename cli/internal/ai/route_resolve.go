@@ -78,7 +78,16 @@ func (e *UnroutedSlotError) Error() string {
 // An unknown model yields an empty route and the provider defaults apply,
 // exactly as before routes existed.
 func ResolveMeasurementRoute(cfg AIConfig, modelID, vaultRoot string) SlotRoute {
-	out := SlotRoute{Route: RouteKey{Provider: cfg.Provider, ID: modelID}}
+	provider := cfg.Provider
+	switch {
+	case modelID == cfg.GenerationModel && cfg.EffectiveGenerationProvider() != "":
+		provider = cfg.EffectiveGenerationProvider()
+	case modelID == cfg.EmbeddingModel && cfg.EffectiveEmbeddingProvider() != "":
+		provider = cfg.EffectiveEmbeddingProvider()
+	case modelID == cfg.ResolveRerankModel() && cfg.EffectiveRerankProvider() != "":
+		provider = cfg.EffectiveRerankProvider()
+	}
+	out := SlotRoute{Route: RouteKey{Provider: provider, ID: modelID}}
 	if modelID == "" {
 		return out
 	}

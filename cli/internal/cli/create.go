@@ -242,18 +242,32 @@ func editExistingNote(cmd *cobra.Command, v *vault.Vault, absPath, content strin
 // The skips are logged at debug level so a missing embedding is traceable in
 // .2ndbrain/logs/cli.log instead of vanishing silently.
 func embedNewDocument(v *vault.Vault, doc *document.Document) {
+	if doc == nil {
+		return
+	}
+	if doc.ID == "" && v.DB != nil && doc.Path != "" {
+		if dbDoc, err := v.DB.GetDocumentByPath(doc.Path); err == nil && dbDoc != nil {
+			doc.ID = dbDoc.ID
+		}
+	}
+	if doc.ID == "" {
+		slog.Debug("inline embed skipped: missing document id", "path", doc.Path)
+		return
+	}
+
 	cfg := v.Config.AI
 	initAIProviders(v)
 
-	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	embedder, err := ai.DefaultRegistry.Embedder(embedProvider)
 	if err != nil {
-		slog.Debug("inline embed skipped: no embedder", "path", doc.Path, "provider", cfg.Provider, "err", err)
+		slog.Debug("inline embed skipped: no embedder", "path", doc.Path, "provider", embedProvider, "err", err)
 		return
 	}
 
 	ctx := context.Background()
 	if !embedder.Available(ctx) {
-		slog.Debug("inline embed skipped: provider unavailable; will backfill on next index", "path", doc.Path, "provider", cfg.Provider)
+		slog.Debug("inline embed skipped: provider unavailable; will backfill on next index", "path", doc.Path, "provider", embedProvider)
 		return
 	}
 
@@ -261,6 +275,6 @@ func embedNewDocument(v *vault.Vault, doc *document.Document) {
 	// freshly-created note is immediately searchable through vec0. Best-effort:
 	// a failure backfills on the next index.
 	if _, err := embed.Document(ctx, v.DB, embedder, doc.ID, doc, cfg.EmbeddingModel); err != nil {
-		slog.Debug("inline embed skipped: embed error; will backfill on next index", "path", doc.Path, "provider", cfg.Provider, "err", err)
+		slog.Debug("inline embed skipped: embed error; will backfill on next index", "path", doc.Path, "provider", embedProvider, "err", err)
 	}
 }

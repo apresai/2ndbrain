@@ -2,7 +2,7 @@
 .env.*
 # Local code-signing / notarization config (identity + notary key path/IDs).
 # Real values live here on the maintainer's machine only; the committed
-# scripts/sign.env.example is the template. Keys themselves stay in ~/dev/certs.
+# scripts/sign.env.example is the template. Signing keys stay outside the repo.
 scripts/sign.env
 node_modules/
 .DS_Store
@@ -55,3 +55,18 @@ app/*.xcworkspace/xcuserdata/
 # Review proof records are per-branch scratch, never committed. PROOF.md was
 # committed by accident in cycle 5 (its own first line says "untracked").
 PROOF*.md
+
+# 2ndbrain local state
+.2ndbrain/config.yaml
+.2ndbrain/index.db
+.2ndbrain/index.db-wal
+.2ndbrain/index.db-shm
+.2ndbrain/bench.db
+.2ndbrain/metrics.db
+.2ndbrain/metrics.db-wal
+.2ndbrain/metrics.db-shm
+.2ndbrain/logs/
+.2ndbrain/recovery/
+.2ndbrain/mcp/
+.2ndbrain/eval/
+.2ndbrain/*.bak

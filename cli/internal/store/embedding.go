@@ -17,6 +17,50 @@ type EmbeddingSnapshot struct {
 	Hash  string
 }
 
+// DocEmbedSizing summarizes chunk and character volume for one document in
+// `chunks`. Used to weight embedding progress and ETA estimates by real size.
+type DocEmbedSizing struct {
+	Chunks int
+	Chars  int
+}
+
+// AllDocEmbedSizing returns chunk and total character counts keyed by doc_id.
+func (db *DB) AllDocEmbedSizing() (map[string]DocEmbedSizing, error) {
+	rows, err := db.conn.Query(`
+		SELECT doc_id, COUNT(*), COALESCE(SUM(LENGTH(content)), 0)
+		FROM chunks
+		GROUP BY doc_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query doc embed sizing: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]DocEmbedSizing)
+	for rows.Next() {
+		var docID string
+		var s DocEmbedSizing
+		if err := rows.Scan(&docID, &s.Chunks, &s.Chars); err != nil {
+			return nil, err
+		}
+		out[docID] = s
+	}
+	return out, rows.Err()
+}
+
+// VaultEmbedCorpusSizing returns total embeddable documents, total chunks, and
+// total chunk characters across all non-empty documents currently in the index.
+func (db *DB) VaultEmbedCorpusSizing() (embeddableDocs, totalChunks, totalChars int, err error) {
+	err = db.conn.QueryRow(`
+		SELECT COUNT(DISTINCT doc_id), COUNT(*), COALESCE(SUM(LENGTH(content)), 0)
+		FROM chunks
+	`).Scan(&embeddableDocs, &totalChunks, &totalChars)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("query vault embed corpus sizing: %w", err)
+	}
+	return embeddableDocs, totalChunks, totalChars, nil
+}
+
 // SetEmbedding stores a document's embedding vector.
 func (db *DB) SetEmbedding(docID string, embedding []float32, model string, contentHash string) error {
 	blob := float32sToBytes(embedding)

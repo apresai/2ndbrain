@@ -73,13 +73,14 @@ func runAIEmbedProbe(cmd *cobra.Command, args []string) error {
 	initAIProviders(v)
 	ctx := context.Background()
 	cfg := v.Config.AI
+	embedProvider := cfg.EffectiveEmbeddingProvider()
 
-	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedder, err := ai.DefaultRegistry.Embedder(embedProvider)
 	if err != nil {
 		return fmt.Errorf("no embedding provider: %w", err)
 	}
 	if ready, code := ai.Availability(ctx, embedder); !ready {
-		return embedderNotReadyError(cfg.Provider, code)
+		return embedderNotReadyError(embedProvider, code)
 	}
 
 	levels, err := parseProbeLevels(probeLevelsFlag)
@@ -98,7 +99,7 @@ func runAIEmbedProbe(cmd *cobra.Command, args []string) error {
 	format := getFormat(cmd)
 	if !probeYesFlag && format == "" {
 		fmt.Fprintf(os.Stderr, "Probe will make ~%d embedding calls (%d chunks × %d levels) via %s. Continue? [y/N] ",
-			len(sample)*len(levels), len(sample), len(levels), cfg.Provider)
+			len(sample)*len(levels), len(sample), len(levels), embedProvider)
 		var resp string
 		fmt.Scanln(&resp)
 		if !strings.EqualFold(strings.TrimSpace(resp), "y") {
@@ -107,7 +108,7 @@ func runAIEmbedProbe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	result := ProbeResult{Provider: cfg.Provider, Model: cfg.EmbeddingModel, SampleSize: len(sample)}
+	result := ProbeResult{Provider: embedProvider, Model: cfg.EmbeddingModel, SampleSize: len(sample)}
 	for _, level := range levels {
 		pl := probeOneLevel(ctx, embedder, sample, level)
 		result.Levels = append(result.Levels, pl)

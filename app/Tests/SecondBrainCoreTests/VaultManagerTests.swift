@@ -97,3 +97,18 @@ func isInitializedReflectsDiskState() throws {
     try VaultManager.initializeVault(at: tmp)
     #expect(vm.isInitialized == true)
 }
+
+@Test("hasTemplatePlaceholders handles CRLF, CR, and trailing-space fences identically to LF")
+func hasTemplatePlaceholdersCRLFAndTrailingSpaces() {
+    let lf = "---\ntitle: {{title}}\ndate: {{date}}\n---\n\n# {{title}}\n"
+    let crlf = "---\r\ntitle: {{title}}\r\ndate: {{date}}\r\n---\r\n\r\n# {{title}}\r\n"
+    let crlfTemplater = "---  \r\ntitle: <% tp.file.title %>\r\n--- \t\r\nBody\r\n"
+    let cr = "---\rtitle: {{title}}\r---\rBody\r"
+    let bodyOnlyCRLF = "---\r\ntitle: Guide\r\ntype: note\r\n---\r\n\r\nMentions {{date}} in body.\r\n"
+
+    #expect(VaultManager.hasTemplatePlaceholders(lf) == true)
+    #expect(VaultManager.hasTemplatePlaceholders(crlf) == true)
+    #expect(VaultManager.hasTemplatePlaceholders(crlfTemplater) == true)
+    #expect(VaultManager.hasTemplatePlaceholders(cr) == true)
+    #expect(VaultManager.hasTemplatePlaceholders(bodyOnlyCRLF) == false)
+}

@@ -1,197 +1,92 @@
 #!/bin/bash
-# GUI Test Suite: UI — sidebar, focus mode, split view, tabs
-set -e
+# GUI Test Suite: Beta 4-Tab Workspace Navigation, Telemetry View, Settings, & Menus
+set -euo pipefail
 cd "$(dirname "$0")/.."
 source tests/gui-helpers.sh
 
-echo "=== GUI Test: UI ==="
-echo ""
+echo "=== GUI Test: Beta UI Navigation & Telemetry ==="
 
-rm -f "$VAULT/gui-test-"*.md
+TEST_VAULT=$(mktemp -d /tmp/sb-gui-ui.XXXXXX)
+cleanup() {
+    kill_app
+    rm -rf "$TEST_VAULT" "$GUI_LOG_DIR"
+}
+trap cleanup EXIT
 
-launch_app
+setup_temp_vault "$TEST_VAULT"
+_=$(seed_note "$TEST_VAULT" "GUI Test Note" "Sample note for navigation verification.")
 
-# Create test docs
-create_note "GUI Test UI Alpha"
-create_note "GUI Test UI Beta"
-screenshot "ui-00-setup"
+launch_app_on_vault "$TEST_VAULT"
+screenshot "ui-01-home"
 
-# --- Test 1: Sidebar visible (UI-UB-001) ---
-echo ""
-echo "--- UI-UB-001: Sidebar visible ---"
-# The sidebar should be visible by default with file list
-# Verify by checking that the window shows sidebar content
-bring_to_front
-sleep 0.5
-screenshot "ui-01-sidebar"
-pass "UI-UB-001: Sidebar visible with file list"
+assert_gui_action "app.launch" "succeeded" "App launch logged"
+assert_gui_action "vault.open" "succeeded" "Vault open logged"
 
-# --- Test 2: Toggle sidebar (UI-EV-002) ---
-echo ""
-echo "--- UI-EV-002: Toggle sidebar ---"
-# Cmd+\ to hide sidebar
-osascript -e 'tell application "System Events" to tell process "SecondBrain" to keystroke "\\" using {command down}'
-sleep 1
-screenshot "ui-02-sidebar-hidden"
-# Toggle back
-osascript -e 'tell application "System Events" to tell process "SecondBrain" to keystroke "\\" using {command down}'
-sleep 1
-screenshot "ui-02b-sidebar-shown"
-pass "UI-EV-002: Cmd+\\ toggled sidebar"
+# --- Cmd+1..4 4-Tab Workspace Navigation ---
+cmd_key "2"
+wait_gui_state 'state.get("activeTab") == "Ask & Search"' 8
+pass "Cmd+2 switched to Ask & Search tab"
 
-# --- Test 3: Focus mode (UI-EV-004 / UI-ST-001) ---
-echo ""
-echo "--- UI-EV-004: Focus mode ---"
-# Open a doc first
-open_quick_open
-type_text "alpha"
-sleep 0.5
-press_return
-sleep 1
+cmd_key "3"
+wait_gui_state 'state.get("activeTab") == "Notes"' 8
+pass "Cmd+3 switched to Notes tab"
 
-# Enter focus mode
-cmd_shift_key "e"
-sleep 1
-screenshot "ui-03-focus-mode"
+cmd_key "4"
+wait_gui_state 'state.get("activeTab") == "Activity"' 8
+pass "Cmd+4 switched to Activity tab"
 
-# Exit focus mode
-cmd_shift_key "e"
-sleep 1
-screenshot "ui-03b-normal-mode"
-pass "UI-EV-004: Focus mode toggled"
+cmd_key "1"
+wait_gui_state 'state.get("activeTab") == "Home"' 8
+pass "Cmd+1 switched back to Home tab"
 
-# --- Test 4: Multiple tabs (DOC-UB-002) ---
-echo ""
-echo "--- DOC-UB-002: Multiple tabs ---"
-# Open second doc
-open_quick_open
-type_text "beta"
-sleep 0.5
-press_return
-sleep 1
-screenshot "ui-04-two-tabs"
-pass "DOC-UB-002: Two documents open in tabs"
+assert_gui_action "nav.tab" "succeeded" "Tab navigation events recorded"
 
-# --- Test 5: Notes and Vault menus present (post-menu-reorganization) ---
-echo ""
-echo "--- Notes + Vault menu completeness ---"
-NOTES_ITEMS=$(osascript <<'EOF'
-tell application "System Events"
-    tell process "SecondBrain"
-        set frontmost to true
-        delay 0.5
-        tell menu bar 1
-            tell menu bar item "Notes"
-                click
-                delay 0.5
-                tell menu 1
-                    return name of every menu item
-                end tell
-            end tell
-        end tell
-    end tell
-end tell
-EOF
-)
-press_escape
-sleep 0.3
+# --- Cmd+Shift+J opens Activity > Actions & Status ---
+cmd_shift_key "j"
+wait_gui_state 'state.get("activeTab") == "Activity" and state.get("activeSection") == "Actions & Status"' 8
+screenshot "ui-02-actions-status"
+pass "Cmd+Shift+J opened Activity > Actions & Status"
 
-VAULT_ITEMS=$(osascript <<'EOF'
-tell application "System Events"
-    tell process "SecondBrain"
-        set frontmost to true
-        delay 0.5
-        tell menu bar 1
-            tell menu bar item "Vault"
-                click
-                delay 0.5
-                tell menu 1
-                    return name of every menu item
-                end tell
-            end tell
-        end tell
-    end tell
-end tell
-EOF
-)
-press_escape
-sleep 0.3
+# --- Settings via AI menu ---
+click_menu_item "AI" "Gemini Settings…"
+assert_gui_action "settings.open" "succeeded" "AI > Gemini Settings… recorded settings.open"
+screenshot "ui-03-settings"
+cmd_key "w"
+sleep 0.25
 
-HAS_NEW_VAULT=false
-HAS_OPEN_VAULT=false
-HAS_NEW_NOTE=false
-[[ "$VAULT_ITEMS" == *"New Vault"* ]] && HAS_NEW_VAULT=true
-[[ "$VAULT_ITEMS" == *"Open Vault"* ]] && HAS_OPEN_VAULT=true
-[[ "$NOTES_ITEMS" == *"New Note"* ]] && HAS_NEW_NOTE=true
-
-if $HAS_NEW_VAULT && $HAS_OPEN_VAULT && $HAS_NEW_NOTE; then
-    pass "Menus: Notes has New Note; Vault has New/Open Vault"
+# --- Menu bar structure verification ---
+MENU_JSON=$(inspect_menus)
+if python3 - "$MENU_JSON" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+top = set(data.get("top", []))
+required_top = {"SecondBrain", "Vault", "View", "AI"}
+if not required_top.issubset(top):
+    print(f"missing top menus: {required_top - top} in {sorted(top)}", file=sys.stderr)
+    sys.exit(1)
+vault_items = set(data.get("menus", {}).get("Vault", []))
+required_vault = {"Sync Index", "Re-embed All…"}
+if not required_vault.issubset(vault_items):
+    print(f"missing Vault items: {required_vault - vault_items} in {sorted(vault_items)}", file=sys.stderr)
+    sys.exit(1)
+ai_items = set(data.get("menus", {}).get("AI", []))
+required_ai = {
+    "Ask & Search Vault…",
+    "Search Vault…",
+    "Quick Ask & Search Panel",
+    "Polish Note with Gemini…",
+    "Gemini Settings…",
+}
+if not required_ai.issubset(ai_items):
+    print(f"missing AI items: {required_ai - ai_items} in {sorted(ai_items)}", file=sys.stderr)
+    sys.exit(1)
+PY
+then
+    pass "Menu bar has Vault/View/AI menus and expected Sync/Re-embed/Gemini actions"
 else
-    fail "Menus: Missing items" "NewVault=$HAS_NEW_VAULT OpenVault=$HAS_OPEN_VAULT NewNote=$HAS_NEW_NOTE"
+    fail "Menu bar structure mismatch" "$MENU_JSON"
 fi
 
-# --- Test 6: View menu items present ---
-echo ""
-echo "--- View menu ---"
-# Our CommandMenu("View") may create a second View menu; check all menu bar items
-VIEW_ITEMS=$(osascript <<'EOF'
-tell application "System Events"
-    tell process "SecondBrain"
-        set frontmost to true
-        delay 0.3
-        tell menu bar 1
-            set allNames to name of every menu bar item
-            set output to ""
-            repeat with i from 1 to count of allNames
-                if item i of allNames is "View" then
-                    tell menu bar item i
-                        click
-                        delay 0.3
-                        tell menu 1
-                            set menuNames to name of every menu item
-                            repeat with mn in menuNames
-                                set output to output & mn & ","
-                            end repeat
-                        end tell
-                    end tell
-                    key code 53
-                    delay 0.2
-                end if
-            end repeat
-            return output
-        end tell
-    end tell
-end tell
-EOF
-)
-sleep 0.3
-
-HAS_SEARCH=false
-HAS_QUICKOPEN=false
-HAS_CMDPALETTE=false
-HAS_FOCUS=false
-[[ "$VIEW_ITEMS" == *"Search"* ]] && HAS_SEARCH=true
-[[ "$VIEW_ITEMS" == *"Quick Open"* ]] && HAS_QUICKOPEN=true
-[[ "$VIEW_ITEMS" == *"Command Palette"* ]] && HAS_CMDPALETTE=true
-[[ "$VIEW_ITEMS" == *"Focus"* ]] && HAS_FOCUS=true
-
-if $HAS_SEARCH && $HAS_QUICKOPEN && $HAS_CMDPALETTE && $HAS_FOCUS; then
-    pass "View menu: All required items present"
-else
-    fail "View menu: Missing items" "Search=$HAS_SEARCH QuickOpen=$HAS_QUICKOPEN CmdPalette=$HAS_CMDPALETTE Focus=$HAS_FOCUS items=$VIEW_ITEMS"
-fi
-
-# Graph View is exercised by its own dedicated suite (tests/gui-test-graph.sh),
-# which covers sheet open, inspector structure, mode/filter toggles, rebuild,
-# FSEvents-driven refresh, and close/reopen. Don't duplicate the shallow
-# sheet-exists check here.
-
-# Cleanup
-echo ""
-echo "--- Cleanup ---"
-rm -f "$VAULT/gui-test-"*.md
-kill_app
-echo "Removed test files"
-
+assert_no_leaked_secrets
 print_results
-exit $FAIL
+[ "$FAIL" -eq 0 ]

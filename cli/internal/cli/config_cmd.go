@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -232,7 +233,7 @@ type ConfigSetResult struct {
 // sync the `config set ai.embedding_model` path takes. A stale dimension is a
 // silent DIMENSION BREAK that disables semantic search.
 func resyncEmbeddingDimensions(v *vault.Vault, embedID string, warn io.Writer) {
-	dims := ai.EmbeddingDimensionsFor(v.Root, v.Config.AI.Provider, embedID)
+	dims := ai.EmbeddingDimensionsFor(v.Root, v.Config.AI.EffectiveEmbeddingProvider(), embedID)
 	if dims <= 0 || dims == v.Config.AI.Dimensions {
 		return
 	}
@@ -246,19 +247,29 @@ func resyncEmbeddingDimensions(v *vault.Vault, embedID string, warn io.Writer) {
 	v.Config.AI.Dimensions = dims
 }
 
+func readAPIKeyLine(r io.Reader) (string, error) {
+	reader := bufio.NewReader(r)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("read key: %w", err)
+	}
+	if errors.Is(err, io.EOF) && line == "" {
+		return "", fmt.Errorf("read key: %w", io.EOF)
+	}
+	key := strings.TrimSpace(line)
+	if key == "" {
+		return "", fmt.Errorf("empty key")
+	}
+	return key, nil
+}
+
 func runConfigSetKey(cmd *cobra.Command, args []string) error {
 	provider := args[0]
 
 	fmt.Fprintf(os.Stderr, "Enter API key for %s: ", provider)
-	reader := bufio.NewReader(os.Stdin)
-	key, err := reader.ReadString('\n')
+	key, err := readAPIKeyLine(os.Stdin)
 	if err != nil {
-		return fmt.Errorf("read key: %w", err)
-	}
-	key = strings.TrimSpace(key)
-
-	if key == "" {
-		return fmt.Errorf("empty key")
+		return err
 	}
 
 	if provider == "bedrock" {
@@ -289,6 +300,8 @@ func runConfigSetKey(cmd *cobra.Command, args []string) error {
 // message. Order is presentation order.
 var settableConfigKeys = []string{
 	"ai.provider",
+	"ai.embedding_provider",
+	"ai.generation_provider",
 	"ai.embedding_model",
 	"ai.embedding_plane",
 	"ai.embedding_region",
@@ -296,6 +309,8 @@ var settableConfigKeys = []string{
 	"ai.generation_plane",
 	"ai.generation_region",
 	"ai.dimensions",
+	"ai.task_preset",
+	"ai.llama.task_prefix",
 	"ai.similarity_threshold",
 	"ai.bm25_weight",
 	"ai.vector_weight",
@@ -304,10 +319,17 @@ var settableConfigKeys = []string{
 	"ai.embed_concurrency",
 	"ai.reasoning_effort",
 	"ai.rerank.enabled",
+	"ai.rerank.provider",
 	"ai.rerank.model",
 	"ai.rerank.plane",
 	"ai.rerank.region",
 	"ai.rerank.candidate_docs",
+	"ai.gemini.project",
+	"ai.gemini.location",
+	"ai.gemini.api_key_env",
+	"ai.gemini.use_vertex_ai",
+	"ai.gemini.app_label",
+	"ai.gemini.disabled",
 	"ai.bedrock.profile",
 	"ai.bedrock.region",
 	"ai.bedrock.disabled",
@@ -330,6 +352,10 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 	switch key {
 	case "ai.provider":
 		return cfg.Provider, nil
+	case "ai.embedding_provider":
+		return cfg.EffectiveEmbeddingProvider(), nil
+	case "ai.generation_provider":
+		return cfg.EffectiveGenerationProvider(), nil
 	case "ai.embedding_model":
 		return cfg.EmbeddingModel, nil
 	case "ai.embedding_plane":
@@ -344,6 +370,8 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return cfg.GenerationRegion, nil
 	case "ai.dimensions":
 		return fmt.Sprintf("%d", cfg.Dimensions), nil
+	case "ai.task_preset", "ai.llama.task_prefix":
+		return cfg.ResolveTaskPreset(), nil
 	case "ai.similarity_threshold":
 		return strconv.FormatFloat(cfg.SimilarityThreshold, 'g', -1, 64), nil
 	case "ai.bm25_weight":
@@ -360,6 +388,8 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return cfg.ReasoningEffort, nil
 	case "ai.rerank.enabled":
 		return strconv.FormatBool(cfg.Rerank.Enabled), nil
+	case "ai.rerank.provider":
+		return cfg.EffectiveRerankProvider(), nil
 	case "ai.rerank.model":
 		return cfg.Rerank.Model, nil
 	case "ai.rerank.plane":
@@ -368,6 +398,18 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 		return cfg.Rerank.Region, nil
 	case "ai.rerank.candidate_docs":
 		return strconv.Itoa(cfg.Rerank.CandidateDocs), nil
+	case "ai.gemini.project":
+		return cfg.Gemini.Project, nil
+	case "ai.gemini.location":
+		return cfg.Gemini.Location, nil
+	case "ai.gemini.api_key_env":
+		return cfg.Gemini.APIKeyEnv, nil
+	case "ai.gemini.use_vertex_ai":
+		return strconv.FormatBool(cfg.Gemini.UseVertexAI), nil
+	case "ai.gemini.app_label":
+		return cfg.Gemini.AppLabel, nil
+	case "ai.gemini.disabled":
+		return strconv.FormatBool(cfg.Gemini.Disabled), nil
 	case "ai.bedrock.profile":
 		return cfg.Bedrock.Profile, nil
 	case "ai.bedrock.region":
@@ -397,6 +439,20 @@ func getConfigValue(cfg ai.AIConfig, key string) (string, error) {
 	}
 }
 
+func setSlotProvider(cfg *ai.AIConfig, dst *string, value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		*dst = ""
+		return nil
+	}
+	if !ai.IsKnownProvider(v) {
+		return fmt.Errorf("unknown provider %q; valid providers: %s", value, strings.Join(ai.KnownProviders, ", "))
+	}
+	*dst = v
+	cfg.SetProviderDisabled(v, false)
+	return nil
+}
+
 func containsInt(xs []int, want int) bool {
 	for _, x := range xs {
 		if x == want {
@@ -421,11 +477,20 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("unknown provider %q; valid providers: %s", value, strings.Join(ai.KnownProviders, ", "))
 		}
 		cfg.Provider = value
+		// Setting the unified ai.provider clears per-slot overrides so legacy
+		// single-provider workflows switch all slots together.
+		cfg.EmbeddingProvider = ""
+		cfg.GenerationProvider = ""
+		cfg.Rerank.Provider = ""
 		// Activating a provider clears its disabled flag. An active-but-disabled
 		// provider is contradictory: the CLI still runs it, but the GUI hides
 		// every one of its models, so the two surfaces disagree about the same
 		// vault. Mirrors `ai setup`, which enables the chosen provider.
 		cfg.SetProviderDisabled(value, false)
+	case "ai.embedding_provider":
+		return setSlotProvider(cfg, &cfg.EmbeddingProvider, value)
+	case "ai.generation_provider":
+		return setSlotProvider(cfg, &cfg.GenerationProvider, value)
 	case "ai.embedding_model":
 		// Clearing the route is REQUIRED, not tidiness. This raw path is
 		// still reached by `ai setup`, `ai local`, and `models wizard
@@ -476,10 +541,23 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 		// value is rejected by the provider at embed time (a silent search
 		// break), so refuse it here against the model's declared set. Models
 		// that declare no set (SupportedDimensionsFor == nil) are unconstrained.
-		if supported := ai.SupportedDimensionsFor("", cfg.Provider, cfg.EmbeddingModel); len(supported) > 0 && !containsInt(supported, d) {
+		if supported := ai.SupportedDimensionsFor("", cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel); len(supported) > 0 && !containsInt(supported, d) {
 			return fmt.Errorf("dimension %d not supported by %s (Matryoshka widths: %s)", d, cfg.EmbeddingModel, intsCSV(supported))
 		}
 		cfg.Dimensions = d
+	case "ai.task_preset", "ai.llama.task_prefix":
+		v := strings.ToLower(strings.TrimSpace(value))
+		if v == "" {
+			cfg.TaskPreset = ""
+			return nil
+		}
+		if !ai.IsValidTaskPreset(v) {
+			return fmt.Errorf("task_preset must be one of %s (got %q); empty clears it and leaves the default %q", strings.Join(ai.TaskPresets, ", "), value, ai.DefaultTaskPreset)
+		}
+		if v == "symmetric" {
+			v = "none"
+		}
+		cfg.TaskPreset = v
 	case "ai.similarity_threshold":
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil {
@@ -539,6 +617,8 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return err
 		}
 		cfg.Rerank.Enabled = b
+	case "ai.rerank.provider":
+		return setSlotProvider(cfg, &cfg.Rerank.Provider, value)
 	case "ai.rerank.model":
 		cfg.SetRerankModel(value)
 	case "ai.rerank.plane":
@@ -558,6 +638,26 @@ func setConfigValue(cfg *ai.AIConfig, key, value string) error {
 			return fmt.Errorf("rerank.candidate_docs must be an integer between 0 and 100 (got %q); 0/unset resolves to the default %d, and Bedrock Rerank caps one query at 100 docs", value, ai.DefaultRerankCandidateDocs)
 		}
 		cfg.Rerank.CandidateDocs = n
+	case "ai.gemini.project":
+		cfg.Gemini.Project = value
+	case "ai.gemini.location":
+		cfg.Gemini.Location = value
+	case "ai.gemini.api_key_env":
+		cfg.Gemini.APIKeyEnv = value
+	case "ai.gemini.use_vertex_ai":
+		b, err := parseConfigBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Gemini.UseVertexAI = b
+	case "ai.gemini.app_label":
+		cfg.Gemini.AppLabel = value
+	case "ai.gemini.disabled":
+		b, err := parseConfigBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Gemini.Disabled = b
 	case "ai.bedrock.profile":
 		cfg.Bedrock.Profile = value
 	case "ai.bedrock.region":

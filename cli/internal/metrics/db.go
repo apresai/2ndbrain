@@ -30,6 +30,11 @@ const (
 	OpReembed  = "reembed"   // full forced re-embed (--force-reembed)
 	OpSearch   = "search"    // hybrid/BM25 search query
 	OpAsk      = "ask"       // RAG ask query
+	OpChat     = "chat"      // multi-turn chat RAG turn
+	OpPolish   = "polish"    // note copy-edit / grounded links
+	OpFix      = "fix"       // vault-wide AI-assisted links & schema fix
+	OpSuggest  = "suggest"   // suggest-links / suggest-target
+	OpProbe    = "probe"     // live model connectivity/smoke probe
 )
 
 // DefaultPerTypeCap bounds how many rows of EACH operation type are retained.
@@ -109,12 +114,57 @@ type Operation struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 
+	// Per-slot provider/model attribution & estimated USD cost. Schema v4.
+	EmbeddingProvider  string  `json:"embedding_provider,omitempty"`
+	GenerationProvider string  `json:"generation_provider,omitempty"`
+	GenerationModel    string  `json:"generation_model,omitempty"`
+	EmbedInputTokens   int     `json:"embed_input_tokens,omitempty"`
+	GenInputTokens     int     `json:"gen_input_tokens,omitempty"`
+	GenOutputTokens    int     `json:"gen_output_tokens,omitempty"`
+	CostUSD            float64 `json:"cost_usd,omitempty"`
+	KnownPricing       bool    `json:"known_pricing,omitempty"`
+
 	CLIVersion string `json:"cli_version,omitempty"`
+
+	// UsageLegs carries slot-level usage for unpruned ai_usage_ledger upserts.
+	// Not stored directly in the operations row JSON.
+	UsageLegs []UsageLeg `json:"-"`
 
 	// derived (computed by WithRates, not persisted)
 	DocsPerSec       float64 `json:"docs_per_sec,omitempty"`
 	EmbeddingsPerSec float64 `json:"embeddings_per_sec,omitempty"`
 	CharsPerSec      float64 `json:"chars_per_sec,omitempty"`
+}
+
+// UsageLeg captures one model slot's token and cost attribution within an
+// operation so hybrid combos (e.g., local embeddings + cloud generation)
+// attribute cloud spend accurately in ai_usage_ledger.
+type UsageLeg struct {
+	Provider     string
+	Model        string
+	Slot         string // "generation" | "embedding" | "rerank"
+	Operation    string
+	IsCloud      bool
+	Calls        int
+	InputTokens  int
+	OutputTokens int
+	CostUSD      float64
+	KnownPricing bool
+}
+
+// LedgerRow is one aggregated daily entry in ai_usage_ledger.
+type LedgerRow struct {
+	Day           string  `json:"day"`
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	Slot          string  `json:"slot"`
+	Operation     string  `json:"operation"`
+	IsCloud       bool    `json:"is_cloud"`
+	Calls         int     `json:"calls"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
+	CostUSD       float64 `json:"cost_usd"`
+	UnpricedCalls int     `json:"unpriced_calls"`
 }
 
 // WithRates returns a copy of the operation with the derived per-second rates
@@ -189,7 +239,7 @@ func Open(dbPath string) (*DB, error) {
 }
 
 // maxMetricsSchemaVersion is the highest schema version this binary writes.
-const maxMetricsSchemaVersion = 3
+const maxMetricsSchemaVersion = 4
 
 // metricsSchemaV2 adds the token columns. Run as an idempotent ALTER (rather than
 // baked into the v1 CREATE) so an EXISTING metrics.db — carrying the user's
@@ -207,6 +257,63 @@ var metricsSchemaV2 = []string{
 // upgraded one does and the migration is exercised on every install.
 var metricsSchemaV3 = []string{
 	`ALTER TABLE operations ADD COLUMN embed_retries INTEGER NOT NULL DEFAULT 0`,
+}
+
+// metricsSchemaV4 adds per-slot provider/model/cost attribution to operations
+// plus an unpruned daily ai_usage_ledger table so pruning operations to 200
+// rows never discards historical AI usage or estimated cloud spend.
+var metricsSchemaV4 = []string{
+	`ALTER TABLE operations ADD COLUMN embedding_provider TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN generation_provider TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN generation_model TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN embed_input_tokens INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN gen_input_tokens INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN gen_output_tokens INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN known_pricing INTEGER NOT NULL DEFAULT 0`,
+	`CREATE TABLE IF NOT EXISTS ai_usage_ledger (
+		day            TEXT    NOT NULL,
+		provider       TEXT    NOT NULL,
+		model          TEXT    NOT NULL,
+		slot           TEXT    NOT NULL,
+		operation      TEXT    NOT NULL,
+		is_cloud       INTEGER NOT NULL DEFAULT 0,
+		calls          INTEGER NOT NULL DEFAULT 0,
+		input_tokens   INTEGER NOT NULL DEFAULT 0,
+		output_tokens  INTEGER NOT NULL DEFAULT 0,
+		cost_usd       REAL    NOT NULL DEFAULT 0,
+		unpriced_calls INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (day, provider, model, slot, operation)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ai_usage_day ON ai_usage_ledger(day DESC)`,
+	`INSERT OR IGNORE INTO ai_usage_ledger (
+		day, provider, model, slot, operation, is_cloud, calls, input_tokens, output_tokens, cost_usd, unpriced_calls
+	)
+	SELECT
+		substr(ts, 1, 10),
+		CASE
+			WHEN embedding_provider != '' THEN embedding_provider
+			WHEN embedding_model LIKE 'embeddinggemma-%' OR embedding_model LIKE 'gemma4-%' THEN 'llama-local'
+			WHEN embedding_model LIKE 'gemini-%' THEN 'gemini'
+			WHEN embedding_model LIKE 'amazon.%' OR embedding_model LIKE 'cohere.%' THEN 'bedrock'
+			WHEN embedding_model LIKE '%/%' THEN 'openrouter'
+			ELSE ''
+		END AS inferred_provider,
+		embedding_model,
+		'embedding',
+		operation,
+		CASE
+			WHEN embedding_model LIKE 'embeddinggemma-%' OR embedding_model LIKE 'gemma4-%' THEN 0
+			ELSE 1
+		END AS is_cloud,
+		SUM(CASE WHEN embedded > 0 THEN embedded ELSE 1 END),
+		SUM(input_tokens),
+		0,
+		0,
+		SUM(CASE WHEN embedding_model LIKE 'embeddinggemma-%' OR embedding_model LIKE 'gemma4-%' THEN 0 ELSE 1 END)
+	FROM operations
+	WHERE embedding_model != '' AND input_tokens > 0 AND length(ts) >= 10
+	GROUP BY substr(ts, 1, 10), inferred_provider, embedding_model, operation`,
 }
 
 // migrate brings an existing operations table up to maxMetricsSchemaVersion.
@@ -238,6 +345,11 @@ func (db *DB) migrate() error {
 	}
 	if version < 3 {
 		if err := db.applyMigration(3, metricsSchemaV3); err != nil {
+			return err
+		}
+	}
+	if version < 4 {
+		if err := db.applyMigration(4, metricsSchemaV4); err != nil {
 			return err
 		}
 	}
@@ -305,8 +417,12 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
-// Clear deletes all recorded operations and returns how many rows were removed.
+// Clear deletes all recorded operations and daily usage ledger entries and
+// returns how many operation rows were removed.
 func (db *DB) Clear() (int64, error) {
+	if _, err := db.conn.Exec(`DELETE FROM ai_usage_ledger`); err != nil {
+		return 0, err
+	}
 	res, err := db.conn.Exec(`DELETE FROM operations`)
 	if err != nil {
 		return 0, err
@@ -314,8 +430,9 @@ func (db *DB) Clear() (int64, error) {
 	return res.RowsAffected()
 }
 
-// Record stores one operation and then prunes that operation type back to
-// DefaultPerTypeCap rows. Timestamp/Source default to now/"cli" when empty.
+// Record stores one operation, upserts any UsageLegs into ai_usage_ledger, and
+// prunes that operation type back to DefaultPerTypeCap rows. Timestamp/Source
+// default to now/"cli" when empty.
 func (db *DB) Record(op Operation) error {
 	if op.Timestamp == "" {
 		op.Timestamp = time.Now().UTC().Format(time.RFC3339)
@@ -328,19 +445,129 @@ func (db *DB) Record(op Operation) error {
 			ts, operation, source, duration_ms, ok, error,
 			files_scanned, docs_indexed, chunks_created, links_found,
 			embedded, embed_skipped, embed_failed, embed_retries, embed_ms, total_chars,
-			embedding_model, embedding_dims, result_count, mode,
+			embedding_model, embedding_dims,
+			embedding_provider, generation_provider, generation_model,
+			embed_input_tokens, gen_input_tokens, gen_output_tokens,
+			cost_usd, known_pricing,
+			result_count, mode,
 			input_tokens, output_tokens, cli_version
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		op.Timestamp, op.Operation, op.Source, op.DurationMs, boolToInt(op.OK), op.Error,
 		op.FilesScanned, op.DocsIndexed, op.ChunksCreated, op.LinksFound,
 		op.Embedded, op.EmbedSkipped, op.EmbedFailed, op.EmbedRetries, op.EmbedMs, op.TotalChars,
-		op.EmbeddingModel, op.EmbeddingDims, op.ResultCount, op.Mode,
+		op.EmbeddingModel, op.EmbeddingDims,
+		op.EmbeddingProvider, op.GenerationProvider, op.GenerationModel,
+		op.EmbedInputTokens, op.GenInputTokens, op.GenOutputTokens,
+		op.CostUSD, boolToInt(op.KnownPricing),
+		op.ResultCount, op.Mode,
 		op.InputTokens, op.OutputTokens, op.CLIVersion,
 	)
 	if err != nil {
 		return err
 	}
+
+	day := op.Timestamp
+	if len(day) >= 10 {
+		day = day[:10]
+	} else {
+		day = time.Now().UTC().Format("2006-01-02")
+	}
+	for _, leg := range op.UsageLegs {
+		if leg.Calls <= 0 && leg.InputTokens <= 0 && leg.OutputTokens <= 0 {
+			continue
+		}
+		legOp := leg.Operation
+		if legOp == "" {
+			legOp = op.Operation
+		}
+		unpriced := 0
+		if leg.IsCloud && !leg.KnownPricing {
+			unpriced = leg.Calls
+			if unpriced <= 0 {
+				unpriced = 1
+			}
+		}
+		if _, err := db.conn.Exec(
+			`INSERT INTO ai_usage_ledger (
+				day, provider, model, slot, operation, is_cloud,
+				calls, input_tokens, output_tokens, cost_usd, unpriced_calls
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(day, provider, model, slot, operation) DO UPDATE SET
+				calls = calls + excluded.calls,
+				input_tokens = input_tokens + excluded.input_tokens,
+				output_tokens = output_tokens + excluded.output_tokens,
+				cost_usd = cost_usd + excluded.cost_usd,
+				unpriced_calls = unpriced_calls + excluded.unpriced_calls,
+				is_cloud = excluded.is_cloud`,
+			day, leg.Provider, leg.Model, leg.Slot, legOp, boolToInt(leg.IsCloud),
+			leg.Calls, leg.InputTokens, leg.OutputTokens, leg.CostUSD, unpriced,
+		); err != nil {
+			return err
+		}
+	}
 	return db.prune(op.Operation, DefaultPerTypeCap)
+}
+
+// UsageEntries returns aggregated daily AI usage ledger rows on or after
+// sinceDay (YYYY-MM-DD), or all rows when sinceDay is empty, newest day first.
+func (db *DB) UsageEntries(sinceDay string) ([]LedgerRow, error) {
+	q := `SELECT day, provider, model, slot, operation, is_cloud, calls, input_tokens, output_tokens, cost_usd, unpriced_calls
+		FROM ai_usage_ledger`
+	var rows *sql.Rows
+	var err error
+	if sinceDay != "" {
+		rows, err = db.conn.Query(q+` WHERE day >= ? ORDER BY day DESC, provider, model, slot, operation`, sinceDay)
+	} else {
+		rows, err = db.conn.Query(q + ` ORDER BY day DESC, provider, model, slot, operation`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []LedgerRow
+	for rows.Next() {
+		var r LedgerRow
+		var isCloud int
+		if err := rows.Scan(
+			&r.Day, &r.Provider, &r.Model, &r.Slot, &r.Operation, &isCloud,
+			&r.Calls, &r.InputTokens, &r.OutputTokens, &r.CostUSD, &r.UnpricedCalls,
+		); err != nil {
+			return nil, err
+		}
+		r.IsCloud = isCloud != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// HistoricalEmbedThroughput returns the measured docs/sec and chars/sec from
+// the most recent successful bulk embed build (>= 3 embedded docs) matching
+// the active embedding model (and provider when recorded).
+func (db *DB) HistoricalEmbedThroughput(provider, model string) (docsPerSec, charsPerSec float64, ok bool) {
+	if model == "" {
+		return 0, 0, false
+	}
+	var embedded, totalChars int
+	var embedMs int64
+	err := db.conn.QueryRow(
+		`SELECT embedded, total_chars, embed_ms
+		 FROM operations
+		 WHERE ok = 1
+		   AND embedded >= 3
+		   AND embed_ms > 0
+		   AND total_chars > 0
+		   AND embedding_model = ?
+		   AND (embedding_provider = ? OR embedding_provider = '')
+		 ORDER BY id DESC
+		 LIMIT 1`,
+		model, provider,
+	).Scan(&embedded, &totalChars, &embedMs)
+	if err != nil || embedMs <= 0 || embedded <= 0 || totalChars <= 0 {
+		return 0, 0, false
+	}
+	secs := float64(embedMs) / 1000.0
+	return float64(embedded) / secs, float64(totalChars) / secs, true
 }
 
 // prune keeps only the newest `keep` rows of the given operation type. Uses the
@@ -454,24 +681,33 @@ func (db *DB) Aggregates() (map[string]Aggregate, error) {
 const opColumns = `id, ts, operation, source, duration_ms, ok, error,
 	files_scanned, docs_indexed, chunks_created, links_found,
 	embedded, embed_skipped, embed_failed, embed_retries, embed_ms, total_chars,
-	embedding_model, embedding_dims, result_count, mode,
+	embedding_model, embedding_dims,
+	embedding_provider, generation_provider, generation_model,
+	embed_input_tokens, gen_input_tokens, gen_output_tokens,
+	cost_usd, known_pricing,
+	result_count, mode,
 	input_tokens, output_tokens, cli_version`
 
 func scanOps(rows *sql.Rows) ([]Operation, error) {
 	var ops []Operation
 	for rows.Next() {
 		var o Operation
-		var ok int
+		var ok, knownPricing int
 		if err := rows.Scan(
 			&o.ID, &o.Timestamp, &o.Operation, &o.Source, &o.DurationMs, &ok, &o.Error,
 			&o.FilesScanned, &o.DocsIndexed, &o.ChunksCreated, &o.LinksFound,
 			&o.Embedded, &o.EmbedSkipped, &o.EmbedFailed, &o.EmbedRetries, &o.EmbedMs, &o.TotalChars,
-			&o.EmbeddingModel, &o.EmbeddingDims, &o.ResultCount, &o.Mode,
+			&o.EmbeddingModel, &o.EmbeddingDims,
+			&o.EmbeddingProvider, &o.GenerationProvider, &o.GenerationModel,
+			&o.EmbedInputTokens, &o.GenInputTokens, &o.GenOutputTokens,
+			&o.CostUSD, &knownPricing,
+			&o.ResultCount, &o.Mode,
 			&o.InputTokens, &o.OutputTokens, &o.CLIVersion,
 		); err != nil {
 			return nil, err
 		}
 		o.OK = ok != 0
+		o.KnownPricing = knownPricing != 0
 		ops = append(ops, o)
 	}
 	return ops, rows.Err()

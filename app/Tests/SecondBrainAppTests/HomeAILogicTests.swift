@@ -19,6 +19,9 @@ func homeAIModelValue() {
 func homeAIHeaderTitle() {
     #expect(HomeAI.headerTitle(nil) == "AI · checking…")
 
+    let gemini = decodeStatus(#"{"provider":"gemini","embedding_model":"e","generation_model":"g","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.headerTitle(gemini) == "AI · Google Gemini (GCP)")
+
     let bedrock = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
     #expect(HomeAI.headerTitle(bedrock) == "AI · AWS Bedrock")
 
@@ -29,6 +32,9 @@ func homeAIHeaderTitle() {
 @Test("HomeAI.statusLine is provider-generic: ready, reason, or credentials fallback")
 func homeAIStatusLine() {
     #expect(HomeAI.statusLine(nil) == "Checking…")
+
+    let readyGemini = decodeStatus(#"{"provider":"gemini","embedding_model":"gemini-embedding-2","generation_model":"gemini-4-hydrogen","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(HomeAI.statusLine(readyGemini) == "Google Gemini (GCP) ready")
 
     let ready = decodeStatus(#"{"provider":"bedrock","embedding_model":"e","generation_model":"g","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
     #expect(HomeAI.statusLine(ready) == "AWS Bedrock ready")
@@ -47,10 +53,10 @@ func homeAIStatusLine() {
 
 @Test("HomeAI defaults mirror the CLI DefaultAIConfig contract")
 func homeAIDefaults() {
-    #expect(HomeAI.provider == "bedrock")
-    #expect(HomeAI.genModel == "us.anthropic.claude-haiku-4-5-20251001-v1:0")
-    #expect(HomeAI.embedModel == "amazon.nova-2-multimodal-embeddings-v1:0")
-    #expect(HomeAI.dims == 1024)
+    #expect(HomeAI.provider == "gemini")
+    #expect(HomeAI.genModel == "gemini-4-hydrogen")
+    #expect(HomeAI.embedModel == "gemini-embedding-2")
+    #expect(HomeAI.dims == 768)
 }
 
 @Test("HomeAI.differsFromDefaults gates the Reset button on real drift")
@@ -59,17 +65,17 @@ func homeAIDiffersFromDefaults() {
     #expect(HomeAI.differsFromDefaults(nil) == false)
 
     // Exactly the defaults: no drift, no button.
-    let defaults = decodeStatus(#"{"provider":"bedrock","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-haiku-4-5-20251001-v1:0","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    let defaults = decodeStatus(#"{"provider":"gemini","embedding_model":"gemini-embedding-2","generation_model":"gemini-4-hydrogen","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
     #expect(HomeAI.differsFromDefaults(defaults) == false)
 
     // A different provider, model, or dimension each counts as drift.
-    let otherProvider = decodeStatus(#"{"provider":"ollama","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-haiku-4-5-20251001-v1:0","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    let otherProvider = decodeStatus(#"{"provider":"ollama","embedding_model":"gemini-embedding-2","generation_model":"gemini-4-hydrogen","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
     #expect(HomeAI.differsFromDefaults(otherProvider))
 
-    let otherGen = decodeStatus(#"{"provider":"bedrock","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-sonnet-5","dimensions":1024,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    let otherGen = decodeStatus(#"{"provider":"gemini","embedding_model":"gemini-embedding-2","generation_model":"gemini-4-carbon","dimensions":768,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
     #expect(HomeAI.differsFromDefaults(otherGen))
 
-    let otherDims = decodeStatus(#"{"provider":"bedrock","embedding_model":"amazon.nova-2-multimodal-embeddings-v1:0","generation_model":"us.anthropic.claude-haiku-4-5-20251001-v1:0","dimensions":256,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    let otherDims = decodeStatus(#"{"provider":"gemini","embedding_model":"gemini-embedding-2","generation_model":"gemini-4-hydrogen","dimensions":256,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
     #expect(HomeAI.differsFromDefaults(otherDims))
 }
 
@@ -85,10 +91,12 @@ func homeAIResetConfirmText() {
 
 @Test("ProviderDisplay maps known providers and capitalizes unknowns")
 func providerDisplayNames() {
+    #expect(ProviderDisplay.name("gemini") == "Google Gemini (GCP)")
+    #expect(ProviderDisplay.name("google") == "Google Gemini (GCP)")
     #expect(ProviderDisplay.name("bedrock") == "AWS Bedrock")
     #expect(ProviderDisplay.name("openrouter") == "OpenRouter")
     #expect(ProviderDisplay.name("ollama") == "Ollama (local)")
-    #expect(ProviderDisplay.name("llama-local") == "Local (llama.cpp)")
+    #expect(ProviderDisplay.name("llama-local") == "Local Gemma (On-Device)")
     #expect(ProviderDisplay.name("something") == "Something")
 }
 
@@ -134,4 +142,18 @@ func aiStatusEmbeddableDenominator() {
 func settingsLinkCopy() {
     #expect(HomeAI.settingsLinkTitle(ready: false) == "Add your API key in Settings…")
     #expect(HomeAI.settingsLinkTitle(ready: true) == "AI settings…")
+}
+
+@Test("HomeAI handles mixed embedding and generation providers cleanly")
+func homeAIMixedProviders() {
+    let mixedReady = decodeStatus(#"{"provider":"gemini","embedding_provider":"llama-local","generation_provider":"gemini","embedding_model":"embeddinggemma-2","generation_model":"gemini-4-hydrogen","dimensions":256,"embed_available":true,"gen_available":true,"embedding_count":10,"document_count":10}"#)
+    #expect(mixedReady.isMixedProviders == true)
+    #expect(mixedReady.effectiveEmbeddingProvider == "llama-local")
+    #expect(mixedReady.effectiveGenerationProvider == "gemini")
+    #expect(HomeAI.headerTitle(mixedReady) == "AI · Google Gemini (GCP) + Local Gemma (On-Device)")
+    #expect(HomeAI.statusLine(mixedReady) == "Hybrid AI ready")
+    #expect(HomeAI.differsFromDefaults(mixedReady) == true)
+
+    let mixedFailing = decodeStatus(#"{"provider":"gemini","embedding_provider":"llama-local","generation_provider":"gemini","embedding_model":"embeddinggemma-2","generation_model":"gemini-4-hydrogen","dimensions":256,"embed_available":true,"gen_available":false,"embedding_count":10,"document_count":10,"providers":[{"name":"gemini","config_present":false,"disabled":false,"reachable":false,"reason":"credentials missing"},{"name":"llama-local","config_present":true,"disabled":false,"reachable":true}]}"#)
+    #expect(HomeAI.statusLine(mixedFailing) == "Not ready: credentials missing")
 }

@@ -1106,56 +1106,62 @@ func InitBedrock(ctx context.Context, reg *Registry, cfg BedrockConfig, aiCfg AI
 	rows := LoadUserCatalog(vaultRoot)
 	rows = append(rows, BuiltinCatalog()...)
 
-	embedRoute, err := ResolveSlotRoute("embedding", aiCfg.EmbeddingRoute(), rows)
-	if err != nil {
-		return noteBedrockUnrouted(reg, err)
-	}
-	embedCfg := cfg
-	if embedRoute.Route.Region != "" {
-		embedCfg.RegionOverride = embedRoute.Route.Region
-	}
-	embedder, err := newBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions, embedRoute.Strategy)
-	if err != nil {
-		return fmt.Errorf("init bedrock embedder: %w", err)
-	}
-	reg.RegisterEmbedder("bedrock", embedder)
-
-	genRoute, err := ResolveSlotRoute("generation", aiCfg.GenerationRoute(), rows)
-	if err != nil {
-		return noteBedrockUnrouted(reg, err)
-	}
-	genCfg := cfg
-	if genRoute.Route.Region != "" {
-		genCfg.RegionOverride = genRoute.Route.Region
-	}
-	generator, err := NewBedrockGenerationForRoute(ctx, genCfg, genRoute, vaultRoot)
-	if err != nil {
-		return fmt.Errorf("init bedrock generator: %w", err)
-	}
-	reg.RegisterGenerator("bedrock", generator)
-
-	// Register the reranker only when enabled: it's an optional stage on a
-	// distinct API (bedrockagentruntime.Rerank), so a disabled rerank config
-	// leaves the slot empty and retrieve keeps the RRF order.
-	if aiCfg.RerankEnabled() {
-		// The rerank slot's route is honored like the other two. Without
-		// this, ai.rerank.plane and ai.rerank.region were a dead knob:
-		// settable, gettable, validated, documented, and read by nothing at
-		// invoke time, so a user who pinned a rerank region silently kept
-		// calling us-east-1.
-		rerankRoute, err := ResolveSlotRoute("rerank", aiCfg.RerankRoute(), rows)
+	if ep := aiCfg.EffectiveEmbeddingProvider(); ep == "" || ep == "bedrock" {
+		embedRoute, err := ResolveSlotRoute("embedding", aiCfg.EmbeddingRoute(), rows)
 		if err != nil {
 			return noteBedrockUnrouted(reg, err)
 		}
-		rerankCfg := cfg
-		if rerankRoute.Route.Region != "" {
-			rerankCfg.RegionOverride = rerankRoute.Route.Region
+		embedCfg := cfg
+		if embedRoute.Route.Region != "" {
+			embedCfg.RegionOverride = embedRoute.Route.Region
 		}
-		reranker, err := NewBedrockReranker(ctx, rerankCfg, aiCfg.ResolveRerankModel())
+		embedder, err := newBedrockEmbedder(ctx, embedCfg, aiCfg.EmbeddingModel, aiCfg.Dimensions, embedRoute.Strategy)
 		if err != nil {
-			return fmt.Errorf("init bedrock reranker: %w", err)
+			return fmt.Errorf("init bedrock embedder: %w", err)
 		}
-		reg.RegisterReranker("bedrock", reranker)
+		reg.RegisterEmbedder("bedrock", embedder)
+	}
+
+	if gp := aiCfg.EffectiveGenerationProvider(); gp == "" || gp == "bedrock" {
+		genRoute, err := ResolveSlotRoute("generation", aiCfg.GenerationRoute(), rows)
+		if err != nil {
+			return noteBedrockUnrouted(reg, err)
+		}
+		genCfg := cfg
+		if genRoute.Route.Region != "" {
+			genCfg.RegionOverride = genRoute.Route.Region
+		}
+		generator, err := NewBedrockGenerationForRoute(ctx, genCfg, genRoute, vaultRoot)
+		if err != nil {
+			return fmt.Errorf("init bedrock generator: %w", err)
+		}
+		reg.RegisterGenerator("bedrock", generator)
+	}
+
+	// Register the reranker only when enabled and routed to bedrock: it's an
+	// optional stage on a distinct API (bedrockagentruntime.Rerank), so a disabled
+	// rerank config leaves the slot empty and retrieve keeps the RRF order.
+	if aiCfg.RerankEnabled() {
+		if rp := aiCfg.EffectiveRerankProvider(); rp == "" || rp == "bedrock" {
+			// The rerank slot's route is honored like the other two. Without
+			// this, ai.rerank.plane and ai.rerank.region were a dead knob:
+			// settable, gettable, validated, documented, and read by nothing at
+			// invoke time, so a user who pinned a rerank region silently kept
+			// calling us-east-1.
+			rerankRoute, err := ResolveSlotRoute("rerank", aiCfg.RerankRoute(), rows)
+			if err != nil {
+				return noteBedrockUnrouted(reg, err)
+			}
+			rerankCfg := cfg
+			if rerankRoute.Route.Region != "" {
+				rerankCfg.RegionOverride = rerankRoute.Route.Region
+			}
+			reranker, err := NewBedrockReranker(ctx, rerankCfg, aiCfg.ResolveRerankModel())
+			if err != nil {
+				return fmt.Errorf("init bedrock reranker: %w", err)
+			}
+			reg.RegisterReranker("bedrock", reranker)
+		}
 	}
 
 	return nil

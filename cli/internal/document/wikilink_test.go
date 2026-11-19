@@ -1,6 +1,8 @@
 package document
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -162,5 +164,195 @@ func TestExtractWikiLinks_MarkdownLinksAndEmbeds(t *testing.T) {
 	}
 	if links[1].Alias != "to doc" {
 		t.Errorf("expected alias 'to doc', got %q", links[1].Alias)
+	}
+}
+
+func TestExtractWikiLinks_IgnoresIndentedAndBlockquoteFences(t *testing.T) {
+	body := strings.Join([]string{
+		"- Example:",
+		"  ```markdown",
+		"  [[list-indented-backtick]]",
+		"  ```",
+		"1. Ordered example:",
+		"   ~~~md",
+		"   [[ordered-indented-tilde]]",
+		"   ~~~",
+		"> Blockquote example:",
+		"> ```markdown",
+		"> [[blockquote-fence]]",
+		"> ```",
+		"- ```markdown",
+		"  [[bullet-same-line-fence]]",
+		"  ```",
+		"Then [[real-after-indented]] applies.",
+	}, "\n")
+
+	links := ExtractWikiLinks(body)
+	if len(links) != 1 || links[0].Target != "real-after-indented" {
+		t.Fatalf("expected only [real-after-indented], got %+v", links)
+	}
+}
+
+func TestExtractWikiLinks_IgnoresNestedFourTickAndTildeFences(t *testing.T) {
+	body := strings.Join([]string{
+		"````markdown",
+		"Example fence:",
+		"```md",
+		"[[nested-three-tick]]",
+		"```",
+		"~~~",
+		"[[nested-three-tilde]]",
+		"~~~",
+		"```not-a-closer",
+		"````not-a-closer-either",
+		"[[still-inside-four-tick]]",
+		"````",
+		"After backtick fence [[real-one]].",
+		"~~~~markdown",
+		"```",
+		"[[inside-four-tilde]]",
+		"```",
+		"~~~~",
+		"After tilde fence [[real-two]].",
+	}, "\n")
+
+	links := ExtractWikiLinks(body)
+	if len(links) != 2 || links[0].Target != "real-one" || links[1].Target != "real-two" {
+		t.Fatalf("expected [real-one, real-two], got %+v", links)
+	}
+}
+
+func TestExtractWikiLinks_LineStartInlineBacktickNotFencedBlock(t *testing.T) {
+	body := strings.Join([]string{
+		"```[[inline-triple]]``` and [[real-one]].",
+		"`a` and `[[inline-single]]` and [[real-two]].",
+		"    [[not-fenced-plain-prose]]",
+	}, "\n")
+
+	links := ExtractWikiLinks(body)
+	if len(links) != 3 {
+		t.Fatalf("expected 3 real links, got %d: %+v", len(links), links)
+	}
+	want := []string{"real-one", "real-two", "not-fenced-plain-prose"}
+	for i, w := range want {
+		if links[i].Target != w {
+			t.Errorf("links[%d].Target = %q, want %q", i, links[i].Target, w)
+		}
+	}
+}
+
+func TestExtractWikiLinks_CRLFFencedAndUnclosedToEOF(t *testing.T) {
+	crlf := "- Item\r\n  ````md\r\n  ```text\r\n  [[crlf-nested]]\r\n  ```\r\n  ````\r\n[[real-crlf]]\r\n```go\r\n[[unclosed-eof]]"
+	links := ExtractWikiLinks(crlf)
+	if len(links) != 1 || links[0].Target != "real-crlf" {
+		t.Fatalf("expected only [real-crlf], got %+v", links)
+	}
+}
+
+func TestExtractWikiLinks_BlockquoteDepthFenceClose(t *testing.T) {
+	body := strings.Join([]string{
+		"```md",
+		"> ```",
+		"[[broken-and-target]]",
+		"```",
+		"[[real-after-toplevel]]",
+		"> ```md",
+		"> > ```",
+		"> [[inside-bq1]]",
+		"> ```",
+		"[[real-after-bq1]]",
+		"> > ```md",
+		"> > [[inside-bq2]]",
+		"> > ```",
+		"[[real-after-bq2]]",
+		"- ```md",
+		"  > ```",
+		"  [[inside-list-fence]]",
+		"  ```",
+		"[[real-after-list]]",
+	}, "\n")
+
+	links := ExtractWikiLinks(body)
+	want := []string{"real-after-toplevel", "real-after-bq1", "real-after-bq2", "real-after-list"}
+	if len(links) != len(want) {
+		t.Fatalf("expected %d links (%v), got %d: %+v", len(want), want, len(links), links)
+	}
+	for i, w := range want {
+		if links[i].Target != w {
+			t.Errorf("links[%d].Target = %q, want %q", i, links[i].Target, w)
+		}
+	}
+}
+
+func TestMaskAndExtractInlineCodeSpans(t *testing.T) {
+	line := "Check ``foo ` bar Core Target baz ` qux`` and `single` and ```a `` b ` c``` end."
+	masked := MaskInlineCodeSpans(line)
+	if strings.Contains(masked, "Core Target") || strings.Contains(masked, "single") || strings.Contains(masked, "a `` b") {
+		t.Fatalf("inline code leaked into masked output: %q", masked)
+	}
+	if !strings.HasPrefix(masked, "Check ") || !strings.HasSuffix(masked, " end.") {
+		t.Fatalf("prose surrounding inline code damaged: %q", masked)
+	}
+	if len(masked) != len(line) {
+		t.Fatalf("MaskInlineCodeSpans changed byte length: got %d, want %d", len(masked), len(line))
+	}
+
+	gotSpans := ExtractInlineCodeSpans(line)
+	wantSpans := []string{
+		"``foo ` bar Core Target baz ` qux``",
+		"`single`",
+		"```a `` b ` c```",
+	}
+	if !reflect.DeepEqual(gotSpans, wantSpans) {
+		t.Fatalf("ExtractInlineCodeSpans = %#v, want %#v", gotSpans, wantSpans)
+	}
+
+	// Unmatched backtick on line 1 must not pair with line 2.
+	multi := "Unclosed `backtick\nPlain Core Target `prose"
+	if got := MaskInlineCodeSpans(multi); got != multi {
+		t.Fatalf("unmatched backticks across lines should stay untouched, got %q", got)
+	}
+	if got := ExtractInlineCodeSpans(multi); len(got) != 0 {
+		t.Fatalf("expected no spans for unmatched backticks, got %#v", got)
+	}
+}
+
+func TestExtractWikiLinks_ShallowerQuoteFenceDoesNotCloseBlockquoteFence(t *testing.T) {
+	body := strings.Join([]string{
+		// bq1_with_top_trap: top-level ``` must NOT close > ```md
+		"> ```md",
+		"```",
+		"> [[broken-inside-bq1-after-top]] and [[target]]",
+		"> ```",
+		"[[real-after-bq1]]",
+		// bq2_with_bq1_trap: > ``` and ``` must NOT close > > ```md
+		"> > ```md",
+		"> ```",
+		"```",
+		"> > [[broken-inside-bq2-after-bq1]] and [[target]]",
+		"> > ```",
+		"[[real-after-bq2]]",
+		// Tilde equivalents
+		"> ~~~md",
+		"~~~",
+		"> [[broken-tilde-bq1]]",
+		"> ~~~",
+		"[[real-tilde-bq1]]",
+		"> > ~~~md",
+		"> ~~~",
+		"> > [[broken-tilde-bq2]]",
+		"> > ~~~",
+		"[[real-tilde-bq2]]",
+	}, "\n")
+
+	links := ExtractWikiLinks(body)
+	want := []string{"real-after-bq1", "real-after-bq2", "real-tilde-bq1", "real-tilde-bq2"}
+	if len(links) != len(want) {
+		t.Fatalf("expected %d links (%v), got %d: %+v", len(want), want, len(links), links)
+	}
+	for i, w := range want {
+		if links[i].Target != w {
+			t.Errorf("links[%d].Target = %q, want %q", i, links[i].Target, w)
+		}
 	}
 }

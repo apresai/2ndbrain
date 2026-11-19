@@ -8,9 +8,11 @@ import (
 
 // AIConfig holds AI provider configuration from vault config.yaml.
 type AIConfig struct {
-	Provider        string `yaml:"provider" json:"provider"` // ollama, bedrock, openrouter
-	EmbeddingModel  string `yaml:"embedding_model" json:"embedding_model"`
-	GenerationModel string `yaml:"generation_model" json:"generation_model"`
+	Provider           string `yaml:"provider" json:"provider"` // gemini, llama-local, bedrock, ollama, openrouter
+	EmbeddingProvider  string `yaml:"embedding_provider,omitempty" json:"embedding_provider,omitempty"`
+	GenerationProvider string `yaml:"generation_provider,omitempty" json:"generation_provider,omitempty"`
+	EmbeddingModel     string `yaml:"embedding_model" json:"embedding_model"`
+	GenerationModel    string `yaml:"generation_model" json:"generation_model"`
 	// {Embedding,Generation}Plane and {Embedding,Generation}Region name the
 	// ROUTE each slot invokes, explicitly. Nothing is inferred at invoke
 	// time: a bare model id that resolves to more than one route is refused
@@ -25,6 +27,9 @@ type AIConfig struct {
 	GenerationPlane  Plane  `yaml:"generation_plane,omitempty" json:"generation_plane,omitempty"`
 	GenerationRegion string `yaml:"generation_region,omitempty" json:"generation_region,omitempty"`
 	Dimensions       int    `yaml:"dimensions" json:"dimensions"`
+	// TaskPreset specifies the query instruction prefix preset for EmbeddingGemma:
+	// "search", "code", "qa", or "none". Empty resolves to DefaultTaskPreset ("search").
+	TaskPreset string `yaml:"task_preset,omitempty" json:"task_preset,omitempty"`
 	// SimilarityThreshold is the minimum cosine similarity for a vector
 	// search hit to be included in results. Below this, results are
 	// treated as noise and dropped from the RRF merge so they don't pad
@@ -47,11 +52,12 @@ type AIConfig struct {
 	// for the active provider; resolved via ResolveEmbedConcurrency.
 	EmbedConcurrency int `yaml:"embed_concurrency,omitempty" json:"embed_concurrency,omitempty"`
 	// ReasoningEffort is the thinking depth a reasoning-capable generation model
-	// spends on a production request: "none", "low", "medium" or "high". Empty
-	// (the default) sends no reasoning field at all, so the model's own default
-	// applies. Only the bedrock-mantle models read it today; every other
-	// provider ignores it. Resolved via ResolveReasoningEffort.
+	// spends on a production request: "none", "low", "medium", "high", or
+	// "xhigh" (Gemini 4 Hydrogen; capped at "high" on other reasoning models).
+	// Empty (the default) lets the model apply its own default. Read by Gemini
+	// and Bedrock Mantle models. Resolved via ResolveReasoningEffort.
 	ReasoningEffort string           `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	Gemini          GeminiConfig     `yaml:"gemini,omitempty" json:"gemini,omitempty"`
 	Ollama          OllamaConfig     `yaml:"ollama,omitempty" json:"ollama,omitempty"`
 	Bedrock         BedrockConfig    `yaml:"bedrock,omitempty" json:"bedrock,omitempty"`
 	OpenRouter      OpenRouterConfig `yaml:"openrouter,omitempty" json:"openrouter,omitempty"`
@@ -61,12 +67,24 @@ type AIConfig struct {
 	Llama  LlamaConfig  `yaml:"llama,omitempty" json:"llama,omitempty"`
 }
 
+// GeminiConfig holds settings for Google Cloud Vertex AI and Gemini API.
+type GeminiConfig struct {
+	Project     string `yaml:"project,omitempty" json:"project,omitempty"`
+	Location    string `yaml:"location,omitempty" json:"location,omitempty"`
+	APIKeyEnv   string `yaml:"api_key_env,omitempty" json:"api_key_env,omitempty"`
+	UseVertexAI bool   `yaml:"use_vertex_ai,omitempty" json:"use_vertex_ai,omitempty"`
+	AppLabel    string `yaml:"app_label,omitempty" json:"app_label,omitempty"`
+	Disabled    bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+}
+
 // RerankConfig configures the optional Bedrock Cohere rerank stage that reorders
 // hybrid-search candidates by cross-encoder relevance. Default OFF: reranking
 // adds a per-query cloud call and its answer-quality lift is scale-dependent, so
 // it is opt-in. See internal/ai/rerank_bedrock.go and internal/retrieve.
 type RerankConfig struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Provider optionally overrides ai.provider for reranking.
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	// Model is the rerank model id; empty resolves to DefaultRerankModel.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 	// Plane and Region name the rerank slot's route, like the generation and
@@ -106,21 +124,77 @@ func (c *AIConfig) SetRerankModel(id string) {
 	c.Rerank.Plane, c.Rerank.Region = "", ""
 }
 
+// EffectiveEmbeddingProvider returns the provider governing the embedding slot
+// (ai.embedding_provider when set, otherwise ai.provider).
+func (c AIConfig) EffectiveEmbeddingProvider() string {
+	if c.EmbeddingProvider != "" {
+		return c.EmbeddingProvider
+	}
+	return c.Provider
+}
+
+// EffectiveGenerationProvider returns the provider governing the generation slot
+// (ai.generation_provider when set, otherwise ai.provider).
+func (c AIConfig) EffectiveGenerationProvider() string {
+	if c.GenerationProvider != "" {
+		return c.GenerationProvider
+	}
+	return c.Provider
+}
+
+// EffectiveRerankProvider returns the provider governing the rerank slot
+// (ai.rerank.provider when set, otherwise ai.provider).
+func (c AIConfig) EffectiveRerankProvider() string {
+	if c.Rerank.Provider != "" {
+		return c.Rerank.Provider
+	}
+	return c.Provider
+}
+
+// IsMixedProviders reports whether embedding and generation resolve to distinct
+// non-empty providers (e.g., local llama-local embeddings + cloud gemini generation).
+func (c AIConfig) IsMixedProviders() bool {
+	ep, gp := c.EffectiveEmbeddingProvider(), c.EffectiveGenerationProvider()
+	return ep != "" && gp != "" && ep != gp
+}
+
+// ActiveProviders returns the deduplicated list of non-empty providers needed
+// by the active embedding, generation, and (when enabled) rerank slots.
+func (c AIConfig) ActiveProviders() []string {
+	seen := make(map[string]bool, 3)
+	var out []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	add(c.EffectiveEmbeddingProvider())
+	add(c.EffectiveGenerationProvider())
+	if c.RerankEnabled() {
+		add(c.EffectiveRerankProvider())
+	}
+	if len(out) == 0 && c.Provider != "" {
+		out = append(out, c.Provider)
+	}
+	return out
+}
+
 // GenerationRoute, EmbeddingRoute, and RerankRoute return the route each slot
 // invokes. The plane and region come from config verbatim: they are what the
 // user picked, and nothing here infers a missing one. A slot whose plane or
 // region is empty is a config written before routes existed; the invoke path
 // reports that rather than guessing (which is exactly the bug routes fix).
 func (c AIConfig) GenerationRoute() RouteKey {
-	return RouteKey{Provider: c.Provider, ID: c.GenerationModel, Plane: c.GenerationPlane, Region: c.GenerationRegion}
+	return RouteKey{Provider: c.EffectiveGenerationProvider(), ID: c.GenerationModel, Plane: c.GenerationPlane, Region: c.GenerationRegion}
 }
 
 func (c AIConfig) EmbeddingRoute() RouteKey {
-	return RouteKey{Provider: c.Provider, ID: c.EmbeddingModel, Plane: c.EmbeddingPlane, Region: c.EmbeddingRegion}
+	return RouteKey{Provider: c.EffectiveEmbeddingProvider(), ID: c.EmbeddingModel, Plane: c.EmbeddingPlane, Region: c.EmbeddingRegion}
 }
 
 func (c AIConfig) RerankRoute() RouteKey {
-	return RouteKey{Provider: c.Provider, ID: c.ResolveRerankModel(), Plane: c.Rerank.Plane, Region: c.Rerank.Region}
+	return RouteKey{Provider: c.EffectiveRerankProvider(), ID: c.ResolveRerankModel(), Plane: c.Rerank.Plane, Region: c.Rerank.Region}
 }
 
 // RerankEnabled reports whether the rerank stage is on.
@@ -175,7 +249,7 @@ func (c AIConfig) ResolveEmbedConcurrency(provider string) int {
 // ReasoningEfforts is the accepted set of ai.reasoning_effort values, in
 // increasing depth. Empty is also accepted by config set and means "leave it
 // to the model", which is why it is not a member here.
-var ReasoningEfforts = []string{"none", "low", "medium", "high"}
+var ReasoningEfforts = []string{"none", "low", "medium", "high", "xhigh"}
 
 // IsValidReasoningEffort reports whether v names a reasoning depth, ignoring
 // surrounding space and case. Empty is deliberately NOT valid: callers handle
@@ -201,6 +275,39 @@ func (c AIConfig) ResolveReasoningEffort() string {
 		return v
 	}
 	return ""
+}
+
+// DefaultTaskPreset is the default query instruction preset for EmbeddingGemma.
+const DefaultTaskPreset = "search"
+
+// TaskPresets lists the canonical query instruction presets.
+var TaskPresets = []string{"search", "code", "qa", "none"}
+
+// IsValidTaskPreset reports whether v names a valid task preset, ignoring case
+// and surrounding whitespace. Accepts "search", "code", "qa", "none", and alias "symmetric".
+func IsValidTaskPreset(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "search", "code", "qa", "none", "symmetric":
+		return true
+	default:
+		return false
+	}
+}
+
+// ResolveTaskPreset returns the normalized task preset for query instruction formatting.
+// If unset or unrecognized, returns DefaultTaskPreset ("search"). Alias "symmetric" maps to "none".
+func (c AIConfig) ResolveTaskPreset() string {
+	v := strings.ToLower(strings.TrimSpace(c.TaskPreset))
+	switch v {
+	case "code", "qa", "none":
+		return v
+	case "symmetric":
+		return "none"
+	case "search":
+		return "search"
+	default:
+		return DefaultTaskPreset
+	}
 }
 
 // RAG context (parent-document) budget defaults — generous within Claude Haiku
@@ -295,6 +402,8 @@ type LlamaConfig struct {
 // disabled in cfg. Unknown provider names return false (enabled by default).
 func (cfg AIConfig) ProviderDisabled(name string) bool {
 	switch name {
+	case "gemini":
+		return cfg.Gemini.Disabled
 	case "bedrock":
 		return cfg.Bedrock.Disabled
 	case "openrouter":
@@ -311,6 +420,8 @@ func (cfg AIConfig) ProviderDisabled(name string) bool {
 // provider names are a no-op. Pointer receiver: it mutates cfg.
 func (cfg *AIConfig) SetProviderDisabled(name string, disabled bool) {
 	switch name {
+	case "gemini":
+		cfg.Gemini.Disabled = disabled
 	case "bedrock":
 		cfg.Bedrock.Disabled = disabled
 	case "openrouter":
@@ -332,19 +443,22 @@ const DefaultSimilarityThreshold = 0.20
 
 // DefaultAIConfig returns sensible defaults. SimilarityThreshold is left at
 // zero so ResolveSimilarityThresholdFull falls through to the active
-// embedding model's RecommendedSimilarityThreshold (e.g., Nova-2 → 0.25)
+// embedding model's RecommendedSimilarityThreshold (e.g., gemini-embedding-2 → 0.60)
 // instead of permanently shadowing it with the conservative global default.
 func DefaultAIConfig() AIConfig {
 	return AIConfig{
-		Provider:        "bedrock",
-		EmbeddingModel:  "amazon.nova-2-multimodal-embeddings-v1:0",
-		GenerationModel: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-		Dimensions:      1024,
-		// Ollama (local) and OpenRouter are opt-in: disabled by default so a
-		// fresh vault presents only the Bedrock default in selection UIs. The
-		// setup wizard / AI Hub clears Disabled when the user enables them.
-		// (Disabled only hides a provider's models from catalog dropdowns; it
-		// does not prevent an explicitly-chosen active provider from running.)
+		Provider:        "gemini",
+		EmbeddingModel:  "gemini-embedding-2",
+		GenerationModel: "gemini-4-hydrogen",
+		Dimensions:      768,
+		Gemini: GeminiConfig{
+			Project:     "",
+			Location:    "us-central1",
+			APIKeyEnv:   "GEMINI_API_KEY",
+			UseVertexAI: false,
+			AppLabel:    "2nb",
+			Disabled:    false,
+		},
 		Ollama: OllamaConfig{
 			Endpoint: "http://localhost:11434",
 			Disabled: true,
@@ -389,12 +503,13 @@ func (c AIConfig) ResolveSimilarityThresholdFull(vaultRoot string) (float64, Res
 	if c.SimilarityThreshold > 0 {
 		return c.SimilarityThreshold, ThresholdSourceVaultConfig
 	}
+	ep := c.EffectiveEmbeddingProvider()
 	if vaultRoot != "" {
-		if t := userCatalogSimilarityThreshold(vaultRoot, c.Provider, c.EmbeddingModel); t > 0 {
+		if t := userCatalogSimilarityThreshold(vaultRoot, ep, c.EmbeddingModel); t > 0 {
 			return t, ThresholdSourceUserCalibration
 		}
 	}
-	if t := RecommendedSimilarityThresholdFor(c.Provider, c.EmbeddingModel); t > 0 {
+	if t := RecommendedSimilarityThresholdFor(ep, c.EmbeddingModel); t > 0 {
 		return t, ThresholdSourceModel
 	}
 	return DefaultSimilarityThreshold, ThresholdSourceDefault
@@ -500,26 +615,32 @@ func catalogProviderFor(vaultRoot, modelType, modelID string) (string, bool) {
 
 // Validate reports internal-consistency problems with the active AI selection
 // that would silently break semantic search or generation. It is advisory:
-// callers (config set, and a future config doctor / ai status) surface the
-// issues, but the config is still saved — a model the catalog doesn't know
-// (a user's own discovered model) is legitimate and must not be blocked.
+// callers (config set, and config doctor / ai status) surface the issues, but
+// the config is still saved — a model the catalog doesn't know (a user's own
+// discovered model) is legitimate and must not be blocked.
 //
-// Today it catches the orphaned-slot bug: 2nb resolves both the embedder and
-// the generator from the single ai.provider, so an embedding or generation
-// model the catalog registers under a DIFFERENT provider can never be served,
-// and search/generation silently dies. Returns nil when consistent. Pass
-// vaultRoot="" to validate against the builtin catalog only.
+// Each slot is checked against its effective provider (ai.<slot>_provider when
+// set, otherwise ai.provider), supporting hybrid combinations such as local
+// embeddings with cloud generation while catching orphaned models whose catalog
+// provider differs from the slot's configured provider. Returns nil when
+// consistent. Pass vaultRoot="" to validate against the builtin catalog only.
 func (c AIConfig) Validate(vaultRoot string) []string {
 	var issues []string
-	check := func(slot, modelID string) {
+	check := func(slot, activeProvider, override, modelID string) {
 		p, ok := catalogProviderFor(vaultRoot, slot, modelID)
-		if ok && p != c.Provider {
-			issues = append(issues, fmt.Sprintf(
-				"%s model %q belongs to provider %q but ai.provider is %q, which cannot serve it; switch the %s model to a %q model, or set ai.provider to %q.",
-				slot, modelID, p, c.Provider, slot, c.Provider, p))
+		if ok && p != activeProvider {
+			if override != "" {
+				issues = append(issues, fmt.Sprintf(
+					"%s model %q belongs to provider %q but ai.%s_provider is %q, which cannot serve it; switch the %s model to a %q model, or set ai.%s_provider to %q.",
+					slot, modelID, p, slot, activeProvider, slot, activeProvider, slot, p))
+			} else {
+				issues = append(issues, fmt.Sprintf(
+					"%s model %q belongs to provider %q but ai.provider is %q, which cannot serve it; switch the %s model to a %q model, or set ai.%s_provider (or ai.provider) to %q.",
+					slot, modelID, p, activeProvider, slot, activeProvider, slot, p))
+			}
 		}
 	}
-	check("embedding", c.EmbeddingModel)
-	check("generation", c.GenerationModel)
+	check("embedding", c.EffectiveEmbeddingProvider(), c.EmbeddingProvider, c.EmbeddingModel)
+	check("generation", c.EffectiveGenerationProvider(), c.GenerationProvider, c.GenerationModel)
 	return issues
 }

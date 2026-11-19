@@ -122,7 +122,7 @@ func runModelsCalibrate(cmd *cobra.Command, args []string) error {
 	}
 
 	result := calibrationResult{
-		Provider:        cfg.Provider,
+		Provider:        cfg.EffectiveEmbeddingProvider(),
 		Model:           cfg.EmbeddingModel,
 		Dimensions:      len(vecs[0]),
 		DocCount:        len(docIDs),
@@ -172,7 +172,7 @@ func runModelsCalibrate(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := saveCalibration(scope, vaultRoot, cfg.Provider, cfg.EmbeddingModel, recommended, cfg); err != nil {
+		if err := saveCalibration(scope, vaultRoot, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel, recommended, cfg); err != nil {
 			return fmt.Errorf("save calibration: %w", err)
 		}
 		path, _ := ai.CatalogPathForScope(scope, vaultRoot)

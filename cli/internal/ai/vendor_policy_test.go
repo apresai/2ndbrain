@@ -194,7 +194,10 @@ func TestApplyVendorPolicy_Precedence(t *testing.T) {
 }
 
 func TestApplyVendorPolicy_ActiveGuard(t *testing.T) {
-	cfg := DefaultAIConfig() // bedrock: haiku generation + nova embed, both amazon/anthropic
+	cfg := DefaultAIConfig()
+	cfg.Provider = "bedrock"
+	cfg.GenerationModel = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+	cfg.EmbeddingModel = "amazon.nova-2-multimodal-embeddings-v1:0"
 	policies := []ScopedVendorPolicy{{
 		VendorPolicy: VendorPolicy{Provider: "bedrock", Mode: VendorPolicyModeEnableOnly, Vendors: []string{"cohere"}},
 		Scope:        ScopeVault,
@@ -296,7 +299,10 @@ func TestBuildModelList_VendorPolicy_EndToEnd(t *testing.T) {
 		Provider: "bedrock", Mode: VendorPolicyModeEnableOnly, Vendors: []string{"anthropic"},
 	})
 
-	cfg := DefaultAIConfig() // active: nova embed (amazon) + haiku (anthropic)
+	cfg := DefaultAIConfig()
+	cfg.Provider = "bedrock"
+	cfg.GenerationModel = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+	cfg.EmbeddingModel = "amazon.nova-2-multimodal-embeddings-v1:0"
 	result, err := BuildModelList(context.Background(), MergedListOptions{Config: cfg, VaultRoot: vaultRoot})
 	if err != nil {
 		t.Fatalf("BuildModelList: %v", err)

@@ -1,10 +1,33 @@
 # AI Providers Reference
 
-The canonical reference for 2nb's AI provider layer: the default Bedrock setup, authentication and token precedence, the Bedrock mantle plane, the opt-in providers, embedding request shapes, live pricing, invoke strategies, the classic-plane compatibility gate, the retrieval-quality probe, the cost estimator, and the builtin model catalog. CLAUDE.md points here; this file is the single home for these facts.
+The canonical reference for 2nb's AI provider layer: the default Google Gemini setup, open-source BYOK / BYOP architecture, Bedrock setup, authentication and token precedence, the Bedrock mantle plane, the opt-in providers, embedding request shapes, live pricing, invoke strategies, the classic-plane compatibility gate, the retrieval-quality probe, the cost estimator, and the builtin model catalog. CLAUDE.md points here; this file is the single home for these facts.
 
 ## Defaults
 
-The default provider is **AWS Bedrock** (via your AWS credentials): generation is Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`), embeddings are Amazon Nova-2 (`amazon.nova-2-multimodal-embeddings-v1:0`, 1024 dims). Defaults live in `DefaultAIConfig()` (`cli/internal/ai/config.go`).
+The default provider is **Google Gemini**: generation is `gemini-4-hydrogen`, embeddings are `gemini-embedding-2` (768 dims, 8K context, recommended similarity threshold `0.60`). Defaults live in `DefaultAIConfig()` (`cli/internal/ai/config.go`).
+
+## Google Gemini Setup (Native Default)
+
+2nb connects natively to Google Gemini using the unified `google.golang.org/genai` Go SDK.
+
+### Open-Source BYOK / BYOP Architecture
+2nb is an open-source tool. Users supply their own credentials — 2nb never hardcodes or relies on any maintainer project, personal account, or secrets:
+
+1. **Mode 1: Gemini Developer API Key (BYOK)**:
+   - For fast developer workflows without GCP project setup.
+   - Configure with `export GEMINI_API_KEY="AIza..."` or store in Keychain via `2nb config set-key gemini` (or GUI Settings).
+   - *Policy*: `2nb` strictly ignores and rejects `GOOGLE_API_KEY` to avoid SDK precedence conflicts. Always use `GEMINI_API_KEY` or `2nb config set-key gemini`.
+2. **Mode 2: Vertex AI on User's GCP Project (BYOP)**:
+   - For enterprise and GCP-first setups.
+   - Configure with user's own GCP project: `2nb config set ai.gemini.project <your-gcp-project-id>` (or `export GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>`).
+   - Authenticate with Application Default Credentials: `gcloud auth application-default login` (or `GOOGLE_APPLICATION_CREDENTIALS`).
+   - Region defaults to `us-central1`, configurable via `2nb config set ai.gemini.location <location>`.
+
+### Models and Asymmetry
+- **Generation (Gemini 4)**: `gemini-4-hydrogen` (default, 1M unified context, Free Tier + Paid Tier, `low`/`medium`/`high`/`xhigh` thinking levels). Also supports `gemini-4-argon` and `gemini-4-carbon`. On Gemini 4 models, sampler parameters (`Temperature`) are omitted and `MaxOutputTokens` is floored at `32,768` so default-on reasoning cannot starve answers. *(Legacy `gemini-2.5-*` and `gemini-3.x` generation models are retired/superseded.)*
+- **Embeddings**: `gemini-embedding-2` (768 dimensions default, 8,192 input token context, multimodal + text, supported Matryoshka dimensions: 768, 1024, 1536, 3072 with L2 unit normalization). Also supports `gemini-embedding-001` (2,048 context). *(Google's active GA embedding models use `gemini-embedding-*` IDs.)*
+- **Asymmetric Retrieval**: Documents are indexed with `TaskType: RETRIEVAL_DOCUMENT` and document title context. Queries are embedded with `TaskType: RETRIEVAL_QUERY`. Recommended similarity threshold is `0.60`.
+- **Sub-batching and Rate-Limit Retries**: `GeminiProvider.Embed` automatically partitions large multi-section documents into ordered sub-batches of at most `100` chunks and `48 KB` UTF-8 bytes per `EmbedContent` call so single-note indexing never hits Gemini API's 100-request cap or Vertex AI's 20,000-token batch ceiling. Both embed and generation calls retry `429 RESOURCE_EXHAUSTED` and transient `500`/`503` faults up to `5` attempts, honoring Google `RetryInfo` (`retryDelay` / `Please retry in Xs`) capped at `20s` per wait, while logging via `slog.Info` and recording into `ai.RetryCounter`.
 
 ## Bedrock authentication
 
@@ -162,11 +185,11 @@ Missing credentials is the case that ties the two together. With no credentials 
 
 **Ollama (local) and OpenRouter are opt-in**: both ship `disabled: true` in a fresh vault's `config.yaml`, so selection UIs show only Bedrock until the user enables them. `2nb ai setup` (a Bedrock-first wizard that detects AWS creds, confirms region, verifies models, and reminds you to enable Bedrock model access in the AWS console), the macOS AI Hub, or activating the provider with `2nb config set ai.provider <name>` clears the `disabled` flag. `Disabled` only hides a provider's models from dropdowns; an explicitly-chosen active provider still runs.
 
-## llama-local (bundled Gemma, fully offline)
+## llama-local (supervised Gemma, fully offline)
 
-llama-local is a fourth, opt-in provider (`disabled: true` on a fresh vault): a bundled llama.cpp `llama-server` runs Gemma weights locally with no API key. The GGUF weights are downloaded on demand (never bundled), sha256-verified into `~/Library/Caches/2nb/models/` from ungated Hugging Face repos: EmbeddingGemma-300m (embed), Gemma 4 E2B/E4B (generation), bge-reranker-v2-m3 (rerank). Fetch them via `2nb ai engine pull <id>`, the `2nb ai setup` llama-local branch, or the macOS AI Hub's "Download local models" button. `EnsureModel` fails closed on an empty or mismatched sha256, and a 60s idle watchdog bounds a stalled transfer. Model pins and licenses (Gemma Terms of Use, not Apache) live in `cli/internal/llama/models.go`; attribution is in `THIRD_PARTY_NOTICES.md`.
+llama-local is an opt-in offline provider (`disabled: true` on a fresh vault): the bundled arm64 Metal `llama.cpp` runtime inside `SecondBrain.app/Contents/Resources/llama/` (pinned `b12428`, inside-out signed) runs Gemma weights locally on demand with no API key or Homebrew dependency. The GGUF weights are downloaded on demand (never bundled), sha256-verified into `~/Library/Caches/2nb/models/` from ungated Hugging Face repos: `embeddinggemma-2` (default embedder, Q8_0, ~310 MB, Gemma 4 encoder, Apache-2.0, `0.60` recommended similarity threshold; legacy `embeddinggemma-300m` ~334 MB with `0.35` threshold remains supported for previously indexed vaults), `gemma4-e2b` (generation, Q4_K_M, ~3.11 GB, default local generator), `gemma4-e4b` (optional Q4_K_M, ~4.98 GB), and `bge-reranker-v2-m3` (rerank, Q8_0, ~636 MB, Apache-2.0). Fetch them via `2nb ai engine pull <id>`, the `2nb ai setup` llama-local branch, or Settings > Gemini > `Local Gemma (On-Device)` in the macOS app. `EnsureModel` fails closed on an empty or mismatched sha256, and a 60s idle watchdog bounds a stalled transfer. Model pins and licenses (Apache-2.0 for `embeddinggemma-2` and `bge-reranker-v2-m3`; Gemma Terms of Use for `gemma4-*` and legacy `embeddinggemma-300m`) live in `cli/internal/llama/models.go`; attribution is in `THIRD_PARTY_NOTICES.md`.
 
-**llama-local is NOT user-ready and is hidden in the macOS GUI.** Only model weights are provisioned; the `llama-server` engine binary is neither bundled in the app nor downloaded, so `LocateEngine` finds nothing and embeddings/generation fail with "engine not running". A CLI user can still run it by putting `llama-server` on PATH (`brew install llama.cpp`) then `2nb ai engine install`. Every GUI surface is gated behind `AIHubView.localEngineFeatureEnabled` (currently `false`); do not surface llama-local in the GUI until the engine ships. Full architecture, build status, and the path forward: [llama-local-engine.md](llama-local-engine.md).
+`LocateEngine` auto-discovers `llama-server` across `ai.llama.engine_path`, `TWONB_ENGINE_PATH`, executable-relative `llama/llama-server` / sibling, `$APP`/`~/Applications`/`/Applications` `SecondBrain.app/Contents/Resources/llama/`, `EngineCacheDir()`, and `PATH` as a CLI fallback. Providers start role servers invisibly on demand via `EnsureEndpointFor` (per-role `flock`, detached `2nb ai engine serve --idle-timeout 10m`, auto-stop after 10 minutes idle); `Settings > AI & Models` lets you choose `Local Gemma (On-Device)` or `Google Gemini (Cloud)` independently for **Generation** and **Embeddings** (e.g., on-device `embeddinggemma-2` via `ai.embedding_provider=llama-local` paired with cloud `gemini-4-hydrogen` via `ai.generation_provider=gemini`), exposes EmbeddingGemma Matryoshka dimensions (`256d`/`512d`/`768d`, plus `128d` via CLI) with automatic client-side L2 re-normalization and task instruction presets (`ai.task_preset`: `search`, `code`, `qa`, `none`), and triggers vault re-embedding without surfacing server/PID/port/launchd UI. Architecture details: [llama-local-engine.md](llama-local-engine.md) and [embedding-gemma-tuning.md](embedding-gemma-tuning.md).
 
 ## Bedrock embedding (Marengo)
 
@@ -217,6 +240,8 @@ Per-probe token assumptions:
 | `retrieval` | 0 | 0 | 0 | zero-API |
 
 The specs quote the shared constants in `cost_estimate.go` so estimates cannot drift from what a probe may bill. Every generation budget follows the project rule: **budgets bound runaway cost, they must never fail a working model**. Classic always-reasoning models bill roughly 180 reasoning tokens before any answer text, with no off switch; `TestGenerationBudgetsPinned` holds the floors. `KnownPricing` distinguishes known-free (`Local=true`, or an explicit $0 with `PriceSource` set) from unknown.
+
+For runtime metering in `.2ndbrain/metrics.db` (`ai_usage_ledger` schema v4), CLI and MCP call sites price each slot locally via `ai.LookupLocalModelPricing` (BuiltinCatalog + UserCatalog, zero network I/O) and `ai.EstimateUsageCost`: cloud providers (`gemini`, `bedrock`, `openrouter`) accrue USD based on actual `UsageGenerator` counts or `chars/4` estimates, while on-device providers (`llama-local`, `ollama`) record `$0.00` (`known_pricing=true`). Re-embed time and cost estimates combine `VaultEmbedCorpusSizing()` from `index.db` (`embeddable_docs`, `total_chunks`, `total_chars`) with `HistoricalEmbedThroughput` (falling back to provider/concurrency baselines) and track live remaining time using work-weighted (`0.5 * docShare + 0.5 * charShare`) progress in `EmbedETATracker`.
 
 ## Builtin catalog
 

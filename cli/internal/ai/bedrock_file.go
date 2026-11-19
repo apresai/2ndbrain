@@ -437,9 +437,10 @@ func bedrockTokenDivergence(getenv func(string) string, fileToken func() string,
 // bedrockSkipKeychainEnv lets tests neutralize the login Keychain without
 // deleting the developer's real item. Production never sets this.
 const bedrockSkipKeychainEnv = "2NB_BEDROCK_SKIP_KEYCHAIN"
+const skipKeychainEnv = "2NB_SKIP_KEYCHAIN"
 
 func keychainLookupEnabled() bool {
-	return runtime.GOOS == "darwin" && os.Getenv(bedrockSkipKeychainEnv) == ""
+	return runtime.GOOS == "darwin" && os.Getenv(bedrockSkipKeychainEnv) == "" && os.Getenv(skipKeychainEnv) == ""
 }
 
 func readBedrockFileToken() string {

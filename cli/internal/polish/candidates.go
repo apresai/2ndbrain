@@ -9,6 +9,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
 	"github.com/apresai/2ndbrain/internal/search"
+	"github.com/apresai/2ndbrain/internal/store"
 	"github.com/apresai/2ndbrain/internal/vault"
 )
 
@@ -80,9 +81,19 @@ func GatherCandidates(ctx context.Context, v *vault.Vault, embedder ai.Embedding
 	}
 
 	// 2. Substring matches, titles/aliases that appear verbatim in the prose.
-	addSubstringMatches(v, in, linkedPaths, byPath)
+	// Use live filesystem docs/aliases when available so unindexed notes are
+	// discovered and deleted DB ghosts are excluded.
+	var liveDocs []store.DocInfo
+	var liveAliases map[string][]string
+	if v.Root != "" {
+		if d, a, lerr := vault.CollectLiveDocs(v.Root); lerr == nil {
+			liveDocs = d
+			liveAliases = a
+		}
+	}
+	addSubstringMatches(v, in, linkedPaths, byPath, liveDocs, liveAliases)
 
-	out := finalizeCandidates(v, byPath, max)
+	out := finalizeCandidates(v, byPath, max, liveDocs, liveAliases)
 	return out, in.Warning, nil
 }
 
@@ -116,17 +127,32 @@ func linkedTargetPaths(v *vault.Vault, sourceID string) map[string]bool {
 // occurrences of every vault note's title and alias, adding a candidate per
 // matched path. Code is masked so a title mentioned only inside a code sample is
 // not matched. Semantic candidates already in byPath are not overwritten.
-func addSubstringMatches(v *vault.Vault, in CandidateInput, linkedPaths map[string]bool, byPath map[string]LinkCandidate) {
-	titles, err := v.DB.AllDocTitles()
-	if err != nil {
-		slog.Warn("polish: could not load doc titles for substring link matching", "err", err)
-		return
+func addSubstringMatches(v *vault.Vault, in CandidateInput, linkedPaths map[string]bool, byPath map[string]LinkCandidate, liveDocs []store.DocInfo, liveAliases map[string][]string) {
+	var titles []store.DocTitle
+	var aliases []store.AliasRef
+	if len(liveDocs) > 0 {
+		titles = make([]store.DocTitle, 0, len(liveDocs))
+		for _, d := range liveDocs {
+			titles = append(titles, store.DocTitle{Path: d.Path, Title: d.Title})
+		}
+		for alias, paths := range liveAliases {
+			for _, p := range paths {
+				aliases = append(aliases, store.AliasRef{Alias: alias, Path: p})
+			}
+		}
+	} else if v.DB != nil {
+		var err error
+		titles, err = v.DB.AllDocTitles()
+		if err != nil {
+			slog.Warn("polish: could not load doc titles for substring link matching", "err", err)
+			return
+		}
+		aliases, _ = v.DB.AllAliases()
 	}
 	titleByPath := make(map[string]string, len(titles))
 	for _, t := range titles {
 		titleByPath[t.Path] = t.Title
 	}
-	aliases, _ := v.DB.AllAliases()
 
 	// Match titles against prose only: fenced blocks and inline code are removed
 	// so a note title mentioned inside a code sample is never linked.
@@ -158,11 +184,24 @@ func addSubstringMatches(v *vault.Vault, in CandidateInput, linkedPaths map[stri
 // finalizeCandidates attaches aliases, drops titles that do not resolve
 // unambiguously back to their own path, sorts (semantic-by-score first, then
 // substring alphabetically), and caps the list.
-func finalizeCandidates(v *vault.Vault, byPath map[string]LinkCandidate, max int) []LinkCandidate {
+func finalizeCandidates(v *vault.Vault, byPath map[string]LinkCandidate, max int, liveDocs []store.DocInfo, liveAliases map[string][]string) []LinkCandidate {
 	aliasByPath := make(map[string][]string)
-	if aliases, err := v.DB.AllAliases(); err == nil {
-		for _, a := range aliases {
-			aliasByPath[a.Path] = append(aliasByPath[a.Path], a.Alias)
+	var liveResolver *store.Resolver
+	if len(liveDocs) > 0 {
+		liveResolver = store.NewResolver(liveDocs, liveAliases)
+		for alias, paths := range liveAliases {
+			for _, p := range paths {
+				aliasByPath[p] = append(aliasByPath[p], alias)
+			}
+		}
+		for p := range aliasByPath {
+			sort.Strings(aliasByPath[p])
+		}
+	} else if v.DB != nil {
+		if aliases, err := v.DB.AllAliases(); err == nil {
+			for _, a := range aliases {
+				aliasByPath[a.Path] = append(aliasByPath[a.Path], a.Alias)
+			}
 		}
 	}
 
@@ -170,7 +209,14 @@ func finalizeCandidates(v *vault.Vault, byPath map[string]LinkCandidate, max int
 	for path, c := range byPath {
 		// Ambiguity guard: only keep a candidate whose title resolves to exactly
 		// this path, so [[Title]] in the polished note cannot mis-resolve.
-		if resolved, err := v.DB.ResolveTarget(c.Title); err != nil || resolved != path {
+		var resolved string
+		var rerr error
+		if liveResolver != nil {
+			resolved, rerr = liveResolver.Resolve(c.Title)
+		} else if v.DB != nil {
+			resolved, rerr = v.DB.ResolveTarget(c.Title)
+		}
+		if rerr != nil || resolved != path {
 			continue
 		}
 		c.Aliases = aliasByPath[path]
@@ -199,18 +245,14 @@ func finalizeCandidates(v *vault.Vault, byPath map[string]LinkCandidate, max int
 // that only appears inside a code sample.
 func proseOnly(body string) string {
 	var b strings.Builder
-	inFence := false
+	var fence document.CodeFenceTracker
 	for _, line := range strings.Split(body, "\n") {
-		if isFenceLine(strings.TrimRight(line, " \t")) {
-			inFence = !inFence
+		isDelim, inCode := fence.Step(line)
+		if isDelim || inCode {
 			b.WriteByte('\n')
 			continue
 		}
-		if inFence {
-			b.WriteByte('\n')
-			continue
-		}
-		b.WriteString(inlineCodeRe.ReplaceAllString(line, " "))
+		b.WriteString(document.MaskInlineCodeSpans(line))
 		b.WriteByte('\n')
 	}
 	return b.String()

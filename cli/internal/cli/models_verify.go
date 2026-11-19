@@ -438,8 +438,12 @@ func verifyCandidates(ctx context.Context, cfg ai.AIConfig, vaultRoot string, ar
 			credOK[s.Name] = s.Available
 		}
 		// llama-local isn't covered by the wizard's provider status; include
-		// it only when it is the active provider.
-		credOK["llama-local"] = cfg.Provider == "llama-local"
+		// it when it governs any active slot.
+		for _, ap := range cfg.ActiveProviders() {
+			if ap == "llama-local" {
+				credOK["llama-local"] = true
+			}
+		}
 	}
 
 	var out []ai.ModelInfo

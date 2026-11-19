@@ -27,6 +27,10 @@ type EmbedStats struct {
 	// used to fail an entire force-reembed and roll back every good embedding
 	// because one note in the vault had bad frontmatter or a permission bit.
 	Failed int
+	// FailedDocs records each document whose embedding call failed, in
+	// deterministic work-set order, so callers can surface the concrete path and
+	// error reason instead of an opaque failed count.
+	FailedDocs []UnparseableDoc
 	// Unparseable lists notes whose CONTENT would not parse. Nothing was sent to
 	// the provider for them and nothing about their stored embedding changed.
 	Unparseable []UnparseableDoc
@@ -41,15 +45,28 @@ type EmbedStats struct {
 	// nothing to embed — and providers like Amazon Nova-2 reject empty input.
 	Skipped int
 	// DurationMs is the embed-phase wall time, TotalChars the total body chars
-	// embedded, and Model the embedding model used — the throughput inputs for
-	// the metrics observatory. Zero when nothing needed embedding.
-	DurationMs int64
-	TotalChars int
-	Model      string
+	// embedded, ChunksEmbedded total chunks embedded, and Model the embedding
+	// model used — the throughput inputs for the metrics observatory.
+	DurationMs     int64
+	TotalChars     int
+	ChunksEmbedded int
+	Model          string
 	// Cancelled is true when the caller's context was cancelled mid-pass (e.g.
 	// an MCP client timeout/disconnect). The pass returns the partial results it
 	// completed rather than an error, so callers can report "embedded N of M".
 	Cancelled bool
+}
+
+// EmbedPlan describes the pre-flight scope of an embedding pass computed from
+// the index's chunk sizes before workers start.
+type EmbedPlan struct {
+	TotalDocs      int
+	EmbeddableDocs int
+	TotalChunks    int
+	TotalChars     int
+	Concurrency    int
+	Model          string
+	Provider       string
 }
 
 // EmbedEventKind classifies a per-document outcome reported to EmbedOpts.OnEvent.
@@ -73,15 +90,30 @@ const (
 // EmbedEvent is a single per-document progress event. Callers (the CLI) use it
 // to render live stderr progress; the MCP path leaves OnEvent nil (silent).
 type EmbedEvent struct {
-	Path  string
-	Kind  EmbedEventKind
-	Err   error
-	Done  int // monotonic embedded count, set for EmbedEmbedded
-	Total int // total work set size, set for EmbedEmbedded
+	Path            string
+	Kind            EmbedEventKind
+	Err             error
+	Done            int // monotonic embedded count, set for EmbedEmbedded
+	Total           int // total work set size, set for EmbedEmbedded
+	Processed       int
+	EmbeddableTotal int
+	DoneChunks      int
+	TotalChunks     int
+	DoneChars       int
+	TotalChars      int
+	DocsPerSec      float64
+	ChunksPerSec    float64
+	ETASeconds      float64
+	ElapsedMs       int64
 }
 
 // EmbedOpts carries optional progress callbacks. Both are nil for a silent run.
 type EmbedOpts struct {
+	// InitialEstimateSeconds optionally seeds the work-weighted ETA from
+	// historical throughput before live samples arrive.
+	InitialEstimateSeconds float64
+	// OnPlan fires once before the worker pool launches with index-based sizing.
+	OnPlan func(EmbedPlan)
 	// OnStart fires once before the worker pool launches, with the work-set size
 	// and the resolved concurrency. Not called when nothing needs embedding.
 	OnStart func(count, concurrency int)
@@ -116,6 +148,7 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 	stats := EmbedStats{
 		Attempted:   len(docs),
 		Model:       model,
+		FailedDocs:  []UnparseableDoc{},
 		Unparseable: []UnparseableDoc{},
 		Unreadable:  []UnparseableDoc{},
 	}
@@ -125,20 +158,74 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 	}
 
 	embedStart := time.Now()
-	concurrency := cfg.ResolveEmbedConcurrency(cfg.Provider)
-	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", cfg.Provider, "concurrency", concurrency)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	concurrency := cfg.ResolveEmbedConcurrency(embedProvider)
+	slog.Info("embedding documents", "count", len(docs), "model", model, "provider", embedProvider, "concurrency", concurrency)
+
+	sizingMap, _ := v.DB.AllDocEmbedSizing()
+	var embeddableDocs, totalChunks, totalCharsPlanned int
+	for _, d := range docs {
+		if s, ok := sizingMap[d.ID]; ok && s.Chunks > 0 {
+			embeddableDocs++
+			totalChunks += s.Chunks
+			totalCharsPlanned += s.Chars
+		}
+	}
+	if opts.OnPlan != nil {
+		opts.OnPlan(EmbedPlan{
+			TotalDocs:      len(docs),
+			EmbeddableDocs: embeddableDocs,
+			TotalChunks:    totalChunks,
+			TotalChars:     totalCharsPlanned,
+			Concurrency:    concurrency,
+			Model:          model,
+			Provider:       embedProvider,
+		})
+	}
 	if opts.OnStart != nil {
 		opts.OnStart(len(docs), concurrency)
 	}
 
+	initialEst := opts.InitialEstimateSeconds
+	if initialEst <= 0 && embeddableDocs > 0 {
+		initialEst, _ = EstimateInitialEmbedSeconds(embeddableDocs, totalCharsPlanned, embedProvider, concurrency, 0, 0)
+	}
+	tracker := NewEmbedETATracker(sizingMap, embeddableDocs, totalChunks, totalCharsPlanned, initialEst)
+	var eventMu sync.Mutex
+
 	type docResult struct {
-		embedded, failed, skipped, chars int
-		unparseable                      *UnparseableDoc
-		unreadable                       *UnparseableDoc
+		embedded, failed, skipped, chars, chunks int
+		failedDoc                                *UnparseableDoc
+		unparseable                              *UnparseableDoc
+		unreadable                               *UnparseableDoc
 	}
 	results := make([]docResult, len(docs))
 	var completed atomic.Int64
 	var cancelled atomic.Bool
+	emitTracked := func(docID string, ev EmbedEvent) {
+		if opts.OnEvent == nil {
+			return
+		}
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		if ev.Kind == EmbedEmbedded {
+			ev.Done = int(completed.Add(1))
+			ev.Total = len(docs)
+		}
+		snap := tracker.Observe(docID, time.Since(embedStart).Milliseconds())
+		ev.Processed = snap.Processed
+		ev.EmbeddableTotal = snap.EmbeddableTotal
+		ev.DoneChunks = snap.DoneChunks
+		ev.TotalChunks = snap.TotalChunks
+		ev.DoneChars = snap.DoneChars
+		ev.TotalChars = snap.TotalChars
+		ev.DocsPerSec = snap.DocsPerSec
+		ev.ChunksPerSec = snap.ChunksPerSec
+		ev.ETASeconds = snap.ETASeconds
+		ev.ElapsedMs = snap.ElapsedMs
+		opts.OnEvent(ev)
+	}
+
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
@@ -174,7 +261,7 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 					// named instead, and the caller decides the exit code.
 					results[i].unreadable = &UnparseableDoc{Path: doc.Path, Err: err.Error()}
 					slog.Warn("embedding skipped: could not read note", "path", doc.Path, "err", err)
-					emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedReadFailed, Err: err})
+					emitTracked(doc.ID, EmbedEvent{Path: doc.Path, Kind: EmbedReadFailed, Err: err})
 					return
 				}
 				// Not a failure of the embed call: nothing was sent. Report it
@@ -182,7 +269,7 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 				// as complete.
 				results[i].unparseable = &UnparseableDoc{Path: doc.Path, Err: err.Error()}
 				slog.Warn("embedding skipped: parse failed", "path", doc.Path, "err", err)
-				emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedParseFailed, Err: err})
+				emitTracked(doc.ID, EmbedEvent{Path: doc.Path, Kind: EmbedParseFailed, Err: err})
 				return
 			}
 
@@ -203,35 +290,39 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 					return
 				}
 				results[i].failed = 1
-				slog.Warn("embedding failed", "path", doc.Path, "provider", cfg.Provider, "model", model, "err", err)
-				emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedFailed, Err: err})
+				results[i].failedDoc = &UnparseableDoc{Path: doc.Path, Err: err.Error()}
+				slog.Warn("embedding failed", "path", doc.Path, "provider", embedProvider, "model", model, "err", err)
+				emitTracked(doc.ID, EmbedEvent{Path: doc.Path, Kind: EmbedFailed, Err: err})
 				return
 			}
 			if n == 0 {
 				results[i].skipped = 1
 				slog.Debug("embedding skipped: empty document", "path", doc.Path)
-				emitEmbedEvent(opts, EmbedEvent{Path: doc.Path, Kind: EmbedSkipped})
+				emitTracked(doc.ID, EmbedEvent{Path: doc.Path, Kind: EmbedSkipped})
 				return
 			}
 
 			results[i].embedded = 1
+			results[i].chunks = n
 			results[i].chars = len(parsed.Body)
-			emitEmbedEvent(opts, EmbedEvent{
-				Path:  doc.Path,
-				Kind:  EmbedEmbedded,
-				Done:  int(completed.Add(1)),
-				Total: len(docs),
+			emitTracked(doc.ID, EmbedEvent{
+				Path: doc.Path,
+				Kind: EmbedEmbedded,
 			})
 		}(i)
 	}
 	wg.Wait()
 
-	var totalChars int
+	var totalChars, chunksEmbedded int
 	for _, r := range results {
 		stats.Embedded += r.embedded
 		stats.Failed += r.failed
 		stats.Skipped += r.skipped
 		totalChars += r.chars
+		chunksEmbedded += r.chunks
+		if r.failedDoc != nil {
+			stats.FailedDocs = append(stats.FailedDocs, *r.failedDoc)
+		}
 		if r.unparseable != nil {
 			// Collected in work-set order, so the reported list is stable even
 			// though the workers complete out of order.
@@ -243,6 +334,7 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 	}
 	stats.DurationMs = time.Since(embedStart).Milliseconds()
 	stats.TotalChars = totalChars
+	stats.ChunksEmbedded = chunksEmbedded
 	stats.Cancelled = cancelled.Load()
 	slog.Info("embedding complete",
 		"embedded", stats.Embedded,
@@ -255,10 +347,4 @@ func EmbedDocuments(ctx context.Context, v *Vault, cfg ai.AIConfig, embedder ai.
 		"elapsed", time.Since(embedStart),
 	)
 	return stats, nil
-}
-
-func emitEmbedEvent(opts EmbedOpts, ev EmbedEvent) {
-	if opts.OnEvent != nil {
-		opts.OnEvent(ev)
-	}
 }

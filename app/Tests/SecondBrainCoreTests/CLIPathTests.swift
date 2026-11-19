@@ -25,11 +25,9 @@ func argsHandlesEmpty() {
 
 @Test("resolve returns an existing path or the fallback")
 func resolveReturnsKnownCandidate() {
-    // resolve() prefers the bundled binary, then iterates the known Homebrew
-    // paths. The test runner is not the SecondBrain.app bundle, so bundledPath
-    // is nil and the returned string must be one of the Homebrew candidates
-    // regardless of whether 2nb is installed.
-    let got = CLIPath.resolve()
+    // resolve() checks TWONB_CLI_PATH, prefers the bundled binary, then iterates the known Homebrew
+    // paths. Pass an empty environment here so TWONB_CLI_PATH from `make test-swift` doesn't override.
+    let got = CLIPath.resolve(environment: [:])
     let validCandidates = [
         "/opt/homebrew/bin/2nb",
         "/usr/local/bin/2nb",
@@ -43,7 +41,19 @@ func bundledPathNilInTests() {
     // This guards the precedence in resolve(): a non-bundled run (dev/tests)
     // must never claim a bundled binary and must fall through to Homebrew.
     #expect(CLIPath.bundledPath == nil)
-    #expect(CLIPath.resolve() != Bundle.main.bundlePath + "/Contents/Resources/2nb")
+    #expect(CLIPath.resolve(environment: [:]) != Bundle.main.bundlePath + "/Contents/Resources/2nb")
+}
+
+@Test("resolve honors TWONB_CLI_PATH when pointing to an executable")
+func resolveHonorsEnvironmentOverride() throws {
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-cli-override-\(UUID().uuidString)")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: tmp)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmp.path)
+
+    #expect(CLIPath.resolve(environment: ["TWONB_CLI_PATH": tmp.path]) == tmp.path)
+    #expect(CLIPath.resolve(environment: ["TWONB_CLI_PATH": "/nonexistent/2nb-\(UUID().uuidString)"]) != "/nonexistent")
 }
 
 @Test("augmentedPATH prepends the Homebrew/Go bin dirs that launchd omits")

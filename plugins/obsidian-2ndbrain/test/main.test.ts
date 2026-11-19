@@ -382,8 +382,8 @@ describe('pinVaultArgs', () => {
 	// The core "joined at the hip" guarantee: every 2nb invocation is pinned to
 	// the open Obsidian vault via --vault, the CLI's highest-priority source.
 	it('prepends --vault <path> ahead of the subcommand', () => {
-		expect(pinVaultArgs('/Users/chad/dev/obsidian', ['search', 'q', '--json'])).toEqual([
-			'--vault', '/Users/chad/dev/obsidian', 'search', 'q', '--json',
+		expect(pinVaultArgs('/Users/alice/dev/obsidian', ['search', 'q', '--json'])).toEqual([
+			'--vault', '/Users/alice/dev/obsidian', 'search', 'q', '--json',
 		]);
 	});
 
@@ -587,7 +587,7 @@ describe('parsePolishResponse', () => {
 });
 
 describe('mcpSnippetFor', () => {
-	const vault = '/Users/chad/dev/obsidian';
+	const vault = '/Users/alice/dev/obsidian';
 	const cli = '/opt/homebrew/bin/2nb';
 
 	it('renders the legacy ~/.claude.json shape for claude-code (bare "2nb" + cwd)', () => {

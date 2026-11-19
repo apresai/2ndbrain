@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -79,6 +81,9 @@ type embeddingRunStats struct {
 	// parsed is in Unparseable instead, and one that could not be opened is in
 	// Unreadable: no request was made for either.
 	Failed int
+	// FailedDocs holds the per-document error paths and reasons recorded when
+	// Failed > 0, used to surface concrete root causes instead of bare counts.
+	FailedDocs []vault.UnparseableDoc
 	// Unparseable names the notes whose content would not parse.
 	Unparseable []vault.UnparseableDoc
 	// Unreadable names the notes the pass could not open. They keep whatever
@@ -105,8 +110,16 @@ type embeddingRunStats struct {
 // reembed when force is set). For a reembed the index counts reflect the full
 // index that runs before re-embedding, since `index --force-reembed` does both.
 func indexOperation(force bool, start time.Time, ix vault.IndexStats, es embeddingRunStats, cfg ai.AIConfig, opErr error) metrics.Operation {
+	return indexOperationForVault("", force, start, ix, es, cfg, opErr)
+}
+
+func indexOperationForVault(vaultRoot string, force bool, start time.Time, ix vault.IndexStats, es embeddingRunStats, cfg ai.AIConfig, opErr error) metrics.Operation {
+	opName := metrics.OpIndex
+	if force {
+		opName = metrics.OpReembed
+	}
 	op := metrics.Operation{
-		Operation:      metrics.OpIndex,
+		Operation:      opName,
 		DurationMs:     time.Since(start).Milliseconds(),
 		OK:             opErr == nil,
 		Error:          errString(opErr),
@@ -122,12 +135,18 @@ func indexOperation(force bool, start time.Time, ix vault.IndexStats, es embeddi
 		TotalChars:     es.TotalChars,
 		EmbeddingModel: es.Model,
 		EmbeddingDims:  cfg.Dimensions,
-		// Embeddings have no provider-reported usage; estimate input tokens at
-		// chars/4 (no output tokens). Same heuristic as the cost estimate.
-		InputTokens: es.TotalChars / 4,
+		InputTokens:    es.TotalChars / 4,
 	}
-	if force {
-		op.Operation = metrics.OpReembed
+	if es.Embedded > 0 {
+		inTok := es.TotalChars / 4
+		if es.TotalChars > 0 && inTok == 0 {
+			inTok = 1
+		}
+		model := es.Model
+		if model == "" {
+			model = cfg.EmbeddingModel
+		}
+		attachUsageLegs(&op, buildUsageLeg(vaultRoot, cfg.EffectiveEmbeddingProvider(), model, "embedding", opName, es.Embedded, inTok, 0))
 	}
 	return op
 }
@@ -160,7 +179,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		// Record the failed build (best-effort) before bailing so the
 		// observatory shows the failure, not just a gap.
-		recordMetric(v, indexOperation(indexForceReembed, startTime, vault.IndexStats{}, embeddingRunStats{}, v.Config.AI, err))
+		recordMetric(v, indexOperationForVault(v.Root, indexForceReembed, startTime, vault.IndexStats{}, embeddingRunStats{}, v.Config.AI, err))
 		slog.Error("index failed", "error", err, "elapsed", time.Since(startTime))
 		return fmt.Errorf("index vault: %w", err)
 	}
@@ -194,7 +213,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		embedStats, err = forceReembedDocuments(ctx, v, cfg)
 		if err != nil {
 			if !errors.Is(err, errReembedUnreadable) {
-				recordMetric(v, indexOperation(true, startTime, *stats, embedStats, cfg, err))
+				recordMetric(v, indexOperationForVault(v.Root, true, startTime, *stats, embedStats, cfg, err))
 				slog.Error("force-reembed failed", "error", err)
 				return err
 			}
@@ -208,7 +227,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			// directly to `2nb ai setup` instead of printing a raw
 			// registry-lookup error — that's the "just works"
 			// onboarding path for receivers of a shipped vault.
-			if cfg.Provider == "" {
+			if cfg.EffectiveEmbeddingProvider() == "" {
 				fmt.Fprintln(os.Stderr, "  no AI provider configured — run '2nb ai setup' to enable semantic search (BM25 index built)")
 			} else {
 				fmt.Fprintf(os.Stderr, "  embedding skipped: %v\n", eerr)
@@ -218,10 +237,19 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		embedStats = es
 		if es.Failed > 0 {
 			slog.Warn("embedding completed with document failures", "embedded", es.Embedded, "attempted", es.Attempted, "failed", es.Failed)
+			if !flagPorcelain && len(es.FailedDocs) > 0 {
+				limit := min(3, len(es.FailedDocs))
+				for _, d := range es.FailedDocs[:limit] {
+					fmt.Fprintf(os.Stderr, "  warning: document failed to embed (%s): %s\n", d.Path, singleLineErr(d.Err))
+				}
+				if len(es.FailedDocs) > limit {
+					fmt.Fprintf(os.Stderr, "  ... and %d more failed document(s)\n", len(es.FailedDocs)-limit)
+				}
+			}
 		}
 	}
 
-	recordMetric(v, indexOperation(indexForceReembed, startTime, *stats, embedStats, cfg, deferredErr))
+	recordMetric(v, indexOperationForVault(v.Root, indexForceReembed, startTime, *stats, embedStats, cfg, deferredErr))
 
 	// Stamp which indexing/embedding LOGIC generation this build achieved, so a
 	// future 2nb that changes that logic can detect this vault is stale and prompt
@@ -299,7 +327,7 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 	// macOS app shell `2nb index --doc` on each note save.
 	var embedStats embeddingRunStats
 	defer func() {
-		recordMetric(v, metrics.Operation{
+		op := metrics.Operation{
 			Operation:      metrics.OpIndexDoc,
 			DurationMs:     time.Since(start).Milliseconds(),
 			OK:             err == nil,
@@ -313,7 +341,19 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 			TotalChars:     embedStats.TotalChars,
 			EmbeddingModel: embedStats.Model,
 			EmbeddingDims:  v.Config.AI.Dimensions,
-		})
+		}
+		if embedStats.Embedded > 0 {
+			inTok := embedStats.TotalChars / 4
+			if embedStats.TotalChars > 0 && inTok == 0 {
+				inTok = 1
+			}
+			model := embedStats.Model
+			if model == "" {
+				model = v.Config.AI.EmbeddingModel
+			}
+			attachUsageLegs(&op, buildUsageLeg(v.Root, v.Config.AI.EffectiveEmbeddingProvider(), model, "embedding", metrics.OpIndexDoc, embedStats.Embedded, inTok, 0))
+		}
+		recordMetric(v, op)
 	}()
 
 	absPath := docArg
@@ -366,9 +406,10 @@ func runIndexSingleDoc(cmd *cobra.Command, v *vault.Vault, docArg string) (err e
 }
 
 func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.EmbeddingProvider, error) {
-	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	embedder, err := ai.DefaultRegistry.Embedder(embedProvider)
 	if err != nil {
-		return nil, fmt.Errorf("no embedding provider %q configured — run `2nb ai setup`", cfg.Provider)
+		return nil, fmt.Errorf("no embedding provider %q configured — run `2nb ai setup`", embedProvider)
 	}
 
 	// One ask, and carry its answer. Re-asking for the reason can disagree with
@@ -376,7 +417,7 @@ func validateEmbeddingProvider(ctx context.Context, cfg ai.AIConfig) (ai.Embeddi
 	// failureTTL) the entry can lapse in between, so the second ask pays a fresh
 	// probe on exactly the path this reporting exists to explain.
 	if ready, code := ai.Availability(ctx, embedder); !ready {
-		return nil, embedderNotReadyError(cfg.Provider, code)
+		return nil, embedderNotReadyError(embedProvider, code)
 	}
 	return embedder, nil
 }
@@ -425,7 +466,12 @@ func forceReembedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig)
 	// vault where a single note had an empty frontmatter block.
 	embeddable := stats.Attempted - stats.Skipped - len(stats.Unparseable) - len(stats.Unreadable)
 	if err == nil && (stats.Failed > 0 || stats.Embedded < embeddable) {
-		err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, embeddable, stats.Failed)
+		if len(stats.FailedDocs) > 0 {
+			first := stats.FailedDocs[0]
+			err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed; first error on %s: %s)", stats.Embedded, embeddable, stats.Failed, first.Path, singleLineErr(first.Err))
+		} else {
+			err = fmt.Errorf("force-reembed incomplete: embedded %d/%d documents (%d failed)", stats.Embedded, embeddable, stats.Failed)
+		}
 	}
 	if err == nil {
 		if len(stats.Unreadable) > 0 {
@@ -515,12 +561,18 @@ const (
 // embedProgressOpts builds the pass's callbacks. Nil callbacks mean a silent
 // pass, which is also what --porcelain gets.
 func embedProgressOpts(p embedProgress) vault.EmbedOpts {
+	return embedProgressOptsWithHistory(p, 0, 0)
+}
+
+func embedProgressOptsWithHistory(p embedProgress, histDPS, histCPS float64) vault.EmbedOpts {
 	if p == withoutEmbedProgress || flagPorcelain {
 		return vault.EmbedOpts{}
 	}
 	return vault.EmbedOpts{
-		OnStart: func(count, concurrency int) {
-			fmt.Fprintf(os.Stderr, "  embedding %d documents (concurrency %d)...\n", count, concurrency)
+		OnPlan: func(plan vault.EmbedPlan) {
+			estSec, _ := vault.EstimateInitialEmbedSeconds(plan.EmbeddableDocs, plan.TotalChars, plan.Provider, plan.Concurrency, histDPS, histCPS)
+			fmt.Fprintf(os.Stderr, "  embedding %d documents (%d chunks, ~%s tokens, concurrency %d, est. ~%s)...\n",
+				plan.TotalDocs, plan.TotalChunks, formatTokenEstimate(plan.TotalChars/4), plan.Concurrency, formatETADuration(estSec))
 		},
 		OnEvent: func(ev vault.EmbedEvent) {
 			switch ev.Kind {
@@ -533,12 +585,44 @@ func embedProgressOpts(p embedProgress) vault.EmbedOpts {
 			case vault.EmbedSkipped:
 				fmt.Fprintf(os.Stderr, "  skip %s: empty (nothing to embed)\n", ev.Path)
 			case vault.EmbedEmbedded:
-				// Monotonic completion counter; the path order printed is
-				// non-deterministic under concurrency.
-				fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", ev.Done, ev.Total, ev.Path)
+				// Monotonic completion counter + work-weighted ETA; preserves `: <path>` suffix.
+				if ev.TotalChunks > 0 && ev.DocsPerSec > 0 {
+					fmt.Fprintf(os.Stderr, "  embedded %d/%d (%d/%d chunks, %.1f docs/s, ~%s left): %s\n",
+						ev.Done, ev.Total, ev.DoneChunks, ev.TotalChunks, ev.DocsPerSec, formatETADuration(ev.ETASeconds), ev.Path)
+				} else {
+					fmt.Fprintf(os.Stderr, "  embedded %d/%d: %s\n", ev.Done, ev.Total, ev.Path)
+				}
 			}
 		},
 	}
+}
+
+func formatTokenEstimate(tok int) string {
+	switch {
+	case tok < 1000:
+		return fmt.Sprintf("%d", tok)
+	case tok < 1_000_000:
+		return fmt.Sprintf("%.1fk", float64(tok)/1000.0)
+	default:
+		return fmt.Sprintf("%.1fM", float64(tok)/1_000_000.0)
+	}
+}
+
+func formatETADuration(secs float64) string {
+	if secs <= 0 {
+		return "0s"
+	}
+	if secs < 1.0 {
+		return "<1s"
+	}
+	total := int(math.Round(secs))
+	if total < 60 {
+		return fmt.Sprintf("%ds", total)
+	}
+	if total < 3600 {
+		return fmt.Sprintf("%dm%02ds", total/60, total%60)
+	}
+	return fmt.Sprintf("%dh%02dm", total/3600, (total%3600)/60)
 }
 
 func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, progress embedProgress) (embeddingRunStats, error) {
@@ -555,9 +639,18 @@ func embedDocuments(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, progre
 // tool shares it; here we only translate the pass's events into the CLI's
 // !flagPorcelain output and convert the result into embeddingRunStats.
 func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AIConfig, embedder ai.EmbeddingProvider, progress embedProgress) (embeddingRunStats, error) {
-	quiet := embedProgressOpts(progress).OnEvent == nil
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	histDPS, histCPS, _ := historicalEmbedThroughput(v, embedProvider, cfg.EmbeddingModel)
+	opts := embedProgressOptsWithHistory(progress, histDPS, histCPS)
+	quiet := opts.OnEvent == nil
+	if histDPS > 0 && histCPS > 0 && v != nil && v.DB != nil {
+		if docs, _, chars, err := v.DB.VaultEmbedCorpusSizing(); err == nil && docs > 0 {
+			initEst, _ := vault.EstimateInitialEmbedSeconds(docs, chars, embedProvider, cfg.ResolveEmbedConcurrency(embedProvider), histDPS, histCPS)
+			opts.InitialEstimateSeconds = initEst
+		}
+	}
 
-	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, embedProgressOpts(progress))
+	es, err := vault.EmbedDocuments(ctx, v, cfg, embedder, opts)
 	// Read the counter AFTER the pass: every worker reports into the one the
 	// caller attached to ctx, so this is the whole pass's retry total.
 	retries := ai.RetriesFrom(ctx)
@@ -566,6 +659,7 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		Attempted:   es.Attempted,
 		Embedded:    es.Embedded,
 		Failed:      es.Failed,
+		FailedDocs:  es.FailedDocs,
 		Unparseable: es.Unparseable,
 		Unreadable:  es.Unreadable,
 		Skipped:     es.Skipped,
@@ -586,21 +680,20 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 
 	// Show cost estimate for non-free providers (CLI-only UX, after the pass).
 	if !flagPorcelain && !quiet && es.Embedded > 0 {
-		var modelInfo ai.ModelInfo
-		if models, err := loadVerifiedModelCatalog(ctx, cfg, v.Root); err == nil {
-			modelInfo, _ = lookupModelInfo(models, cfg.Provider, es.Model)
-		} else {
-			slog.Debug("cost estimate skipped: catalog load failed", "err", err)
+		modelInfo := ai.LookupLocalModelPricing(v.Root, embedProvider, es.Model)
+		inTok := es.TotalChars / 4
+		if es.TotalChars > 0 && inTok == 0 {
+			inTok = 1
 		}
-		estimatedTokens := float64(es.TotalChars) / 4.0 // rough chars→tokens estimate
-		if ai.IsExplicitlyFree(modelInfo) {
+		cost, isCloud, known := ai.EstimateUsageCost(modelInfo, inTok, 0, es.Embedded)
+		if !isCloud || (known && cost == 0) {
 			fmt.Fprintf(os.Stderr, "  cost: free (%s)\n", es.Model)
-		} else if cost, ok := ai.EstimateInputCost(modelInfo, estimatedTokens, es.Embedded); ok {
-			fmt.Fprintf(os.Stderr, "  cost estimate: $%.4f (%s)\n", cost, es.Model)
+		} else if known {
+			fmt.Fprintf(os.Stderr, "  cost estimate: %s (%s)\n", ai.FormatUSD(cost), es.Model)
 			monthlyCost := cost * 4 // assume ~4 re-indexes per month
 			if monthlyCost > 3.0 {
 				fmt.Fprintf(os.Stderr, "  estimated monthly cost: ~$%.2f\n", monthlyCost)
-				fmt.Fprintf(os.Stderr, "  tip: run `2nb ai setup` to configure free local AI with Ollama\n")
+				fmt.Fprintf(os.Stderr, "  tip: run `2nb ai setup` to configure free Local Gemma embeddings\n")
 			}
 		}
 	}
@@ -609,4 +702,8 @@ func embedDocumentsWithProvider(ctx context.Context, v *vault.Vault, cfg ai.AICo
 		fmt.Fprintf(os.Stderr, "  skipped %d empty document(s)\n", stats.Skipped)
 	}
 	return stats, nil
+}
+
+func singleLineErr(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

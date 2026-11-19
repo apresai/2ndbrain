@@ -12,7 +12,14 @@ public enum CLIPath {
         return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
     }
 
-    public static func resolve() -> String {
+    public static func resolve(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        if let override = environment["TWONB_CLI_PATH"],
+           !override.isEmpty,
+           FileManager.default.isExecutableFile(atPath: override) {
+            return override
+        }
         // Prefer the bundled, version-matched binary so app-internal CLI calls
         // always match the app's feature set. Fall back to a Homebrew install
         // for non-bundled runs (dev, tests) and shell parity.
@@ -63,10 +70,31 @@ public enum CLIPath {
     /// whether the quarantine xattr is now absent (cleared or never present).
     /// SecondBrainCore stays logger-free; the caller logs the outcome so a
     /// support report can answer "did the quarantine strip succeed?".
+    public static var bundledLlamaDir: String? {
+        let candidate = Bundle.main.bundlePath + "/Contents/Resources/llama"
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: candidate, isDirectory: &isDir) && isDir.boolValue ? candidate : nil
+    }
+
+    /// Best-effort recursive removal of the `com.apple.quarantine` xattr from a directory tree.
+    public static func clearQuarantineRecursively(at path: String) {
+        clearQuarantine(at: path)
+        if let enumerator = FileManager.default.enumerator(atPath: path) {
+            for case let item as String in enumerator {
+                let fullPath = (path as NSString).appendingPathComponent(item)
+                clearQuarantine(at: fullPath)
+            }
+        }
+    }
+
     @discardableResult
     public static func prepareBundledCLI() -> Bool? {
         guard let bundled = bundledPath else { return nil }
-        return clearQuarantine(at: bundled)
+        let ok = clearQuarantine(at: bundled)
+        if let llamaDir = bundledLlamaDir {
+            clearQuarantineRecursively(at: llamaDir)
+        }
+        return ok
     }
 
     /// The PATH a child process should see: `current` with the directories a

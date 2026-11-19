@@ -76,6 +76,7 @@ view now shows the threshold the resolver actually uses, and `threshold_source`
 appears only on a stamped value.
 
 Different embedding models have very different baseline distributions. Builtin recommendations:
+Google Gemini `gemini-embedding-2` / `gemini-embedding-001` `0.60` (native default; asymmetric retrieval via `RETRIEVAL_DOCUMENT` with title vs `RETRIEVAL_QUERY` with L2 unit normalization),
 Nova-2 `0.25` (measured on a real 151-doc vault under the asymmetric query purpose, see below),
 Nemotron-VL `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`,
 all-minilm `0.35`. The rest are estimates from training objectives.

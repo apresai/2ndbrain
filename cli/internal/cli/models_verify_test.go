@@ -573,7 +573,7 @@ func TestContract_ModelsVerifyMultiRegion_CredGated(t *testing.T) {
 func TestContract_AIStatusActiveProviderDisabled(t *testing.T) {
 	_, root := newContractVault(t)
 
-	if _, err := runCLIArgs(t, root, "config", "set", "ai.bedrock.disabled", "true"); err != nil {
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.gemini.disabled", "true"); err != nil {
 		t.Fatalf("set disabled: %v", err)
 	}
 	got, err := runCLIArgs(t, root, "ai", "status", "--json", "--porcelain")
@@ -587,15 +587,15 @@ func TestContract_AIStatusActiveProviderDisabled(t *testing.T) {
 	if err := json.Unmarshal(got, &status); err != nil {
 		t.Fatalf("parse: %v (body=%s)", err, truncate(got, 300))
 	}
-	if status.Provider != "bedrock" {
-		t.Fatalf("expected default provider bedrock, got %q", status.Provider)
+	if status.Provider != "gemini" {
+		t.Fatalf("expected default provider gemini, got %q", status.Provider)
 	}
 	if !status.ActiveProviderDisabled {
 		t.Fatal("active_provider_disabled not reported for a disabled active provider")
 	}
 
 	// Re-selecting the provider clears the flag (config set side effect).
-	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrock"); err != nil {
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "gemini"); err != nil {
 		t.Fatalf("re-select provider: %v", err)
 	}
 	got, err = runCLIArgs(t, root, "ai", "status", "--json", "--porcelain")

@@ -117,14 +117,71 @@ func TestMetricsReport_EmptyVault(t *testing.T) {
 	if len(report.Recent) != 0 {
 		t.Errorf("recent = %d, want 0", len(report.Recent))
 	}
-	// recent must marshal as [] not null — a nil Go slice becomes JSON null,
-	// which the macOS app's typed [MetricOperation] decode can't accept and which
-	// would blank the whole Metrics tab on a fresh/cleared vault.
+	// recent and ai_usage.by_model must marshal as [] not null — a nil Go slice
+	// becomes JSON null, which typed Swift decoding cannot accept.
 	blob, err := json.Marshal(report)
 	if err != nil {
 		t.Fatalf("marshal report: %v", err)
 	}
 	if !strings.Contains(string(blob), `"recent":[]`) {
 		t.Errorf("empty-vault JSON must contain \"recent\":[] (not null); got: %s", blob)
+	}
+	if !strings.Contains(string(blob), `"by_model":[]`) {
+		t.Errorf("empty-vault JSON must contain \"by_model\":[] (not null); got: %s", blob)
+	}
+}
+
+func TestMetricsReport_ReembedEstimateAndHybridCostUsage(t *testing.T) {
+	v := testutil.NewTestVault(t)
+	v.Config.AI.Provider = "gemini"
+	v.Config.AI.EmbeddingProvider = "llama-local"
+	v.Config.AI.EmbeddingModel = "embeddinggemma-2"
+	v.Config.AI.GenerationProvider = "gemini"
+	v.Config.AI.GenerationModel = "gemini-4-hydrogen"
+	if err := v.Config.Save(v.DotDir); err != nil {
+		t.Fatal(err)
+	}
+	testutil.CreateAndIndex(t, v, "Note One", "note", "first note body with substantive markdown content")
+	testutil.CreateAndIndex(t, v, "Note Two", "note", "second note body with enough text to size chunks")
+
+	// Record a hybrid ask (free local embedding + paid cloud generation) and a local reembed.
+	askOp := metrics.Operation{Operation: metrics.OpAsk, DurationMs: 500, OK: true}
+	attachUsageLegs(&askOp,
+		buildUsageLeg(v.Root, "llama-local", "embeddinggemma-2", "embedding", metrics.OpAsk, 1, 200, 0),
+		buildUsageLeg(v.Root, "gemini", "gemini-4-hydrogen", "generation", metrics.OpAsk, 1, 1_000_000, 100_000),
+	)
+	recordMetric(v, askOp)
+
+	reembedOp := metrics.Operation{Operation: metrics.OpReembed, DurationMs: 500, EmbedMs: 500, Embedded: 5, TotalChars: 5000, OK: true}
+	attachUsageLegs(&reembedOp,
+		buildUsageLeg(v.Root, "llama-local", "embeddinggemma-2", "embedding", metrics.OpReembed, 5, 1250, 0),
+	)
+	recordMetric(v, reembedOp)
+
+	report, err := buildMetricsReport(v, 20)
+	if err != nil {
+		t.Fatalf("buildMetricsReport: %v", err)
+	}
+	if report.ReembedEstimate == nil || report.ReembedEstimate.EmbeddableDocs != 2 || report.ReembedEstimate.TotalChunks < 2 {
+		t.Fatalf("ReembedEstimate mismatch: %+v", report.ReembedEstimate)
+	}
+	if report.ReembedEstimate.IsCloud || report.ReembedEstimate.EstimatedCostUSD != 0 {
+		t.Errorf("local embedding reembed should be free ($0.00, IsCloud=false), got %+v", report.ReembedEstimate)
+	}
+	if report.ReembedEstimate.SpeedSource != "history" {
+		t.Errorf("SpeedSource = %q, want history (from recorded >=3 doc reembed)", report.ReembedEstimate.SpeedSource)
+	}
+	if report.AIUsage == nil {
+		t.Fatal("AIUsage = nil")
+	}
+	// gemini-4-hydrogen: 1M in @ $1.50 + 100k out @ $7.50/M ($0.75) = $2.25; local embed = $0.
+	if report.AIUsage.AllTime.CloudCostUSD < 2.24 || report.AIUsage.AllTime.CloudCostUSD > 2.26 {
+		t.Errorf("AllTime.CloudCostUSD = %v, want ~2.25", report.AIUsage.AllTime.CloudCostUSD)
+	}
+	if report.AIUsage.AllTime.LocalTokens != 1450 || report.AIUsage.AllTime.CloudInputTokens != 1_000_000 {
+		t.Errorf("token split wrong: %+v", report.AIUsage.AllTime)
+	}
+	if len(report.AIUsage.ByModel) != 2 {
+		t.Errorf("ByModel len = %d, want 2: %+v", len(report.AIUsage.ByModel), report.AIUsage.ByModel)
 	}
 }

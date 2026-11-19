@@ -1,88 +1,51 @@
 import SwiftUI
 
-/// Two grouping containers that take the sidebar from eight entries to five.
-///
-/// The sidebar accumulated one tab per surface, so "is my vault healthy?" was
-/// spread over three of them (Vault Status, Metrics, Updates) and "what has been
-/// happening?" over two (Git Integration, MCP Server). With configuration moved
-/// into the Settings window, what remains is all status, and status groups by the
-/// question it answers rather than by which subsystem produced it.
-///
-/// Each group hosts the EXISTING inline views unchanged behind a segmented
-/// picker. Nothing is rewritten and nothing is dropped — a rewrite would risk
-/// losing detail these views already render correctly, and the point of the
-/// change is fewer places to look, not less to see.
-
-/// Where a menu item lands: a tab, plus the pane inside it when that tab is a
-/// group.
-///
-/// Extracted from ContentView's onChange closures so it can be tested. Grouping
-/// two tabs into one made this routing load-bearing — "MCP Server Status…" and
-/// "Recent Activity" now select the same tab and differ only in the pane — and
-/// the first version of that wiring shipped wrong, opening Git for both.
+/// Where a menu item or Home quick action lands: a sidebar tab plus the
+/// segmented pane inside it when that tab is a group.
 enum DashboardRoute {
-    /// Every deep link the menus and status bar can fire.
     enum Target {
-        case aiHub
-        case mcpStatus
-        case gitActivity
+        case askSearch
         case lintResults
-        case vaultStatus
-        case settings
-        case testing
+        case notePolish
+        case guiActions
+        case gitActivity
+        case mcpStatus
+        case aiUsage
     }
 
     static func tab(for target: Target) -> DashboardTab {
         switch target {
-        case .aiHub: return .models
-        case .mcpStatus, .gitActivity: return .activity
-        case .lintResults: return .notes
-        case .vaultStatus: return .health
-        case .settings: return .settings
-        case .testing: return .testing
+        case .askSearch: return .askSearch
+        case .lintResults, .notePolish: return .notes
+        case .guiActions, .gitActivity, .mcpStatus, .aiUsage: return .activity
         }
     }
 
-    /// The Activity pane a target wants, or nil when it does not land there.
+    static func notesSection(for target: Target) -> NotesView.Section? {
+        switch target {
+        case .lintResults: return .linksAndSchema
+        case .notePolish: return .polish
+        default: return nil
+        }
+    }
+
     static func activitySection(for target: Target) -> ActivityView.Section? {
         switch target {
+        case .guiActions: return .actions
         case .mcpStatus: return .mcp
         case .gitActivity: return .git
+        case .aiUsage: return .aiUsage
         default: return nil
         }
-    }
-
-    /// The Health pane a target wants, or nil when it does not land there.
-    static func healthSection(for target: Target) -> HealthView.Section? {
-        switch target {
-        case .vaultStatus: return .vault
-        default: return nil
-        }
-    }
-
-    /// The Testing pane a target wants. Currently nil for every target: the
-    /// bare `.testing` menu item names no pane, so it deliberately keeps the
-    /// last-used one (the same rationale as ContentView owning the section
-    /// state). Future deep links that name a pane (a Discover or Quality
-    /// entry point) land here.
-    static func testingSection(for target: Target) -> TestingView.Section? {
-        nil
     }
 }
 
-/// Health: the state of this vault and of the three installed products.
-///
-/// The selected section is owned by ContentView, not by @State here, for two
-/// reasons. A menu item that names a specific pane ("MCP Server Status…") has to
-/// be able to land on it — otherwise grouping two tabs into one silently breaks
-/// the deep link, which would be an odd thing for a change about labels matching
-/// behavior to do. And @State would reset the pane every time you left the tab.
-struct HealthView: View {
+/// Notes maintenance: deterministic wikilink/frontmatter validation alongside
+/// Gemini-powered note polishing.
+struct NotesView: View {
     enum Section: String, CaseIterable, Identifiable {
-        case vault = "Vault"
-        // Performance moved to the Testing tab (everything measurable in one
-        // destination); Health keeps vault state and product parity.
-        case updates = "Updates"
+        case linksAndSchema = "Links & Schema"
+        case polish = "AI Polish"
         var id: String { rawValue }
     }
 
@@ -90,30 +53,39 @@ struct HealthView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $section) {
-                ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
+            HStack {
+                Picker("", selection: $section) {
+                    ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 320)
+                .accessibilityIdentifier("notes.sectionPicker")
+                Spacer()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding([.horizontal, .top])
-            .padding(.bottom, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+
+            Divider()
 
             switch section {
-            case .vault:
-                VaultStatusView(isPresented: .constant(true), isInline: true)
-            case .updates:
-                UpdatesView()
+            case .linksAndSchema:
+                LintResultsView(isPresented: .constant(true), isInline: true)
+            case .polish:
+                NotePolishView()
             }
         }
     }
 }
 
-/// Activity: what has been happening in and around the vault.
-/// Section ownership matches HealthView, and for the same reasons.
+/// Activity: live GUI action telemetry, git history, and MCP server status for this vault.
 struct ActivityView: View {
     enum Section: String, CaseIterable, Identifiable {
+        case actions = "Actions & Status"
         case git = "Git"
         case mcp = "MCP Server"
+        case aiUsage = "AI Usage & Cost"
         var id: String { rawValue }
     }
 
@@ -121,19 +93,31 @@ struct ActivityView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $section) {
-                ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
+            HStack {
+                Picker("", selection: $section) {
+                    ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 520)
+                .accessibilityIdentifier("activity.sectionPicker")
+                Spacer()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding([.horizontal, .top])
-            .padding(.bottom, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+
+            Divider()
 
             switch section {
+            case .actions:
+                GUIActionsView()
             case .git:
                 GitActivityView(isPresented: .constant(true), isInline: true)
             case .mcp:
                 MCPStatusView(isPresented: .constant(true), isInline: true)
+            case .aiUsage:
+                AIUsageView()
             }
         }
     }

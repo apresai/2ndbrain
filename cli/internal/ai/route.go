@@ -467,9 +467,6 @@ func markActiveRoutes(cfg AIConfig, lists ...*[]ModelInfo) {
 		for i := range *l {
 			(*l)[i].Active = false
 			m := (*l)[i]
-			if m.Provider != cfg.Provider {
-				continue
-			}
 			k := slot{m.ID, m.Type}
 			if wanted[k] && isActiveModel(m, cfg) {
 				candidates[k] = append(candidates[k], m)

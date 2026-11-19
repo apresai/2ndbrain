@@ -14,6 +14,15 @@ import (
 // SnapshotVersion is the on-disk schema version for a PolishSnapshot.
 const SnapshotVersion = 1
 
+// PolishBatchFile records one additional note modified alongside the target
+// note during a `2nb polish --write --backlinks --apply-backlinks` batch so
+// `2nb polish <target> --undo` can revert all files atomically.
+type PolishBatchFile struct {
+	Path          string `json:"path"` // vault-relative
+	OriginalFull  string `json:"original_full_content"`
+	PostWriteHash string `json:"post_write_hash"`
+}
+
 // PolishSnapshot captures the state needed to undo one applied polish. It stores
 // the FULL pre-write file content (frontmatter + body) so undo restores the
 // original byte-for-byte, and the hash of the file AS WRITTEN so undo can detect
@@ -21,15 +30,16 @@ const SnapshotVersion = 1
 // overwrites the prior snapshot) and live under the gitignored
 // .2ndbrain/recovery/polish/ directory.
 type PolishSnapshot struct {
-	Version       int    `json:"version"`
-	Path          string `json:"path"` // vault-relative
-	OriginalFull  string `json:"original_full_content"`
-	PolishedBody  string `json:"polished_body"`
-	Provider      string `json:"provider"`
-	Model         string `json:"model"`
-	Links         bool   `json:"links"`
-	Timestamp     string `json:"timestamp"` // RFC3339
-	PostWriteHash string `json:"post_write_hash"`
+	Version       int               `json:"version"`
+	Path          string            `json:"path"` // vault-relative
+	OriginalFull  string            `json:"original_full_content"`
+	PolishedBody  string            `json:"polished_body"`
+	Provider      string            `json:"provider"`
+	Model         string            `json:"model"`
+	Links         bool              `json:"links"`
+	Timestamp     string            `json:"timestamp"` // RFC3339
+	PostWriteHash string            `json:"post_write_hash"`
+	BatchFiles    []PolishBatchFile `json:"batch_files,omitempty"`
 }
 
 // UndoDecision classifies the on-disk file state against a snapshot.
@@ -119,11 +129,18 @@ func DeleteSnapshot(v *vault.Vault, relPath string) error {
 // ClassifyUndo decides whether undoing is safe given the current on-disk file
 // content and the snapshot taken at polish time.
 func ClassifyUndo(currentFull []byte, s *PolishSnapshot) UndoDecision {
+	return ClassifyUndoFile(currentFull, s.OriginalFull, s.PostWriteHash)
+}
+
+// ClassifyUndoFile decides whether undoing one file in a polish snapshot or
+// backlink batch is safe given its current on-disk bytes, original content, and
+// post-write hash.
+func ClassifyUndoFile(currentFull []byte, originalFull, postWriteHash string) UndoDecision {
 	cur := HashContent(currentFull)
-	if cur == s.PostWriteHash {
+	if cur == postWriteHash {
 		return UndoProceed
 	}
-	if cur == HashContent([]byte(s.OriginalFull)) {
+	if cur == HashContent([]byte(originalFull)) {
 		return UndoNoop
 	}
 	return UndoConflict

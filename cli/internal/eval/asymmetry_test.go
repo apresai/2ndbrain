@@ -14,7 +14,7 @@ import (
 // symmetric GENERIC_INDEX) over a real Nova-embedded vault. It is gated on a
 // vault path AND real Bedrock credentials, per the no-mock policy:
 //
-//	source ~/.secrets/shell.zsh
+//	# Export AWS / Bedrock credentials in your shell environment
 //	2NB_EVAL_VAULT=/path/to/vault go test ./internal/eval/ -run Asymmetric -v
 //
 // It asserts the asymmetric purpose does not REGRESS MRR@K (the flip's whole

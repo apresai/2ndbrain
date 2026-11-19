@@ -116,6 +116,23 @@ func TestBuildMantleRequest_ReasoningEffort(t *testing.T) {
 	if _, ok := raw["reasoning"]; ok {
 		t.Error("reasoning key must be omitted when ReasoningEffort is empty")
 	}
+
+	// "xhigh" (Gemini 4 Hydrogen) caps at "high" for Mantle endpoints.
+	body, err = buildMantleRequest("xai.grok-4.3", "hi", GenOpts{MaxTokens: 512, ReasoningEffort: "xhigh"})
+	if err != nil {
+		t.Fatalf("build (xhigh): %v", err)
+	}
+	var capped struct {
+		Reasoning *struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &capped); err != nil {
+		t.Fatalf("unmarshal (xhigh): %v", err)
+	}
+	if capped.Reasoning == nil || capped.Reasoning.Effort != "high" {
+		t.Errorf("xhigh reasoning effort on mantle = %+v, want high", capped.Reasoning)
+	}
 }
 
 func TestBuildMantleRequest_MaxTokens(t *testing.T) {

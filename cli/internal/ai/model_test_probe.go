@@ -3,8 +3,13 @@ package ai
 import (
 	"context"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/apresai/2ndbrain/internal/llama"
 )
 
 // TestProbeResult holds the result of a model test.
@@ -184,7 +189,11 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 
 	switch modelType {
 	case "embedding":
-		err = probeEmbedding(ctx, cfg, provider, m.ID, vaultRoot, strategy)
+		var embedDetail string
+		embedDetail, err = probeEmbedding(ctx, cfg, provider, m.ID, vaultRoot, strategy)
+		if err == nil {
+			result.Detail = embedDetail
+		}
 	case "rerank":
 		// No rerank probe exists; don't generation-probe a reranker (which would
 		// fail confusingly). Enable a reranker with `2nb config set ai.rerank.enabled true`.
@@ -216,61 +225,170 @@ func TestProbeModelInfo(ctx context.Context, cfg AIConfig, m ModelInfo, vaultRoo
 	return result, nil
 }
 
-func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot, strategy string) error {
+// probeEmbeddingText is the fixed input every embedding smoke probe sends.
+const probeEmbeddingText = "test embedding probe"
+
+// resolveProbeDimensions picks the dimension an embedding probe requests
+// (probeDim) and the dimension the returned vector MUST have (strictExpectedDim;
+// 0 means "do not enforce a width").
+//
+// A probe is the proof that a model answers, so when the probed model is the
+// configured embedding slot the user's own ai.dimensions is honored and (when
+// it is a width the catalog says the model can emit) enforced. A manual
+// override outside the catalog's declared widths is still requested but not
+// enforced, so a clamping provider does not turn into a false failure. For any
+// other model the probe uses the catalog default and enforces it.
+func resolveProbeDimensions(cfg AIConfig, provider, modelID, vaultRoot string) (probeDim int, strictExpectedDim int) {
+	defDim := EmbeddingDimensionsFor(vaultRoot, provider, modelID)
+	supported := SupportedDimensionsFor(vaultRoot, provider, modelID)
+	validWidth := func(d int) bool {
+		return d == defDim || slices.Contains(supported, d)
+	}
+
+	if cfg.Dimensions > 0 && cfg.EffectiveEmbeddingProvider() == provider && cfg.EmbeddingModel == modelID {
+		probeDim = cfg.Dimensions
+		if defDim > 0 && validWidth(cfg.Dimensions) {
+			strictExpectedDim = cfg.Dimensions
+		}
+		return probeDim, strictExpectedDim
+	}
+
+	if cfg.Dimensions > 0 && validWidth(cfg.Dimensions) {
+		probeDim = cfg.Dimensions
+	} else {
+		probeDim = defDim
+	}
+	if probeDim > 0 {
+		strictExpectedDim = probeDim
+	}
+	return probeDim, strictExpectedDim
+}
+
+// validateEmbeddingProbeVector turns a returned embedding into evidence: it
+// must be non-empty, the expected width (when enforced), finite, and carry a
+// non-degenerate L2 norm. The detail keeps "dims=%d" intact because
+// parseDimsFromDetail reads it back out.
+func validateEmbeddingProbeVector(modelID string, vecs [][]float32, strictExpectedDim int) (string, error) {
+	if len(vecs) == 0 || len(vecs[0]) == 0 {
+		return "", fmt.Errorf("got empty embedding vector")
+	}
+	vec := vecs[0]
+	if strictExpectedDim > 0 && len(vec) != strictExpectedDim {
+		return "", fmt.Errorf("embedding dimension mismatch from %s: got %dd, expected %dd", modelID, len(vec), strictExpectedDim)
+	}
+	var sum float64
+	for i, v := range vec {
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return "", fmt.Errorf("embedding from %s contains a non-finite value at index %d", modelID, i)
+		}
+		sum += f * f
+	}
+	norm := math.Sqrt(sum)
+	if norm <= 1e-6 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		return "", fmt.Errorf("embedding from %s has zero/degenerate L2 norm", modelID)
+	}
+	return fmt.Sprintf("dims=%d, L2=%.2f", len(vec), norm), nil
+}
+
+func probeEmbedding(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot, strategy string) (string, error) {
+	probeDim, strictDim := resolveProbeDimensions(cfg, provider, modelID, vaultRoot)
+	texts := []string{probeEmbeddingText}
+
 	switch provider {
+	case "gemini":
+		e, err := NewGeminiEmbedder(ctx, cfg.Gemini, modelID, probeDim)
+		if err != nil {
+			return "", err
+		}
+		vecs, err := e.Embed(ctx, texts)
+		if err != nil {
+			return "", err
+		}
+		return validateEmbeddingProbeVector(modelID, vecs, strictDim)
+
 	case "bedrock":
 		if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "embedding", vaultRoot); err != nil {
-			return err
+			return "", err
 		}
-		e, err := newBedrockEmbedder(ctx, cfg.Bedrock, modelID, cfg.Dimensions, strategy)
+		e, err := newBedrockEmbedder(ctx, cfg.Bedrock, modelID, probeDim, strategy)
 		if err != nil {
-			return err
+			return "", err
 		}
 		// Belt: if the constructor ignored the strategy argument, overwrite
 		// the catalog lookup. The test mutates assignResolvedEmbedStrategy.
 		assignResolvedEmbedStrategy(e, strategy)
-		vecs, err := e.Embed(ctx, []string{"test embedding probe"})
+		vecs, err := e.Embed(ctx, texts)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if len(vecs) == 0 || len(vecs[0]) == 0 {
-			return fmt.Errorf("got empty embedding vector")
-		}
-		return nil
+		return validateEmbeddingProbeVector(modelID, vecs, strictDim)
 
 	case "openrouter":
 		key, err := GetAPIKey("openrouter")
 		if err != nil {
-			return err
+			return "", err
 		}
-		e := NewOpenRouterEmbedder(key, modelID, cfg.Dimensions)
-		vecs, err := e.Embed(ctx, []string{"test embedding probe"})
+		e := NewOpenRouterEmbedder(key, modelID, probeDim)
+		vecs, err := e.Embed(ctx, texts)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if len(vecs) == 0 || len(vecs[0]) == 0 {
-			return fmt.Errorf("got empty embedding vector")
-		}
-		return nil
+		return validateEmbeddingProbeVector(modelID, vecs, strictDim)
 
 	case "ollama":
 		endpoint := cfg.Ollama.Endpoint
 		if endpoint == "" {
 			endpoint = "http://localhost:11434"
 		}
-		e := NewOllamaEmbedder(endpoint, modelID, cfg.Dimensions)
-		vecs, err := e.Embed(ctx, []string{"test embedding probe"})
+		e := NewOllamaEmbedder(endpoint, modelID, probeDim)
+		vecs, err := e.Embed(ctx, texts)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if len(vecs) == 0 || len(vecs[0]) == 0 {
-			return fmt.Errorf("got empty embedding vector")
+		return validateEmbeddingProbeVector(modelID, vecs, strictDim)
+
+	case "llama-local":
+		// An explicit endpoint is dialed directly (it names a server the caller
+		// vouches for); only the default path needs cached weights to start one.
+		if cfg.Llama.EmbedEndpoint == "" && modelID != "" && !llama.RoleCanStart(llama.RoleEmbed, modelID) {
+			return "", fmt.Errorf("local model %q not available for embedding (download weights or specify valid model id)", modelID)
 		}
-		return nil
+		e := NewLlamaEmbedder(modelID, probeDim, cfg.ResolveTaskPreset(), cfg.Llama.EmbedEndpoint)
+		vecs, err := e.Embed(ctx, texts)
+		if err != nil {
+			return "", err
+		}
+		return validateEmbeddingProbeVector(modelID, vecs, strictDim)
 
 	default:
-		return fmt.Errorf("unknown provider %q", provider)
+		return "", fmt.Errorf("unknown provider %q", provider)
 	}
+}
+
+// truncateProbeRunes shortens s to at most max runes (never splitting a rune),
+// appending an ellipsis when it cut.
+func truncateProbeRunes(s string, max int) string {
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:max]) + "…"
+}
+
+// validateGenerationProbeResponse requires the model to actually answer the
+// probe prompt ("What is 2+2?") rather than merely return bytes: a model that
+// replies with nothing, or with something unrelated, has not been proven.
+func validateGenerationProbeResponse(modelID, raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty response from %s", modelID)
+	}
+	cleaned := strings.Join(strings.Fields(trimmed), " ")
+	if !strings.Contains(cleaned, "4") && !strings.Contains(strings.ToLower(cleaned), "four") {
+		return "", fmt.Errorf("unexpected response from %s (expected 4, got %q)", modelID, truncateProbeRunes(cleaned, 80))
+	}
+	return truncateProbeRunes(cleaned, 80), nil
 }
 
 // assignResolvedEmbedStrategy writes the probe's already-resolved strategy
@@ -309,6 +427,14 @@ const probeGenMaxTokens = 1024
 // plane — a hinted discovery would be misclassified incompatible) and routes
 // construction through the strategy-aware dispatcher.
 func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot, strategy string) (string, error) {
+	text, err := probeGenerationRaw(ctx, cfg, provider, modelID, vaultRoot, strategy)
+	if err != nil {
+		return "", err
+	}
+	return validateGenerationProbeResponse(modelID, text)
+}
+
+func probeGenerationRaw(ctx context.Context, cfg AIConfig, provider, modelID, vaultRoot, strategy string) (string, error) {
 	prompt := "What is 2+2? Reply with just the number."
 	// ReasoningEffort "none" keeps a smoke probe deterministic: a mantle model
 	// reasons by default and, with reasoning on, non-deterministically consumes
@@ -319,8 +445,21 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 	// ignores cfg.ReasoningEffort: a user's thinking-depth preference applies to
 	// real answers, not to an access check whose only job is to come back.
 	opts := GenOpts{MaxTokens: probeGenMaxTokens, SystemPrompt: "You are a helpful assistant. Be concise.", ReasoningEffort: "none"}
+	// The one exception: probing the configured Gemini generation model honors
+	// the user's reasoning_effort, so the probe proves the model works at the
+	// depth it will actually be asked to run at.
+	if provider == "gemini" && cfg.EffectiveGenerationProvider() == "gemini" && modelID == cfg.GenerationModel && strings.TrimSpace(cfg.ReasoningEffort) != "" {
+		opts.ReasoningEffort = cfg.ReasoningEffort
+	}
 
 	switch provider {
+	case "gemini":
+		g, err := NewGeminiGenerator(ctx, cfg.Gemini, modelID)
+		if err != nil {
+			return "", err
+		}
+		return g.Generate(ctx, prompt, opts)
+
 	case "bedrock":
 		if strategy != StrategyBedrockMantleResponses {
 			if err := BedrockPreflightModel(ctx, cfg.Bedrock, modelID, "generation", vaultRoot); err != nil {
@@ -356,6 +495,13 @@ func probeGeneration(ctx context.Context, cfg AIConfig, provider, modelID, vault
 			endpoint = "http://localhost:11434"
 		}
 		g := NewOllamaGenerator(endpoint, modelID)
+		return g.Generate(ctx, prompt, opts)
+
+	case "llama-local":
+		if cfg.Llama.GenEndpoint == "" && modelID != "" && !llama.RoleCanStart(llama.RoleGen, modelID) {
+			return "", fmt.Errorf("local model %q not available for generation (download weights or specify valid model id)", modelID)
+		}
+		g := NewLlamaGenerator(modelID, cfg.Llama.GenEndpoint)
 		return g.Generate(ctx, prompt, opts)
 
 	default:
@@ -514,6 +660,11 @@ func usesClassicRegionFanOut(m ModelInfo, vaultRoot string) bool {
 
 // InferProvider guesses the provider from model ID patterns.
 func InferProvider(modelID string) string {
+	if strings.HasPrefix(modelID, "gemini-") ||
+		strings.HasPrefix(modelID, "gemini/") ||
+		strings.HasPrefix(modelID, "google.") {
+		return "gemini"
+	}
 	// Bedrock: starts with region prefix or amazon/anthropic/meta namespace
 	if strings.HasPrefix(modelID, "us.") ||
 		strings.HasPrefix(modelID, "eu.") ||
@@ -528,6 +679,12 @@ func InferProvider(modelID string) string {
 		strings.HasPrefix(modelID, "cohere.") {
 		return "bedrock"
 	}
+	// llama-local: local Gemma models and local cross-encoder models
+	if strings.HasPrefix(modelID, "embeddinggemma-") ||
+		strings.HasPrefix(modelID, "gemma4-") ||
+		strings.HasPrefix(modelID, "bge-reranker-") {
+		return "llama-local"
+	}
 	// OpenRouter: contains a slash (org/model format)
 	if strings.Contains(modelID, "/") {
 		return "openrouter"
@@ -539,6 +696,9 @@ func InferProvider(modelID string) string {
 // InferModelType guesses embedding vs generation from model ID.
 func InferModelType(modelID string) string {
 	lower := strings.ToLower(modelID)
+	if strings.Contains(lower, "rerank") {
+		return "rerank"
+	}
 	if strings.Contains(lower, "embed") {
 		return "embedding"
 	}

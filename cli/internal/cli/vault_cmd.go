@@ -285,9 +285,13 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 
 	var embedder ai.EmbeddingProvider
 	var generator ai.GenerationProvider
-	if cfg.Provider != "" {
-		embedder, _ = ai.DefaultRegistry.Embedder(cfg.Provider)
-		generator, _ = ai.DefaultRegistry.Generator(cfg.Provider)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	genProvider := cfg.EffectiveGenerationProvider()
+	if embedProvider != "" {
+		embedder, _ = ai.DefaultRegistry.Embedder(embedProvider)
+	}
+	if genProvider != "" {
+		generator, _ = ai.DefaultRegistry.Generator(genProvider)
 	}
 
 	// Provider reachability probes can each block 100-500ms (Bedrock
@@ -328,7 +332,13 @@ func runVaultStatus(cmd *cobra.Command, _ []string) error {
 		return output.Write(os.Stdout, format, status)
 	}
 
-	label, hint := nextStepHint(docCount, embeddedCount, embeddedCount+embeddableUnembedded, cfg.Provider)
+	displayProvider := cfg.Provider
+	if cfg.IsMixedProviders() {
+		displayProvider = embedProvider + "+" + genProvider
+	} else if embedProvider != "" {
+		displayProvider = embedProvider
+	}
+	label, hint := nextStepHint(docCount, embeddedCount, embeddedCount+embeddableUnembedded, displayProvider)
 	printVaultStatus(status, label, hint)
 	return nil
 }

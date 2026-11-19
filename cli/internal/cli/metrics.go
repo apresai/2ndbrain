@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
@@ -65,17 +66,71 @@ type MetricsGauges struct {
 	EmbeddingDims     int     `json:"embedding_dims,omitempty"`
 }
 
+// AIUsageWindowSummary aggregates AI calls, tokens, and cloud spend over a
+// rolling UTC window (today, 7d, 30d, or all-time).
+type AIUsageWindowSummary struct {
+	CloudCostUSD      float64 `json:"cloud_cost_usd"`
+	KnownPricing      bool    `json:"known_pricing"`
+	CloudCalls        int     `json:"cloud_calls"`
+	LocalCalls        int     `json:"local_calls"`
+	CloudInputTokens  int     `json:"cloud_input_tokens"`
+	CloudOutputTokens int     `json:"cloud_output_tokens"`
+	LocalTokens       int     `json:"local_tokens"`
+	UnpricedCalls     int     `json:"unpriced_calls"`
+}
+
+// AIModelUsageRow is a lifetime rollup for one (provider, model, slot) pair.
+type AIModelUsageRow struct {
+	Provider         string  `json:"provider"`
+	Model            string  `json:"model"`
+	Slot             string  `json:"slot"`
+	IsCloud          bool    `json:"is_cloud"`
+	Calls            int     `json:"calls"`
+	InputTokens      int     `json:"input_tokens"`
+	OutputTokens     int     `json:"output_tokens"`
+	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
+	KnownPricing     bool    `json:"known_pricing"`
+	PriceLabel       string  `json:"price_label"`
+}
+
+// AIUsageSummary holds windowed spend totals and per-model breakdowns from the
+// unpruned ai_usage_ledger table.
+type AIUsageSummary struct {
+	Today   AIUsageWindowSummary `json:"today"`
+	Last7d  AIUsageWindowSummary `json:"last_7d"`
+	Last30d AIUsageWindowSummary `json:"last_30d"`
+	AllTime AIUsageWindowSummary `json:"all_time"`
+	ByModel []AIModelUsageRow    `json:"by_model"`
+}
+
+// ReembedEstimate projects full-vault re-embedding volume, runtime (from
+// metrics.db history or calibrated baselines), and cloud USD cost from index.db.
+type ReembedEstimate struct {
+	EmbeddableDocs   int     `json:"embeddable_docs"`
+	TotalChunks      int     `json:"total_chunks"`
+	TotalChars       int     `json:"total_chars"`
+	EstimatedTokens  int     `json:"estimated_tokens"`
+	EstimatedSeconds float64 `json:"estimated_seconds"`
+	SpeedSource      string  `json:"speed_source"` // history | baseline | none
+	DocsPerSec       float64 `json:"docs_per_sec"`
+	Provider         string  `json:"provider"`
+	Model            string  `json:"model"`
+	IsCloud          bool    `json:"is_cloud"`
+	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
+	KnownPricing     bool    `json:"known_pricing"`
+}
+
 // MetricsReport is the full `2nb metrics --json` payload (the macOS app decodes
 // this single object). last_build is null when no index run has been recorded.
 type MetricsReport struct {
-	LastBuild  *metrics.Operation           `json:"last_build"`
-	Gauges     MetricsGauges                `json:"gauges"`
-	Recent     []metrics.Operation          `json:"recent"`
-	Aggregates map[string]metrics.Aggregate `json:"aggregates"`
-	// Token totals across the retained window (ask uses provider-actual usage;
-	// embed/search estimate at chars/4).
-	TokensIn  int `json:"total_input_tokens"`
-	TokensOut int `json:"total_output_tokens"`
+	LastBuild       *metrics.Operation           `json:"last_build"`
+	Gauges          MetricsGauges                `json:"gauges"`
+	Recent          []metrics.Operation          `json:"recent"`
+	Aggregates      map[string]metrics.Aggregate `json:"aggregates"`
+	TokensIn        int                          `json:"total_input_tokens"`
+	TokensOut       int                          `json:"total_output_tokens"`
+	AIUsage         *AIUsageSummary              `json:"ai_usage"`
+	ReembedEstimate *ReembedEstimate             `json:"reembed_estimate"`
 }
 
 func openMetricsDB(v *vault.Vault) (*metrics.DB, error) {
@@ -116,14 +171,177 @@ func buildMetricsReport(v *vault.Vault, limit int) (MetricsReport, error) {
 		tokIn += a.TokensIn
 		tokOut += a.TokensOut
 	}
+	aiUsage := buildAIUsageSummary(v, mdb)
+	reembedEst := buildReembedEstimate(v, mdb)
 	return MetricsReport{
-		LastBuild:  lastBuild,
-		Gauges:     vaultGauges(v, lastBuild),
-		Recent:     recent,
-		Aggregates: aggregates,
-		TokensIn:   tokIn,
-		TokensOut:  tokOut,
+		LastBuild:       lastBuild,
+		Gauges:          vaultGauges(v, lastBuild),
+		Recent:          recent,
+		Aggregates:      aggregates,
+		TokensIn:        tokIn,
+		TokensOut:       tokOut,
+		AIUsage:         &aiUsage,
+		ReembedEstimate: &reembedEst,
 	}, nil
+}
+
+func buildAIUsageSummary(v *vault.Vault, mdb *metrics.DB) AIUsageSummary {
+	summary := AIUsageSummary{
+		Today:   AIUsageWindowSummary{KnownPricing: true},
+		Last7d:  AIUsageWindowSummary{KnownPricing: true},
+		Last30d: AIUsageWindowSummary{KnownPricing: true},
+		AllTime: AIUsageWindowSummary{KnownPricing: true},
+		ByModel: []AIModelUsageRow{},
+	}
+	rows, err := mdb.UsageEntries("")
+	if err != nil {
+		return summary
+	}
+
+	now := time.Now().UTC()
+	todayStr := now.Format("2006-01-02")
+	d7Str := now.AddDate(0, 0, -6).Format("2006-01-02")
+	d30Str := now.AddDate(0, 0, -29).Format("2006-01-02")
+
+	type modelKey struct {
+		provider string
+		model    string
+		slot     string
+	}
+	modelAcc := make(map[modelKey]*AIModelUsageRow)
+	priceCache := make(map[modelKey]ai.ModelInfo)
+
+	lookupInfo := func(provider, model, slot string) ai.ModelInfo {
+		k := modelKey{provider: provider, model: model, slot: slot}
+		if info, ok := priceCache[k]; ok {
+			return info
+		}
+		var root string
+		if v != nil {
+			root = v.Root
+		}
+		info := ai.LookupLocalModelPricing(root, provider, model)
+		priceCache[k] = info
+		return info
+	}
+
+	addWindow := func(w *AIUsageWindowSummary, isCloud bool, calls, inTok, outTok int, costUSD float64, unpricedCalls int) {
+		if isCloud {
+			w.CloudCalls += calls
+			w.CloudInputTokens += inTok
+			w.CloudOutputTokens += outTok
+			w.CloudCostUSD += costUSD
+			if unpricedCalls > 0 {
+				w.KnownPricing = false
+				w.UnpricedCalls += unpricedCalls
+			}
+		} else {
+			w.LocalCalls += calls
+			w.LocalTokens += inTok + outTok
+		}
+	}
+
+	for _, r := range rows {
+		info := lookupInfo(r.Provider, r.Model, r.Slot)
+		isCloud := r.IsCloud
+		rowCost := r.CostUSD
+		unpriced := r.UnpricedCalls
+		if isCloud && unpriced > 0 && rowCost == 0 && ai.HasKnownPricing(info) {
+			if computed, _, ok := ai.EstimateUsageCost(info, r.InputTokens, r.OutputTokens, r.Calls); ok {
+				rowCost = computed
+				unpriced = 0
+			}
+		}
+
+		addWindow(&summary.AllTime, isCloud, r.Calls, r.InputTokens, r.OutputTokens, rowCost, unpriced)
+		if r.Day >= d30Str {
+			addWindow(&summary.Last30d, isCloud, r.Calls, r.InputTokens, r.OutputTokens, rowCost, unpriced)
+		}
+		if r.Day >= d7Str {
+			addWindow(&summary.Last7d, isCloud, r.Calls, r.InputTokens, r.OutputTokens, rowCost, unpriced)
+		}
+		if r.Day == todayStr {
+			addWindow(&summary.Today, isCloud, r.Calls, r.InputTokens, r.OutputTokens, rowCost, unpriced)
+		}
+
+		k := modelKey{provider: r.Provider, model: r.Model, slot: r.Slot}
+		entry, ok := modelAcc[k]
+		if !ok {
+			entry = &AIModelUsageRow{
+				Provider:     r.Provider,
+				Model:        r.Model,
+				Slot:         r.Slot,
+				IsCloud:      isCloud,
+				KnownPricing: true,
+				PriceLabel:   ai.VerbosePriceLabel(info),
+			}
+			modelAcc[k] = entry
+		}
+		entry.Calls += r.Calls
+		entry.InputTokens += r.InputTokens
+		entry.OutputTokens += r.OutputTokens
+		entry.EstimatedCostUSD += rowCost
+		if isCloud && unpriced > 0 {
+			entry.KnownPricing = false
+		}
+	}
+
+	for _, entry := range modelAcc {
+		summary.ByModel = append(summary.ByModel, *entry)
+	}
+	sort.Slice(summary.ByModel, func(i, j int) bool {
+		a, b := summary.ByModel[i], summary.ByModel[j]
+		if a.EstimatedCostUSD != b.EstimatedCostUSD {
+			return a.EstimatedCostUSD > b.EstimatedCostUSD
+		}
+		totA := a.InputTokens + a.OutputTokens
+		totB := b.InputTokens + b.OutputTokens
+		if totA != totB {
+			return totA > totB
+		}
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		if a.Slot != b.Slot {
+			return a.Slot < b.Slot
+		}
+		return a.Model < b.Model
+	})
+	return summary
+}
+
+func buildReembedEstimate(v *vault.Vault, mdb *metrics.DB) ReembedEstimate {
+	cfg := v.Config.AI
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	model := cfg.EmbeddingModel
+	embeddableDocs, totalChunks, totalChars, _ := v.DB.VaultEmbedCorpusSizing()
+	histDPS, histCPS, _ := mdb.HistoricalEmbedThroughput(embedProvider, model)
+	concurrency := cfg.ResolveEmbedConcurrency(embedProvider)
+	estSec, speedSource := vault.EstimateInitialEmbedSeconds(embeddableDocs, totalChars, embedProvider, concurrency, histDPS, histCPS)
+	var docsPerSec float64
+	if estSec > 0 && embeddableDocs > 0 {
+		docsPerSec = math.Round((float64(embeddableDocs)/estSec)*100) / 100
+	}
+	estTokens := totalChars / 4
+	if totalChars > 0 && estTokens == 0 {
+		estTokens = 1
+	}
+	modelInfo := ai.LookupLocalModelPricing(v.Root, embedProvider, model)
+	costUSD, isCloud, knownPricing := ai.EstimateUsageCost(modelInfo, estTokens, 0, embeddableDocs)
+	return ReembedEstimate{
+		EmbeddableDocs:   embeddableDocs,
+		TotalChunks:      totalChunks,
+		TotalChars:       totalChars,
+		EstimatedTokens:  estTokens,
+		EstimatedSeconds: math.Round(estSec*100) / 100,
+		SpeedSource:      speedSource,
+		DocsPerSec:       docsPerSec,
+		Provider:         embedProvider,
+		Model:            model,
+		IsCloud:          isCloud,
+		EstimatedCostUSD: costUSD,
+		KnownPricing:     knownPricing,
+	}
 }
 
 // vaultGauges reads current-state counts directly from the index. Each read is
@@ -253,9 +471,51 @@ func printMetricsReport(r MetricsReport) {
 		fmt.Printf("  tokens:      %d in / %d out  (recent window; ask actual, embed/search estimated)\n", r.TokensIn, r.TokensOut)
 	}
 
+	if re := r.ReembedEstimate; re != nil && re.EmbeddableDocs > 0 {
+		costStr := "free (on-device)"
+		if re.IsCloud {
+			if re.KnownPricing {
+				costStr = fmt.Sprintf("~%s", ai.FormatUSD(re.EstimatedCostUSD))
+			} else {
+				costStr = "unknown pricing"
+			}
+		}
+		fmt.Printf("\nFull re-embed estimate (%s · %s):\n", re.Provider, re.Model)
+		fmt.Printf("  scope:       %d docs, %d chunks (~%s tokens)\n",
+			re.EmbeddableDocs, re.TotalChunks, formatTokenEstimate(re.EstimatedTokens))
+		fmt.Printf("  eta & cost:  ~%s (%.1f docs/s via %s) · %s\n",
+			formatETADuration(re.EstimatedSeconds), re.DocsPerSec, re.SpeedSource, costStr)
+	}
+
+	if u := r.AIUsage; u != nil && (len(u.ByModel) > 0 || u.AllTime.CloudCalls > 0 || u.AllTime.LocalCalls > 0) {
+		fmt.Println("\nAI usage & estimated cloud cost:")
+		fmt.Printf("  today:       %s cloud (%d cloud / %d local calls)\n",
+			ai.FormatUSD(u.Today.CloudCostUSD), u.Today.CloudCalls, u.Today.LocalCalls)
+		fmt.Printf("  last 30d:    %s cloud (%s in / %s out cloud tok, %s local tok)\n",
+			ai.FormatUSD(u.Last30d.CloudCostUSD),
+			formatTokenEstimate(u.Last30d.CloudInputTokens),
+			formatTokenEstimate(u.Last30d.CloudOutputTokens),
+			formatTokenEstimate(u.Last30d.LocalTokens))
+		fmt.Printf("  all-time:    %s cloud (%d calls total)\n",
+			ai.FormatUSD(u.AllTime.CloudCostUSD), u.AllTime.CloudCalls+u.AllTime.LocalCalls)
+		for _, m := range u.ByModel {
+			costStr := "free (on-device)"
+			if m.IsCloud {
+				if m.KnownPricing {
+					costStr = ai.FormatUSD(m.EstimatedCostUSD)
+				} else {
+					costStr = "unknown"
+				}
+			}
+			fmt.Printf("    %-11s %-26s %-10s %4d calls  %7s tok  %s\n",
+				m.Provider, m.Model, m.Slot, m.Calls,
+				formatTokenEstimate(m.InputTokens+m.OutputTokens), costStr)
+		}
+	}
+
 	if len(r.Aggregates) > 0 {
 		fmt.Println("\nPer-operation (recent window):")
-		for _, op := range []string{metrics.OpIndex, metrics.OpReembed, metrics.OpIndexDoc, metrics.OpSearch, metrics.OpAsk} {
+		for _, op := range []string{metrics.OpIndex, metrics.OpReembed, metrics.OpIndexDoc, metrics.OpSearch, metrics.OpAsk, metrics.OpChat, metrics.OpPolish, metrics.OpFix, metrics.OpSuggest, metrics.OpProbe} {
 			a, ok := r.Aggregates[op]
 			if !ok {
 				continue
@@ -321,7 +581,7 @@ func metricsDurationF(ms float64) string {
 func embedRetryAdvice(v *vault.Vault) string {
 	cfg := v.Config.AI
 	configured := cfg.EmbedConcurrency
-	automatic := ai.ProviderEmbedConcurrencyDefault(cfg.Provider)
+	automatic := ai.ProviderEmbedConcurrencyDefault(cfg.EffectiveEmbeddingProvider())
 	if configured <= automatic {
 		return ""
 	}

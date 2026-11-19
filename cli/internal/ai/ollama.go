@@ -248,11 +248,15 @@ func InitOllama(_ context.Context, reg *Registry, cfg OllamaConfig, aiCfg AIConf
 		endpoint = ollamaDefaultEndpoint
 	}
 
-	embedder := NewOllamaEmbedder(endpoint, aiCfg.EmbeddingModel, aiCfg.Dimensions)
-	reg.RegisterEmbedder("ollama", embedder)
+	if ep := aiCfg.EffectiveEmbeddingProvider(); ep == "" || ep == "ollama" {
+		embedder := NewOllamaEmbedder(endpoint, aiCfg.EmbeddingModel, aiCfg.Dimensions)
+		reg.RegisterEmbedder("ollama", embedder)
+	}
 
-	generator := NewOllamaGenerator(endpoint, aiCfg.GenerationModel)
-	reg.RegisterGenerator("ollama", generator)
+	if gp := aiCfg.EffectiveGenerationProvider(); gp == "" || gp == "ollama" {
+		generator := NewOllamaGenerator(endpoint, aiCfg.GenerationModel)
+		reg.RegisterGenerator("ollama", generator)
+	}
 
 	return nil
 }

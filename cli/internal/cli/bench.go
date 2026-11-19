@@ -172,8 +172,8 @@ func runBench(cmd *cobra.Command, args []string) error {
 		if len(favs) == 0 {
 			// Fall back to active config.
 			targets = append(targets,
-				target{provider: cfg.Provider, modelID: cfg.EmbeddingModel, modelType: "embedding"},
-				target{provider: cfg.Provider, modelID: cfg.GenerationModel, modelType: "generation"},
+				target{provider: cfg.EffectiveEmbeddingProvider(), modelID: cfg.EmbeddingModel, modelType: "embedding"},
+				target{provider: cfg.EffectiveGenerationProvider(), modelID: cfg.GenerationModel, modelType: "generation"},
 			)
 		} else {
 			for _, f := range favs {

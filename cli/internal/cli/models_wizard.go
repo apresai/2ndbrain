@@ -39,7 +39,7 @@ func init() {
 	modelsWizardCmd.Flags().StringVar(&wizardScope, "scope", "vault",
 		"Catalog scope to save verified models to: global or vault")
 	modelsWizardCmd.Flags().StringVar(&wizardProvider, "provider", "",
-		"Limit to a single provider: bedrock, openrouter, ollama")
+		"Limit to a single provider: gemini, bedrock, openrouter, ollama")
 	modelsWizardCmd.Flags().BoolVar(&wizardSkipDiscover, "skip-discover", false,
 		"Use only the builtin catalog; don't query vendor APIs")
 	modelsWizardCmd.Flags().Float64Var(&wizardCostCap, "cost-cap", 0.50,
@@ -357,13 +357,14 @@ func writeActiveModelConfig(v *vault.Vault, provider, embed, gen string, events 
 	return nil
 }
 
-// probeProviderStatus returns reachability for the three supported
-// providers. The wizard uses this both for filtering candidates and
-// for the providers step event.
+// probeProviderStatus returns reachability for the supported cloud and local
+// providers (with Google Gemini first). The wizard uses this both for filtering
+// candidates and for the providers step event.
 func probeProviderStatus(ctx context.Context, cfg ai.AIConfig) []providerStatus {
 	// Quick, cheap probes: check for creds/endpoint configuration, not
 	// live API health. Live reachability is exercised by the test step.
 	out := []providerStatus{
+		{Name: "gemini", Available: ai.CheckGeminiCredentials(ctx, cfg.Gemini)},
 		// Bedrock has no API key — readiness is whether AWS credentials actually
 		// resolve, not HasAPIKey("bedrock") (which always returns true).
 		{Name: "bedrock", Available: ai.CheckBedrockCredentials(ctx, cfg.Bedrock)},
@@ -405,10 +406,30 @@ func filterForWizard(models []ai.ModelInfo, provider string, status []providerSt
 	return out
 }
 
+func betterEasyPick(currIdx int, cand ai.ModelInfo, candidates []ai.ModelInfo, cfg ai.AIConfig) bool {
+	if currIdx == -1 {
+		return true
+	}
+	curr := candidates[currIdx]
+	currPref := isPreferredProvider(curr.Provider, cfg)
+	candPref := isPreferredProvider(cand.Provider, cfg)
+	if candPref && !currPref {
+		return true
+	}
+	if !candPref && currPref {
+		return false
+	}
+	if cand.Provider == curr.Provider && cand.Recommended && !curr.Recommended {
+		return true
+	}
+	return false
+}
+
 // easyModeIndices returns indices into `candidates` that represent the
 // wizard's recommended picks. We pick at most one embedding and one
 // generation model — matching the existing AI setup wizard's "easy
-// mode" philosophy — preferring entries that already carry TierVerified.
+// mode" philosophy — preferring entries that already carry TierVerified
+// and keeping recommended defaults ahead of later rows in the same provider.
 func easyModeIndices(candidates []ai.ModelInfo, cfg ai.AIConfig) []int {
 	embed := -1
 	gen := -1
@@ -418,11 +439,11 @@ func easyModeIndices(candidates []ai.ModelInfo, cfg ai.AIConfig) []int {
 		}
 		switch m.Type {
 		case "embedding":
-			if embed == -1 || isPreferredProvider(m.Provider, cfg) {
+			if betterEasyPick(embed, m, candidates, cfg) {
 				embed = i
 			}
 		case "generation":
-			if gen == -1 || isPreferredProvider(m.Provider, cfg) {
+			if betterEasyPick(gen, m, candidates, cfg) {
 				gen = i
 			}
 		}
@@ -438,7 +459,15 @@ func easyModeIndices(candidates []ai.ModelInfo, cfg ai.AIConfig) []int {
 }
 
 func isPreferredProvider(p string, cfg ai.AIConfig) bool {
-	return cfg.Provider != "" && p == cfg.Provider
+	if p == "" {
+		return false
+	}
+	for _, ap := range cfg.ActiveProviders() {
+		if p == ap {
+			return true
+		}
+	}
+	return false
 }
 
 func subset(all []ai.ModelInfo, indices []int) []ai.ModelInfo {

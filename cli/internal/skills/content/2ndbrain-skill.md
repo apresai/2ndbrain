@@ -42,7 +42,7 @@ Three intents cover almost every request. Pick the path; do not improvise a one-
 
 **1. Find / recall / "what do we know about X" → search, then fetch.**
 - Search: `kb_search` (query) or `2nb search "X" --json`.
-- Rank by `vector_score` (raw cosine), NOT `score`. `score` is RRF rank-fusion: useful for ordering, meaningless as an absolute relevance signal (a strong vector-only hit can show `score` near 0.016). Cosine bands: 0.6+ strong, 0.35 to 0.6 related, below the active threshold it is dropped entirely. A result with no `vector_score` was a BM25-only match (still valid).
+- Rank by `vector_score` (raw cosine), NOT `score`. `score` is RRF rank-fusion: useful for ordering, meaningless as an absolute relevance signal (a strong vector-only hit can show `score` near 0.016). Cosine bands (default `gemini-embedding-2` and `embeddinggemma-2`, threshold `0.60`): 0.75+ strong, 0.60 to 0.75 related, below the active threshold it is dropped entirely (legacy `embeddinggemma-300m` uses `0.35`, Nova-2 uses `0.25`). A result with no `vector_score` was a BM25-only match (still valid).
 - Fetch the winners: `kb_read` / `2nb read <path>`. For a long document call `kb_structure` first, then `kb_read` with `chunk:"<heading>"` so you pull one section instead of the whole body.
 
 **2. Save / capture / "write up X" → search FIRST, then create.**
@@ -114,18 +114,33 @@ echo "from stdin" | 2nb append notes.md                                # --text 
 2nb rename old.md new-name                  # same folder; .md appended if omitted; delegates to move
 ```
 
-**Polish (copy-edit + fix links, in place)**
+**Fix Vault (one-shot deterministic + AI-assisted link, parse, format & schema repair, in place)**
 ```bash
-2nb polish notes.md --json                                   # preview only: original + polished body for a diff (no write)
-2nb polish notes.md --write --links --repair-links --json    # apply: copy-edit, repair broken links, add grounded links, re-embed; snapshot kept
-2nb polish notes.md --undo                                   # restore the pre-polish snapshot (refuses if changed since, unless --force)
+2nb fix --json             # preview deterministic fixes and classify AI-fixable issues (hermetic, no AI call)
+2nb fix --ai --json        # preview deterministic + AI-assisted YAML, schema, and broken-link repairs
+2nb fix --write --json     # apply deterministic + AI fixes (use --no-ai for offline-only) and save .2ndbrain/recovery/fix-last.json
+2nb fix --undo             # restore every modified note and .2ndbrain/schemas.yaml byte-for-byte (or --force)
+```
+
+**Polish (copy-edit + schema + outgoing links + incoming backlinks, in place)**
+```bash
+2nb polish notes.md --json                                                     # preview only: original + polished + schema repairs (no write)
+2nb polish notes.md --goal "Tighten into 3 bullets" --backlinks --json         # goal-steered preview with incoming backlink previews
+2nb polish notes.md --write --links --repair-links --backlinks --apply-backlinks --json  # apply target + backlinks batch with undo snapshot
+2nb polish notes.md --undo                                                     # restore target note and any backlink batch notes (or --force)
 ```
 
 **Index & AI** (after a DIRECT file write, not via a 2nb write command, reindex so search/embeddings see it)
 ```bash
 2nb index --doc jwt-auth.md     # re-index + re-embed ONE file (cheap, hash-gated)
-2nb index                       # whole vault; only re-embeds changed docs and purges deleted ones
+2nb index                       # whole vault; prints chunk/ETA estimate and only re-embeds changed docs
+2nb metrics --json              # AI usage (cloud vs $0.00 local), reembed_estimate (ETA + cost), gauges, recent ops
 2nb ai status --json            # provider, models, embedding coverage, threshold + source, portability_status
+2nb config set-key gemini       # BYOK: store Gemini API key in Keychain
+2nb config set ai.gemini.project <your-gcp-project-id>  # BYOP: set Vertex AI GCP project
+2nb ai engine pull embeddinggemma-2       # offline local Gemma: pull 310MB Q8_0 GGUF weights (Apache-2.0)
+2nb config set ai.dimensions 256         # EmbeddingGemma Matryoshka width (128|256|512|768)
+2nb config set ai.task_preset code       # EmbeddingGemma query prefix preset (search|code|qa|none)
 ```
 
 **Complete example, author a design note and wire it into the graph:**
@@ -170,7 +185,8 @@ Build the command from this table instead of probing `--help`. **Global flags on
 | `move` / `rename` | `--dry-run` `--force` |
 | `obsidian migrate-properties` | `--write` (previews without it). Rewrites quoted `created`/`modified` (and any schema `date`/`datetime` field) into the plain form Obsidian types as **Date and time**; date-shaped properties YOU author are reported, never touched. Idempotent; snapshots each note so `2nb polish <path> --undo` reverses it |
 | `obsidian register-types` | `--write` `--force` (previews without `--write`). Merges 2nb's property types into `.obsidian/types.json`. The only Obsidian setting 2nb writes; refused while Obsidian has the vault open, and refused until `migrate-properties` has run |
-| `polish` | `--write` `--links` `--repair-links` `--undo` `--force` `--system` `--max-tokens` |
+| `fix` | `--write` `--ai` `--no-ai` `--undo` `--force` |
+| `polish` | `--write` `--goal` `--lens` `--schema` `--no-schema` `--links` `--repair-links` `--backlinks` `--apply-backlinks` `--undo` `--force` `--system` `--max-tokens` |
 | `index` | `--doc <path>` `--force-reembed` |
 | `stale` | `--since <days>` (an integer number of days, e.g. `--since 7`; NOT a duration string). Reads `documents.modified_at`, so a note only appears once it has been indexed by 0.22.4 or later; run `2nb index` once after upgrading |
 | `meta --set`, `tag add\|remove`, `tags rename` | Frontmatter-only writes. They touch ONLY the property named: every other line comes back byte for byte, and a note's body is never rewritten. A note's `---` lines must be exactly that at both ends (trailing invisible whitespace is fine); a `----` rule is body. An anchored property stays valid YAML after an edit, and CRLF notes keep CRLF |
@@ -245,14 +261,16 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 | `2nb delete <path> [--force]` | Delete from disk and index. Prompts for confirmation interactively; **pass `--force` for non-interactive/agent use** (a non-terminal stdin waits 60s, then reports the note was NOT removed and points at `--force`, so an agent never hangs). |
 | `2nb move <src> <dst> [--dry-run] [--force]` | Move/rename a note to a new vault-relative path AND rewrite every `[[wikilink]]` AND markdown-style `[text](path.md)` link across the vault that points at it (wikilinks keep `#heading`/`#^block`/`\|alias`/`!`-embed suffixes; markdown links keep the `[label]` text, any `#anchor`/`?query` suffix, and the `.md` extension; both keep the bare-vs-path form. External-URL and anchor-only markdown links are skipped; links inside code are never touched). The strongest write surface: it edits OTHER notes. **Always `--dry-run` first** to preview the rename, per-note rewrites, and the ambiguous links it would skip. Without `--force`, a move is refused when a bare `[[name]]` link is ambiguous (the name matches more than one note), where `name` is anything the resolver accepts: a filename, a path suffix, a frontmatter title, or an alias, so two notes sharing a TITLE block a link to that title too. `--force` then rewrites only the unambiguous path-qualified links. The target file is moved LAST (after referencing notes), so a crash leaves links pointing at the still-present old name. JSON: `{moved, rewritten, skipped_ambiguous, failed}`. |
 | `2nb rename <src> <newname> [--dry-run] [--force]` | Rename a note in place (same folder; `.md` appended if omitted), delegating to `move` with all its behavior. |
+| `2nb fix [--write] [--undo [--force]]` | Deterministically repair the whole vault (no AI): widens `.2ndbrain/schemas.yaml` note status enums for common statuses (`active`, `reference`, `archived`, `published`, `done`), fixes missing required `title`/`status` and quoted date frontmatter while keeping comments/unknown keys, normalizes link syntax (`\` -> `/`, stray `.md`, `[[note\|]]` empty pipes, spaces in resolvable markdown links), repoints drifted/moved/obvious broken links & backlinks, and unwraps confirmed 0-match dead links to plain text (multi-candidate ambiguous links are skipped). `--write` snapshots all edited notes and `schemas.yaml` to `.2ndbrain/recovery/fix-last.json` so `--undo` restores them byte-for-byte. |
 | `2nb polish <path> [--write] [--links] [--repair-links] [--undo]` | AI copy-edit (spelling/grammar/clarity) — returns JSON with `original` and `polished` body for diff review. Default is preview only (**does not write to disk**). `--write` applies the polished body in place (opt-in) and snapshots the original. `--links` adds grounded `[[wikilinks]]` to existing notes (never invents a target). `--repair-links` repairs broken `[[wikilinks]]` to existing notes (bare-name case/whitespace/alias drift; ambiguous or path-qualified targets reported, never guessed). `--undo` restores the pre-polish snapshot. |
 
 ### Index & housekeeping
 
 | Command | Purpose |
 |---------|---------|
-| `2nb index` | Rebuild the search index and regenerate embeddings for changed docs. A note whose frontmatter will not parse is named and skipped (its stale index row dropped) rather than failing the run; one that cannot be READ keeps its existing row. `--json` always carries both `unparseable` and `unreadable` (empty arrays when there is nothing to report, never absent) plus `embedded`/`embed_failed`/`embed_skipped`/`embed_retries`/`excluded_purged`. Obsidian's template folders are not indexed |
+| `2nb index` | Rebuild the search index and regenerate embeddings for changed docs (`--force-reembed` invalidates all vectors; prints corpus chunk/token/ETA estimate and live `docs/s` countdown). A note whose frontmatter will not parse is named and skipped (its stale index row dropped) rather than failing the run; one that cannot be READ keeps its existing row. `--json` always carries both `unparseable` and `unreadable` (empty arrays when there is nothing to report, never absent) plus `embedded`/`embed_failed`/`embed_skipped`/`embed_retries`/`excluded_purged`. Obsidian's template folders are not indexed |
 | `2nb index --doc <path>` | Re-index + re-embed only one document (fast, skips unchanged hash). Unlike the whole-vault run this DOES exit non-zero on a parse error, so an editor save reports the broken note |
+| `2nb metrics` | Performance observatory + AI usage/cost summary from `.2ndbrain/metrics.db`: `ai_usage` windows (`today`/`last_7d`/`last_30d`/`all_time`/`by_model` separating cloud spend from `$0.00` on-device calls), `reembed_estimate` (chunk-weighted ETA + cost from vault history or baseline), gauges, and recent ops. `2nb metrics clear` resets history |
 | `2nb lint [glob]` | Validate schemas, check broken wikilinks (ignores wikilinks inside code spans) |
 | `2nb export-context --types <types>` | Generate a CLAUDE.md-compatible context bundle. The bundle is a document body: the default form and `--format raw`/`md`/`text` emit it, `--json` wraps it as `{bundle, docs, chars}`, and `csv`/`tsv`/`yaml` are refused |
 
@@ -280,9 +298,9 @@ All commands support `--json`, `--yaml`, `--csv`, `--format` (also `tsv`/`raw`/`
 |---------|---------|
 | `2nb config show` | Full config with `vault_root`, `vault_dir`, `vault_name` |
 | `2nb config get <key>` | Read one key (e.g. `ai.provider`, `ai.similarity_threshold`). `--effective` on `ai.similarity_threshold` prints the resolved value + source (chain: vault > calibration > model > default) instead of the often-zero raw value |
-| `2nb config set <key> <value>` | Write one key. Setting `ai.embedding_model` also resyncs `ai.dimensions` from the catalog; setting `ai.provider` validates the name, re-enables that provider, and warns if an active model can't be served. Search-tuning keys: `ai.similarity_threshold` (drop vector hits below this cosine), `ai.bm25_weight` / `ai.vector_weight` (bias the RRF fusion toward keyword or semantic recall; each defaults to 1.0 — raise `ai.vector_weight` to lean on the vector channel), `ai.dimensions` (Matryoshka width, validated against the model's supported set) |
+| `2nb config set <key> <value>` | Write one key. Setting `ai.embedding_model` also resyncs `ai.dimensions` from the catalog; setting `ai.provider` clears per-slot overrides (`ai.embedding_provider`, `ai.generation_provider`, `ai.rerank.provider`), re-enables that provider, and warns if an active model can't be served. Set `ai.embedding_provider` / `ai.generation_provider` independently to mix providers across slots (e.g., on-device `llama-local` embeddings with cloud `gemini` generation). Search-tuning keys: `ai.similarity_threshold` (drop vector hits below this cosine), `ai.bm25_weight` / `ai.vector_weight` (bias the RRF fusion toward keyword or semantic recall; each defaults to 1.0 — raise `ai.vector_weight` to lean on the vector channel), `ai.dimensions` (Matryoshka width, validated against the model's supported set). Google Gemini keys: `ai.gemini.project <your-gcp-project-id>` (enables Vertex AI backend), `ai.gemini.location` (GCP region, default `us-central1`) |
 | `2nb config bedrock` | Show or set machine-local Bedrock region + token (`~/.config/2nb/bedrock.json`). No vault required. `--json` redacts the token |
-| `2nb config set-key <provider>` | Store a provider API key (bedrock writes the machine file; OpenRouter stays Keychain-only) |
+| `2nb config set-key <provider>` | Store a provider API key (`gemini` stores in Keychain; `bedrock` writes machine file; `openrouter` stays Keychain-only) |
 | `2nb config doctor` | Diagnose AI-config problems (provider known/enabled, no orphaned model slot, `ai.dimensions` matches the model, DB embeddings match the selection, threshold resolves), each with a fix hint. A genuine config defect exits 2 (so it can gate a script); an unreachable provider is a non-failing warning, so it stays usable offline/in CI. Run it when search degrades or after editing config by hand |
 | `2nb ai status` / `ai setup` / `ai local` / `ai embed <text>` | Provider status, setup wizard (a model that passes its probe is saved to the user catalog as `user_verified`), readiness check, debug embedding |
 | `2nb eval` / `eval tune` / `eval answers` | Retrieval scorecard (Recall@10 / R@1 / MRR over a cached QA set generated from the vault; cost-gated one-time generation), a threshold/weight sweep that prints suggested `config set` commands (suggest-only, near-zero cost), and an LLM-jury answer scorecard (self-judged by default, `--judges` for a panel, cost-gated) |
@@ -330,7 +348,7 @@ The MCP server (`2nb mcp-server`, started as a stdio subprocess by the client) e
 | `kb_append` | Append text to the END of a doc's body (frontmatter untouched), then reindex + re-embed. Explicit body write; rejects read-only `.canvas`/`.base`. |
 | `kb_replace_section` | Replace the content under ONE heading (siblings untouched, first match wins), then reindex + re-embed. Call `kb_structure` first to confirm heading names. Errors if the heading isn't found; rejects read-only `.canvas`/`.base`. |
 | `kb_delete` | Delete from disk + index. Irreversible. Confirm the path is correct before calling. |
-| `kb_polish` | AI copy-edit. Returns both `original` and `polished` — **you decide** whether to apply the changes with a follow-up edit. The server doesn't write the polished text anywhere. |
+| `kb_polish` | AI copy-edit preview (optional `goal`, `schema`, `links`, `repair_links`, `backlinks`, `system`). Returns `original`, `polished`, `frontmatter_fixes`, and `backlink_previews` — **you decide** whether to apply the changes with a follow-up edit. The server doesn't write anywhere. |
 | `kb_index` | Force a full reindex + embedding rebuild. Most operations auto-index; only call this after bulk external edits or imports. The result carries `unparseable` and `unreadable` (both always present, `[]` when empty): a note that would not PARSE has had its index row dropped and is gone from search until it is fixed, one that would not OPEN keeps its row and is still answering searches from what was indexed before. |
 
 > Note: `move`/`rename` (the wikilink-rewriting vault mutation) is intentionally **CLI-only**: it is the highest-blast-radius write surface (it rewrites links across every note), so it stays behind `2nb move`/`2nb rename` with their mandatory `--dry-run` preview rather than an MCP tool.
@@ -398,32 +416,87 @@ Both surfaces share the same vault, schemas, and SQLite index. The differences a
 2. Diff the two in your head (or with a diff tool). Check that wikilinks, code blocks, and frontmatter are preserved.
 3. If you like the changes, write the polished body back with a normal file edit (polish itself doesn't touch disk).
 
+## AI Providers & BYOK Architecture
+
+2ndbrain natively defaults to **Google Gemini** on Google Cloud Platform, while also supporting AWS Bedrock, OpenRouter, and Ollama (fully local).
+
+### Google Gemini (Native Default)
+
+- **Provider**: `gemini`
+- **Default Generation Model**: `gemini-4-hydrogen` (1M unified context window, Free Tier + Paid Tier available, Gemini 4 multimodal reasoning & agentic model). Other supported Gemini 4 generation models: `gemini-4-argon` and `gemini-4-carbon`. *(Legacy `gemini-2.5-*` and `gemini-3.x` generation models are retired/superseded.)*
+- **Default Embedding Model**: `gemini-embedding-2` (768 dimensions default, 8,192 input token context, multimodal + text, with Matryoshka support for 768, 1024, 1536, and 3072 dims; unit-normalized). Also supports text-only `gemini-embedding-001` (2,048 context). *(Google's embedding models remain named `gemini-embedding-*`; there is no `gemini-4-embedding*` model ID.)*
+- **Asymmetric Retrieval**:
+  - Indexing: `TaskType: RETRIEVAL_DOCUMENT` with document `Title` context.
+  - Query: `TaskType: RETRIEVAL_QUERY`.
+- **Recommended Similarity Threshold**: `0.60`.
+
+### Open-Source BYOK / BYOP (Bring Your Own Key / Project)
+
+2nb is open-source. Users supply their own credentials — 2nb never hardcodes or relies on any maintainer project, personal account, or secrets.
+
+#### Mode 1: Gemini API Key (BYOK — Seamless Developer Setup)
+No GCP project or cloud billing setup is required:
+```bash
+export GEMINI_API_KEY="AIza..."
+# OR store securely in macOS Keychain:
+2nb config set-key gemini
+```
+*Project Policy Note*: `2nb` strictly ignores and rejects `GOOGLE_API_KEY` to prevent SDK precedence conflicts. Always use `GEMINI_API_KEY` or `2nb config set-key gemini`.
+
+#### Mode 2: Vertex AI on User's GCP Project (BYOP — Enterprise / GCP-First)
+For teams or developers utilizing Google Cloud Vertex AI quotas and infrastructure:
+1. Authenticate with Google Application Default Credentials (ADC):
+   ```bash
+   gcloud auth application-default login
+   ```
+   (or set `GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json`).
+2. Configure your own GCP project ID:
+   ```bash
+   2nb config set ai.gemini.project <your-gcp-project-id>
+   # OR export GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
+   ```
+3. (Optional) Set region (defaults to `us-central1`):
+   ```bash
+   2nb config set ai.gemini.location us-central1
+   ```
+4. Ensure Vertex AI API is enabled on your project:
+   ```bash
+   gcloud services enable aiplatform.googleapis.com --project=<your-gcp-project-id>
+   ```
+
 ## Search scoring, explained
 
 `2nb search` and `kb_search` display two numbers per result:
 
 - **`rrf`** — Reciprocal Rank Fusion score. Combines BM25 rank + vector rank. Good for *ordering* results; bad as an absolute relevance signal. A doc that matched only in the vector channel at rank 1 gets `rrf ≈ 0.016` even if the cosine is 0.9.
-- **`cos`** — raw cosine similarity from the vector channel. This is what you actually want to look at for "is this relevant?". Rules of thumb (tune per embedding model):
-  - ≥ 0.6 — strong semantic match
-  - 0.35 – 0.6 — related
-  - 0.20 – 0.35 — weakly related
-  - < 0.20 — filtered out entirely by `ai.similarity_threshold`
+- **`cos`** — raw cosine similarity from the vector channel. This is what you actually want to look at for "is this relevant?".
 
-If legitimate matches are being cut, lower the threshold: `2nb config set ai.similarity_threshold 0.15`. If noise is slipping through, raise it. Per-query overrides: `2nb search "foo" --threshold 0.35`.
+  **Rules of thumb for default Gemini (`gemini-embedding-2`, 768d) and Local Gemma (`embeddinggemma-2`, 768d, Apache-2.0), both with recommended threshold `0.60`:**
+  - ≥ 0.75 — strong semantic match
+  - 0.60 – 0.75 — related match
+  - < 0.60 — filtered out entirely by `ai.similarity_threshold`
+
+  *(For legacy models: `embeddinggemma-300m` uses threshold `0.35`, and Nova-2 uses `0.25`: ≥ 0.6 strong, 0.35–0.6 related, 0.20–0.35 weakly related, < 0.20 filtered out).*
+
+If legitimate matches are being cut, lower the threshold: `2nb config set ai.similarity_threshold 0.50`. If noise is slipping through, raise it. Per-query overrides: `2nb search "foo" --threshold 0.50`.
 
 ## Error recovery playbook
 
 When semantic search falls back to BM25, the CLI prints a warning to stderr and the `--json` envelope includes it in `warnings[]`. Match on the stable prefix `"semantic search disabled:"` — the tail varies with provider/dim details.
 
-`2nb ai status --json` is the fastest triage. It exposes `portability_status` (e.g. `ok`, `provider_unavailable`, `dimension_break`, `model_mismatch`, `mixed`, `unindexed`), the active `similarity_threshold` with its `similarity_threshold_source`, the embedding/embeddable/embedded doc counts, and a `providers[]` array carrying per-provider `reachable` / `disabled` / `reason`. There is no separate code field. When a provider can classify its own failure (today: bedrock, after a probe) `reason` ends in the machine-readable cause in parentheses, e.g. `credentials were rejected (bad_credentials)`, the same token the degradation warning below carries. Other rows carry a plain-language reason with no code (`disabled in vault config`, `no API key (set $OPENROUTER_API_KEY …)`, `not running on http://localhost:11434`), so treat the trailing code as present-if-classified, not guaranteed. Do NOT just extract the last parenthesis: even bedrock says `region not set (ai.bedrock.region)` and `bedrock not registered (check ai.provider setup)` when it never got as far as probing. Match the parenthesized value against the known codes below and ignore it otherwise. Read it before guessing why a search degraded.
+`2nb ai status --json` is the fastest triage. It exposes `portability_status` (e.g. `ok`, `provider_unavailable`, `dimension_break`, `model_mismatch`, `mixed`, `unindexed`), the active `similarity_threshold` with its `similarity_threshold_source`, the embedding/embeddable/embedded doc counts, and a `providers[]` array carrying per-provider `reachable` / `disabled` / `reason`. There is no separate code field. When a provider can classify its own failure (both `gemini` and `bedrock`, after a probe) `reason` ends in the machine-readable cause in parentheses, e.g. `credentials were rejected (bad_credentials)`, the same token the degradation warning below carries. Other rows carry a plain-language reason with no code (`disabled in vault config`, `no API key (set $OPENROUTER_API_KEY …)`, `not running on http://localhost:11434`), so treat the trailing code as present-if-classified, not guaranteed. Match the parenthesized value against the known codes below and ignore it otherwise. Read it before guessing why a search degraded.
 
 | Warning or state | What's wrong | Fix |
 |---|---|---|
 | `"semantic search disabled: vault was embedded with Nd vectors but current provider X produces Md"` | Dimension mismatch — you switched providers and existing embeddings are the wrong size | `2nb index --force-reembed` OR switch the provider back to the one that built this vault |
+| `"semantic search disabled: provider X not ready (bad_credentials) — falling back to keyword search"` / `UNAUTHENTICATED` | Gemini API key missing/invalid, or Google ADC credentials missing/expired | Mode 1: Set `GEMINI_API_KEY` or run `2nb config set-key gemini`. Mode 2: Run `gcloud auth application-default login`. Check `2nb ai status`. |
+| `"semantic search disabled: provider X not ready (access_denied) — falling back to keyword search"` / `PERMISSION_DENIED` | GCP project lacks Vertex AI API enablement or identity lacks IAM permission | Mode 2: Run `gcloud services enable aiplatform.googleapis.com --project=<your-gcp-project-id>` and ensure identity has `roles/aiplatform.user` on `<your-gcp-project-id>`. |
+| `"semantic search disabled: provider X not ready (throttled) — falling back to keyword search"` / `RESOURCE_EXHAUSTED` | Google Cloud or provider rate limits / quotas exhausted (HTTP 429) | Automatic exponential backoff retries transient spikes; check quotas or request an increase in Google Cloud console. |
 | `"semantic search disabled: provider X not ready (CODE) — falling back to keyword search"` | The configured provider failed its readiness probe. `CODE` is one of `timeout`, `throttled`, `provider_unreachable`, `bad_credentials`, `access_denied`, `not_found`, `invalid_request`, `unknown`; treat an unrecognized code as `unknown` rather than assuming the set is closed | Branch on the code: `timeout`/`throttled`/`provider_unreachable` usually clear on their own, `bad_credentials`/`access_denied` need `2nb ai status`, `unknown` means the probe failed unrecognizably. BM25 still works: results still return, just without vector ranking. |
 | `"semantic search disabled: provider X unavailable — falling back to keyword search"` | The same state from a provider that cannot classify its own failure (ollama, openrouter, llama-local) | Check `2nb ai status`. BM25 still works. |
-| `"semantic search disabled: no AI provider configured"` | Nothing set up yet | `2nb ai setup` |
+| `"semantic search disabled: no AI provider configured"` | Nothing set up yet | `2nb ai setup` (select `gemini` for default setup) |
 | `"semantic search disabled: embedder X not registered"` | Config names a provider that isn't compiled in | `2nb config show` — check `ai.provider` |
+| `"GOOGLE_API_KEY is prohibited by project policy"` | `GOOGLE_API_KEY` environment variable is set | Unset `GOOGLE_API_KEY` (`unset GOOGLE_API_KEY`) and use `GEMINI_API_KEY` or Vertex AI ADC instead. |
 | Search returns `mode: keyword` with no warnings | Vault has no embeddings yet | `2nb index` — BM25 works immediately, embeddings backfill during the run |
 | Search returns empty results | Usually a threshold issue, not a content gap | Try `2nb search "foo" --threshold 0.15` or `--bm25-only` |
 | A note you know exists is missing from `search` AND `list` | Its frontmatter stopped parsing, so `2nb index` dropped its row rather than serving a version that is no longer on disk | `2nb index --json` lists it under `unparseable` with the parser's reason; fix the frontmatter and reindex. A note that could not be READ (permissions, locked mid-save) is under `unreadable` instead and KEEPS its old index entry |

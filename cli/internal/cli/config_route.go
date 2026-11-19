@@ -105,7 +105,16 @@ func applyModelSlotRoute(v *vault.Vault, key, value string) (bool, error) {
 		}
 	}
 	if ref.Provider == "" {
-		ref.Provider = v.Config.AI.Provider
+		switch slotName {
+		case "generation":
+			ref.Provider = v.Config.AI.EffectiveGenerationProvider()
+		case "embedding":
+			ref.Provider = v.Config.AI.EffectiveEmbeddingProvider()
+		case "rerank":
+			ref.Provider = v.Config.AI.EffectiveRerankProvider()
+		default:
+			ref.Provider = v.Config.AI.Provider
+		}
 	}
 
 	list, err := ai.BuildModelList(context.Background(), ai.MergedListOptions{

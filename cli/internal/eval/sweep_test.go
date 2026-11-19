@@ -26,7 +26,7 @@ var judgeModels = []struct{ name, id string }{
 // how well they retrieve each question's ground-truth source note, then LLM-juries
 // the end-to-end answers of the top configs. Gated on a vault + real Bedrock:
 //
-//	source ~/.secrets/shell.zsh
+//	# Export AWS / Bedrock credentials in your shell environment
 //	env 2NB_EVAL_VAULT=/path/to/vault EVAL_N=24 EVAL_JURY_TOP=4 \
 //	  go test ./internal/eval/ -run ConfigSweep -v -count=1 -timeout 3600s
 func TestConfigSweep_Bedrock(t *testing.T) {

@@ -135,7 +135,7 @@ func splitTargetHeadingAlias() {
     #expect(heading == "Setup")
 }
 
-// MARK: - Link round-trip regression (Chad review HIGH finding)
+// MARK: - Link round-trip regression
 //
 // The original Phase D implementation stored wikilinks as URL values
 // with `.urlPathAllowed` percent-encoding, which meant `[[projects/q2]]`

@@ -61,6 +61,8 @@ func TestLocateEngineOverride(t *testing.T) {
 func TestLocateEngineFromPATH(t *testing.T) {
 	// Force the cache/bundle branches to miss by pointing them at empty dirs.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("APP", t.TempDir())
 
 	want := filepath.Join(t.TempDir(), "llama-server")
 	if err := os.WriteFile(want, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -98,5 +100,102 @@ func TestIsExecutableFile(t *testing.T) {
 	}
 	if isExecutableFile(dir) {
 		t.Error("a directory is not an executable file")
+	}
+}
+
+func TestLocateEngineSibling(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeExe := filepath.Join(dir, "2nb")
+	if err := os.WriteFile(fakeExe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(sibling, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origExe := executable
+	executable = func() (string, error) { return fakeExe, nil }
+	t.Cleanup(func() { executable = origExe })
+
+	if got := LocateEngine(""); got != sibling {
+		t.Errorf("LocateEngine() = %q, want sibling %q", got, sibling)
+	}
+}
+
+func TestLocateEngineNestedSibling(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeExe := filepath.Join(dir, "2nb")
+	if err := os.WriteFile(fakeExe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	llamaDir := filepath.Join(dir, "llama")
+	if err := os.MkdirAll(llamaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(llamaDir, "llama-server")
+	if err := os.WriteFile(nested, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origExe := executable
+	executable = func() (string, error) { return fakeExe, nil }
+	t.Cleanup(func() { executable = origExe })
+
+	if got := LocateEngine(""); got != nested {
+		t.Errorf("LocateEngine() = %q, want nested sibling %q", got, nested)
+	}
+}
+
+func TestLocateEngineEnvVar(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "custom-llama-server")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TWONB_ENGINE_PATH", bin)
+	if got := LocateEngine(""); got != bin {
+		t.Errorf("LocateEngine() = %q, want env var %q", got, bin)
+	}
+}
+
+func TestLocateEngineAppEnv(t *testing.T) {
+	dir := t.TempDir()
+	appLlamaDir := filepath.Join(dir, "Contents", "Resources", "llama")
+	if err := os.MkdirAll(appLlamaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(appLlamaDir, "llama-server")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APP", dir)
+	// Clear TWONB_ENGINE_PATH to test APP fallback
+	t.Setenv("TWONB_ENGINE_PATH", "")
+
+	origExe := executable
+	executable = func() (string, error) { return filepath.Join(t.TempDir(), "nonexistent"), nil }
+	t.Cleanup(func() { executable = origExe })
+
+	if got := LocateEngine(""); got != bin {
+		t.Errorf("LocateEngine() = %q, want $APP engine %q", got, bin)
+	}
+}
+
+func TestLocateCLIEnv(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "custom-2nb")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TWONB_CLI_PATH", bin)
+	if got := LocateCLI(); got != bin {
+		t.Errorf("LocateCLI() = %q, want env var %q", got, bin)
 	}
 }

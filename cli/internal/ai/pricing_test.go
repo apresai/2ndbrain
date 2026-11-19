@@ -99,3 +99,76 @@ func TestHasKnownPricing_UnifiedSemantics(t *testing.T) {
 		t.Errorf("CompactPriceLabel(unknown) = %q, want —", got)
 	}
 }
+
+func TestLookupLocalModelPricingAndEstimateUsageCost(t *testing.T) {
+	t.Run("gemini generation pricing", func(t *testing.T) {
+		m := LookupLocalModelPricing("", "gemini", "gemini-4-hydrogen")
+		if m.PriceIn != 1.50 || m.PriceOut != 7.50 {
+			t.Fatalf("gemini-4-hydrogen pricing = (%v, %v), want (1.50, 7.50)", m.PriceIn, m.PriceOut)
+		}
+		usd, isCloud, known := EstimateUsageCost(m, 1_000_000, 100_000, 1)
+		if !isCloud || !known {
+			t.Fatalf("got isCloud=%v known=%v, want true/true", isCloud, known)
+		}
+		want := 1.50 + 0.75
+		if usd < want-1e-9 || usd > want+1e-9 {
+			t.Fatalf("usd = %v, want %v", usd, want)
+		}
+	})
+
+	t.Run("gemini embedding pricing", func(t *testing.T) {
+		m := LookupLocalModelPricing("", "gemini", "gemini-embedding-2")
+		if m.PriceIn != 0.20 {
+			t.Fatalf("gemini-embedding-2 price_in = %v, want 0.20", m.PriceIn)
+		}
+		usd, isCloud, known := EstimateUsageCost(m, 500_000, 0, 1)
+		if !isCloud || !known || usd != 0.10 {
+			t.Fatalf("got (%v, %v, %v), want (0.10, true, true)", usd, isCloud, known)
+		}
+	})
+
+	t.Run("on-device local models always $0.00", func(t *testing.T) {
+		for _, id := range []string{"embeddinggemma-2", "gemma4-e2b"} {
+			m := LookupLocalModelPricing("", "llama-local", id)
+			usd, isCloud, known := EstimateUsageCost(m, 250_000, 10_000, 5)
+			if usd != 0 || isCloud || !known {
+				t.Fatalf("%s: got (%v, isCloud=%v, known=%v), want (0, false, true)", id, usd, isCloud, known)
+			}
+		}
+	})
+
+	t.Run("explicit free cloud openrouter model", func(t *testing.T) {
+		m := LookupLocalModelPricing("", "openrouter", "google/gemma-4-31b-it:free")
+		usd, isCloud, known := EstimateUsageCost(m, 100_000, 5_000, 1)
+		if usd != 0 || !isCloud || !known {
+			t.Fatalf("explicit free cloud: got (%v, isCloud=%v, known=%v), want (0, true, true)", usd, isCloud, known)
+		}
+	})
+
+	t.Run("unpriced custom cloud model reports unknown", func(t *testing.T) {
+		m := LookupLocalModelPricing("", "openrouter", "vendor/custom-unpriced")
+		usd, isCloud, known := EstimateUsageCost(m, 50_000, 1_000, 1)
+		if usd != 0 || !isCloud || known {
+			t.Fatalf("unpriced custom cloud: got (%v, isCloud=%v, known=%v), want (0, true, false)", usd, isCloud, known)
+		}
+	})
+}
+
+func TestFormatUSD(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{0, "$0.00"},
+		{-0.01, "$0.00"},
+		{0.00004, "<$0.0001"},
+		{0.00124, "$0.0012"},
+		{0.0426, "$0.043"},
+		{1.254, "$1.25"},
+	}
+	for _, tc := range cases {
+		if got := FormatUSD(tc.in); got != tc.want {
+			t.Errorf("FormatUSD(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

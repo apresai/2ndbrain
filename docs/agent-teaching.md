@@ -244,8 +244,8 @@ These aren't in the battery — they go in existing (or new) test files targeted
 | `app/Tests/SecondBrainTests/AppStateCRUDTests.swift` (new) | Create / open / save / delete through `AppState`, not just JSON parsing | Swift tests currently stop at `FrontmatterParser` and `JSONDecoding`. The actual state transitions in `AppState` aren't tested. |
 | `app/Tests/SecondBrainTests/AutoSaveTests.swift` (new) | 15/30/60s interval picker; disabled-save preference; low-disk warning before save | Autosave is a core write-path feature with zero test coverage today. |
 | `app/Tests/SecondBrainTests/CrashJournalTests.swift` (new) | Pre-write snapshot; parse-on-open recovery from `.recovery.md` | Crash recovery is safety-critical and untested. |
-| `tests/gui-test-vault-switch.sh` (new) | Open vault A → switch to B → sidebar reflects B's contents | `gui-test-crud.sh` covers vault reopen within one vault; switching vaults is a different flow (AppKit folder picker, FSEvents rebind). |
-| `tests/gui-test-polish.sh` (new) | Cmd+Option+P → diff view → Accept writes polished, Reject discards | Polish UI is untested. The diff view is reused by merge conflict resolution, so a regression here spans multiple features. |
+| `tests/gui-test-vault-switch.sh` (new) | Open vault A → switch to B → active vault updates without mutating `UserDefaults` | `gui-test-ui.sh`/`gui-test-index.sh` stay inside one vault; switching vaults exercises `--vault` rebind, FSEvents teardown, and state isolation. |
+| `tests/gui-test-polish.sh` (new) | `Cmd+Shift+P` → diff preview → Apply writes polished, Undo restores backup | Polish UI was untested. The diff view is reused by commit diffs, so a regression here spans multiple features. |
 
 ## Verification for Phase B
 

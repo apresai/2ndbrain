@@ -123,12 +123,13 @@ func runEvalAnswers(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	generator, gerr := ai.DefaultRegistry.Generator(cfg.Provider)
+	genProvider := cfg.EffectiveGenerationProvider()
+	generator, gerr := ai.DefaultRegistry.Generator(genProvider)
 	if gerr != nil {
 		return fmt.Errorf("generation provider not available: %w", gerr)
 	}
 	if ready, code := ai.Availability(ctx, generator); !ready {
-		return generatorNotReadyError(cfg.Provider, code)
+		return generatorNotReadyError(genProvider, code)
 	}
 
 	// Assemble the jury: explicit --judges, or the active model self-judging.
@@ -154,7 +155,7 @@ func runEvalAnswers(cmd *cobra.Command, args []string) error {
 	if merr != nil {
 		models = ai.BuiltinCatalog()
 	}
-	genM, _ := lookupModelInfo(models, cfg.Provider, cfg.GenerationModel)
+	genM, _ := lookupModelInfo(models, genProvider, cfg.GenerationModel)
 	judgeModels := make([]ai.ModelInfo, 0, len(judgeNames))
 	for _, id := range judgeNames {
 		jm, _ := lookupModelInfo(models, ai.InferProvider(id), id)

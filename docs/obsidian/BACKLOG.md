@@ -1,6 +1,6 @@
 # 0.5.0 Backlog — deferred review findings
 
-MEDIUM/LOW findings from the chad-review of the 0.5.0 Obsidian-compliance work. CRITICAL/HIGH were fixed before merge; these are follow-ups that don't block the PR.
+MEDIUM/LOW findings from the code review of the 0.5.0 Obsidian-compliance work. CRITICAL/HIGH were fixed before merge; these are follow-ups that don't block the PR.
 
 ## Swift app (dead code from the editor → dashboard pivot)
 - **MEDIUM — Crash-recovery dialog is orphaned.** `AppState.showRecoveryDialog` is still set (on vault open with leftover recovery entries, and on frontmatter parse failure), but ContentView no longer renders the recovery alert. Either remove the recovery machinery (`recoveryEntries`, `dismissRecovery`, `recoverDocument`) now that the app doesn't edit documents, or re-add a minimal recovery surface.

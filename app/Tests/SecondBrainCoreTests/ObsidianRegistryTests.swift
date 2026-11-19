@@ -10,15 +10,15 @@ struct ObsidianRegistryTests {
         let json = """
         {
           "vaults": {
-            "0b772aad89d5cf96": { "path": "/Users/chad/dev/obsidian", "ts": 1780434058390, "open": true },
-            "aaaa1111bbbb2222": { "path": "/Users/chad/notes-archive", "ts": 1700000000000, "open": false }
+            "0b772aad89d5cf96": { "path": "/Users/alice/dev/obsidian", "ts": 1780434058390, "open": true },
+            "aaaa1111bbbb2222": { "path": "/Users/alice/notes-archive", "ts": 1700000000000, "open": false }
           },
           "cli": true
         }
         """
         let reg = try ObsidianRegistry(data: Data(json.utf8))
         #expect(reg.vaults.count == 2)
-        #expect(reg.openVault?.path == "/Users/chad/dev/obsidian")
+        #expect(reg.openVault?.path == "/Users/alice/dev/obsidian")
         #expect(reg.openVault?.name == "obsidian")
         #expect(reg.openVault?.open == true)
     }
@@ -50,10 +50,10 @@ struct ObsidianRegistryTests {
 
     @Test("matches a vault by path, ignoring a trailing slash")
     func matchesByPath() throws {
-        let json = #"{ "vaults": { "a": { "path": "/Users/chad/dev/obsidian", "ts": 1, "open": true } } }"#
+        let json = #"{ "vaults": { "a": { "path": "/Users/alice/dev/obsidian", "ts": 1, "open": true } } }"#
         let reg = try ObsidianRegistry(data: Data(json.utf8))
-        #expect(reg.vault(at: URL(fileURLWithPath: "/Users/chad/dev/obsidian/"))?.name == "obsidian")
-        #expect(reg.vault(at: URL(fileURLWithPath: "/Users/chad/other")) == nil)
+        #expect(reg.vault(at: URL(fileURLWithPath: "/Users/alice/dev/obsidian/"))?.name == "obsidian")
+        #expect(reg.vault(at: URL(fileURLWithPath: "/Users/alice/other")) == nil)
     }
 
     @Test("init throws on malformed JSON")

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/apresai/2ndbrain/internal/document"
+	"github.com/apresai/2ndbrain/internal/store"
 )
 
 // wikilinkSpanRe matches a [[...]] wikilink body (without the optional leading
@@ -162,16 +163,13 @@ var headingRe = regexp.MustCompile(`^#{1,6}[ \t]`)
 // extractHeadings returns the heading lines (trimmed) outside fenced code.
 func extractHeadings(body string) []string {
 	var out []string
-	inFence := false
+	var fence document.CodeFenceTracker
 	for _, line := range strings.Split(body, "\n") {
+		isDelim, inCode := fence.Step(line)
+		if isDelim || inCode {
+			continue
+		}
 		trimmed := strings.TrimRight(line, " \t")
-		if isFenceLine(trimmed) {
-			inFence = !inFence
-			continue
-		}
-		if inFence {
-			continue
-		}
 		if headingRe.MatchString(trimmed) {
 			out = append(out, strings.TrimSpace(trimmed))
 		}
@@ -183,19 +181,19 @@ func extractHeadings(body string) []string {
 // blocks and inline spans) so two bodies can be compared for code equality.
 func extractCode(body string) string {
 	var out strings.Builder
-	inFence := false
+	var fence document.CodeFenceTracker
 	for _, line := range strings.Split(body, "\n") {
-		if isFenceLine(strings.TrimRight(line, " \t")) {
-			inFence = !inFence
+		isDelim, inCode := fence.Step(line)
+		if isDelim {
 			out.WriteString("\x00FENCE\x00")
 			continue
 		}
-		if inFence {
+		if inCode {
 			out.WriteString(line)
 			out.WriteByte('\n')
 			continue
 		}
-		for _, span := range inlineCodeRe.FindAllString(line, -1) {
+		for _, span := range document.ExtractInlineCodeSpans(line) {
 			out.WriteString(span)
 			out.WriteByte('\x00')
 		}
@@ -203,8 +201,152 @@ func extractCode(body string) string {
 	return out.String()
 }
 
-var inlineCodeRe = regexp.MustCompile("`[^`]+`")
-
 func isFenceLine(trimmed string) bool {
 	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+}
+
+// ValidatePolishedBody normalizes line endings for mechanical verification,
+// strips any accidental outer markdown fence or injected frontmatter, strips
+// ungrounded [[wikilinks]] unconditionally, and checks the hard polish
+// invariants (code spans, existing links, heading structure).
+func ValidatePolishedBody(original, polished string, allowedLinks map[string]bool) (cleaned string, stripped []string, violations []string) {
+	normOrig := strings.ReplaceAll(original, "\r\n", "\n")
+	cleaned = strings.TrimSpace(strings.ReplaceAll(polished, "\r\n", "\n"))
+	cleaned = stripWrappingMarkdownFence(normOrig, cleaned)
+	cleaned = stripInjectedFrontmatter(normOrig, cleaned)
+
+	if allowedLinks == nil {
+		allowedLinks = AllowedLinkSet(nil, normOrig)
+	}
+	cleaned, stripped = StripInventedLinks(cleaned, allowedLinks)
+
+	if !CodeSpansEqual(normOrig, cleaned) {
+		violations = append(violations, "code_spans_modified")
+	}
+	if !ExistingLinksPreserved(normOrig, cleaned) || !existingRawLinksPreserved(normOrig, cleaned) {
+		violations = append(violations, "existing_links_dropped")
+	}
+	if !HeadingStructureEqual(normOrig, cleaned) {
+		violations = append(violations, "headings_modified")
+	}
+	return cleaned, stripped, violations
+}
+
+// ValidateBacklinkAlignedBody validates an AI-aligned referencing note body.
+// It preserves all non-raw-link checks (wrapping fence/frontmatter stripping,
+// StripInventedLinks, CodeSpansEqual, ExistingLinksPreserved, and
+// HeadingStructureEqual) and enforces raw-link verbatim preservation only for
+// non-target links (links in original that do not resolve to targetRel), so
+// links targeting targetRel may update un-aliased display labels while being
+// governed by targetLinkAndSuffixesPreserved.
+func ValidateBacklinkAlignedBody(original, polished string, allowedLinks map[string]bool, targetRel string, liveResolver *store.Resolver) (cleaned string, stripped []string, violations []string) {
+	normOrig := strings.ReplaceAll(original, "\r\n", "\n")
+	cleaned = strings.TrimSpace(strings.ReplaceAll(polished, "\r\n", "\n"))
+	cleaned = stripWrappingMarkdownFence(normOrig, cleaned)
+	cleaned = stripInjectedFrontmatter(normOrig, cleaned)
+
+	if allowedLinks == nil {
+		allowedLinks = AllowedLinkSet(nil, normOrig)
+	}
+	cleaned, stripped = StripInventedLinks(cleaned, allowedLinks)
+
+	if !CodeSpansEqual(normOrig, cleaned) {
+		violations = append(violations, "code_spans_modified")
+	}
+	if !ExistingLinksPreserved(normOrig, cleaned) || !nonTargetRawLinksPreserved(normOrig, cleaned, targetRel, liveResolver) {
+		violations = append(violations, "existing_links_dropped")
+	}
+	if !HeadingStructureEqual(normOrig, cleaned) {
+		violations = append(violations, "headings_modified")
+	}
+	return cleaned, stripped, violations
+}
+
+func nonTargetRawLinksPreserved(original, polished, targetRel string, liveResolver *store.Resolver) bool {
+	if liveResolver == nil || targetRel == "" {
+		return existingRawLinksPreserved(original, polished)
+	}
+	cleanedLinks := document.ExtractWikiLinks(polished)
+	haveRaw := make(map[string]bool, len(cleanedLinks))
+	for _, l := range cleanedLinks {
+		haveRaw[strings.TrimSpace(l.Raw)] = true
+	}
+	for _, l := range document.ExtractWikiLinks(original) {
+		raw := strings.TrimSpace(l.Raw)
+		if raw == "" {
+			continue
+		}
+		if resolved, err := liveResolver.Resolve(strings.TrimSpace(l.Target)); err == nil && resolved == targetRel {
+			continue
+		}
+		if !haveRaw[raw] {
+			return false
+		}
+	}
+	return true
+}
+
+func existingRawLinksPreserved(original, polished string) bool {
+	cleanedLinks := document.ExtractWikiLinks(polished)
+	haveRaw := make(map[string]bool, len(cleanedLinks))
+	for _, l := range cleanedLinks {
+		haveRaw[strings.TrimSpace(l.Raw)] = true
+	}
+	for _, l := range document.ExtractWikiLinks(original) {
+		raw := strings.TrimSpace(l.Raw)
+		if raw == "" {
+			continue
+		}
+		if !haveRaw[raw] {
+			return false
+		}
+	}
+	return true
+}
+
+func stripWrappingMarkdownFence(original, polished string) string {
+	trimmedOrig := strings.TrimSpace(original)
+	if strings.HasPrefix(trimmedOrig, "```") || strings.HasPrefix(trimmedOrig, "~~~") {
+		return polished
+	}
+	lines := strings.Split(polished, "\n")
+	if len(lines) < 2 {
+		return polished
+	}
+	first := strings.TrimSpace(lines[0])
+	last := strings.TrimSpace(lines[len(lines)-1])
+	var fence string
+	switch {
+	case strings.HasPrefix(first, "```") && last == "```":
+		fence = "```"
+	case strings.HasPrefix(first, "~~~") && last == "~~~":
+		fence = "~~~"
+	default:
+		return polished
+	}
+	inner := lines[1 : len(lines)-1]
+	fenceCount := 0
+	for _, line := range inner {
+		if isFenceLine(strings.TrimSpace(line)) {
+			fenceCount++
+		}
+	}
+	if fenceCount%2 != 0 || fence == "" {
+		return polished
+	}
+	return strings.TrimSpace(strings.Join(inner, "\n"))
+}
+
+func stripInjectedFrontmatter(original, polished string) string {
+	if strings.HasPrefix(strings.TrimSpace(original), "---") {
+		return polished
+	}
+	if !strings.HasPrefix(strings.TrimSpace(polished), "---") {
+		return polished
+	}
+	parts, ok := document.SplitRawFrontmatter([]byte(polished))
+	if !ok || parts.Unclosed {
+		return polished
+	}
+	return strings.TrimSpace(parts.Body)
 }

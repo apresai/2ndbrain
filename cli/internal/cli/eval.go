@@ -163,8 +163,8 @@ func runEvalEstimate(cmd *cobra.Command, command string) error {
 	if merr != nil {
 		models = ai.BuiltinCatalog() // builtin pricing is enough for an estimate
 	}
-	genM, _ := lookupModelInfo(models, cfg.Provider, cfg.GenerationModel)
-	embM, _ := lookupModelInfo(models, cfg.Provider, cfg.EmbeddingModel)
+	genM, _ := lookupModelInfo(models, cfg.EffectiveGenerationProvider(), cfg.GenerationModel)
+	embM, _ := lookupModelInfo(models, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel)
 	var judges []ai.ModelInfo
 	if command == "answers" {
 		if len(evalJudges) == 0 {
@@ -278,12 +278,13 @@ func ensureQASet(ctx context.Context, cmd *cobra.Command, v *vault.Vault) (ai.Em
 	} else if embCount == 0 {
 		return nil, nil, false, fmt.Errorf("no embeddings yet — run `2nb index` first so search has vectors to score")
 	}
-	embedder, eerr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	embedder, eerr := ai.DefaultRegistry.Embedder(embedProvider)
 	if eerr != nil {
 		return nil, nil, false, fmt.Errorf("embedding provider not available: %w", eerr)
 	}
 	if ready, code := ai.Availability(ctx, embedder); !ready {
-		return nil, nil, false, embedderNotReadyError(cfg.Provider, code)
+		return nil, nil, false, embedderNotReadyError(embedProvider, code)
 	}
 
 	if evalN < 1 {
@@ -311,12 +312,13 @@ func ensureQASet(ctx context.Context, cmd *cobra.Command, v *vault.Vault) (ai.Em
 			fmt.Fprintf(os.Stderr, "Using cached QA set of %d questions (%s)\n", len(qa), qaPath)
 		}
 	} else {
-		generator, gerr := ai.DefaultRegistry.Generator(cfg.Provider)
+		genProvider := cfg.EffectiveGenerationProvider()
+		generator, gerr := ai.DefaultRegistry.Generator(genProvider)
 		if gerr != nil {
 			return nil, nil, false, fmt.Errorf("a generation provider is required to build the QA set: %w", gerr)
 		}
 		if ready, code := ai.Availability(ctx, generator); !ready {
-			return nil, nil, false, generatorNotReadyError(cfg.Provider, code)
+			return nil, nil, false, generatorNotReadyError(genProvider, code)
 		}
 		// Cost preview + confirm (the cap aborts identically interactive or piped).
 		if err := evalConfirmCost(ctx, cmd, cfg, v.Root, evalN); err != nil {
@@ -362,8 +364,8 @@ func evalConfirmCost(ctx context.Context, cmd *cobra.Command, cfg ai.AIConfig, r
 	if err != nil {
 		models = ai.BuiltinCatalog() // builtin pricing is enough for an estimate
 	}
-	genM, _ := lookupModelInfo(models, cfg.Provider, cfg.GenerationModel)
-	embM, _ := lookupModelInfo(models, cfg.Provider, cfg.EmbeddingModel)
+	genM, _ := lookupModelInfo(models, cfg.EffectiveGenerationProvider(), cfg.GenerationModel)
+	embM, _ := lookupModelInfo(models, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel)
 	total, genUSD, embUSD := estimateEvalCostUSD(genM, embM, n)
 
 	if getFormat(cmd) != output.FormatJSON && !flagPorcelain {

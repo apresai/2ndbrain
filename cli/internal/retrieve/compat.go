@@ -37,7 +37,7 @@ func VectorCompat(ctx context.Context, v *vault.Vault, embedder ai.EmbeddingProv
 
 	providerName := ""
 	if v.Config != nil {
-		providerName = v.Config.AI.Provider
+		providerName = v.Config.AI.EffectiveEmbeddingProvider()
 	}
 
 	if embedder == nil {

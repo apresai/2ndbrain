@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,16 +61,25 @@ type LintIssue struct {
 	// pick list without a suggest-target round-trip. Empty for other Fix
 	// classes: drift's single match is DriftTarget, and missing has none.
 	Candidates []string `json:"candidates,omitempty"`
+
+	// Additive metadata fields for structured lint consumers (all omitempty so
+	// existing JSON contracts remain unchanged).
+	Kind  string `json:"kind,omitempty"`  // parse_error | missing_required | schema_enum | date_format | date_invalid | link_syntax | broken_link
+	Field string `json:"field,omitempty"` // frontmatter field name when applicable
 }
 
 type LintReport struct {
-	Issues []LintIssue `json:"issues"` // always [] in JSON, never null; initialized non-nil in runLint
+	Issues []LintIssue `json:"issues"` // always [] in JSON, never null; initialized non-nil in buildLintReport
 	Files  int         `json:"files_checked"`
 	Errors int         `json:"errors"`
 	Warns  int         `json:"warnings"`
 }
 
 func runLint(cmd *cobra.Command, args []string) error {
+	if err := refuseBodylessFormat(cmd, "lint"); err != nil {
+		return err
+	}
+
 	v, err := openVault()
 	if err != nil {
 		return err
@@ -77,6 +87,28 @@ func runLint(cmd *cobra.Command, args []string) error {
 	defer v.Close()
 	setupFileLogging(v)
 
+	report, err := buildLintReport(v, args)
+	if err != nil {
+		return err
+	}
+
+	if !flagPorcelain && report.Errors+report.Warns > 0 {
+		fmt.Fprintf(os.Stderr, "%d files checked, %d errors, %d warnings\n",
+			report.Files, report.Errors, report.Warns)
+	}
+
+	format := getFormat(cmd)
+	if err := output.Write(os.Stdout, format, report); err != nil {
+		return err
+	}
+
+	if report.Errors > 0 {
+		os.Exit(ExitValidation)
+	}
+	return nil
+}
+
+func buildLintReport(v *vault.Vault, args []string) (*LintReport, error) {
 	startTime := time.Now()
 
 	lintPattern := "**/*.md (recursive)"
@@ -85,16 +117,12 @@ func runLint(cmd *cobra.Command, args []string) error {
 	}
 	slog.Info("lint started", "vault", v.Root, "pattern", lintPattern)
 
-	// Collect the markdown files to lint. An explicit glob argument is honoured
-	// verbatim (relative to the vault root). With no argument we walk the whole
-	// vault recursively: filepath.Glob does not support "**", so the old "*.md"
-	// pattern silently linted only top-level files and skipped every note in a
-	// subdirectory.
 	var matches []string
+	var err error
 	if len(args) > 0 {
 		matches, err = filepath.Glob(filepath.Join(v.Root, args[0]))
 		if err != nil {
-			return fmt.Errorf("glob: %w", err)
+			return nil, fmt.Errorf("glob: %w", err)
 		}
 	} else {
 		if werr := filepath.Walk(v.Root, func(path string, info os.FileInfo, err error) error {
@@ -102,9 +130,9 @@ func runLint(cmd *cobra.Command, args []string) error {
 				return nil
 			}
 			if info.IsDir() {
-				// Skip dot-directories (.git, .obsidian, .2ndbrain, .trash, ...).
-				// IsIgnored only inspects basenames, so it can't prune subtrees.
-				if path != v.Root && strings.HasPrefix(filepath.Base(path), ".") {
+				base := filepath.Base(path)
+				// Skip dot-directories (.git, .obsidian, .2ndbrain, .trash, ...) and node_modules.
+				if path != v.Root && (strings.HasPrefix(base, ".") || base == "node_modules") {
 					return filepath.SkipDir
 				}
 				return nil
@@ -114,33 +142,22 @@ func runLint(cmd *cobra.Command, args []string) error {
 			}
 			return nil
 		}); werr != nil {
-			return fmt.Errorf("walk: %w", werr)
+			return nil, fmt.Errorf("walk: %w", werr)
 		}
 	}
+	sort.Strings(matches)
 
 	// Issues starts non-nil: an issue-free vault must marshal as `"issues": []`,
 	// not `null`, or `jq '.issues[]'` fails on the good case.
 	report := &LintReport{Issues: []LintIssue{}}
 
-	// First pass: build the SAME tiered lookup the rest of 2nb uses
-	// (store.NewResolver -> the canonical buildLookupIndex), sourced from the
-	// live filesystem via vault.CollectLiveDocs so lint never depends on a fresh
-	// index.db. Resolving by filename alone (the old behavior) falsely flagged
-	// title/alias-only links as broken. The same walk feeds the repair tools
-	// (repair-links, suggest-target, relink), so lint and repair can never
-	// disagree about which links are broken.
 	docs, aliasIndex, werr := vault.CollectLiveDocs(v.Root)
 	if werr != nil {
-		return fmt.Errorf("walk for resolver index: %w", werr)
+		return nil, fmt.Errorf("walk for resolver index: %w", werr)
 	}
 	resolver := store.NewResolver(docs, aliasIndex)
-	// The SAME walk also feeds the repair index, so each broken link is
-	// classified up front (drift / ambiguous / missing) against exactly the
-	// candidates repair-links and suggest-target tier 1 would resolve to -- the
-	// GUI can show "N drift-repairable / M need a decision" before any click.
 	repairIdx := polish.NewRepairIndex(docs, aliasIndex)
 
-	// One resolution for the whole run, the same shape IndexVault takes.
 	excludedFolders := vault.ObsidianTemplateFolders(v.Root)
 
 	for _, path := range matches {
@@ -148,30 +165,38 @@ func runLint(cmd *cobra.Command, args []string) error {
 		if vault.IsIgnored(relPath) {
 			continue
 		}
-		// The FOLDER half of the same definition. A template folder is not
-		// indexed, so linting it reports findings on notes no other command
-		// will ever see. Read-only: this drops findings, never files.
 		if folder, ok := vault.ExcludedFolderFor(relPath, excludedFolders); ok {
 			slog.Debug("lint skipping a note in an Obsidian template folder", "path", relPath, "folder", folder)
 			continue
 		}
 
-		doc, err := document.ParseFile(path)
-		if err != nil {
-			// Obsidian template files carry unresolved {{placeholder}} tokens in
-			// their frontmatter (e.g. `date: {{date}}`) that are deliberately
-			// invalid YAML. They are scaffolding, not notes, so a parse failure
-			// there is not a real lint error. This is the FILE-level half of the
-			// shared definition, and it stays on the parse-failure path only:
-			// widening it would silently skip a note that parses and merely
-			// mentions {{ }} in its frontmatter.
-			if raw, rerr := os.ReadFile(path); rerr == nil && vault.HasTemplatePlaceholders(raw) {
-				slog.Debug("lint skipping template (unresolved {{placeholders}} in frontmatter)", "path", relPath)
-				continue
-			}
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
 			report.Files++
 			report.Issues = append(report.Issues, LintIssue{
-				Path: relPath, Level: "error", Message: fmt.Sprintf("parse error: %v", err),
+				Path: relPath, Level: "error", Message: fmt.Sprintf("parse error: %v", rerr), Kind: "parse_error",
+			})
+			report.Errors++
+			continue
+		}
+		if vault.HasTemplatePlaceholders(raw) {
+			slog.Debug("lint skipping template (unresolved {{placeholders}} in frontmatter)", "path", relPath)
+			continue
+		}
+
+		doc, perr := document.Parse(path, raw)
+		if perr != nil {
+			report.Files++
+			report.Issues = append(report.Issues, LintIssue{
+				Path: relPath, Level: "error", Message: fmt.Sprintf("parse error: %v", perr), Kind: "parse_error",
+			})
+			report.Errors++
+			continue
+		}
+		if doc.Frontmatter == nil && document.HasUnclosedFrontmatter(raw) {
+			report.Files++
+			report.Issues = append(report.Issues, LintIssue{
+				Path: relPath, Level: "error", Message: "parse error: unclosed YAML frontmatter fence", Kind: "parse_error",
 			})
 			report.Errors++
 			continue
@@ -180,79 +205,179 @@ func runLint(cmd *cobra.Command, args []string) error {
 
 		// Note: no 'id' check. Under the path-based identity model
 		// (docs/obsidian/identity-model.md) a document's identity is its path;
-		// frontmatter 'id' is read if present but never required, so a missing
-		// id is not a lint error. Vanilla Obsidian notes carry no id at all.
+		// frontmatter 'id' is read if present but never required.
 
-		// Check: required fields
-		if schema, ok := v.Schemas.Types[doc.Type]; ok {
-			for _, field := range schema.Required {
-				if _, exists := doc.Frontmatter[field]; !exists {
-					report.Issues = append(report.Issues, LintIssue{
-						Path: relPath, Level: "error",
-						Message: fmt.Sprintf("missing required field '%s' for type '%s'", field, doc.Type),
-					})
-					report.Errors++
+		// Check: required fields and enum validation across all schema types.
+		if v.Schemas != nil {
+			if schema, ok := v.Schemas.Types[doc.Type]; ok {
+				for _, field := range schema.Required {
+					if lintFieldMissing(doc, v.Schemas, schema, field) {
+						report.Issues = append(report.Issues, LintIssue{
+							Path:    relPath,
+							Level:   "error",
+							Message: fmt.Sprintf("missing required field '%s' for type '%s'", field, doc.Type),
+							Kind:    "missing_required",
+							Field:   field,
+						})
+						report.Errors++
+					}
 				}
-			}
 
-			// Check: enum validation
-			for fieldName, fieldDef := range schema.Fields {
-				val, exists := doc.Frontmatter[fieldName]
-				if !exists {
-					continue
+				fieldNames := make([]string, 0, len(schema.Fields))
+				for fieldName := range schema.Fields {
+					fieldNames = append(fieldNames, fieldName)
 				}
-				if len(fieldDef.Enum) > 0 {
-					// A non-string value SKIPS the enum check rather than
-					// failing it. That is deliberate and it is a read-only
-					// gap, not the data loss its shape resembles: an unquoted
-					// `status: true` or `status: 2026-09-04` is simply not
-					// validated here, where the tag commands' identical
-					// assertion used to DROP such a value from the file. Using
-					// the note's own text (doc.MetaText) would flag those, at
-					// the cost of new findings on notes that lint clean today,
-					// so it is left as a decision rather than taken silently.
-					strVal, ok := val.(string)
-					if !ok {
+				sort.Strings(fieldNames)
+
+				for _, fieldName := range fieldNames {
+					fieldDef := schema.Fields[fieldName]
+					val, exists := doc.Frontmatter[fieldName]
+					if !exists || val == nil || len(fieldDef.Enum) == 0 {
 						continue
 					}
-					found := false
-					for _, e := range fieldDef.Enum {
-						if e == strVal {
-							found = true
-							break
+					if fieldName != "status" && v.Schemas.IsListField(doc.Type, fieldName) {
+						elems, ok := lintListElements(doc, fieldName, val)
+						if !ok {
+							report.Issues = append(report.Issues, LintIssue{
+								Path:    relPath,
+								Level:   "error",
+								Message: fmt.Sprintf("field '%s' expects scalar values in %v", fieldName, fieldDef.Enum),
+								Kind:    "schema_enum",
+								Field:   fieldName,
+							})
+							report.Errors++
+							continue
 						}
+						for _, elem := range elems {
+							if !stringInSlice(elem, fieldDef.Enum) {
+								report.Issues = append(report.Issues, LintIssue{
+									Path:    relPath,
+									Level:   "error",
+									Message: fmt.Sprintf("field '%s' value '%s' not in %v", fieldName, elem, fieldDef.Enum),
+									Kind:    "schema_enum",
+									Field:   fieldName,
+								})
+								report.Errors++
+							}
+						}
+						continue
 					}
-					if !found {
+
+					strVal, ok := lintScalarText(doc, fieldName, val)
+					if !ok {
 						report.Issues = append(report.Issues, LintIssue{
-							Path: relPath, Level: "error",
+							Path:    relPath,
+							Level:   "error",
+							Message: fmt.Sprintf("field '%s' expects a scalar string in %v", fieldName, fieldDef.Enum),
+							Kind:    "schema_enum",
+							Field:   fieldName,
+						})
+						report.Errors++
+						continue
+					}
+					if !stringInSlice(strVal, fieldDef.Enum) {
+						report.Issues = append(report.Issues, LintIssue{
+							Path:    relPath,
+							Level:   "error",
 							Message: fmt.Sprintf("field '%s' value '%s' not in %v", fieldName, strVal, fieldDef.Enum),
+							Kind:    "schema_enum",
+							Field:   fieldName,
 						})
 						report.Errors++
 					}
 				}
 			}
+
+			// Check: date fields (`created`, `modified`, schema `date`/`datetime`).
+			fmKeys := make([]string, 0, len(doc.Frontmatter))
+			for k := range doc.Frontmatter {
+				fmKeys = append(fmKeys, k)
+			}
+			sort.Strings(fmKeys)
+			for _, key := range fmKeys {
+				if !v.Schemas.IsDateField(doc.Type, key) {
+					continue
+				}
+				val := doc.Frontmatter[key]
+				switch t := val.(type) {
+				case nil:
+					continue
+				case time.Time:
+					if t.Nanosecond() != 0 {
+						report.Issues = append(report.Issues, LintIssue{
+							Path:    relPath,
+							Level:   "warning",
+							Message: fmt.Sprintf("date field '%s' has sub-second precision (run `2nb fix` or `2nb obsidian migrate-properties`)", key),
+							Kind:    "date_format",
+							Field:   key,
+						})
+						report.Warns++
+					}
+				case string:
+					if strings.TrimSpace(t) == "" {
+						continue
+					}
+					if _, ok := document.ParseFrontmatterDateText(t); ok {
+						report.Issues = append(report.Issues, LintIssue{
+							Path:    relPath,
+							Level:   "warning",
+							Message: fmt.Sprintf("date field '%s' is quoted or unnormalized %q (run `2nb fix` or `2nb obsidian migrate-properties`)", key, t),
+							Kind:    "date_format",
+							Field:   key,
+						})
+						report.Warns++
+					} else {
+						report.Issues = append(report.Issues, LintIssue{
+							Path:    relPath,
+							Level:   "error",
+							Message: fmt.Sprintf("invalid date value %q for field '%s'", t, key),
+							Kind:    "date_invalid",
+							Field:   key,
+						})
+						report.Errors++
+					}
+				default:
+					report.Issues = append(report.Issues, LintIssue{
+						Path:    relPath,
+						Level:   "error",
+						Message: fmt.Sprintf("field '%s' holds %T, expected date", key, val),
+						Kind:    "date_invalid",
+						Field:   key,
+					})
+					report.Errors++
+				}
+			}
 		}
 
-		// Check: broken wikilinks. Skip anchor-only links ([x](#section), empty
-		// target) and embedded assets ([alt](img.png), ![[img.png]]) — Obsidian
-		// vaults are image- and anchor-heavy, and treating those as broken notes
-		// makes lint noisy to useless.
+		// Check: link syntax formatting (matches polish.FixVault NormalizeLinkFormatting).
+		_, fmtChanges := document.NormalizeLinkFormatting(doc.Body, func(target string) bool {
+			_, rerr := resolver.Resolve(target)
+			return rerr == nil
+		})
+		for _, fc := range fmtChanges {
+			report.Issues = append(report.Issues, LintIssue{
+				Path:    relPath,
+				Level:   "warning",
+				Message: fmt.Sprintf("link formatting: %s -> %s", fc.From, fc.To),
+				Kind:    "link_syntax",
+			})
+			report.Warns++
+		}
+
+		// Check: broken wikilinks.
 		links := document.ExtractWikiLinks(doc.Body)
 		for _, link := range links {
 			target := link.Target
 			if isAssetOrAnchorTarget(target) {
 				continue
 			}
-			// Canonical tiered resolution (path -> shortest-unique suffix ->
-			// title -> alias). ONLY ErrTargetNotFound is broken: a clean resolve
-			// is fine, and an *AmbiguousTargetError means the target DOES match
-			// (>1 doc) — not broken. This is what makes lint agree with
-			// `2nb links` and the per-finding fix tools.
 			if _, rerr := resolver.Resolve(target); errors.Is(rerr, store.ErrTargetNotFound) {
 				issue := LintIssue{
-					Path: relPath, Level: "warning",
+					Path:    relPath,
+					Level:   "warning",
 					Message: fmt.Sprintf("broken wikilink: [[%s]]", target),
 					Target:  target,
+					Kind:    "broken_link",
 				}
 				switch candidates := repairIdx.Lookup(target); len(candidates) {
 				case 1:
@@ -279,20 +404,74 @@ func runLint(cmd *cobra.Command, args []string) error {
 		"elapsed", time.Since(startTime),
 	)
 
-	if !flagPorcelain && report.Errors+report.Warns > 0 {
-		fmt.Fprintf(os.Stderr, "%d files checked, %d errors, %d warnings\n",
-			report.Files, report.Errors, report.Warns)
-	}
+	return report, nil
+}
 
-	format := getFormat(cmd)
-	if err := output.Write(os.Stdout, format, report); err != nil {
-		return err
+func lintScalarText(doc *document.Document, field string, val any) (string, bool) {
+	if s, ok := doc.MetaText(field); ok {
+		return s, true
 	}
+	return document.ScalarText(val)
+}
 
-	if report.Errors > 0 {
-		os.Exit(ExitValidation)
+func lintListElements(doc *document.Document, field string, val any) ([]string, bool) {
+	switch lv := val.(type) {
+	case []any:
+		out := make([]string, 0, len(lv))
+		for i, item := range lv {
+			if s, ok := doc.MetaTextItem(field, i); ok {
+				out = append(out, s)
+				continue
+			}
+			s, ok := document.ScalarText(item)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	case []string:
+		return lv, true
+	default:
+		if s, ok := lintScalarText(doc, field, val); ok {
+			return []string{s}, true
+		}
+		return nil, false
 	}
-	return nil
+}
+
+func lintFieldMissing(doc *document.Document, schemas *vault.SchemaSet, schema vault.DocTypeSchema, field string) bool {
+	val, exists := doc.Frontmatter[field]
+	if !exists || val == nil {
+		return true
+	}
+	if field != "status" && schemas != nil && schemas.IsListField(doc.Type, field) {
+		switch lv := val.(type) {
+		case []any:
+			return len(lv) == 0
+		case []string:
+			return len(lv) == 0
+		default:
+			s, ok := lintScalarText(doc, field, val)
+			return !ok || strings.TrimSpace(s) == ""
+		}
+	}
+	str, ok := lintScalarText(doc, field, val)
+	if !ok {
+		// Non-scalar on a non-enum required scalar field is treated as missing;
+		// enum fields emit a specific non-scalar enum error instead.
+		return len(schema.Fields[field].Enum) == 0
+	}
+	return strings.TrimSpace(str) == ""
+}
+
+func stringInSlice(s string, list []string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }
 
 // isAssetOrAnchorTarget reports whether a link target should be excluded from

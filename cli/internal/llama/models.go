@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,15 +30,29 @@ type ModelArtifact struct {
 	License   string // SPDX-ish tag, for the readiness report ("apache-2.0", "mit", ...)
 }
 
+// DefaultEmbedModelID is the local embedding model used when none is configured.
+const DefaultEmbedModelID = "embeddinggemma-2"
+
 // ModelManifest pins the local Gemma-family models to UNGATED Hugging Face GGUF
-// repos — the same source re:Gist's iOS app uses (Unsloth's Gemma GGUF
-// conversions are ungated even though the base Gemma weights are license-gated
-// on HF). GGUF weights are arch-independent, so there is no GOARCH key here (only
+// repos (ggml-org and Unsloth Gemma GGUF conversions are ungated even though
+// some base Gemma weights are license-gated on HF). GGUF weights are arch-independent, so there is no GOARCH key here (only
 // the engine binary is arch-specific). Each SHA256 is the file's Hugging Face LFS
 // oid; EnsureModel streams + hashes the download and FAILS CLOSED on a mismatch.
 // The Gemma models are governed by the Gemma Terms of Use
 // (https://ai.google.dev/gemma/terms) — see THIRD_PARTY_NOTICES.
 var ModelManifest = map[string]ModelArtifact{
+	// EmbeddingGemma 2 is the default local embedder (Apache-2.0, 310 MB Q8_0).
+	"embeddinggemma-2": {
+		ID:        "embeddinggemma-2",
+		Role:      RoleEmbed,
+		File:      "embeddinggemma-2-Q8_0.gguf",
+		URL:       "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/bfcd298762cc34d0357ece5ebdd31791a3a374d8/embeddinggemma-2-Q8_0.gguf",
+		SHA256:    "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135",
+		SizeBytes: 309855456,
+		Dims:      768,
+		License:   "apache-2.0",
+	},
+	// Legacy: kept so vaults already indexed with 300M keep working.
 	"embeddinggemma-300m": {
 		ID:        "embeddinggemma-300m",
 		Role:      RoleEmbed,
@@ -80,7 +95,21 @@ var ModelManifest = map[string]ModelArtifact{
 // ArtifactFor looks up a model artifact by id.
 func ArtifactFor(id string) (ModelArtifact, bool) {
 	a, ok := ModelManifest[id]
-	return a, ok
+	if !ok {
+		return a, false
+	}
+	if overrideURL := os.Getenv("2NB_TEST_MODEL_URL"); overrideURL != "" {
+		a.URL = overrideURL
+	}
+	if overrideSHA := os.Getenv("2NB_TEST_MODEL_SHA256"); overrideSHA != "" {
+		a.SHA256 = overrideSHA
+	}
+	if overrideSize := os.Getenv("2NB_TEST_MODEL_SIZE"); overrideSize != "" {
+		if s, err := strconv.ParseInt(overrideSize, 10, 64); err == nil {
+			a.SizeBytes = s
+		}
+	}
+	return a, true
 }
 
 // RemoveModel deletes a cached model's directory (<models>/<id>) and returns the
@@ -226,7 +255,14 @@ func EnsureModelProgress(ctx context.Context, id string, onProgress ProgressFunc
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	tmp := dest + ".part"
+	// Seed from an already-verified local copy (Hugging Face hub cache) before
+	// touching the network. Skipped under hermetic test isolation.
+	if os.Getenv("2NB_TEST_MODEL_URL") == "" && os.Getenv("XDG_CACHE_HOME") == "" {
+		if trySeedFromLocalVerifiedCache(art, dest, onProgress) {
+			return dest, nil
+		}
+	}
+	tmp := fmt.Sprintf("%s.part.%d.%d", dest, os.Getpid(), time.Now().UnixNano())
 	sum, err := downloadTo(ctx, art.URL, tmp, art.SizeBytes, onProgress)
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -236,11 +272,92 @@ func EnsureModelProgress(ctx context.Context, id string, onProgress ProgressFunc
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("model %q sha256 mismatch: got %s, want %s", id, sum, art.SHA256)
 	}
+	// If another concurrent download finished first and verified dest:
+	if existingSum, err := fileSHA256(dest); err == nil && existingSum == art.SHA256 {
+		_ = os.Remove(tmp)
+		return dest, nil
+	}
 	if err := os.Rename(tmp, dest); err != nil {
+		if existingSum, err2 := fileSHA256(dest); err2 == nil && existingSum == art.SHA256 {
+			_ = os.Remove(tmp)
+			return dest, nil
+		}
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("install %q: %w", id, err)
 	}
 	return dest, nil
+}
+
+// localCacheCandidates lists on-disk locations that may already hold a verified
+// copy of the artifact.
+func localCacheCandidates(art ModelArtifact) []string {
+	var out []string
+	home, _ := os.UserHomeDir()
+	if art.ID == "embeddinggemma-2" {
+		hub := os.Getenv("HF_HUB_CACHE")
+		if hub == "" {
+			if hf := os.Getenv("HF_HOME"); hf != "" {
+				hub = filepath.Join(hf, "hub")
+			} else if home != "" {
+				hub = filepath.Join(home, ".cache", "huggingface", "hub")
+			}
+		}
+		if hub != "" {
+			out = append(out, filepath.Join(hub, "models--ggml-org--embeddinggemma-2-GGUF", "snapshots",
+				"bfcd298762cc34d0357ece5ebdd31791a3a374d8", art.File))
+		}
+	}
+	return out
+}
+
+// trySeedFromLocalVerifiedCache copies an already-downloaded, sha256-verified
+// copy of the artifact into dest instead of re-downloading it. It returns true
+// only when dest now holds a verified file; any mismatch or I/O error falls
+// back to the normal download (false).
+func trySeedFromLocalVerifiedCache(art ModelArtifact, dest string, onProgress ProgressFunc) bool {
+	for _, candidate := range localCacheCandidates(art) {
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() || info.Size() != art.SizeBytes {
+			continue
+		}
+		if sum, err := fileSHA256(candidate); err != nil || sum != art.SHA256 {
+			continue
+		}
+		if copyVerified(candidate, dest, art) {
+			if onProgress != nil {
+				onProgress(art.SizeBytes, art.SizeBytes)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func copyVerified(src, dest string, art ModelArtifact) bool {
+	in, err := os.Open(src)
+	if err != nil {
+		return false
+	}
+	defer in.Close()
+	tmp := fmt.Sprintf("%s.part.%d.%d", dest, os.Getpid(), time.Now().UnixNano())
+	out, err := os.Create(tmp)
+	if err != nil {
+		return false
+	}
+	h := sha256.New()
+	_, err = io.Copy(io.MultiWriter(out, h), in)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil || hex.EncodeToString(h.Sum(nil)) != art.SHA256 {
+		_ = os.Remove(tmp)
+		return false
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return false
+	}
+	return true
 }
 
 // downloadHTTPClient has no overall timeout (model files are large); callers

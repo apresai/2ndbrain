@@ -3,17 +3,9 @@ import Yams
 
 public enum FrontmatterParser {
     public static func parse(_ content: String) -> (frontmatter: [String: Any], body: String) {
-        guard content.hasPrefix("---\n") || content.hasPrefix("---\r\n") else {
+        guard let (yamlString, body) = splitFrontmatter(in: content) else {
             return ([:], content)
         }
-
-        let rest = String(content.dropFirst(4))
-        guard let endIndex = rest.range(of: "\n---\n") else {
-            return ([:], content)
-        }
-
-        let yamlString = String(rest[rest.startIndex..<endIndex.lowerBound])
-        let bodyStart = rest[endIndex.upperBound...]
 
         // Parse via the Node AST (compose) and convert it ourselves. `Yams.load`
         // eagerly constructs Swift values through Yams's Constructor, which can
@@ -26,10 +18,85 @@ public enum FrontmatterParser {
         // anything it rejects simply degrades to no frontmatter.
         if let node = try? Yams.compose(yaml: yamlString),
            let dict = nodeToValue(node) as? [String: Any] {
-            return (dict, String(bodyStart))
+            return (dict, body)
         }
 
         return ([:], content)
+    }
+
+    private static func splitFrontmatter(in content: String) -> (yaml: String, body: String)? {
+        let scalars = content.unicodeScalars
+        guard let yamlStart = consumeOpeningFence(scalars, from: scalars.startIndex) else {
+            return nil
+        }
+        var cur = yamlStart
+        while cur < scalars.endIndex {
+            let lineStart = cur
+            var lineEnd = cur
+            while lineEnd < scalars.endIndex && scalars[lineEnd] != "\n" && scalars[lineEnd] != "\r" {
+                lineEnd = scalars.index(after: lineEnd)
+            }
+            if isFenceLine(scalars[lineStart..<lineEnd]) {
+                let bodyStart = advancePastNewline(scalars, from: lineEnd)
+                let rawYAML = String(scalars[yamlStart..<lineStart])
+                    .replacingOccurrences(of: "\r\n", with: "\n")
+                    .replacingOccurrences(of: "\r", with: "\n")
+                let body = String(scalars[bodyStart...])
+                return (rawYAML, body)
+            }
+            let next = advancePastNewline(scalars, from: lineEnd)
+            if next == lineEnd {
+                break
+            }
+            cur = next
+        }
+        return nil
+    }
+
+    private static func consumeOpeningFence(
+        _ scalars: String.UnicodeScalarView,
+        from start: String.UnicodeScalarView.Index
+    ) -> String.UnicodeScalarView.Index? {
+        var lineEnd = start
+        while lineEnd < scalars.endIndex && scalars[lineEnd] != "\n" && scalars[lineEnd] != "\r" {
+            lineEnd = scalars.index(after: lineEnd)
+        }
+        guard lineEnd < scalars.endIndex, isFenceLine(scalars[start..<lineEnd]) else {
+            return nil
+        }
+        return advancePastNewline(scalars, from: lineEnd)
+    }
+
+    private static func isFenceLine(_ slice: String.UnicodeScalarView.SubSequence) -> Bool {
+        var i = slice.startIndex
+        for _ in 0..<3 {
+            guard i < slice.endIndex, slice[i] == "-" else { return false }
+            i = slice.index(after: i)
+        }
+        while i < slice.endIndex {
+            let s = slice[i]
+            guard s == " " || s == "\t" else { return false }
+            i = slice.index(after: i)
+        }
+        return true
+    }
+
+    private static func advancePastNewline(
+        _ scalars: String.UnicodeScalarView,
+        from idx: String.UnicodeScalarView.Index
+    ) -> String.UnicodeScalarView.Index {
+        guard idx < scalars.endIndex else { return idx }
+        if scalars[idx] == "\r" {
+            let next = scalars.index(after: idx)
+            if next < scalars.endIndex && scalars[next] == "\n" {
+                return scalars.index(after: next)
+            }
+            return next
+        }
+        if scalars[idx] == "\n" {
+            return scalars.index(after: idx)
+        }
+        return idx
     }
 
     /// Convert a Yams `Node` (AST) into Foundation values WITHOUT invoking Yams's

@@ -60,6 +60,9 @@ func TestValidateRegionValue(t *testing.T) {
 // classic Converse.
 func TestConfigSetGenerationModelRefusesAmbiguousRoute(t *testing.T) {
 	_, root := newContractVault(t)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrock"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Two real routes for one id, as a discovery walk now produces.
 	for _, m := range []ai.ModelInfo{
@@ -120,6 +123,9 @@ func TestConfigSetGenerationModelRefusesAmbiguousRoute(t *testing.T) {
 // naming the endpoint explicitly.
 func TestConfigSetGenerationModelUniqueRouteIsExplicit(t *testing.T) {
 	_, root := newContractVault(t)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrock"); err != nil {
+		t.Fatal(err)
+	}
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
 		ID: "fake.single-route", Provider: "bedrock", Type: "generation", Tier: ai.TierUserVerified,
 		Plane: ai.PlaneMantle, InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: "us-east-2",
@@ -155,6 +161,9 @@ func TestConfigSetGenerationModelUniqueRouteIsExplicit(t *testing.T) {
 // validator. This fix had no shipped test until now.
 func TestConfigSetEmbeddingModelRefusesResolvedMantlePlane(t *testing.T) {
 	_, root := newContractVault(t)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrock"); err != nil {
+		t.Fatal(err)
+	}
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
 		ID: "fake.mantle-only-embed", Provider: "bedrock", Type: "embedding", Tier: ai.TierUserVerified,
 		Plane: ai.PlaneMantle, InvokeStrategy: ai.StrategyBedrockMantleResponses, Region: "us-west-2",
@@ -183,6 +192,9 @@ func TestConfigSetEmbeddingModelRefusesResolvedMantlePlane(t *testing.T) {
 // guard must not block a legitimate classic embedding route.
 func TestConfigSetEmbeddingModelClassicRouteStillWorks(t *testing.T) {
 	_, root := newContractVault(t)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrock"); err != nil {
+		t.Fatal(err)
+	}
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
 		ID: "fake.classic-embed", Provider: "bedrock", Type: "embedding", Tier: ai.TierUserVerified,
 		Plane: ai.PlaneClassic, Region: "us-east-1",

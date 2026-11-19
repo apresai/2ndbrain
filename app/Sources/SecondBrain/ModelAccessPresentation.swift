@@ -46,8 +46,12 @@ enum ModelAccessPresentation {
         var actionLabel: String?
         var action: Guidance.Action?
         switch code {
-        case "access_denied":
-            if isMantle {
+        case "access_denied", "permission_denied":
+            if provider == "gemini" || provider == "google" {
+                advice = remediation ?? "Your Google Cloud project or account lacks permission for this model. Ensure the Vertex AI API (aiplatform.googleapis.com) is enabled and your account has roles/aiplatform.user, or configure a Gemini API key (BYOK)."
+                actionLabel = "Open Vertex AI console"
+                action = .url(vertexAIConsoleURL(project: region))
+            } else if isMantle {
                 advice = remediation ?? "Your account isn't entitled to this model on the Bedrock mantle plane. This is AWS's staged, per-account rollout, not a problem with 2nb or your credentials, and your other models still work. Request access by contacting AWS Sales; the Bedrock console's Model access page does not govern mantle models."
             } else {
                 advice = remediation ?? "Your account can't invoke this model yet. For Bedrock, request access under Model access in the AWS console; newer frontier models can stay gated by AWS's staged rollout even when the console shows access as granted."
@@ -68,7 +72,11 @@ enum ModelAccessPresentation {
             advice = remediation ?? "The model ID wasn't found for this account or region."
             return Guidance(badge: "not found", title: "Model not found", advice: advice, actionLabel: nil, action: nil)
         case "provider_unreachable":
-            advice = remediation ?? "The provider endpoint is unreachable. Check your network, or that the local server is running."
+            if provider == "llama-local" {
+                advice = remediation ?? "On-device Gemma model weights may not be downloaded yet, or the local runtime could not start. Download the local models in Settings and retry."
+            } else {
+                advice = remediation ?? "The provider endpoint is unreachable. Check your network, or that the local server is running."
+            }
             return Guidance(badge: "unreachable", title: "Provider unreachable", advice: advice, actionLabel: nil, action: nil)
         case "timeout":
             advice = remediation ?? "The probe timed out. Retry; the model may be cold-starting."
@@ -103,5 +111,14 @@ enum ModelAccessPresentation {
             return URL(string: "https://\(region).console.aws.amazon.com/bedrock/home?region=\(region)#/modelaccess")
         }
         return URL(string: "https://console.aws.amazon.com/bedrock/home#/modelaccess")
+    }
+
+    /// The Google Cloud Vertex AI console page, project-scoped when known.
+    static func vertexAIConsoleURL(project: String? = nil) -> URL {
+        if let project, !project.isEmpty,
+           project.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil {
+            return URL(string: "https://console.cloud.google.com/vertex-ai/?project=\(project)") ?? URL(string: "https://console.cloud.google.com/vertex-ai/")!
+        }
+        return URL(string: "https://console.cloud.google.com/vertex-ai/")!
     }
 }

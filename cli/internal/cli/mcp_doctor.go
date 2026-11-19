@@ -138,7 +138,8 @@ func buildMCPDoctorReport(ctx context.Context, v *vault.Vault) MCPDoctorReport {
 	add(engineSearchCheck(ctx, eng, v))
 
 	// WARN: AI readiness (a lightweight probe; the GUI runs a real model test).
-	embedder, eerr := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
+	embedProvider := v.Config.AI.EffectiveEmbeddingProvider()
+	embedder, eerr := ai.DefaultRegistry.Embedder(embedProvider)
 	var aiReady providerReadiness
 	if eerr == nil && embedder != nil {
 		aiReady = resolveReadiness(ctx, embedder)
@@ -147,7 +148,7 @@ func buildMCPDoctorReport(ctx context.Context, v *vault.Vault) MCPDoctorReport {
 		Name:   "ai readiness",
 		OK:     true,
 		Warn:   !aiReady.ready,
-		Detail: aiReadinessDetail(v.Config.AI.Provider, aiReady),
+		Detail: aiReadinessDetail(embedProvider, aiReady),
 		Fix:    aiReadinessFix(aiReady),
 	})
 

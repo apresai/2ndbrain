@@ -195,6 +195,10 @@ func mcpMetricOp(tool string) string {
 		return metrics.OpAsk
 	case "kb_index":
 		return metrics.OpIndex
+	case "kb_polish":
+		return metrics.OpPolish
+	case "kb_suggest_links":
+		return metrics.OpSuggest
 	case "kb_append", "kb_replace_section", "kb_create", "kb_update_meta":
 		return metrics.OpIndexDoc
 	default:
@@ -202,22 +206,105 @@ func mcpMetricOp(tool string) string {
 	}
 }
 
-// mcpMetricDetail carries the token/count detail a metered handler knows but the
-// generic wrapper can't see (it would otherwise have to parse the serialized
-// tool result). wrapMCPMetric seeds an empty one into the context; the handler
-// fills what it has via recordMCPDetail, and the wrapper folds it into the row.
+// mcpMetricDetail carries the token/count/cost detail a metered handler knows
+// but the generic wrapper can't see. wrapMCPMetric seeds an empty one into the
+// context; handlers fill it via recordMCPDetail, and the wrapper folds it into
+// metrics.Operation + ai_usage_ledger.
 type mcpMetricDetail struct {
-	InputTokens  int
-	OutputTokens int
-	ResultCount  int
-	DocsIndexed  int
-	Embedded     int
-	TotalChars   int
-	Mode         string
-	// EmbedRetries is filled by the wrapper from the call's own retry counter,
-	// not by a handler: no handler can see how many times the provider was
-	// retried underneath it.
+	InputTokens        int
+	OutputTokens       int
+	ResultCount        int
+	DocsIndexed        int
+	Embedded           int
+	TotalChars         int
+	Mode               string
+	EmbeddingProvider  string
+	EmbeddingModel     string
+	GenerationProvider string
+	GenerationModel    string
+	EmbedInputTokens   int
+	GenInputTokens     int
+	GenOutputTokens    int
+	CostUSD            float64
+	KnownPricing       bool
+	UsageLegs          []metrics.UsageLeg
+	// EmbedRetries is filled by the wrapper from the call's own retry counter.
 	EmbedRetries int
+}
+
+func buildMCPUsageLeg(vaultRoot, provider, model, slot, operation string, calls, inTok, outTok int) metrics.UsageLeg {
+	if model == "" && provider == "" {
+		return metrics.UsageLeg{}
+	}
+	if provider == "" && model != "" {
+		provider = ai.InferProvider(model)
+	}
+	m := ai.LookupLocalModelPricing(vaultRoot, provider, model)
+	usd, isCloud, knownPricing := ai.EstimateUsageCost(m, inTok, outTok, calls)
+	return metrics.UsageLeg{
+		Provider:     provider,
+		Model:        model,
+		Slot:         slot,
+		Operation:    operation,
+		IsCloud:      isCloud,
+		Calls:        calls,
+		InputTokens:  inTok,
+		OutputTokens: outTok,
+		CostUSD:      usd,
+		KnownPricing: knownPricing,
+	}
+}
+
+func attachMCPUsageLegs(d *mcpMetricDetail, legs ...metrics.UsageLeg) {
+	var (
+		active        []metrics.UsageLeg
+		totalCost     float64
+		embedIn       int
+		genIn, genOut int
+		hasActive     bool
+		allCloudKnown = true
+	)
+	for _, leg := range legs {
+		if leg.Calls <= 0 && leg.InputTokens <= 0 && leg.OutputTokens <= 0 {
+			continue
+		}
+		hasActive = true
+		active = append(active, leg)
+		totalCost += leg.CostUSD
+		if leg.IsCloud && !leg.KnownPricing {
+			allCloudKnown = false
+		}
+		switch leg.Slot {
+		case "embedding":
+			if leg.Provider != "" {
+				d.EmbeddingProvider = leg.Provider
+			}
+			if leg.Model != "" {
+				d.EmbeddingModel = leg.Model
+			}
+			embedIn += leg.InputTokens
+		case "generation":
+			if leg.Provider != "" {
+				d.GenerationProvider = leg.Provider
+			}
+			if leg.Model != "" {
+				d.GenerationModel = leg.Model
+			}
+			genIn += leg.InputTokens
+			genOut += leg.OutputTokens
+		}
+	}
+	if !hasActive {
+		return
+	}
+	d.EmbedInputTokens += embedIn
+	d.GenInputTokens += genIn
+	d.GenOutputTokens += genOut
+	d.InputTokens = d.EmbedInputTokens + d.GenInputTokens
+	d.OutputTokens = d.GenOutputTokens
+	d.CostUSD = totalCost
+	d.KnownPricing = allCloudKnown
+	d.UsageLegs = append(d.UsageLegs, active...)
 }
 
 type mcpMetricDetailKey struct{}
@@ -254,20 +341,30 @@ func wrapMCPMetric(mdb *metrics.DB, op, version string, fn server.ToolHandlerFun
 			errMsg = err.Error()
 		}
 		_ = mdb.Record(metrics.Operation{
-			Operation:    op,
-			Source:       "mcp",
-			DurationMs:   time.Since(start).Milliseconds(),
-			OK:           err == nil,
-			Error:        errMsg,
-			CLIVersion:   version,
-			InputTokens:  detail.InputTokens,
-			OutputTokens: detail.OutputTokens,
-			ResultCount:  detail.ResultCount,
-			DocsIndexed:  detail.DocsIndexed,
-			Embedded:     detail.Embedded,
-			TotalChars:   detail.TotalChars,
-			Mode:         detail.Mode,
-			EmbedRetries: detail.EmbedRetries,
+			Operation:          op,
+			Source:             "mcp",
+			DurationMs:         time.Since(start).Milliseconds(),
+			OK:                 err == nil,
+			Error:              errMsg,
+			CLIVersion:         version,
+			InputTokens:        detail.InputTokens,
+			OutputTokens:       detail.OutputTokens,
+			ResultCount:        detail.ResultCount,
+			DocsIndexed:        detail.DocsIndexed,
+			Embedded:           detail.Embedded,
+			TotalChars:         detail.TotalChars,
+			Mode:               detail.Mode,
+			EmbeddingProvider:  detail.EmbeddingProvider,
+			EmbeddingModel:     detail.EmbeddingModel,
+			GenerationProvider: detail.GenerationProvider,
+			GenerationModel:    detail.GenerationModel,
+			EmbedInputTokens:   detail.EmbedInputTokens,
+			GenInputTokens:     detail.GenInputTokens,
+			GenOutputTokens:    detail.GenOutputTokens,
+			CostUSD:            detail.CostUSD,
+			KnownPricing:       detail.KnownPricing,
+			UsageLegs:          detail.UsageLegs,
+			EmbedRetries:       detail.EmbedRetries,
 		})
 		return result, err
 	}
@@ -476,11 +573,15 @@ func kbGitStatusTool() mcplib.Tool {
 
 func kbPolishTool() mcplib.Tool {
 	return kbTool("kb_polish",
-		"Copy-edit preview; does not write. Required: path. Optional links, system.",
+		"Copy-edit preview; does not write. Required: path. Optional links, system, goal, schema, repair_links, backlinks.",
 		map[string]any{
-			"path":   map[string]any{"type": "string", "description": "Vault-relative path to the document to polish"},
-			"system": map[string]any{"type": "string", "description": "Optional system prompt override (default: copy-editor)"},
-			"links":  map[string]any{"type": "boolean", "description": "Also propose grounded [[wikilinks]] to existing notes (never invents targets); default false"},
+			"path":         map[string]any{"type": "string", "description": "Vault-relative path to the document to polish"},
+			"system":       map[string]any{"type": "string", "description": "Optional system prompt override (default: copy-editor)"},
+			"goal":         map[string]any{"type": "string", "description": "Optional goal/lens prompt steering prose tone or focus while preserving links, schema, and code"},
+			"links":        map[string]any{"type": "boolean", "description": "Also propose grounded [[wikilinks]] to existing notes (never invents targets); default false"},
+			"repair_links": map[string]any{"type": "boolean", "description": "Also repair broken [[wikilinks]] in preview; default false"},
+			"schema":       map[string]any{"type": "boolean", "description": "Also compute frontmatter/schema conformance fixes in preview; default false"},
+			"backlinks":    map[string]any{"type": "boolean", "description": "Also preview incoming backlink updates in other notes (never writes); default false"},
 		},
 		[]string{"path"})
 }

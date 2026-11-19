@@ -3,7 +3,7 @@ package ai
 import "testing"
 
 func TestProviderEmbedConcurrencyDefault(t *testing.T) {
-	tests := map[string]int{"bedrock": 4, "openrouter": 3, "ollama": 2, "unknown": 4, "": 4}
+	tests := map[string]int{"gemini": 4, "bedrock": 4, "openrouter": 3, "ollama": 2, "unknown": 4, "": 4}
 	for provider, want := range tests {
 		if got := ProviderEmbedConcurrencyDefault(provider); got != want {
 			t.Errorf("ProviderEmbedConcurrencyDefault(%q) = %d, want %d", provider, got, want)

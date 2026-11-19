@@ -82,6 +82,25 @@ func TestAIConfig_Validate(t *testing.T) {
 	if issues := cfg2.Validate(""); len(issues) != 0 {
 		t.Errorf("Validate() with unknown models = %v, want no issues (unknown != wrong)", issues)
 	}
+
+	// Mixed provider combo: llama-local EmbeddingGemma + cloud Gemini 4 Hydrogen -> valid (0 issues).
+	mixedOK := DefaultAIConfig()
+	mixedOK.EmbeddingProvider = "llama-local"
+	mixedOK.EmbeddingModel = "embeddinggemma-2"
+	mixedOK.GenerationProvider = "gemini"
+	mixedOK.GenerationModel = "gemini-4-hydrogen"
+	if issues := mixedOK.Validate(""); len(issues) != 0 {
+		t.Errorf("Validate() on valid local-embed + gemini-gen combo = %v, want 0 issues", issues)
+	}
+
+	// Mismatched per-slot override: EmbeddingProvider set to gemini while EmbeddingModel belongs to llama-local.
+	mixedBad := DefaultAIConfig()
+	mixedBad.EmbeddingProvider = "gemini"
+	mixedBad.EmbeddingModel = "embeddinggemma-2"
+	badIssues := mixedBad.Validate("")
+	if len(badIssues) == 0 || !strings.Contains(strings.Join(badIssues, " "), "ai.embedding_provider") {
+		t.Errorf("Validate() with mismatched ai.embedding_provider = %v, want issue naming ai.embedding_provider", badIssues)
+	}
 }
 
 func TestSetProviderDisabled(t *testing.T) {

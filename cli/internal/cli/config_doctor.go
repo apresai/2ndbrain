@@ -72,7 +72,7 @@ func runConfigDoctor(cmd *cobra.Command, args []string) error {
 
 	st := gatherDoctorVaultState(v)
 
-	embedder, _ := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedder, _ := ai.DefaultRegistry.Embedder(cfg.EffectiveEmbeddingProvider())
 	report := ConfigDoctorReport{Checks: buildDoctorChecks(ctx, v.Root, cfg, embedder, st)}
 	report.OK = true
 	for _, c := range report.Checks {
@@ -161,44 +161,71 @@ type doctorVaultState struct {
 func buildDoctorChecks(ctx context.Context, vaultRoot string, cfg ai.AIConfig, embedder ai.EmbeddingProvider, st doctorVaultState) []DoctorCheck {
 	var checks []DoctorCheck
 
-	// 1. Provider is a known name.
-	if ai.IsKnownProvider(cfg.Provider) {
-		checks = append(checks, DoctorCheck{Name: "provider known", OK: true, Detail: cfg.Provider})
-	} else {
+	activeProviders := cfg.ActiveProviders()
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+
+	// 1. Active providers are known names.
+	var unknownProviders []string
+	for _, p := range activeProviders {
+		if !ai.IsKnownProvider(p) {
+			unknownProviders = append(unknownProviders, p)
+		}
+	}
+	if len(unknownProviders) == 0 && len(activeProviders) > 0 {
+		detail := strings.Join(activeProviders, ", ")
+		if cfg.IsMixedProviders() {
+			detail = fmt.Sprintf("embed: %s, generation: %s", embedProvider, cfg.EffectiveGenerationProvider())
+		}
+		checks = append(checks, DoctorCheck{Name: "provider known", OK: true, Detail: detail})
+	} else if len(unknownProviders) == 0 {
 		checks = append(checks, DoctorCheck{
 			Name:   "provider known",
 			OK:     false,
 			Detail: fmt.Sprintf("ai.provider is %q", cfg.Provider),
-			Fix:    fmt.Sprintf("set ai.provider to one of: %s (e.g. `2nb config set ai.provider bedrock`)", strings.Join(ai.KnownProviders, ", ")),
+			Fix:    fmt.Sprintf("set ai.provider to one of: %s (e.g. `2nb config set ai.provider gemini`)", strings.Join(ai.KnownProviders, ", ")),
+		})
+	} else {
+		checks = append(checks, DoctorCheck{
+			Name:   "provider known",
+			OK:     false,
+			Detail: fmt.Sprintf("unknown provider %q", strings.Join(unknownProviders, ", ")),
+			Fix:    fmt.Sprintf("set ai.provider (or ai.embedding_provider / ai.generation_provider) to one of: %s", strings.Join(ai.KnownProviders, ", ")),
 		})
 	}
 
-	// 2. Active provider is not disabled (an active-but-disabled provider runs
+	// 2. Active providers are not disabled (an active-but-disabled provider runs
 	//    in the CLI but is hidden everywhere in the GUI, a contradiction).
-	if cfg.ProviderDisabled(cfg.Provider) {
+	var disabledProviders []string
+	for _, p := range activeProviders {
+		if cfg.ProviderDisabled(p) {
+			disabledProviders = append(disabledProviders, p)
+		}
+	}
+	if len(disabledProviders) > 0 {
+		p := disabledProviders[0]
 		checks = append(checks, DoctorCheck{
 			Name:   "active provider enabled",
 			OK:     false,
-			Detail: fmt.Sprintf("ai.%s.disabled is true while %s is the active provider", cfg.Provider, cfg.Provider),
-			Fix:    fmt.Sprintf("`2nb config set ai.%s.disabled false` (or re-select it; `config set ai.provider` clears the flag)", cfg.Provider),
+			Detail: fmt.Sprintf("ai.%s.disabled is true while %s is an active provider", p, p),
+			Fix:    fmt.Sprintf("`2nb config set ai.%s.disabled false`", p),
 		})
 	} else {
 		checks = append(checks, DoctorCheck{Name: "active provider enabled", OK: true, Detail: "not disabled"})
 	}
 
 	// 3. No orphaned slot: an embedding/generation model registered under a
-	//    different provider than ai.provider can never be served.
+	//    different provider than its slot's effective provider can never be served.
 	if issues := cfg.Validate(vaultRoot); len(issues) > 0 {
 		for _, issue := range issues {
 			checks = append(checks, DoctorCheck{
 				Name:   "model belongs to active provider",
 				OK:     false,
 				Detail: issue,
-				Fix:    "switch the model to one served by the active provider, or change ai.provider to match (see the detail).",
+				Fix:    "switch the model to match its slot provider, or set ai.embedding_provider / ai.generation_provider to match.",
 			})
 		}
 	} else {
-		checks = append(checks, DoctorCheck{Name: "model belongs to active provider", OK: true, Detail: "embedding + generation models match ai.provider"})
+		checks = append(checks, DoctorCheck{Name: "model belongs to active provider", OK: true, Detail: "embedding + generation models match active slot providers"})
 	}
 
 	// 4. ai.dimensions is valid for the active embedding model — its declared
@@ -206,8 +233,8 @@ func buildDoctorChecks(ctx context.Context, vaultRoot string, cfg ai.AIConfig, e
 	//    Nova is a valid, supported choice, not a defect). A dim of 0 means the
 	//    model isn't in any catalog (a user's own discovered model): not a
 	//    failure, just unverifiable here.
-	if dim := ai.EmbeddingDimensionsFor(vaultRoot, cfg.Provider, cfg.EmbeddingModel); dim > 0 {
-		supported := ai.SupportedDimensionsFor(vaultRoot, cfg.Provider, cfg.EmbeddingModel)
+	if dim := ai.EmbeddingDimensionsFor(vaultRoot, embedProvider, cfg.EmbeddingModel); dim > 0 {
+		supported := ai.SupportedDimensionsFor(vaultRoot, embedProvider, cfg.EmbeddingModel)
 		if cfg.Dimensions == dim || containsInt(supported, cfg.Dimensions) {
 			checks = append(checks, DoctorCheck{Name: "ai.dimensions matches model", OK: true, Detail: fmt.Sprintf("%dd", cfg.Dimensions)})
 		} else {

@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/apresai/2ndbrain/internal/vault"
 )
 
 func TestIsAssetOrAnchorTarget(t *testing.T) {
@@ -615,5 +618,177 @@ func TestLint_ResolverIgnoresDotDirNotes(t *testing.T) {
 	}
 	if got := report.Issues[len(report.Issues)-1].Message; !containsSubstr(got, "hidden-note") {
 		t.Errorf("expected warning about hidden-note, got %q", got)
+	}
+}
+
+func TestBuildLintReport_ParseErrorUnclosedFenceAndNodeModules(t *testing.T) {
+	_, root := newContractVault(t)
+	write := func(name, content string) {
+		abs := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("bad-yaml.md", "---\ntitle: Broken: colon: here\ntags:\n\t- tab\n---\n\nBody.\n")
+	write("unclosed.md", "---\ntitle: Unclosed Fence\ntype: note\n\n# Unclosed Fence\nBody.\n")
+	write("node_modules/pkg/ignored.md", "---\ntitle: Pkg\ntype: note\nstatus: open\n---\n[[missing]]\n")
+	write("clean.md", "---\ntitle: Clean\ntype: note\nstatus: draft\n---\nClean.\n")
+
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	defer v.Close()
+
+	rep, err := buildLintReport(v, nil)
+	if err != nil {
+		t.Fatalf("buildLintReport: %v", err)
+	}
+	if rep.Files != 3 {
+		t.Fatalf("Files = %d, want 3 (node_modules must be skipped)", rep.Files)
+	}
+	if rep.Errors != 2 {
+		t.Fatalf("Errors = %d, want 2: %+v", rep.Errors, rep.Issues)
+	}
+	var sawBadYAML, sawUnclosed bool
+	for _, is := range rep.Issues {
+		if is.Path == "bad-yaml.md" && is.Level == "error" && strings.HasPrefix(is.Message, "parse error:") {
+			sawBadYAML = true
+		}
+		if is.Path == "unclosed.md" && is.Level == "error" && is.Message == "parse error: unclosed YAML frontmatter fence" {
+			sawUnclosed = true
+		}
+		if strings.Contains(is.Path, "node_modules") {
+			t.Fatalf("node_modules file must not be linted: %+v", is)
+		}
+	}
+	if !sawBadYAML || !sawUnclosed {
+		t.Fatalf("missing expected parse error issues: %+v", rep.Issues)
+	}
+}
+
+func TestBuildLintReport_RequiredEnumsNonStringDatesAndLinkFormatting(t *testing.T) {
+	_, root := newContractVault(t)
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("Target Note.md", "---\ntitle: Target Note\ntype: note\nstatus: draft\n---\nTarget.\n")
+	// Empty required title + invalid non-scalar enum (status: [open]) + quoted date + link syntax glitch
+	write("note-bad.md", "---\ntitle: \"\"\ntype: note\nstatus: [open]\ncreated: \"2026-04-20T10:00:00Z\"\n---\nSee [[ Target Note.md ]].\n")
+	// Non-note schema: postmortem missing required incident-date + invalid enum severity + unparseable date
+	write("pm-bad.md", "---\ntitle: Outage\ntype: postmortem\nstatus: draft\nseverity: ultra\ncreated: yesterday\n---\nOutage details.\n")
+	// Bool scalar enum value
+	write("bool-status.md", "---\ntitle: Bool Status\ntype: note\nstatus: true\n---\nBody.\n")
+
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	defer v.Close()
+
+	rep, err := buildLintReport(v, nil)
+	if err != nil {
+		t.Fatalf("buildLintReport: %v", err)
+	}
+
+	var sawEmptyTitle, sawSeqStatus, sawMissingIncidentDate, sawBadSeverity, sawBadDate, sawBoolStatus bool
+	var sawQuotedDateWarn, sawLinkSyntaxWarn bool
+	for _, is := range rep.Issues {
+		switch {
+		case is.Path == "note-bad.md" && is.Level == "error" && strings.Contains(is.Message, "missing required field 'title'"):
+			sawEmptyTitle = true
+		case is.Path == "note-bad.md" && is.Level == "error" && strings.Contains(is.Message, "expects a scalar string"):
+			sawSeqStatus = true
+		case is.Path == "note-bad.md" && is.Level == "warning" && is.Kind == "date_format":
+			sawQuotedDateWarn = true
+		case is.Path == "note-bad.md" && is.Level == "warning" && is.Kind == "link_syntax":
+			sawLinkSyntaxWarn = true
+		case is.Path == "pm-bad.md" && is.Level == "error" && strings.Contains(is.Message, "missing required field 'incident-date'"):
+			sawMissingIncidentDate = true
+		case is.Path == "pm-bad.md" && is.Level == "error" && strings.Contains(is.Message, "field 'severity' value 'ultra'"):
+			sawBadSeverity = true
+		case is.Path == "pm-bad.md" && is.Level == "error" && strings.Contains(is.Message, "invalid date value"):
+			sawBadDate = true
+		case is.Path == "bool-status.md" && is.Level == "error" && strings.Contains(is.Message, "field 'status' value 'true'"):
+			sawBoolStatus = true
+		}
+	}
+	if !sawEmptyTitle || !sawSeqStatus || !sawMissingIncidentDate || !sawBadSeverity || !sawBadDate || !sawBoolStatus || !sawQuotedDateWarn || !sawLinkSyntaxWarn {
+		t.Fatalf("missing expected aligned lint findings:\nsawEmptyTitle=%v sawSeqStatus=%v sawMissingIncidentDate=%v sawBadSeverity=%v sawBadDate=%v sawBoolStatus=%v sawQuotedDateWarn=%v sawLinkSyntaxWarn=%v\nissues=%+v",
+			sawEmptyTitle, sawSeqStatus, sawMissingIncidentDate, sawBadSeverity, sawBadDate, sawBoolStatus, sawQuotedDateWarn, sawLinkSyntaxWarn, rep.Issues)
+	}
+}
+
+func TestRunLint_RefusesBodylessFormatUpFront(t *testing.T) {
+	_, root := newContractVault(t)
+	for _, fmtName := range []string{"raw", "md"} {
+		out, err := runCLIArgs(t, root, "lint", "--format", fmtName)
+		if err == nil {
+			t.Fatalf("expected lint --format %s to error, got output:\n%s", fmtName, out)
+		}
+		if !strings.Contains(err.Error(), "--format raw/md") {
+			t.Fatalf("expected format refusal error, got: %v", err)
+		}
+	}
+}
+
+func TestBuildLintReport_SkipsQuotedTemplatePlaceholdersOutsideTemplateFolders(t *testing.T) {
+	_, root := newContractVault(t)
+	if err := os.MkdirAll(filepath.Join(root, ".obsidian", "plugins", "templater-obsidian"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".obsidian", "plugins", "templater-obsidian", "data.json"),
+		[]byte(`{"templates_folder":"Templates"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "Templates"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Templates", "inside.md"),
+		[]byte("---\ntitle: \"<% tp.file.title %>\"\ncreated: \"<% tp.date.now() %>\"\ntype: note\nstatus: draft\n---\nBody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "outside-quoted-tmpl.md"),
+		[]byte("---\ntitle: \"{{title}}\"\ncreated: \"{{date}}\"\ntype: note\nstatus: draft\n---\nBody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "outside-templater-quoted.md"),
+		[]byte("---\ntitle: \"<% tp.file.title %>\"\ncreated: \"<% tp.date.now() %>\"\ntype: note\nstatus: draft\n---\nBody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "outside-templater-unquoted.md"),
+		[]byte("---\ntitle: <% tp.file.title %>\ncreated: <% tp.date.now() %>\ntype: note\nstatus: draft\n---\nBody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real-bad-date.md"),
+		[]byte("---\ntitle: Real Bad\ncreated: \"yesterday\"\ntype: note\nstatus: draft\n---\nBody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	defer v.Close()
+
+	rep, err := buildLintReport(v, nil)
+	if err != nil {
+		t.Fatalf("buildLintReport: %v", err)
+	}
+	if rep.Files != 1 {
+		t.Fatalf("Files = %d, want 1 (templates inside and outside template folders must be skipped)", rep.Files)
+	}
+	if rep.Errors != 1 || rep.Warns != 0 {
+		t.Fatalf("expected 1 error (real-bad-date.md) and 0 warnings, got %+v", rep)
+	}
+	if rep.Issues[0].Path != "real-bad-date.md" {
+		t.Fatalf("unexpected issue path: %+v", rep.Issues)
 	}
 }

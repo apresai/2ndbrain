@@ -358,8 +358,13 @@ func buildMantleRequest(model, prompt string, opts GenOpts) ([]byte, error) {
 	// can consume it entirely and return a reasoning-only "incomplete" response
 	// with no answer text. A smoke probe passes effort "none" so the answer is
 	// never starved; real generation leaves this empty for the model default.
+	// Cap "xhigh" (Gemini 4 Hydrogen) at "high" for Bedrock Mantle endpoints.
 	if opts.ReasoningEffort != "" {
-		req.Reasoning = &mantleReasoning{Effort: opts.ReasoningEffort}
+		effort := opts.ReasoningEffort
+		if effort == "xhigh" {
+			effort = "high"
+		}
+		req.Reasoning = &mantleReasoning{Effort: effort}
 	}
 	body, err := json.Marshal(req)
 	if err != nil {

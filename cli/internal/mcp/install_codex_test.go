@@ -110,7 +110,7 @@ func TestCodexListHasServer(t *testing.T) {
 			t.Errorf("should detect the server in %q", out)
 		}
 	}
-	if codexListHasServer("other  /Users/chad/dev/2ndbrain/vault  stdio") {
+	if codexListHasServer("other  /Users/alice/dev/2ndbrain/vault  stdio") {
 		t.Error("must NOT match 2ndbrain as a path substring")
 	}
 	if codexListHasServer("") {

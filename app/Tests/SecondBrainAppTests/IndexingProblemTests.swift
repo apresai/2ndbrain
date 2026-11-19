@@ -193,3 +193,133 @@ func vaultSwitchCancelsThePendingExternalReindex() throws {
     #expect(state.pendingExternalPaths.isEmpty)
     #expect(state.externalReindexTask == nil)
 }
+
+@MainActor
+@Test("suppressExternalReindex blocks FSEvents paths across /var vs /private/var symlink variants and evicts queued self-writes")
+func suppressExternalReindexCoordinatesSelfWrites() throws {
+    let fm = FileManager.default
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-suppress-\(UUID().uuidString)", isDirectory: true)
+    let otherVault = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-suppress-other-\(UUID().uuidString)", isDirectory: true)
+    try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    try fm.createDirectory(at: otherVault, withIntermediateDirectories: true)
+    defer {
+        try? fm.removeItem(at: root)
+        try? fm.removeItem(at: otherVault)
+    }
+
+    let selfNote = root.appendingPathComponent("self.md")
+    let externalNote = root.appendingPathComponent("external.md")
+    try "---\ntitle: Self\n---\n\nbody\n".write(to: selfNote, atomically: true, encoding: .utf8)
+    try "---\ntitle: External\n---\n\nbody\n".write(to: externalNote, atomically: true, encoding: .utf8)
+
+    let state = AppState()
+    state.openVault(at: root)
+
+    // Pre-existing queued path (e.g. from /var/folders vs /private/var/folders)
+    let canonicalSelf = AppState.canonicalWatcherPath(selfNote.path)
+    state.scheduleExternalReindex(path: selfNote.path)
+    state.scheduleExternalReindex(path: externalNote.path)
+    #expect(state.pendingExternalPaths.contains(selfNote.path))
+    #expect(state.pendingExternalPaths.contains(externalNote.path))
+
+    // Suppressing by relative path evicts selfNote from pendingExternalPaths while preserving externalNote
+    let baseTime = Date(timeIntervalSince1970: 2_000_000_000)
+    state.suppressExternalReindex(paths: ["self.md"], duration: 5.0, now: baseTime)
+    #expect(!state.pendingExternalPaths.contains(selfNote.path))
+    #expect(state.pendingExternalPaths.contains(externalNote.path))
+    #expect(state.externalReindexTask != nil)
+
+    // Canonical symlink variant is still suppressed within TTL
+    state.scheduleExternalReindex(path: canonicalSelf, now: baseTime.addingTimeInterval(2.0))
+    #expect(!state.pendingExternalPaths.contains(canonicalSelf))
+
+    // Once TTL expires, external watcher events queue normally again
+    state.scheduleExternalReindex(path: canonicalSelf, now: baseTime.addingTimeInterval(6.0))
+    #expect(state.pendingExternalPaths.contains(canonicalSelf))
+
+    // Evicting the last pending path cancels externalReindexTask
+    state.suppressExternalReindex(paths: ["self.md", "external.md"], duration: 5.0, now: baseTime.addingTimeInterval(10.0))
+    #expect(state.pendingExternalPaths.isEmpty)
+    #expect(state.externalReindexTask == nil)
+
+    // Switching vaults clears suppressedExternalPaths
+    state.openVault(at: otherVault)
+    #expect(state.suppressedExternalPaths.isEmpty)
+}
+
+@MainActor
+@Test("suppressExternalReindex with clampExisting replaces a 60s pre-write lease with a short post-write TTL")
+func suppressExternalReindexClampExisting() throws {
+    let fm = FileManager.default
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-suppress-clamp-\(UUID().uuidString)", isDirectory: true)
+    try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: root) }
+
+    let note = root.appendingPathComponent("note.md")
+    try "---\ntitle: Note\n---\n\nbody\n".write(to: note, atomically: true, encoding: .utf8)
+
+    let state = AppState()
+    state.openVault(at: root)
+
+    let t0 = Date(timeIntervalSince1970: 2_000_000_000)
+    // Pre-write lease: 60s
+    state.suppressExternalReindex(paths: ["note.md"], duration: 60.0, now: t0)
+    // Post-write clamp at t0 + 2s: clamps down to t0 + 7s (5s after write completion)
+    state.suppressExternalReindex(paths: ["note.md"], duration: 5.0, now: t0.addingTimeInterval(2.0), clampExisting: true)
+
+    // Still suppressed 2s after write (t0 + 4s)
+    state.scheduleExternalReindex(path: note.path, now: t0.addingTimeInterval(4.0))
+    #expect(!state.pendingExternalPaths.contains(note.path))
+
+    // Unsuppressed 6s after write (t0 + 8s), well inside original 60s window
+    state.scheduleExternalReindex(path: note.path, now: t0.addingTimeInterval(8.0))
+    #expect(state.pendingExternalPaths.contains(note.path))
+}
+
+@MainActor
+@Test("scheduleExternalReindex ignores hidden paths, template folders, and placeholder templates")
+func scheduleExternalReindexIgnoresHiddenAndTemplatePaths() throws {
+    let fm = FileManager.default
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("sb-exclude-reindex-\(UUID().uuidString)", isDirectory: true)
+    let obsidianDir = root.appendingPathComponent(".obsidian", isDirectory: true)
+    let templatesDir = root.appendingPathComponent("Templates", isDirectory: true)
+    let notesDir = root.appendingPathComponent("notes", isDirectory: true)
+    try fm.createDirectory(at: obsidianDir, withIntermediateDirectories: true)
+    try fm.createDirectory(at: templatesDir, withIntermediateDirectories: true)
+    try fm.createDirectory(at: notesDir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: root) }
+
+    try "{\"folder\":\"Templates\"}".write(
+        to: obsidianDir.appendingPathComponent("templates.json"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let hiddenObsidian = obsidianDir.appendingPathComponent("README.md")
+    let templateInFolder = templatesDir.appendingPathComponent("daily.md")
+    let standalonePlaceholder = notesDir.appendingPathComponent("tmpl.md")
+    let regularNote = notesDir.appendingPathComponent("regular.md")
+
+    try "# Plugin README\n".write(to: hiddenObsidian, atomically: true, encoding: .utf8)
+    try "---\ntitle: Daily\n---\n\nBody\n".write(to: templateInFolder, atomically: true, encoding: .utf8)
+    try "---\r\ntitle: {{title}}\r\ndate: {{date}}\r\n---\r\n\r\nBody\r\n".write(to: standalonePlaceholder, atomically: true, encoding: .utf8)
+    try "---\ntitle: Regular Note\n---\n\nBody\n".write(to: regularNote, atomically: true, encoding: .utf8)
+
+    let state = AppState()
+    state.openVault(at: root)
+    defer { state.externalReindexTask?.cancel() }
+
+    state.scheduleExternalReindex(path: hiddenObsidian.path)
+    state.scheduleExternalReindex(path: templateInFolder.path)
+    state.scheduleExternalReindex(path: standalonePlaceholder.path)
+    #expect(state.pendingExternalPaths.isEmpty)
+    #expect(state.externalReindexTask == nil)
+
+    state.scheduleExternalReindex(path: regularNote.path)
+    #expect(state.pendingExternalPaths == [regularNote.path])
+    #expect(state.externalReindexTask != nil)
+}

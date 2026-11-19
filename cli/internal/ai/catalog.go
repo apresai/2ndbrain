@@ -11,6 +11,91 @@ import (
 func BuiltinCatalog() []ModelInfo {
 	var models []ModelInfo
 
+	// --- Google Gemini Embeddings ---
+	models = append(models, ModelInfo{
+		ID:                             "gemini-embedding-2",
+		Name:                           "Google Gemini Embedding 2",
+		Provider:                       "gemini",
+		Type:                           "embedding",
+		Dimensions:                     768,
+		SupportedDimensions:            []int{768, 1024, 1536, 3072},
+		Modalities:                     []string{"text", "image", "video", "audio", "pdf"},
+		ContextLen:                     8192,
+		PriceIn:                        0.20,
+		PriceOut:                       0,
+		Local:                          false,
+		Tier:                           TierVerified,
+		Recommended:                    true,
+		ConfigHint:                     configHint("gemini", "embedding", "gemini-embedding-2"),
+		RecommendedSimilarityThreshold: 0.60,
+		Notes:                          "Default Google multimodal + text embeddings (8K context, 768/1024/1536/3072 Matryoshka dims, unit-normalized)",
+	})
+
+	models = append(models, ModelInfo{
+		ID:                             "gemini-embedding-001",
+		Name:                           "Google Gemini Embedding 001",
+		Provider:                       "gemini",
+		Type:                           "embedding",
+		Dimensions:                     768,
+		SupportedDimensions:            []int{768, 1024, 1536, 3072},
+		Modalities:                     []string{"text"},
+		ContextLen:                     2048,
+		PriceIn:                        0.15,
+		PriceOut:                       0,
+		Local:                          false,
+		Tier:                           TierVerified,
+		Recommended:                    true,
+		ConfigHint:                     configHint("gemini", "embedding", "gemini-embedding-001"),
+		RecommendedSimilarityThreshold: 0.60,
+		Notes:                          "Google text embeddings (2K context, 768/1024/1536/3072 Matryoshka dims)",
+	})
+
+	// --- Google Gemini Generation (Gemini 4) ---
+	models = append(models, ModelInfo{
+		ID:          "gemini-4-hydrogen",
+		Name:        "Google Gemini 4 Hydrogen",
+		Provider:    "gemini",
+		Type:        "generation",
+		ContextLen:  1048576,
+		PriceIn:     1.50,
+		PriceOut:    7.50,
+		Local:       false,
+		Tier:        TierVerified,
+		Recommended: true,
+		ConfigHint:  configHint("gemini", "generation", "gemini-4-hydrogen"),
+		Notes:       "2nb default; Gemini 4 multimodal reasoning & agentic model (Free Tier + Paid Tier), 1M context",
+	})
+
+	models = append(models, ModelInfo{
+		ID:          "gemini-4-argon",
+		Name:        "Google Gemini 4 Argon",
+		Provider:    "gemini",
+		Type:        "generation",
+		ContextLen:  1048576,
+		PriceIn:     2.00,
+		PriceOut:    10.00,
+		Local:       false,
+		Tier:        TierVerified,
+		Recommended: false,
+		ConfigHint:  configHint("gemini", "generation", "gemini-4-argon"),
+		Notes:       "Gemini 4 efficient frontier reasoning model (Paid Tier), 1M context",
+	})
+
+	models = append(models, ModelInfo{
+		ID:          "gemini-4-carbon",
+		Name:        "Google Gemini 4 Carbon",
+		Provider:    "gemini",
+		Type:        "generation",
+		ContextLen:  1048576,
+		PriceIn:     2.00,
+		PriceOut:    10.00,
+		Local:       false,
+		Tier:        TierVerified,
+		Recommended: false,
+		ConfigHint:  configHint("gemini", "generation", "gemini-4-carbon"),
+		Notes:       "Gemini 4 flagship frontier reasoning model (Paid Tier), 1M context",
+	})
+
 	// --- Bedrock Embedding (Nova Embeddings v2 format) ---
 	// RecommendedSimilarityThreshold=0.25: queries embed with Nova's asymmetric
 	// GENERIC_RETRIEVAL purpose (documents stay GENERIC_INDEX), which collapses
@@ -310,9 +395,28 @@ func BuiltinCatalog() []ModelInfo {
 	}
 
 	// --- llama-local Embedding (bundled llama.cpp engine) ---
-	// EmbeddingGemma is a symmetric bi-encoder (unlike Nova's asymmetric
-	// query/index purpose), so its noise floor doesn't collapse — seed a
-	// mid-range threshold and let `2nb models calibrate` tune it per vault.
+	// LlamaEmbedder formats EmbeddingGemma with asymmetric task-prefixed
+	// prompts (`title: ... | text: ...` vs `task: ... | query: ...`), where
+	// zero-lexical-overlap semantic hits score ~0.45–0.62 over a ~0.04–0.34
+	// noise floor across 768d/512d/256d Matryoshka slices.
+	models = append(models, ModelInfo{
+		ID:                             "embeddinggemma-2",
+		Name:                           "EmbeddingGemma 2",
+		Provider:                       llamaProviderName,
+		Type:                           "embedding",
+		Dimensions:                     768,
+		SupportedDimensions:            []int{128, 256, 512, 768}, // Matryoshka
+		ContextLen:                     2048,
+		Local:                          true,
+		Tier:                           TierVerified,
+		Recommended:                    true,
+		ConfigHint:                     configHint(llamaProviderName, "embedding", "embeddinggemma-2"),
+		RecommendedSimilarityThreshold: 0.60,
+		Notes:                          "Default local Gemma 4 text encoder (Apache 2.0, 310 MB Q8_0); 768d Matryoshka (→512/256/128); asymmetric task prefixes (ai.task_preset)",
+		InvokeStrategy:                 StrategyLlamaEmbeddings,
+	})
+
+	// Legacy 300M row: kept so vaults already indexed with it stay valid.
 	models = append(models, ModelInfo{
 		ID:                             "embeddinggemma-300m",
 		Name:                           "EmbeddingGemma 300M",
@@ -323,10 +427,10 @@ func BuiltinCatalog() []ModelInfo {
 		ContextLen:                     2048,
 		Local:                          true,
 		Tier:                           TierVerified,
-		Recommended:                    true,
+		Recommended:                    false,
 		ConfigHint:                     configHint(llamaProviderName, "embedding", "embeddinggemma-300m"),
-		RecommendedSimilarityThreshold: 0.55,
-		Notes:                          "768d Matryoshka (→512/256/128); 2K context; symmetric — run `2nb models calibrate`",
+		RecommendedSimilarityThreshold: 0.35,
+		Notes:                          "Legacy local embedder (Gemma Terms); 768d Matryoshka (→512/256/128); 2K context; asymmetric task prefixes (ai.task_preset)",
 		InvokeStrategy:                 StrategyLlamaEmbeddings,
 	})
 

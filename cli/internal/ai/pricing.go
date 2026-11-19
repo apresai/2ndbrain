@@ -60,6 +60,58 @@ func VerbosePriceLabel(m ModelInfo) string {
 	}
 }
 
+// IsCloudProvider reports whether the given provider/local pair runs on a
+// remote cloud API rather than on-device hardware.
+func IsCloudProvider(provider string, local bool) bool {
+	if local {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "llama-local", "ollama":
+		return false
+	default:
+		return true
+	}
+}
+
+// EstimateUsageCost projects the USD cost for an operation leg using catalog
+// per-million-token or per-request pricing. On-device models always return
+// ($0.00, isCloud=false, knownPricing=true). Cloud models with missing pricing
+// return (0, isCloud=true, knownPricing=false).
+func EstimateUsageCost(m ModelInfo, inputTokens, outputTokens, requests int) (usd float64, isCloud bool, knownPricing bool) {
+	isCloud = IsCloudProvider(m.Provider, m.Local)
+	if !isCloud {
+		return 0, false, true
+	}
+	if !HasKnownPricing(m) {
+		return 0, true, false
+	}
+	if IsExplicitlyFree(m) {
+		return 0, true, true
+	}
+	usd = float64(inputTokens)*m.PriceIn/1_000_000 +
+		float64(outputTokens)*m.PriceOut/1_000_000 +
+		float64(requests)*m.PriceRequest
+	return usd, true, true
+}
+
+// FormatUSD renders a USD cost estimate compactly across sub-cent and dollar
+// scales ("$0.00", "<$0.0001", "$0.0012", "$0.042", "$1.25").
+func FormatUSD(usd float64) string {
+	switch {
+	case usd <= 0:
+		return "$0.00"
+	case usd < 0.0001:
+		return "<$0.0001"
+	case usd < 0.01:
+		return fmt.Sprintf("$%.4f", usd)
+	case usd < 0.10:
+		return fmt.Sprintf("$%.3f", usd)
+	default:
+		return fmt.Sprintf("$%.2f", usd)
+	}
+}
+
 // EstimateInputCost returns the estimated input-side cost for the model.
 // The estimate is based on either per-request or per-million input pricing.
 func EstimateInputCost(m ModelInfo, inputTokens float64, requests int) (float64, bool) {

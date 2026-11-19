@@ -6,6 +6,14 @@ import SecondBrainCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let log = Logger(subsystem: "dev.apresai.2ndbrain", category: "appdelegate")
     private var menuTrackingObserver: NSObjectProtocol?
+    private var configuredAppState = false
+    private var statusMenuController: StatusMenuController?
+    private var quickSearchController: QuickSearchPanelController?
+    private var automationController: GUIAutomationController?
+
+    var quickSearchPanelController: QuickSearchPanelController? {
+        quickSearchController
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // launchd starts the app with a minimal PATH (no /opt/homebrew/bin),
@@ -45,6 +53,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let token = menuTrackingObserver {
             NotificationCenter.default.removeObserver(token)
         }
+        automationController?.stop()
+        quickSearchController?.hide()
+        statusMenuController?.tearDown()
+    }
+
+    func configure(appState: AppState) {
+        guard !configuredAppState,
+              ProcessInfo.processInfo.environment["2NB_TEST"] != "1" else {
+            return
+        }
+        configuredAppState = true
+        let quickSearch = QuickSearchPanelController(appState: appState)
+        self.quickSearchController = quickSearch
+        self.statusMenuController = StatusMenuController(appState: appState) {
+            quickSearch.toggle()
+        }
+        if let controlDir = LaunchOptions.current.guiControlDir {
+            let controller = GUIAutomationController(controlDir: controlDir, appState: appState, appDelegate: self)
+            controller.start()
+            self.automationController = controller
+        }
+        HotkeyManager.shared.onTrigger = { [weak self] in
+            self?.quickSearchController?.toggle()
+        }
+        HotkeyManager.shared.registerDefaultIfNeeded()
+    }
+
+    func prepareMenusForInteraction() {
+        renameFileMenuToNotes()
+        if let mainMenu = NSApp.mainMenu {
+            updateMenusRecursively(mainMenu)
+        }
+    }
+
+    private func updateMenusRecursively(_ menu: NSMenu) {
+        menu.delegate?.menuNeedsUpdate?(menu)
+        menu.update()
+        for item in menu.items {
+            if let sub = item.submenu {
+                updateMenusRecursively(sub)
+            }
+        }
+    }
+
+    func toggleQuickSearch() {
+        quickSearchController?.toggle()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

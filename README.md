@@ -76,7 +76,7 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 - **Incremental re-embed** — `2nb index` rebuilds embeddings only for documents whose content hash changed
 - **Git integration (read-only)** — Recent Activity panel with per-commit file diffs in the dashboard, plus MCP git tools for AI clients
 - **Skill files** — One command to teach 8 AI coding agents about your vault
-- **Three AI providers** — AWS Bedrock, OpenRouter, Ollama (fully local)
+- **AI providers** — Google Gemini (native default on GCP), AWS Bedrock, OpenRouter, Ollama (fully local)
 - **Schema validation** — Typed frontmatter, enum constraints, status state machines
 - **Wikilinks** — `[[target#heading|alias]]` with link resolution and graph traversal
 - **Broken-link resolution, no dead ends** — `2nb lint` and the dashboard's Validation tab don't just flag broken `[[wikilinks]]`; every finding gets exactly one machine recommendation (`suggest-target --verdict`, prompt selected by a measured eval — see `docs/link-prompt-eval.md`): repair case/separator drift, relink to a "did you mean?" pick (source-note context + `--llm` re-rank), or **remove the dead link** when nothing matches confidently (the model's explicit decline is the removal signal). **Fix all** applies only high-confidence rewrites (drift + high); **Remove dead links** batches the removal-recommended ones behind a pre-checked confirm; everything else surfaces top 2-3 recommendations for a human pick, with create-the-note always available
@@ -86,25 +86,45 @@ The complete walkthrough (macOS app, Obsidian plugin, AI providers, MCP) lives i
 
 ## AI Providers
 
-2ndbrain supports three AI providers for embeddings and generation. Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token).
+2ndbrain natively defaults to **Google Gemini** on Google Cloud Platform, while also supporting Local Gemma (`llama-local`, fully offline via bundled `llama.cpp`), AWS Bedrock, OpenRouter, and Ollama.
 
-**Bedrock models are identified by their route**, `id@plane/region`, because the same model can be served on both planes and in several US regions with independent entitlement. Grok 4.6 is the clearest case: `us.xai.grok-4.6@classic/us-east-1` and `xai.grok-4.6@mantle/us-west-2` are different endpoints for the same model.
+### Google Gemini (Native Default)
 
-```bash
-2nb models discover                 # walk both planes across us-east-1/us-east-2/us-west-2 (free, cached 24h)
-2nb config set ai.generation_model xai.grok-4.6@mantle/us-west-2
-```
+2ndbrain uses the unified Google GenAI SDK (`google.golang.org/genai`) with native Gemini models:
+- **Generation**: `gemini-4-hydrogen` by default (1M context window, Free Tier + Paid Tier available, Gemini 4 multimodal reasoning with `low`/`medium`/`high`/`xhigh` thinking levels). Also supports `gemini-4-argon` and `gemini-4-carbon`.
+- **Embeddings**: `gemini-embedding-2` by default (768 dimensions default, 8,192-token context, multimodal + text, with Matryoshka support for 768, 1024, 1536, and 3072 dims; unit L2-normalized). Asymmetric retrieval passes `TaskType: RETRIEVAL_DOCUMENT` with title context when indexing notes, and `TaskType: RETRIEVAL_QUERY` when searching. Recommended similarity threshold is `0.60`. Also supports `gemini-embedding-001`. *(Google's embedding family uses `gemini-embedding-*` model IDs rather than a `gemini-4-*` name.)*
 
-`2nb models discover` lists every route it found. A bare model id still works when the model has only one route; when it has several, 2nb refuses and prints the qualified forms rather than picking one for you, because picking wrong means your queries quietly go to an endpoint your account cannot serve.
+#### Open-Source Bring-Your-Own-Credentials (BYOK / BYOP)
+2nb is an open-source tool. Users bring their own credentials — 2nb never hardcodes or relies on any maintainer project or personal account:
 
-Bedrock token precedence: `AWS_BEARER_TOKEN_BEDROCK`, then `~/.config/2nb/bedrock.json` (Settings, Cmd+, or `2nb config bedrock --set`), then the macOS Keychain (`2nb config set-key bedrock`), then SigV4 from `~/.aws`. To make the SAVED key win over the env var for 2nb only — handy when `AWS_BEARER_TOKEN_BEDROCK` serves other tools in your shell — turn on `2nb config bedrock --set --prefer-stored-token` (or the matching Settings checkbox). File region, when set, overlays vault `ai.bedrock.region`. The token is never written into a vault.
+- **Mode 1: Gemini API Key (BYOK)** — No GCP project required. Get a key from [Google AI Studio](https://aistudio.google.com/) and export it or store it in Keychain:
+  ```bash
+  export GEMINI_API_KEY="AIza..."
+  # OR store securely in macOS Keychain:
+  2nb config set-key gemini
+  ```
+  *Note*: `2nb` strictly ignores and rejects `GOOGLE_API_KEY` to prevent SDK precedence conflicts. Always use `GEMINI_API_KEY` or `2nb config set-key gemini`.
+
+- **Mode 2: Vertex AI on Google Cloud (BYOP)** — Use your own Google Cloud project with Application Default Credentials:
+  ```bash
+  # 1. Authenticate with Google ADC
+  gcloud auth application-default login
+
+  # 2. Configure your GCP project ID
+  2nb config set ai.gemini.project <your-gcp-project-id>
+  # (or export GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>)
+
+  # 3. (Optional) Set region (defaults to us-central1)
+  2nb config set ai.gemini.location us-central1
+  ```
 
 | Provider | Embeddings | Generation | Setup |
 |----------|-----------|------------|-------|
+| **Google Gemini** *(Native Default)* | `gemini-embedding-2` (768d) | `gemini-4-hydrogen`, `4-argon`, `4-carbon` | `GEMINI_API_KEY` (Mode 1) or Vertex AI on `<your-gcp-project-id>` with ADC (Mode 2) |
 | **AWS Bedrock** | Nova Embeddings v2 | Nova Micro, Claude, Llama, any model | Bearer token (Settings / `config bedrock`) or existing AWS SSO |
 | **OpenRouter** | Nemotron Embed (free) | Gemma 4 31B (free), GPT-4o, Claude, etc. | `OPENROUTER_API_KEY` env var |
 | **Ollama** | nomic-embed-text | qwen2.5, gemma3, llama3 | `brew install ollama` — fully local |
-| **llama-local** _(experimental, CLI-only)_ | EmbeddingGemma 300M | Gemma 4 E2B / E4B | fully offline via llama.cpp; needs `llama-server` on PATH (`brew install llama.cpp`) since the engine isn't bundled yet. Hidden in the app until it is. |
+| **llama-local** _(Local Gemma, On-Device)_ | `embeddinggemma-2` (`310 MB` Q8_0, Apache-2.0, `0.60` threshold; legacy `embeddinggemma-300m` supported) | Gemma 4 E2B / E4B | fully offline via bundled Metal `llama.cpp` runtime in `SecondBrain.app` (zero Homebrew required); weights downloaded on demand into `~/Library/Caches/2nb/models/` |
 
 ### Quick Setup (Any Provider)
 
@@ -112,35 +132,26 @@ The setup wizard detects credentials and offers recommended defaults:
 
 ```bash
 2nb ai setup
-# → Pick provider (Bedrock / OpenRouter / Ollama)
+# → Pick provider (Gemini / Bedrock / OpenRouter / Ollama)
 # → Easy mode: recommended models, or Custom: pick from catalog
 # → Tests connectivity, saves config, offers to index
 ```
 
-### Local AI with Ollama
+### AWS Bedrock
 
-Run everything locally with no cloud calls:
+Most Bedrock models run through the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html) (Claude, Nova, Llama, Mistral, and more); partner-hosted frontier models on the newer Bedrock "mantle" plane (`openai.gpt-5.5`, `xai.grok-4.3`) run over its OpenAI-compatible REST API and need a Bedrock API key (bearer token).
+
+**Bedrock models are identified by their route**, `id@plane/region`, because the same model can be served on both planes and in several US regions with independent entitlement:
 
 ```bash
-# Check readiness (models, disk, RAM)
-2nb ai local
-
-# Guided setup (installs models, configures vault)
-2nb ai setup
-
-# Or configure manually
-2nb config set ai.provider ollama
-ollama pull embeddinggemma
-ollama pull qwen2.5:0.5b
-2nb index
+2nb models discover                 # walk both planes across us-east-1/us-east-2/us-west-2 (free, cached 24h)
+2nb config set ai.generation_model xai.grok-4.6@mantle/us-west-2
 ```
 
-### AWS Bedrock (Default)
-
-Uses your existing AWS SSO credentials — no new API keys needed:
+Bedrock token precedence: `AWS_BEARER_TOKEN_BEDROCK`, then `~/.config/2nb/bedrock.json` (Settings, Cmd+, or `2nb config bedrock --set`), then the macOS Keychain (`2nb config set-key bedrock`), then SigV4 from `~/.aws`. To make the SAVED key win over the env var for 2nb only — handy when `AWS_BEARER_TOKEN_BEDROCK` serves other tools in your shell — turn on `2nb config bedrock --set --prefer-stored-token` (or the matching Settings checkbox). File region, when set, overlays vault `ai.bedrock.region`. The token is never written into a vault.
 
 ```bash
-2nb ai status
+2nb config set ai.provider bedrock
 2nb config set ai.bedrock.profile my-profile
 2nb config set ai.bedrock.region us-west-2
 ```
@@ -202,7 +213,7 @@ Browse verified models across all providers, test any model, and benchmark your 
 
 Models are tiered as **verified** (tested with 2nb) or **unverified** (available from vendor, use `models test` to check). The benchmark suite stores results in `.2ndbrain/bench.db` for tracking performance over time.
 
-Every catalog entry declares an `invoke_strategy` (e.g. `bedrock_converse`, `bedrock_invoke_cohere_embed`, `openrouter_chat`) so adding a new model variant doesn't require a code change — a catalog entry with the right strategy is enough. The macOS dashboard's **Models** tab (AI → Models…, Cmd+Shift+,) is the simple front door: vendor checkboxes with Check all / Uncheck all, one **Validate** button that probes what your account can actually invoke, an always-visible API-key chip, and Answers/Search pickers over the proven working set. The full catalog browser (provider cards, per-model Test / Set active / Enable / Disable / Discover) lives behind its **Full catalog** disclosure. Catalog changes written by the CLI propagate to the running GUI via FSEvents without reopening the vault.
+Every catalog entry declares an `invoke_strategy` (e.g. `gemini_native`, `bedrock_converse`, `openrouter_chat`) so adding a model doesn't require a code change — a catalog entry with the right strategy is enough. In the macOS app, curated Gemini 4 generation models (`gemini-4-hydrogen`, `gemini-4-argon`, `gemini-4-carbon`), thinking depth, embeddings (`gemini-embedding-2` / `gemini-embedding-001`), and BYOK / Vertex AI credentials live in **Settings > Gemini (`Cmd+,`)**, while multi-provider catalog discovery and benchmarking stay in `2nb models` on the CLI. Catalog changes written by the CLI propagate to the running GUI via FSEvents without reopening the vault.
 
 ## CLI Commands
 
@@ -355,7 +366,7 @@ All commands support `--json`, `--yaml`, `--csv`, `--tsv` for machine-readable o
 ### Defaults and search scoring
 
 - **Parent-command defaults**: running a command group without a subcommand invokes its most-useful read-only action: `2nb ai` → `ai status`, `2nb models` → `models list`, `2nb git` → `git status`, `2nb mcp` → `mcp status`, `2nb plugin` → `plugin status`, `2nb skills` → `skills list`, `2nb config` → `config show`, `2nb metrics` → `metrics show`, `2nb instructions` → `instructions configured`. `--help` still works on every command.
-- **Similarity threshold**: hybrid search drops vector hits whose cosine similarity is below the active threshold so barely-related neighbors stop padding result lists. Resolution order: explicit vault config (`2nb config set ai.similarity_threshold 0.25`) > a user calibration saved by `2nb models calibrate --save` (or `2nb models add --similarity-threshold`, the only two writers, both of which stamp the row `threshold_source: user`) > per-model recommendation from the builtin catalog > global default `0.20`. A user-catalog value that is unstamped and identical to the builtin recommendation is treated as a copy, not a calibration, so a catalog contaminated by an older `models bench` run heals itself on the next read. Builtin recommendations: Nova-2 `0.25` (measured; queries embed with Nova's asymmetric `GENERIC_RETRIEVAL` purpose, which collapses the cosine scale; see [docs/search-tuning.md](docs/search-tuning.md)), Nemotron `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`, all-minilm `0.35` (all estimated from each model's training objective, so run `2nb models calibrate` to tune for your vault). Override per-query with `2nb search "foo" --threshold 0.35`. `2nb ai status` shows the active value and which tier supplied it.
+- **Similarity threshold**: hybrid search drops vector hits whose cosine similarity is below the active threshold so barely-related neighbors stop padding result lists. Resolution order: explicit vault config (`2nb config set ai.similarity_threshold 0.25`) > a user calibration saved by `2nb models calibrate --save` (or `2nb models add --similarity-threshold`, the only two writers, both of which stamp the row `threshold_source: user`) > per-model recommendation from the builtin catalog > global default `0.20`. A user-catalog value that is unstamped and identical to the builtin recommendation is treated as a copy, not a calibration, so a catalog contaminated by an older `models bench` run heals itself on the next read. Builtin recommendations: `gemini-embedding-2` and `embeddinggemma-2` `0.60`, Nova-2 `0.25` (measured; queries embed with Nova's asymmetric `GENERIC_RETRIEVAL` purpose, which collapses the cosine scale; see [docs/search-tuning.md](docs/search-tuning.md)), Nemotron `0.60`, nomic-embed-text/Titan-v2/Cohere-embed `0.50`, mxbai/snowflake/bge-m3 `0.55`, all-minilm and legacy `embeddinggemma-300m` `0.35` (all estimated from each model's training objective, so run `2nb models calibrate` to tune for your vault). Override per-query with `2nb search "foo" --threshold 0.35`. `2nb ai status` shows the active value and which tier supplied it.
 - **Calibration**: `2nb models calibrate` samples random chunk pairs from your vault, reports the noise-floor cosine distribution (p50/p90/p95/p99), and recommends a threshold. Add `--save` to persist it to the per-vault user catalog (or `--save --scope global` for all vaults); it is stamped as yours, and no probe, benchmark or promotion will overwrite or invent one.
 - **Score display**: `2nb search` now shows `(rrf=X.XXX, cos=Y.YYY)` on each result. The `rrf` is the Reciprocal Rank Fusion score used for ranking; `cos` is the raw cosine similarity from the vector channel, which is what you actually want to look at when judging whether a result is relevant. If legitimate matches are being cut, lower the threshold; if noise is slipping through, raise it.
 - **Hybrid weighting**: `2nb config set ai.vector_weight 1.5` (or `ai.bm25_weight`) biases the RRF fusion toward semantic or keyword recall. Both default to `1.0` (equal-weight RRF); raise `ai.vector_weight` to lean on the vector channel, `ai.bm25_weight` for exact-term-heavy vaults.
@@ -519,30 +530,19 @@ Install a skill file to teach AI coding agents about your vault's CLI, MCP tools
 
 Supported agents: Claude Code (also serves Claude Desktop, which reads the same `~/.claude/skills`), Cursor, Windsurf, GitHub Copilot, Kiro, Cline, Roo Code, JetBrains Junie, Warp, Codex, and the cross-tool `agents` (`.agents/skills/`) standard. `2nb setup --client <name>` installs the skill **and** the MCP server in one step; a force-overwrite of an existing skill backs it up first.
 
-## macOS Dashboard
+## macOS Companion App (Beta)
 
-A native SwiftUI + AppKit configuration and companion app. It is **not an editor**: Obsidian stays your editor. The dashboard binds to the vault Obsidian currently has open (read from Obsidian's own registry) and gives you one place to manage everything around it.
+A native SwiftUI + AppKit companion app featuring a focused Dock workspace, persistent menu bar agent, and global Quick Ask & Search HUD. It is **not an editor**: Obsidian stays your editor. The app binds to the vault Obsidian currently has open (read from Obsidian's own registry) and keeps your index synced automatically.
 
-**Home** (the default screen) covers the common cases:
+- **First-run 3-step Setup Guide**: Bind your Obsidian vault (auto-starts background indexing immediately), connect Google Gemini via your own `GEMINI_API_KEY` or GCP project (`your-gcp-project-id`), test the global shortcut, and optionally connect AI coding clients.
+- **Menu Bar & Global HUD (`⌃⇧Space`)**: Dynamic menu bar icon with a clockwise indexing progress sweep, pause/resume auto-sync toggle, and a floating glass Quick Ask & Search panel across all Spaces and fullscreen apps.
+- **Home** (default): Disappearing `"Finish Setup"` checklist plus soft-material cards for Quick Ask & Search, Gemini AI readiness (`gemini-4-hydrogen` + `gemini-embedding-2` 768d defaults), Vault & Obsidian plugin sync, Index coverage, and AI Client summary.
+- **Ask & Search** (`Cmd+Shift+K`): Multi-turn grounded Ask Gemini chat plus two-stage live search (instant `--bm25-only` results followed after 150ms by Gemini hybrid ranking), `"N weaker matches"` folding, split note preview pane, Quick Look (`Space`/`⌘Y`), and one-key `[[wikilink]]` copy (`⌘C`).
+- **Notes**: `2nb lint` broken-link triage + AI Note Polish (`Cmd+Shift+P`, `Cmd+Shift+L`).
+- **Activity**: **Git** (commit history and per-file diffs — `Cmd+Shift+G`) · **MCP Server** (live server processes and recent tool invocations — `Cmd+Shift+M`).
+- **Settings (`Cmd+,`)**: Dedicated auto-sizing window with **Gemini** (BYOK API key / BYOP Vertex AI, Gemini 4 models, thinking depth, retrieval knobs, **Test Connection**), **Integrations** (one-click MCP + skill wiring for Claude Code, Warp, Claude Desktop, and Codex), and **General** (global shortcut recorder, auto-sync pause toggle, first-run guide trigger, and CLI/app/plugin updates).
 
-- **Vault card**: active vault name and path, a badge confirming it matches the vault Obsidian has open, and an Obsidian plugin row showing the installed plugin version with an Install/Update button (runs `2nb plugin install`)
-- **AI card**: provider and models (AWS Bedrock with Claude Haiku 4.5 + Amazon Nova-2 by default) with a readiness dot, an always-visible link to the AI settings (where the API key lives), a Test button, and a Reset-to-recommended-defaults button that appears only when the config has drifted
-- **AI Clients card**: a summary of how many clients can reach this vault, linking to Settings > Integrations, where each client (Claude Code, Warp, Claude Desktop, Codex) shows skill-installed, MCP-configured, and global-instructions status with a one-click **Configure** button (runs `2nb setup --client …`, backup-safe; Codex without its CLI shows the manual `codex mcp add` step instead of a false success)
-- **Index card**: document and embedding counts, a "N notes awaiting embedding" hint, and Sync (incremental, embeds only what changed) and Re-embed All buttons. Notes edited in Obsidian sync automatically
-- The app bundles its own version-matched `2nb` CLI and prefers it, so its AI/indexing calls never run a stale Homebrew copy. An orange banner only appears on dev builds that fall back to an older PATH `2nb`; when Homebrew is present it offers an Update CLI button that runs `brew upgrade apresai/tap/twonb` to refresh the terminal/plugin's copy
-
-Configuration lives in the **Settings window (Cmd+,)**: General, AI (connection, API key, the two active models, and a **Test everything** button that calls them for real), Advanced (every tuning knob), and Integrations (which AI tools can reach this vault).
-
-The rest of the sidebar:
-
-- **Models**: the model catalog with provider cards, active model slots, per-model test and benchmark, and vendor policy (Cmd+Shift+,)
-- **Notes**: `2nb lint` findings with one-click repairs, guided link fixes, and bulk dead-link removal
-- **Testing** (Cmd+Shift+T): everything measurable in one place: **Validate** (which models your account can really invoke, plus a Discover card with per-source cache ages and one-click add/validate of newly listed models), **Benchmarks** (run one model x probe or the favorites battery, a models x probes compare matrix, the embed-throughput curve, bench history), **Performance** (`2nb metrics`), and **Quality** (the `2nb eval` retrieval scorecard, LLM-jury answer grades, and tuning-sweep suggestions, every run cost-previewed before any spend)
-- **Health**: **Vault** (index coverage, embedding portability, AI reachability, stale docs) · **Updates** (app, CLI, and plugin versions against the latest release, with one-click upgrades)
-- **Settings**: the same four Settings tabs hosted inline, so configuration is reachable without knowing Cmd+,
-- **Activity**: **Git** (recent commits, 1/3/7/30-day window; click for per-file diffs — Cmd+Shift+G) · **MCP Server** (live server processes and recent tool invocations — Cmd+Shift+M)
-
-Menus: **Vault** (New Vault, Open Vault Cmd+Shift+O, Reveal in Finder, Vault Status, Sync Index, Validate Vault, Import/Export Obsidian), **View** (Recent Activity Cmd+Shift+G), and **AI** (Models… Cmd+Shift+Comma, Testing & Benchmarks… Cmd+Shift+T, MCP Server Configuration, MCP Server Status Cmd+Shift+M).
+Menus: **Vault** (New Vault, Open Vault `Cmd+Shift+O`, Open in Obsidian, Reveal in Finder, Sync Index, Validate Links & Schema `Cmd+Shift+L`, Run Setup Guide…), **View** (Recent Git Activity `Cmd+Shift+G`), and **AI** (Ask & Search Vault… `Cmd+Shift+K`, Quick Ask & Search Panel, Polish Note with Gemini… `Cmd+Shift+P`, Gemini Settings… `Cmd+Shift+Comma`, AI Client Integrations…, MCP Server Configuration…, MCP Server Status… `Cmd+Shift+M`).
 
 Build and install from source:
 
@@ -661,7 +661,7 @@ make package-app         # builds a branded SecondBrain .dmg locally (Developer 
 ## Architecture
 
 ```
-cli/        Go CLI + MCP server (cobra, modernc.org/sqlite, mcp-go, aws-sdk-go-v2)
+cli/        Go CLI + MCP server (cobra, modernc.org/sqlite, mcp-go, google.golang.org/genai, aws-sdk-go-v2)
 app/        Swift macOS dashboard (SwiftUI, GRDB.swift, swift-markdown)
 plugins/    Obsidian plugin (thin wrapper that shells out to 2nb)
              |                    |

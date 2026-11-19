@@ -39,6 +39,13 @@ type AskResponse struct {
 	// reported, else a chars/4 estimate) plus the query-embedding tokens.
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
+
+	// Unexported slot breakdown carried from askOnce to OpAsk / OpChat metrics.
+	embedInputTokens int
+	embedCalls       int
+	genInputTokens   int
+	genOutputTokens  int
+	genCalls         int
 }
 
 var askHistory string
@@ -132,16 +139,7 @@ func runAsk(cmd *cobra.Command, args []string) (err error) {
 	startTime := time.Now()
 	var resp AskResponse
 	defer func() {
-		recordMetric(v, metrics.Operation{
-			Operation:    metrics.OpAsk,
-			DurationMs:   time.Since(startTime).Milliseconds(),
-			OK:           err == nil,
-			Error:        errString(err),
-			ResultCount:  len(resp.Sources),
-			Mode:         resp.Mode,
-			InputTokens:  resp.InputTokens,
-			OutputTokens: resp.OutputTokens,
-		})
+		recordMetric(v, askMetricOperation(v, metrics.OpAsk, startTime, resp, err))
 	}()
 
 	initAIProviders(v)
@@ -159,12 +157,13 @@ func runAsk(cmd *cobra.Command, args []string) (err error) {
 	slog.Debug("ask history", "history", history)
 
 	// Check generator availability
-	generator, err := ai.DefaultRegistry.Generator(cfg.Provider)
+	genProvider := cfg.EffectiveGenerationProvider()
+	generator, err := ai.DefaultRegistry.Generator(genProvider)
 	if err != nil {
 		return fmt.Errorf("no generation provider: %w\nRun `2nb ai status` to check provider configuration", err)
 	}
 	if ready, code := ai.Availability(ctx, generator); !ready {
-		return generatorNotReadyError(cfg.Provider, code)
+		return generatorNotReadyError(genProvider, code)
 	}
 
 	resp, err = askOnce(ctx, v, generator, question, history)
@@ -187,6 +186,33 @@ func runAsk(cmd *cobra.Command, args []string) (err error) {
 	return nil
 }
 
+// askMetricOperation builds a slot-metered metrics.Operation for ask or chat.
+func askMetricOperation(v *vault.Vault, opName string, startTime time.Time, resp AskResponse, opErr error) metrics.Operation {
+	op := metrics.Operation{
+		Operation:    opName,
+		DurationMs:   time.Since(startTime).Milliseconds(),
+		OK:           opErr == nil,
+		Error:        errString(opErr),
+		ResultCount:  len(resp.Sources),
+		Mode:         resp.Mode,
+		InputTokens:  resp.InputTokens,
+		OutputTokens: resp.OutputTokens,
+	}
+	if v == nil {
+		return op
+	}
+	cfg := v.Config.AI
+	var legs []metrics.UsageLeg
+	if resp.embedCalls > 0 || resp.embedInputTokens > 0 {
+		legs = append(legs, buildUsageLeg(v.Root, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel, "embedding", opName, resp.embedCalls, resp.embedInputTokens, 0))
+	}
+	if resp.genCalls > 0 || resp.genInputTokens > 0 || resp.genOutputTokens > 0 {
+		legs = append(legs, buildUsageLeg(v.Root, cfg.EffectiveGenerationProvider(), cfg.GenerationModel, "generation", opName, resp.genCalls, resp.genInputTokens, resp.genOutputTokens))
+	}
+	attachUsageLegs(&op, legs...)
+	return op
+}
+
 // askOnce runs one full ask turn: condense the question against the history
 // (when present), retrieve context with the standalone query, fall back to
 // the raw question if the rewrite retrieves nothing, then generate with the
@@ -198,7 +224,14 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 	// makes (the condense rewrite and the answer). Empty leaves the model's
 	// default, so an unset config is byte-identical to before.
 	reasoning := ai.WithReasoningEffort(cfg.ResolveReasoningEffort())
-	var warnings []string
+	var (
+		warnings         []string
+		embedCalls       int
+		embedInputTokens int
+		genCalls         int
+		genInputTokens   int
+		genOutputTokens  int
+	)
 	addWarning := func(msg string) {
 		fmt.Fprintln(os.Stderr, "  "+msg)
 		warnings = append(warnings, msg)
@@ -209,12 +242,15 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 	// the raw question still retrieves, just without coreference resolution.
 	retrievalQuery := question
 	if len(history) > 0 {
-		rewritten, err := ai.CondenseQuestion(ctx, generator, history, question, reasoning)
+		rewritten, cu, err := ai.CondenseQuestionWithUsage(ctx, generator, history, question, reasoning)
 		if err != nil {
 			slog.Warn("ask condense failed, using raw question", "err", err)
 			addWarning(fmt.Sprintf("question rewrite failed, searching with the question as asked: %v", err))
 		} else {
 			retrievalQuery = rewritten
+			genCalls++
+			genInputTokens += cu.InputTokens
+			genOutputTokens += cu.OutputTokens
 		}
 	}
 	if retrievalQuery != question && !flagPorcelain {
@@ -239,6 +275,14 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		stopNotice()
 		if err != nil {
 			return nil, false, err
+		}
+		if res.Mode == search.ModeHybrid {
+			embedCalls++
+			tok := len(strings.TrimSpace(query)) / 4
+			if tok == 0 {
+				tok = 1
+			}
+			embedInputTokens += tok
 		}
 		for _, w := range res.Warnings {
 			addWarning(w)
@@ -299,9 +343,9 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		mode = "keyword"
 	}
 
-	// Token usage: prefer the provider's actual generation usage (Bedrock reports
-	// it); estimate at chars/4 when it isn't reported. Add the query-embedding
-	// tokens (the retrieval embed call) to the input side.
+	// Token usage: prefer the provider's actual generation usage (Bedrock/Gemini/llama
+	// report it via UsageGenerator); estimate at chars/4 when it isn't reported.
+	genCalls++
 	inTokens, outTokens := result.InputTokens, result.OutputTokens
 	if inTokens == 0 && outTokens == 0 {
 		var ctxChars int
@@ -311,15 +355,21 @@ func askOnce(ctx context.Context, v *vault.Vault, generator ai.GenerationProvide
 		inTokens = (ctxChars + len(question)) / 4
 		outTokens = len(result.Answer) / 4
 	}
-	inTokens += len(retrievalQuery) / 4
+	genInputTokens += inTokens
+	genOutputTokens += outTokens
 
 	resp := AskResponse{
-		Mode:         mode,
-		Warnings:     nonNilSlice(warnings),
-		Answer:       result.Answer,
-		Sources:      nonNilSlice(result.Sources),
-		InputTokens:  inTokens,
-		OutputTokens: outTokens,
+		Mode:             mode,
+		Warnings:         nonNilSlice(warnings),
+		Answer:           result.Answer,
+		Sources:          nonNilSlice(result.Sources),
+		InputTokens:      embedInputTokens + genInputTokens,
+		OutputTokens:     genOutputTokens,
+		embedInputTokens: embedInputTokens,
+		embedCalls:       embedCalls,
+		genInputTokens:   genInputTokens,
+		genOutputTokens:  genOutputTokens,
+		genCalls:         genCalls,
 	}
 	if retrievalQuery != question {
 		resp.RewrittenQuery = retrievalQuery

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -154,7 +156,7 @@ func init() {
 	modelsListCmd.Flags().BoolVar(&modelsDiscover, "discover", false, "Include vendor-discovered models, served from the 24h discovery cache")
 	modelsListCmd.Flags().BoolVar(&modelsRefresh, "refresh", false, "With --discover, re-walk the vendor APIs instead of using the cache")
 	modelsListCmd.Flags().BoolVar(&modelsCheckStatus, "status", false, "Probe provider reachability and credentials")
-	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama")
+	modelsListCmd.Flags().StringVar(&modelsProvider, "provider", "", "Filter by provider: bedrock, openrouter, ollama, llama-local")
 	modelsListCmd.Flags().BoolVar(&modelsPromote, "promote", false, "Test unverified discovered models and add those that pass (requires --discover)")
 	modelsListCmd.Flags().StringVar(&modelsPromoteScope, "scope", "vault", "Catalog scope for --promote: vault or global")
 	modelsListCmd.Flags().BoolVar(&modelsEnabledOnly, "enabled-only", false, "Exclude models explicitly disabled by the user (use for GUI dropdowns)")
@@ -165,7 +167,7 @@ func init() {
 	_ = modelsListCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 	_ = modelsListCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
-	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama (auto-detected if omitted)")
+	modelsTestCmd.Flags().StringVar(&testProvider, "provider", "", "Provider: bedrock, openrouter, ollama, llama-local (auto-detected if omitted)")
 	modelsTestCmd.Flags().StringVar(&testModelType, "type", "", "Model type: embedding or generation (auto-detected if omitted)")
 	modelsTestCmd.Flags().BoolVar(&testSave, "save", false, "Save the probe result to the user catalog, pass or fail (a pass sets tier=user_verified; a failure records the classified test error)")
 	modelsTestCmd.Flags().StringVar(&testSaveScope, "scope", "vault", "Catalog scope when --save is set: vault or global")
@@ -173,7 +175,7 @@ func init() {
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 	_ = modelsTestCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
-	modelsAddCmd.Flags().StringVar(&addProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsAddCmd.Flags().StringVar(&addProvider, "provider", "", "Provider: bedrock, openrouter, ollama, llama-local (required)")
 	modelsAddCmd.Flags().StringVar(&addType, "type", "", "Type: embedding or generation (required)")
 	modelsAddCmd.Flags().StringVar(&addName, "name", "", "Human-readable name")
 	modelsAddCmd.Flags().IntVar(&addDimensions, "dimensions", 0, "Embedding dimensions (embedding models only)")
@@ -190,27 +192,27 @@ func init() {
 	_ = modelsAddCmd.RegisterFlagCompletionFunc("type", completeModelTypes)
 	_ = modelsAddCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
-	modelsRemoveCmd.Flags().StringVar(&removeProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsRemoveCmd.Flags().StringVar(&removeProvider, "provider", "", "Provider: bedrock, openrouter, ollama, llama-local (required)")
 	modelsRemoveCmd.Flags().StringVar(&removeScope, "scope", "vault", "Scope: vault or global")
 	_ = modelsRemoveCmd.MarkFlagRequired("provider")
 	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsRemoveCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
-	modelsEnableCmd.Flags().StringVar(&enableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsEnableCmd.Flags().StringVar(&enableProvider, "provider", "", "Provider: bedrock, openrouter, ollama, llama-local (required)")
 	modelsEnableCmd.Flags().StringVar(&enableScope, "scope", "vault", "Scope: vault or global")
 	modelsEnableCmd.Flags().StringVar(&enableVendor, "vendor", "", "Apply to every model whose VendorOf() matches (e.g. anthropic, amazon, google). Omits <model-id>.")
 	_ = modelsEnableCmd.MarkFlagRequired("provider")
 	_ = modelsEnableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsEnableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
-	modelsDisableCmd.Flags().StringVar(&disableProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsDisableCmd.Flags().StringVar(&disableProvider, "provider", "", "Provider: bedrock, openrouter, ollama, llama-local (required)")
 	modelsDisableCmd.Flags().StringVar(&disableScope, "scope", "vault", "Scope: vault or global")
 	modelsDisableCmd.Flags().StringVar(&disableVendor, "vendor", "", "Apply to every model whose VendorOf() matches (e.g. anthropic, amazon, google). Omits <model-id>.")
 	_ = modelsDisableCmd.MarkFlagRequired("provider")
 	_ = modelsDisableCmd.RegisterFlagCompletionFunc("provider", completeProviders)
 	_ = modelsDisableCmd.RegisterFlagCompletionFunc("scope", completeCatalogScopes)
 
-	modelsEnableStateCmd.Flags().StringVar(&enableStateProvider, "provider", "", "Provider: bedrock, openrouter, ollama (required)")
+	modelsEnableStateCmd.Flags().StringVar(&enableStateProvider, "provider", "", "Provider: bedrock, openrouter, ollama, llama-local (required)")
 	modelsEnableStateCmd.Flags().StringVar(&enableStateScope, "scope", "vault", "Scope: vault or global")
 	modelsEnableStateCmd.Flags().StringVar(&enableStateValue, "state", "", "State: default, enabled, disabled (required)")
 	_ = modelsEnableStateCmd.MarkFlagRequired("provider")
@@ -595,12 +597,30 @@ func statusLabel(m ai.ModelInfo) string {
 }
 
 func runModelsTest(cmd *cobra.Command, args []string) error {
-	v, err := openVault()
-	if err != nil {
-		return err
+	// A smoke probe needs a model and a config, not a vault. Opening one mints
+	// .2ndbrain/ (and index.db) as a side effect, which a "test" button must
+	// never do to a plain Obsidian folder, and which makes the probe unusable
+	// when NO vault is bound (the macOS Settings window's normal first-run
+	// state). So the vault is opened only when it already carries a sidecar, or
+	// when a vault-scoped --save genuinely needs one; otherwise the AI config is
+	// read without opening anything.
+	root, hasSidecar := resolve2nbVaultRoot()
+	needsVault := testSave && ai.UserCatalogScope(testSaveScope) != ai.ScopeGlobal
+	var (
+		aiCfg     ai.AIConfig
+		vaultRoot string
+	)
+	if hasSidecar || needsVault {
+		v, err := openVault()
+		if err != nil {
+			return err
+		}
+		defer v.Close()
+		setupFileLogging(v)
+		aiCfg, vaultRoot = v.Config.AI, v.Root
+	} else {
+		aiCfg = readAIConfigReadOnly(root)
 	}
-	defer v.Close()
-	setupFileLogging(v)
 
 	ref, err := parseModelRef(args[0], testProvider)
 	if err != nil {
@@ -624,21 +644,43 @@ func runModelsTest(cmd *cobra.Command, args []string) error {
 		Plane:    ref.Plane,
 		Region:   ref.Region,
 	}
-	result, err := ai.TestProbeModelInfoInRegions(ctx, v.Config.AI, m, v.Root, ai.ResolveBedrockRegions(v.Config.AI.Bedrock))
+	probeStart := time.Now()
+	result, err := ai.TestProbeModelInfoInRegions(ctx, aiCfg, m, vaultRoot, ai.ResolveBedrockRegions(aiCfg.Bedrock))
 	if err != nil {
 		return err
+	}
+	if vaultRoot != "" && hasSidecar {
+		op := metrics.Operation{
+			Operation:  metrics.OpProbe,
+			DurationMs: time.Since(probeStart).Milliseconds(),
+			OK:         result.OK,
+		}
+		if !result.OK {
+			op.Error = result.Detail
+		} else {
+			outTok := 0
+			slot := result.Type
+			if slot == "" {
+				slot = "generation"
+			}
+			if slot == "generation" {
+				outTok = 16
+			}
+			attachUsageLegs(&op, buildUsageLeg(vaultRoot, result.Provider, result.ModelID, slot, metrics.OpProbe, 1, 20, outTok))
+		}
+		recordMetricAtDotDir(filepath.Join(vaultRoot, ".2ndbrain"), op)
 	}
 	slog.Info("models test", "provider", result.Provider, "model", result.ModelID, "type", result.Type, "ok", result.OK, "code", string(result.Code), "save", testSave)
 
 	if testSave {
 		scope := ai.UserCatalogScope(testSaveScope)
-		entry := catalogEntryFromTestResult(ctx, v.Config.AI, v.Root, result)
-		entry.Enabled = preserveScopeEnabled(scope, v.Root, entry.Provider, entry.ID)
-		preserveRoutingFields(scope, v.Root, &entry)
-		preserveUserFacts(scope, v.Root, &entry)
-		preserveUserThreshold(scope, v.Root, &entry)
+		entry := catalogEntryFromTestResult(ctx, aiCfg, vaultRoot, result)
+		entry.Enabled = preserveScopeEnabled(scope, vaultRoot, entry.Provider, entry.ID)
+		preserveRoutingFields(scope, vaultRoot, &entry)
+		preserveUserFacts(scope, vaultRoot, &entry)
+		preserveUserThreshold(scope, vaultRoot, &entry)
 		// Wholesale: a probe records a complete fresh verdict (pass or fail).
-		if err := ai.SaveUserCatalogEntry(scope, v.Root, entry); err != nil {
+		if err := ai.SaveUserCatalogEntry(scope, vaultRoot, entry); err != nil {
 			if getFormat(cmd) != "" {
 				return fmt.Errorf("save test result: %w", err)
 			}

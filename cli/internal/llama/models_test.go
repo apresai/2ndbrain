@@ -195,3 +195,79 @@ func TestRemoveModel(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddingGemma2Manifest(t *testing.T) {
+	if DefaultEmbedModelID != "embeddinggemma-2" {
+		t.Errorf("DefaultEmbedModelID = %q, want embeddinggemma-2", DefaultEmbedModelID)
+	}
+	art, ok := ModelManifest["embeddinggemma-2"]
+	if !ok {
+		t.Fatal("embeddinggemma-2 missing from ModelManifest")
+	}
+	if art.SizeBytes != 309855456 {
+		t.Errorf("SizeBytes = %d, want 309855456", art.SizeBytes)
+	}
+	if art.SHA256 == "" || art.URL == "" {
+		t.Errorf("embeddinggemma-2 must pin sha256 and url: %+v", art)
+	}
+	if art.License != "apache-2.0" {
+		t.Errorf("License = %q, want apache-2.0", art.License)
+	}
+	if art.File != "embeddinggemma-2-Q8_0.gguf" || art.Role != RoleEmbed || art.Dims != 768 {
+		t.Errorf("unexpected embeddinggemma-2 artifact: %+v", art)
+	}
+	// Legacy weights stay resolvable for vaults already indexed with them.
+	legacy, ok := ModelManifest["embeddinggemma-300m"]
+	if !ok || legacy.File != "embeddinggemma-300m-Q8_0.gguf" {
+		t.Errorf("legacy embeddinggemma-300m must remain in the manifest: %+v", legacy)
+	}
+}
+
+// A verified copy in the Hugging Face hub cache seeds the model cache without a
+// download; a corrupt copy is ignored.
+func TestTrySeedFromLocalVerifiedCache(t *testing.T) {
+	hub := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HF_HUB_CACHE", hub)
+
+	payload := []byte("tiny stand-in for gguf weights")
+	sum := sha256.Sum256(payload)
+	art := ModelArtifact{
+		ID:        "embeddinggemma-2",
+		File:      "embeddinggemma-2-Q8_0.gguf",
+		SHA256:    hex.EncodeToString(sum[:]),
+		SizeBytes: int64(len(payload)),
+	}
+	snap := filepath.Join(hub, "models--ggml-org--embeddinggemma-2-GGUF", "snapshots",
+		"bfcd298762cc34d0357ece5ebdd31791a3a374d8")
+	if err := os.MkdirAll(snap, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(snap, art.File)
+	dest := filepath.Join(t.TempDir(), art.File)
+
+	// Corrupt candidate (right size, wrong bytes) must not be accepted.
+	if err := os.WriteFile(src, []byte("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if trySeedFromLocalVerifiedCache(art, dest, nil) {
+		t.Fatal("seeded from a candidate whose sha256 does not match")
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("dest must not exist after a rejected candidate")
+	}
+
+	if err := os.WriteFile(src, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var gotDone, gotTotal int64
+	if !trySeedFromLocalVerifiedCache(art, dest, func(d, tot int64) { gotDone, gotTotal = d, tot }) {
+		t.Fatal("expected a verified candidate to seed the cache")
+	}
+	if gotDone != art.SizeBytes || gotTotal != art.SizeBytes {
+		t.Errorf("progress = (%d,%d), want (%d,%d)", gotDone, gotTotal, art.SizeBytes, art.SizeBytes)
+	}
+	if got, err := fileSHA256(dest); err != nil || got != art.SHA256 {
+		t.Errorf("dest sha = %q, %v; want %s", got, err, art.SHA256)
+	}
+}

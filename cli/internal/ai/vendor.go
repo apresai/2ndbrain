@@ -37,6 +37,8 @@ type VendorInfo struct {
 func VendorOf(modelID, provider string) VendorInfo {
 	lower := strings.ToLower(strings.TrimSpace(modelID))
 	switch provider {
+	case "gemini":
+		return vendorForGemini(lower)
 	case "bedrock":
 		return vendorForBedrock(lower)
 	case "openrouter":
@@ -45,6 +47,14 @@ func VendorOf(modelID, provider string) VendorInfo {
 		return vendorForOllama(lower)
 	}
 	return VendorInfo{Vendor: "other", Display: "Other"}
+}
+
+func vendorForGemini(lower string) VendorInfo {
+	family := "Gemini"
+	if strings.HasPrefix(lower, "gemma") {
+		family = "Gemma"
+	}
+	return VendorInfo{Vendor: "google", Display: "Google", Family: family}
 }
 
 func vendorForBedrock(lower string) VendorInfo {
@@ -151,6 +161,9 @@ func bedrockFamilyFromTail(vendor, tail string) string {
 			return "Rerank"
 		}
 	case "google":
+		if strings.HasPrefix(first, "gemini") {
+			return "Gemini"
+		}
 		if strings.HasPrefix(first, "gemma") {
 			return "Gemma"
 		}

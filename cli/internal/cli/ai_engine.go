@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/llama"
@@ -32,6 +34,7 @@ var (
 	engineServeEmbed         string
 	engineServeRerank        string
 	engineServeEngine        string
+	engineServeIdleTimeout   time.Duration
 	engineInstallCmdOverride string
 )
 
@@ -51,6 +54,7 @@ func init() {
 	aiEngineServeCmd.Flags().StringVar(&engineServeEmbed, "embed-model", "", "embedding model id to serve")
 	aiEngineServeCmd.Flags().StringVar(&engineServeRerank, "rerank-model", "", "rerank model id to serve")
 	aiEngineServeCmd.Flags().StringVar(&engineServeEngine, "engine-path", "", "override the llama-server binary path")
+	aiEngineServeCmd.Flags().DurationVar(&engineServeIdleTimeout, "idle-timeout", 0, "stop after idle duration with no activity (e.g. 10m); 0 to disable")
 	aiEngineInstallCmd.Flags().StringVar(&engineInstallCmdOverride, "command", "", "path to the 2nb binary the agent should run (default: this binary)")
 }
 
@@ -83,13 +87,23 @@ var aiEngineUninstallCmd = &cobra.Command{
 var aiEngineStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start (bootstrap) the launchd engine agent",
-	RunE:  func(cmd *cobra.Command, _ []string) error { return llama.Bootstrap() },
+	RunE:  runAIEngineStart,
+}
+
+func runAIEngineStart(cmd *cobra.Command, args []string) error {
+	if llama.AgentPlistExists() {
+		return llama.Bootstrap()
+	}
+	return runAIEngineInstall(cmd, args)
 }
 
 var aiEngineStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop (bootout) the launchd engine agent and free its RAM",
-	RunE:  func(cmd *cobra.Command, _ []string) error { return llama.Bootout() },
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		_ = llama.Bootout()
+		return llama.StopAll()
+	},
 }
 
 var aiEnginePullCmd = &cobra.Command{
@@ -135,12 +149,15 @@ func runAIEngineServe(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
 	if len(specs) == 0 {
-		return fmt.Errorf("no local models available to serve; download them first, e.g. `2nb ai engine pull embeddinggemma-300m gemma4-e4b`")
+		return fmt.Errorf("no local models available to serve; download them first, e.g. `2nb ai engine pull embeddinggemma-2 gemma4-e4b`")
 	}
 
 	mgr, err := llama.NewManager(enginePath)
 	if err != nil {
 		return err
+	}
+	if engineServeIdleTimeout > 0 {
+		mgr.SetIdleTimeout(engineServeIdleTimeout)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -156,6 +173,12 @@ func engineSpecsFor(gen, embed, rerank string) ([]llama.RoleSpec, []string) {
 	add := func(role llama.Role, id string) {
 		if id == "" {
 			return
+		}
+		if filepath.IsAbs(id) || strings.HasSuffix(id, ".gguf") {
+			if _, err := os.Stat(id); err == nil {
+				specs = append(specs, llama.RoleSpec{Role: role, ModelPath: id})
+				return
+			}
 		}
 		art, ok := llama.ArtifactFor(id)
 		if !ok {
@@ -229,9 +252,36 @@ func runAIEngineInstall(cmd *cobra.Command, _ []string) error {
 	// Refuse to install an agent with nothing local to serve: on a non-local
 	// vault serve would find no manifest models, exit non-zero, and launchd's
 	// KeepAlive would restart-loop it. (Not-yet-downloaded local models are OK —
-	// that's the install-then-`pull` flow.)
+	// that's the install-then-`pull` flow.) If the vault isn't configured for
+	// local models yet, fall back to any cached default weights in ModelsCacheDir.
 	if !anyLocalModelConfigured(gen, embed, rerank) {
-		return fmt.Errorf("no local models configured for this vault; set ai.provider=llama-local and a local ai.embedding_model/ai.generation_model (e.g. embeddinggemma-300m / gemma4-e4b) before installing the engine agent")
+		gen, embed = "", ""
+		// Prefer the current default embedder; fall back to the legacy 300M
+		// weights when only those are cached.
+		for _, id := range []string{llama.DefaultEmbedModelID, "embeddinggemma-300m"} {
+			art, ok := llama.ArtifactFor(id)
+			if !ok {
+				continue
+			}
+			p, err := llama.ModelPath(id, art.File)
+			if err != nil {
+				continue
+			}
+			if _, statErr := os.Stat(p); statErr == nil {
+				embed = id
+				break
+			}
+		}
+		if art, ok := llama.ArtifactFor("gemma4-e2b"); ok {
+			if p, err := llama.ModelPath("gemma4-e2b", art.File); err == nil {
+				if _, statErr := os.Stat(p); statErr == nil {
+					gen = "gemma4-e2b"
+				}
+			}
+		}
+	}
+	if !anyLocalModelConfigured(gen, embed, rerank) {
+		return fmt.Errorf("no local models configured for this vault; set ai.provider=llama-local and a local ai.embedding_model/ai.generation_model (e.g. embeddinggemma-2 / gemma4-e4b) before installing the engine agent")
 	}
 	if gen != "" {
 		extra = append(extra, "--gen-model", gen)

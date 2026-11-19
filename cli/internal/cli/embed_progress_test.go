@@ -68,14 +68,14 @@ func TestPorcelainSilencesTheEmbedPass(t *testing.T) {
 	t.Cleanup(func() { flagPorcelain = prev })
 
 	flagPorcelain = true
-	if opts := embedProgressOpts(withEmbedProgress); opts.OnStart != nil || opts.OnEvent != nil {
+	if opts := embedProgressOpts(withEmbedProgress); opts.OnPlan != nil || opts.OnStart != nil || opts.OnEvent != nil {
 		t.Error("--porcelain must silence the pass even when progress is requested")
 	}
 	flagPorcelain = false
-	if opts := embedProgressOpts(withoutEmbedProgress); opts.OnStart != nil || opts.OnEvent != nil {
+	if opts := embedProgressOpts(withoutEmbedProgress); opts.OnPlan != nil || opts.OnStart != nil || opts.OnEvent != nil {
 		t.Error("withoutEmbedProgress must produce no callbacks")
 	}
-	if opts := embedProgressOpts(withEmbedProgress); opts.OnStart == nil || opts.OnEvent == nil {
+	if opts := embedProgressOpts(withEmbedProgress); opts.OnPlan == nil || opts.OnEvent == nil {
 		t.Error("withEmbedProgress on a TTY-bound run must produce callbacks")
 	}
 }

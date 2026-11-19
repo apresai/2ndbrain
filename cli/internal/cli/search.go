@@ -132,25 +132,33 @@ func runSearch(cmd *cobra.Command, args []string) (err error) {
 	// Record the query (best-effort) on every return path, including
 	// zero-result and error cases. mode is "hybrid" or "keyword".
 	defer func() {
-		// Token estimate: a hybrid search embeds the query once (chars/4); a
-		// BM25-only search makes no embedding call.
-		inTok := 0
-		if mode == search.ModeHybrid {
-			inTok = len(query) / 4
-		}
-		recordMetric(v, metrics.Operation{
-			Operation:   metrics.OpSearch,
-			DurationMs:  time.Since(startTime).Milliseconds(),
-			OK:          err == nil,
-			Error:       errString(err),
-			ResultCount: len(results),
-			Mode:        string(mode),
-			InputTokens: inTok,
-			// ctx carries the counter slowCallNotice attached below; the
-			// closure reads the variable, so this is the query embedding's
-			// real retry count.
+		cfg := v.Config.AI
+		op := metrics.Operation{
+			Operation:    metrics.OpSearch,
+			DurationMs:   time.Since(startTime).Milliseconds(),
+			OK:           err == nil,
+			Error:        errString(err),
+			ResultCount:  len(results),
+			Mode:         string(mode),
 			EmbedRetries: ai.RetriesFrom(ctx),
-		})
+		}
+		if mode == search.ModeHybrid {
+			inTok := len(strings.TrimSpace(query)) / 4
+			if inTok == 0 {
+				inTok = 1
+			}
+			attachUsageLegs(&op, buildUsageLeg(
+				v.Root,
+				cfg.EffectiveEmbeddingProvider(),
+				cfg.EmbeddingModel,
+				"embedding",
+				metrics.OpSearch,
+				1,
+				inTok,
+				0,
+			))
+		}
+		recordMetric(v, op)
 	}()
 
 	// The query embedding is one provider call and can be the whole latency of

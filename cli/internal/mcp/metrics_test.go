@@ -15,6 +15,8 @@ func TestMCPMetricOp(t *testing.T) {
 		"kb_search":          metrics.OpSearch,
 		"kb_ask":             metrics.OpAsk,
 		"kb_index":           metrics.OpIndex,
+		"kb_polish":          metrics.OpPolish,
+		"kb_suggest_links":   metrics.OpSuggest,
 		"kb_append":          metrics.OpIndexDoc,
 		"kb_create":          metrics.OpIndexDoc,
 		"kb_update_meta":     metrics.OpIndexDoc,

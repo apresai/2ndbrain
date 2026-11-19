@@ -121,6 +121,30 @@ const bedrockRetryBackoffWorstTotal = 200 * time.Millisecond * ((1 << (maxBedroc
 // path and inflate every outer budget above it.
 const BedrockClassicWorstCase = bedrockSDKMaxAttempts*BedrockClassicAttemptTimeout + bedrockRetryBackoffWorstTotal
 
+// ── Google Gemini (Vertex AI / Gemini Developer API) ───────────────────────
+
+// GeminiAttemptTimeout bounds one Google GenAI call (Vertex AI or Gemini Developer API).
+const GeminiAttemptTimeout = 45 * time.Second
+
+// geminiMaxAttempts bounds the retry loop for Gemini requests (up to 4 retries
+// so transient 429 RPM quota windows can clear cleanly).
+const geminiMaxAttempts = 5
+
+// geminiMaxRetryDelay caps a single retry backoff wait (including RetryInfo
+// retryDelay hints from Google APIs) so Quota RPM refill windows (~12s) succeed
+// without allowing an unbounded sleep inside an attempt budget.
+const geminiMaxRetryDelay = 20 * time.Second
+
+// geminiRetryBackoffWorstTotal is the worst-case total sleep the Gemini retry
+// loop can insert across non-final attempts: (geminiMaxAttempts - 1) waits each
+// capped at geminiMaxRetryDelay (80s today).
+const geminiRetryBackoffWorstTotal = (geminiMaxAttempts - 1) * geminiMaxRetryDelay
+
+// GeminiWorstCase is the longest one Gemini call can take before its own bounds
+// resolve it: every attempt at the per-attempt timeout plus the worst-case retry
+// loop backoff (5 x 45s + 80s = 305s today; strictly below MantleWorstCase).
+const GeminiWorstCase = geminiMaxAttempts*GeminiAttemptTimeout + geminiRetryBackoffWorstTotal
+
 // ── Local engines (Ollama, llama-local) ────────────────────────────────────
 
 // localAttemptTimeout bounds one HTTP call to a local inference server
@@ -158,6 +182,8 @@ const ProbeSlack = 30 * time.Second
 func ProbeDeadline(provider, strategy, modelType string) time.Duration {
 	_ = modelType
 	switch provider {
+	case "gemini":
+		return GeminiWorstCase + ProbeSlack
 	case "bedrock":
 		if strategy == StrategyBedrockMantleResponses {
 			return MantleWorstCase + ProbeSlack
@@ -177,7 +203,7 @@ func ProbeDeadline(provider, strategy, modelType string) time.Duration {
 // (doctor's tier budgets, bench) derive from this.
 func MaxProbeDeadline() time.Duration {
 	max := MantleWorstCase
-	for _, d := range []time.Duration{BedrockClassicWorstCase, OpenRouterWorstCase, LocalWorstCase} {
+	for _, d := range []time.Duration{BedrockClassicWorstCase, OpenRouterWorstCase, LocalWorstCase, GeminiWorstCase} {
 		if d > max {
 			max = d
 		}

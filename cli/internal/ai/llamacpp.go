@@ -4,16 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/apresai/2ndbrain/internal/llama"
 )
 
 // llamaProviderName is the registry key for the bundled-engine provider.
 const llamaProviderName = "llama-local"
+
+// DefaultLlamaEmbedModel is the local embedder used when ai.embedding_model is
+// unset on the llama-local provider.
+const DefaultLlamaEmbedModel = llama.DefaultEmbedModelID
 
 // DefaultLlamaRerankModel is the local cross-encoder used when ai.rerank.model
 // is unset on the llama-local provider (the global DefaultRerankModel is the
@@ -28,26 +36,45 @@ const DefaultLlamaRerankModel = "bge-reranker-v2-m3"
 
 // LlamaEmbedder implements EmbeddingProvider against llama-server /v1/embeddings.
 type LlamaEmbedder struct {
-	model    string
-	dims     int
-	endpoint string // fixed override (config/tests); empty = resolve via the manager
-	client   *http.Client
-	avail    availableCache
+	model      string
+	dims       int
+	taskPreset string
+	endpoint   string // fixed override (config/tests); empty = resolve via the manager
+	client     *http.Client
+	avail      availableCache
 }
 
 // NewLlamaEmbedder builds the embedding client. endpoint may be empty, in which
 // case the base URL is resolved from the running engine's sidecar at call time.
-func NewLlamaEmbedder(model string, dims int, endpoint string) *LlamaEmbedder {
+func NewLlamaEmbedder(model string, dims int, taskPreset string, endpoint string) *LlamaEmbedder {
 	return &LlamaEmbedder{
-		model:    model,
-		dims:     dims,
-		endpoint: endpoint,
-		client:   &http.Client{Timeout: localAttemptTimeout},
+		model:      model,
+		dims:       dims,
+		taskPreset: strings.ToLower(strings.TrimSpace(taskPreset)),
+		endpoint:   endpoint,
+		client:     &http.Client{Timeout: localAttemptTimeout},
 	}
 }
 
-func (e *LlamaEmbedder) Name() string    { return llamaProviderName }
-func (e *LlamaEmbedder) Dimensions() int { return e.dims }
+func (e *LlamaEmbedder) Name() string       { return llamaProviderName }
+func (e *LlamaEmbedder) Dimensions() int    { return e.dims }
+func (e *LlamaEmbedder) TaskPreset() string { return e.taskPreset }
+
+func probeEndpointURL(ctx context.Context, endpoint string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	url := strings.TrimRight(endpoint, "/") + "/health"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
 
 func (e *LlamaEmbedder) baseURL(ctx context.Context) (string, bool) {
 	if e.endpoint != "" {
@@ -56,57 +83,216 @@ func (e *LlamaEmbedder) baseURL(ctx context.Context) (string, bool) {
 	return llama.EndpointFor(ctx, llama.RoleEmbed)
 }
 
+func (e *LlamaEmbedder) ensureBaseURL(ctx context.Context) (string, error) {
+	if e.endpoint != "" {
+		return e.endpoint, nil
+	}
+	model := e.model
+	if model == "" {
+		model = DefaultLlamaEmbedModel
+	}
+	return llama.EnsureEndpointFor(ctx, llama.RoleEmbed, model)
+}
+
 func (e *LlamaEmbedder) Available(ctx context.Context) bool {
 	if v, hit := e.avail.get(); hit {
 		return v
 	}
-	_, ok := e.baseURL(ctx)
+	if e.endpoint != "" {
+		ok := probeEndpointURL(ctx, e.endpoint)
+		e.avail.set(ok)
+		return ok
+	}
+	if _, ok := llama.EndpointFor(ctx, llama.RoleEmbed); ok {
+		e.avail.set(true)
+		return true
+	}
+	model := e.model
+	if model == "" {
+		model = DefaultLlamaEmbedModel
+	}
+	ok := llama.RoleCanStart(llama.RoleEmbed, model)
 	e.avail.set(ok)
 	return ok
 }
 
-// Embed generates embeddings. It honors WithDimension via client-side Matryoshka
-// truncation (EmbeddingGemma is trained so a leading prefix of the vector is a
-// valid lower-dimensional embedding): the vector is sliced to the requested
-// width and L2-renormalized. WithPurpose is currently ignored (EmbeddingGemma is
-// a symmetric bi-encoder; task-prefix handling is a tracked follow-up).
-func (e *LlamaEmbedder) Embed(ctx context.Context, texts []string, opts ...EmbedOption) ([][]float32, error) {
-	base, ok := e.baseURL(ctx)
-	if !ok {
-		return nil, fmt.Errorf("llama-local embedding engine not running (start it: 2nb ai engine start)")
+// formatLlamaEmbedText applies EmbeddingGemma task instruction prefixes.
+// - Query (PurposeQuery or PurposeQueryText): applies active taskPreset (search, code, qa, none, symmetric).
+//   Avoids double prefixing only if input starts with "task:" AND contains " | query:".
+// - Document (PurposeIndex or default): "title: " + (title != "" ? title : "none") + " | text: " + chunk.
+//   Avoids double formatting only if input starts with "title:" AND contains " | text:".
+func formatLlamaEmbedText(text string, cfg EmbedConfig, taskPreset string) string {
+	trimmed := strings.TrimSpace(text)
+	switch cfg.Purpose {
+	case PurposeQuery, PurposeQueryText:
+		if strings.HasPrefix(strings.ToLower(trimmed), "task:") && strings.Contains(text, " | query:") {
+			return text
+		}
+		preset := strings.ToLower(strings.TrimSpace(taskPreset))
+		switch preset {
+		case "code":
+			return "task: code retrieval | query: " + text
+		case "qa":
+			return "task: question answering | query: " + text
+		case "none", "symmetric":
+			return text
+		case "search", "":
+			fallthrough
+		default:
+			return "task: search result | query: " + text
+		}
+	case PurposeIndex:
+		fallthrough
+	default:
+		if strings.HasPrefix(strings.ToLower(trimmed), "title:") && strings.Contains(text, " | text:") {
+			return text
+		}
+		title := cfg.Title
+		if title == "" {
+			title = "none"
+		}
+		return "title: " + title + " | text: " + text
 	}
-	cfg := ResolveEmbedOptions(opts...)
+}
 
-	reqBody, err := json.Marshal(orEmbedRequest{Model: e.model, Input: texts})
-	if err != nil {
-		return nil, fmt.Errorf("marshal embed request: %w", err)
+const (
+	llamaEmbedMaxBatchSize  = 8
+	maxLlamaEmbedInputRunes = 4500
+	maxLlamaEmbedBatchRunes = 4500
+)
+
+// capLlamaEmbedRunes truncates s cleanly on a UTF-8 rune boundary only when
+// utf8.RuneCountInString(s) > maxRunes, preventing oversized chunks from
+// overflowing llama-server's embedding context.
+func capLlamaEmbedRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 || utf8.RuneCountInString(s) <= maxRunes {
+		return s
 	}
-	respBody, err := llamaPost(ctx, e.client, base+"/v1/embeddings", reqBody)
+	count := 0
+	for i := range s {
+		if count == maxRunes {
+			return s[:i]
+		}
+		count++
+	}
+	return s
+}
+
+// partitionLlamaEmbedBatches returns contiguous [start, end) ranges over
+// formatted so each batch has at most maxItems items and total rune count
+// <= maxRunes. Each batch always advances by at least one item so an
+// individually long input still runs.
+func partitionLlamaEmbedBatches(formatted []string, maxItems, maxRunes int) [][2]int {
+	if len(formatted) == 0 {
+		return nil
+	}
+	if maxItems <= 0 {
+		maxItems = llamaEmbedMaxBatchSize
+	}
+	if maxRunes <= 0 {
+		maxRunes = maxLlamaEmbedBatchRunes
+	}
+	var batches [][2]int
+	start := 0
+	batchRunes := 0
+	for i, s := range formatted {
+		runes := utf8.RuneCountInString(s)
+		if i > start && (i-start >= maxItems || batchRunes+runes > maxRunes) {
+			batches = append(batches, [2]int{start, i})
+			start = i
+			batchRunes = 0
+		}
+		batchRunes += runes
+	}
+	if start < len(formatted) {
+		batches = append(batches, [2]int{start, len(formatted)})
+	}
+	return batches
+}
+
+type llamaPostError struct {
+	err error
+}
+
+func (e *llamaPostError) Error() string { return e.err.Error() }
+func (e *llamaPostError) Unwrap() error { return e.err }
+
+func (e *LlamaEmbedder) embedBatch(ctx context.Context, embedURL string, batch []string, dst [][]float32) error {
+	reqBody, err := json.Marshal(orEmbedRequest{Model: e.model, Input: batch})
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("marshal embed request: %w", err)
+	}
+	respBody, err := llamaPost(ctx, e.client, embedURL, reqBody)
+	if err != nil {
+		return &llamaPostError{err: err}
 	}
 
 	var resp orEmbedResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal embed response: %w", err)
+		return fmt.Errorf("unmarshal embed response: %w", err)
 	}
 	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("no embeddings in response")
+		return fmt.Errorf("no embeddings in response")
+	}
+
+	for _, d := range resp.Data {
+		if d.Index < 0 || d.Index >= len(batch) {
+			return fmt.Errorf("invalid embedding index %d in batch", d.Index)
+		}
+	}
+	for _, d := range resp.Data {
+		dst[d.Index] = d.Embedding
+	}
+	return nil
+}
+
+// Embed generates embeddings. It formats task instruction prefixes
+// (search query vs. document), caps overly long inputs on rune boundaries,
+// partitions batches within llama-server's item and rune budgets (falling
+// back one-by-one if a multi-item batch overflows on dense tokens), maps
+// responses 1:1 back into original order, and honors WithDimension via
+// client-side Matryoshka truncation with L2 re-normalization.
+func (e *LlamaEmbedder) Embed(ctx context.Context, texts []string, opts ...EmbedOption) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	base, err := e.ensureBaseURL(ctx)
+	if err != nil {
+		return nil, err
+	}
+	llama.TouchRoleActivity(llama.RoleEmbed)
+	cfg := ResolveEmbedOptions(opts...)
+
+	formatted := make([]string, len(texts))
+	for i, t := range texts {
+		formatted[i] = capLlamaEmbedRunes(formatLlamaEmbedText(t, cfg, e.taskPreset), maxLlamaEmbedInputRunes)
 	}
 
 	results := make([][]float32, len(texts))
-	for _, d := range resp.Data {
-		if d.Index < 0 || d.Index >= len(texts) {
-			return nil, fmt.Errorf("invalid embedding index %d", d.Index)
+	embedURL := base + "/v1/embeddings"
+
+	for _, b := range partitionLlamaEmbedBatches(formatted, llamaEmbedMaxBatchSize, maxLlamaEmbedBatchRunes) {
+		start, end := b[0], b[1]
+		if err := e.embedBatch(ctx, embedURL, formatted[start:end], results[start:end]); err != nil {
+			var postErr *llamaPostError
+			if end-start > 1 && errors.As(err, &postErr) && ctx.Err() == nil {
+				for i := start; i < end; i++ {
+					if singleErr := e.embedBatch(ctx, embedURL, formatted[i:i+1], results[i:i+1]); singleErr != nil {
+						return nil, singleErr
+					}
+				}
+				continue
+			}
+			return nil, err
 		}
-		results[d.Index] = d.Embedding
 	}
+
 	// A well-behaved server returns one vector per input; guard against a short
 	// or gappy response so we never store a nil/empty embedding (which would
 	// silently corrupt the index).
 	for i, v := range results {
 		if v == nil {
-			return nil, fmt.Errorf("embedding server returned %d vectors for %d inputs (missing index %d)", len(resp.Data), len(texts), i)
+			return nil, fmt.Errorf("embedding server returned incomplete vectors for %d inputs (missing index %d)", len(texts), i)
 		}
 	}
 
@@ -162,11 +348,35 @@ func (g *LlamaGenerator) baseURL(ctx context.Context) (string, bool) {
 	return llama.EndpointFor(ctx, llama.RoleGen)
 }
 
+func (g *LlamaGenerator) ensureBaseURL(ctx context.Context) (string, error) {
+	if g.endpoint != "" {
+		return g.endpoint, nil
+	}
+	model := g.model
+	if model == "" {
+		model = "gemma4-e2b"
+	}
+	return llama.EnsureEndpointFor(ctx, llama.RoleGen, model)
+}
+
 func (g *LlamaGenerator) Available(ctx context.Context) bool {
 	if v, hit := g.avail.get(); hit {
 		return v
 	}
-	_, ok := g.baseURL(ctx)
+	if g.endpoint != "" {
+		ok := probeEndpointURL(ctx, g.endpoint)
+		g.avail.set(ok)
+		return ok
+	}
+	if _, ok := llama.EndpointFor(ctx, llama.RoleGen); ok {
+		g.avail.set(true)
+		return true
+	}
+	model := g.model
+	if model == "" {
+		model = "gemma4-e2b"
+	}
+	ok := llama.RoleCanStart(llama.RoleGen, model)
 	g.avail.set(ok)
 	return ok
 }
@@ -181,7 +391,8 @@ type llamaChatRequest struct {
 type llamaChatResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -201,14 +412,15 @@ func (g *LlamaGenerator) GenerateWithUsage(ctx context.Context, prompt string, o
 }
 
 func (g *LlamaGenerator) generate(ctx context.Context, prompt string, opts GenOpts) (string, GenUsage, error) {
-	base, ok := g.baseURL(ctx)
-	if !ok {
-		return "", GenUsage{}, fmt.Errorf("llama-local generation engine not running (start it: 2nb ai engine start)")
+	base, err := g.ensureBaseURL(ctx)
+	if err != nil {
+		return "", GenUsage{}, err
 	}
+	llama.TouchRoleActivity(llama.RoleGen)
 
 	maxTokens := opts.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = 512
+		maxTokens = 1024
 	}
 	messages := make([]orMessage, 0, 2)
 	if opts.SystemPrompt != "" {
@@ -238,8 +450,16 @@ func (g *LlamaGenerator) generate(ctx context.Context, prompt string, opts GenOp
 	if len(resp.Choices) == 0 {
 		return "", GenUsage{}, fmt.Errorf("empty response from %s", g.model)
 	}
+	msg := resp.Choices[0].Message
+	content := msg.Content
+	if strings.TrimSpace(content) == "" && strings.TrimSpace(msg.ReasoningContent) != "" {
+		content = msg.ReasoningContent
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", GenUsage{}, fmt.Errorf("empty response from %s", g.model)
+	}
 	usage := GenUsage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens}
-	return resp.Choices[0].Message.Content, usage, nil
+	return content, usage, nil
 }
 
 func (g *LlamaGenerator) ListModels(_ context.Context) ([]ModelInfo, error) {
@@ -283,11 +503,35 @@ func (r *LlamaReranker) baseURL(ctx context.Context) (string, bool) {
 	return llama.EndpointFor(ctx, llama.RoleRerank)
 }
 
+func (r *LlamaReranker) ensureBaseURL(ctx context.Context) (string, error) {
+	if r.endpoint != "" {
+		return r.endpoint, nil
+	}
+	model := r.model
+	if model == "" {
+		model = DefaultLlamaRerankModel
+	}
+	return llama.EnsureEndpointFor(ctx, llama.RoleRerank, model)
+}
+
 func (r *LlamaReranker) Available(ctx context.Context) bool {
 	if v, hit := r.avail.get(); hit {
 		return v
 	}
-	_, ok := r.baseURL(ctx)
+	if r.endpoint != "" {
+		ok := probeEndpointURL(ctx, r.endpoint)
+		r.avail.set(ok)
+		return ok
+	}
+	if _, ok := llama.EndpointFor(ctx, llama.RoleRerank); ok {
+		r.avail.set(true)
+		return true
+	}
+	model := r.model
+	if model == "" {
+		model = DefaultLlamaRerankModel
+	}
+	ok := llama.RoleCanStart(llama.RoleRerank, model)
 	r.avail.set(ok)
 	return ok
 }
@@ -312,10 +556,11 @@ func (r *LlamaReranker) Rerank(ctx context.Context, query string, docs []string,
 	if len(docs) == 0 {
 		return nil, nil
 	}
-	base, ok := r.baseURL(ctx)
-	if !ok {
-		return nil, fmt.Errorf("llama-local rerank engine not running (start it: 2nb ai engine start)")
+	base, err := r.ensureBaseURL(ctx)
+	if err != nil {
+		return nil, err
 	}
+	llama.TouchRoleActivity(llama.RoleRerank)
 	body, err := json.Marshal(llamaRerankRequest{Model: r.model, Query: query, Documents: docs, TopN: topN})
 	if err != nil {
 		return nil, fmt.Errorf("marshal rerank request: %w", err)
@@ -352,18 +597,34 @@ func llamaRerankModel(aiCfg AIConfig) string {
 
 // InitLlama creates and registers the llama-local providers.
 func InitLlama(_ context.Context, reg *Registry, cfg LlamaConfig, aiCfg AIConfig) error {
-	embedder := NewLlamaEmbedder(aiCfg.EmbeddingModel, aiCfg.Dimensions, cfg.EmbedEndpoint)
+	embedModel, embedDims := DefaultLlamaEmbedModel, 768
+	if ep := aiCfg.EffectiveEmbeddingProvider(); ep == "" || ep == llamaProviderName {
+		if aiCfg.EmbeddingModel != "" {
+			embedModel = aiCfg.EmbeddingModel
+		}
+		if aiCfg.Dimensions > 0 {
+			embedDims = aiCfg.Dimensions
+		}
+	}
+	embedder := NewLlamaEmbedder(embedModel, embedDims, aiCfg.ResolveTaskPreset(), cfg.EmbedEndpoint)
 	reg.RegisterEmbedder(llamaProviderName, embedder)
 
-	generator := NewLlamaGenerator(aiCfg.GenerationModel, cfg.GenEndpoint)
+	genModel := "gemma4-e2b"
+	if gp := aiCfg.EffectiveGenerationProvider(); gp == "" || gp == llamaProviderName {
+		if aiCfg.GenerationModel != "" {
+			genModel = aiCfg.GenerationModel
+		}
+	}
+	generator := NewLlamaGenerator(genModel, cfg.GenEndpoint)
 	reg.RegisterGenerator(llamaProviderName, generator)
 
-	// Register the local reranker only when reranking is enabled, mirroring
-	// InitBedrock — a disabled rerank config adds no reranker (and the retrieve
-	// pipeline resolves it only when RerankEnabled anyway). Default to the local
-	// cross-encoder, not the shared DefaultRerankModel (a Bedrock id).
+	// Register the local reranker only when reranking is enabled and routed to
+	// llama-local, mirroring InitBedrock. Default to the local cross-encoder,
+	// not the shared DefaultRerankModel (a Bedrock id).
 	if aiCfg.RerankEnabled() {
-		reg.RegisterReranker(llamaProviderName, NewLlamaReranker(llamaRerankModel(aiCfg), cfg.RerankEndpoint))
+		if rp := aiCfg.EffectiveRerankProvider(); rp == "" || rp == llamaProviderName {
+			reg.RegisterReranker(llamaProviderName, NewLlamaReranker(llamaRerankModel(aiCfg), cfg.RerankEndpoint))
+		}
 	}
 
 	return nil

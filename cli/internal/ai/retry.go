@@ -183,3 +183,26 @@ func noteMantleRetry(ctx context.Context, attempt, max int, wait time.Duration, 
 	)
 	RetryCounterFrom(ctx).Record("Bedrock throttled", max)
 }
+
+// noteGeminiRetry logs one Gemini retry (embed or generate) and records it on
+// ctx's RetryCounter so slow rate-limited passes explain themselves in logs,
+// CLI notices, and metrics.db rather than failing or sleeping silently.
+func noteGeminiRetry(ctx context.Context, op string, attempt, max int, wait time.Duration, err error) {
+	cause := geminiRetryCause(err)
+	slog.Info("gemini retry",
+		"op", op,
+		"attempt", attempt,
+		"of", max,
+		"wait", wait,
+		"cause", cause,
+		"err", err,
+	)
+	RetryCounterFrom(ctx).Record("Gemini "+cause, max)
+}
+
+func geminiRetryCause(err error) string {
+	if isGeminiRateLimited(err) {
+		return "throttled"
+	}
+	return "server error"
+}

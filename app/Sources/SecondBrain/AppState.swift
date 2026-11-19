@@ -54,72 +54,120 @@ final class AppState {
     var vault: VaultManager?
     var database: DatabaseManager?
     var fileWatcher: FSEventsWatcher?
-    var globalCatalogWatcher: FSEventsWatcher?
 
-    // Bumped when models.yaml changes on disk — in the vault or globally.
-    // AISetupWizardView and any future "Manage Models" panel observe this
-    // counter and reload their cached model list on bump, so a CLI edit
-    // (`2nb models enable/disable`, `2nb models wizard`) is reflected in
-    // the running GUI without a restart.
-    var modelsCatalogVersion: Int = 0
+    /// Structured GUI action and status telemetry (in-memory feed + OSLog +
+    /// JSONL/JSON files under ~/Library/Logs/SecondBrain or `--gui-log-dir`).
+    let actionTracker: GUIActionTracker
 
-    // Document tabs
-    var openDocuments: [DocumentTab] = []
-    var activeTabIndex: Int = 0
+    /// Mounted-view input bridge used when `--gui-control-dir` is enabled.
+    let guiInputBridge = GUIInputBridge()
 
-    // AI Hub: provider control, active model selection, and the model catalog.
-    //
-    // This used to carry three computed aliases — showAISetupWizard,
-    // showModelWizard, showAITest — all of which got and set this same
-    // property. They were a migration shim that outlived its migration: four
-    // names for one flag meant a button labelled "Test Connection…" and one
-    // labelled "AI Setup…" were the same no-op navigation, and reading the
-    // call site told you nothing about what would happen. Both callers now
-    // route to Settings (OpenSettingsTabButton), so the aliases are gone.
-    var showAIHub = false
+    /// Optional per-instance CLI executable override for isolated tests;
+    /// when nil, falls back to `CLIPath.resolve()`.
+    @ObservationIgnored var cliExecutablePathOverride: String?
+
+    private func resolvedCLIPath() -> String {
+        cliExecutablePathOverride ?? CLIPath.resolve()
+    }
 
     /// Which Settings tab the window shows. Selection-bound so a link
-    /// anywhere in the app ("Add your API key…", a bad-credentials fix
-    /// action) can land the user on the exact tab, instead of whatever tab
-    /// macOS last restored. ONE shared property for both Settings hosts (the
-    /// Cmd+, window and the sidebar tab), so the two can never show different
-    /// tabs.
-    var settingsTab: SettingsTab = .general
+    /// anywhere in the app can land the user on the exact Settings tab.
+    var settingsTab: SettingsTab = .ai
 
-    /// Deep-link flag for the sidebar Settings tab, wired in ContentView like
-    /// the other show* flags. OpenSettingsTabButton sets it (after
-    /// settingsTab) when a vault is bound, so Settings opens as the sidebar
-    /// tab rather than a second window; with no vault the main window is
-    /// WelcomeView and the button opens the Cmd+, Settings window instead.
-    var showSettingsPane = false
+    /// Deep-link flags for main Beta navigation tabs, observed by ContentView.
+    var requestedTab: DashboardTab?
+    var showAskSearch = false
+    var requestedAskSearchMode: AskSearchMode?
+    var showNotePolish = false
+    var showGUIActions = false
+    var showSettingsRequest = false
+    var showOnboarding = false
+    var showQuickSearch = false
 
-    // Settings reload concurrency is deliberately PER VIEW INSTANCE, not
-    // AppState-scoped: most settings tab views load into their own @State,
-    // so a cross-host lock starved whichever host lost the race (it skipped
-    // its reload and rendered empty), and a plain skip also dropped
-    // post-write refreshes racing the .task load. Each view now single-
-    // flights its own reload with pending-rerun coalescing; concurrent
-    // read-only status reloads across the two hosts are harmless by design.
+    init() {
+        let tracker = GUIActionTracker(overrideLogDir: LaunchOptions.current.guiLogDir)
+        self.actionTracker = tracker
+        tracker.record(
+            category: .app,
+            action: "app.launch",
+            phase: .succeeded,
+            summary: "SecondBrain launched (v\(appVersion))",
+            metadata: [
+                "version": appVersion,
+                "vault_override": LaunchOptions.current.vaultPath != nil ? "true" : "false",
+                "skip_onboarding": LaunchOptions.current.skipOnboarding ? "true" : "false",
+                "no_startup_sync": LaunchOptions.current.noStartupSync ? "true" : "false",
+            ]
+        )
+    }
 
-    /// Set by the post-key-save "re-validate now?" offer; SimpleModelsView
-    /// observes it and starts a Validate pass (still cost-confirmed there).
-    var pendingValidateRequest = false
+    func openAskGemini() {
+        requestedAskSearchMode = .ask
+        showAskSearch = true
+    }
 
-    /// Deep-link flag for the Testing tab ("Testing & Benchmarks…" menu
-    /// item), wired in ContentView like the other show* flags.
-    var showTesting = false
+    func openHybridSearch() {
+        requestedAskSearchMode = .search
+        showAskSearch = true
+    }
 
-    private static let lowDiskThreshold: Int64 = 50 * 1024 * 1024
+    /// User toggle to pause background incremental indexing from the menu bar
+    /// or Settings → General. Queued paths stay collected and flush on resume.
+    var pauseAutoSync: Bool = ProcessInfo.processInfo.environment["2NB_TEST"] == "1"
+        ? false
+        : UserDefaults.standard.bool(forKey: "pauseAutoSync")
 
-    // Merge conflict controllers (one per active dialog, retained so the NSWindow stays alive)
-    private var mergeControllers: [MergeConflictController] = []
-    private let selfWriteSuppressionInterval: TimeInterval = 2
-    private var recentSelfWrites: [String: Date] = [:]
+    func noteSettingsOpened(tab: SettingsTab) {
+        settingsTab = tab
+        actionTracker.record(
+            category: .navigation,
+            action: "settings.open",
+            phase: .succeeded,
+            summary: "Opened Settings (\(tab.rawValue))",
+            metadata: ["tab": tab.rawValue]
+        )
+    }
 
-    // In-flight incremental re-embed tasks keyed by vault-relative path, so a
-    // second save for the same file queues behind the first instead of
-    // racing the database.
-    private var reindexTasks: [String: Task<Void, Never>] = [:]
+    func requestOpenSettings(tab: SettingsTab = .ai) {
+        noteSettingsOpened(tab: tab)
+        showSettingsRequest = true
+    }
+
+    func setAutoSyncPaused(_ paused: Bool) {
+        guard pauseAutoSync != paused else { return }
+        pauseAutoSync = paused
+        if ProcessInfo.processInfo.environment["2NB_TEST"] != "1" {
+            UserDefaults.standard.set(paused, forKey: "pauseAutoSync")
+        }
+        actionTracker.record(
+            category: .settings,
+            action: "settings.auto_sync_toggle",
+            phase: .succeeded,
+            summary: paused ? "Paused background auto-sync" : "Resumed background auto-sync",
+            metadata: ["paused": String(paused)]
+        )
+        if paused {
+            externalReindexTask?.cancel()
+            externalReindexTask = nil
+        } else if !pendingExternalPaths.isEmpty {
+            externalReindexTask = Task { @MainActor [weak self] in
+                await self?.drainExternalReindex()
+            }
+        }
+    }
+
+    var indexFraction: Double? {
+        guard isIndexing else { return nil }
+        if let ep = embeddingProgress {
+            if let ct = ep.chunksTotal, ct > 0, let cd = ep.chunksDone {
+                return max(0.04, min(0.98, Double(cd) / Double(ct)))
+            }
+            if ep.total > 0 {
+                return max(0.04, min(0.98, Double(ep.current) / Double(ep.total)))
+            }
+        }
+        return 0.06
+    }
 
     // Coalesced incremental index for notes changed OUTSIDE the app (edited in
     // Obsidian, synced, git-pulled). Every path that changes within a debounce
@@ -131,14 +179,11 @@ final class AppState {
     // schedule-then-switch path instead of waiting out the 1.5s debounce.
     // @testable import keeps them inside the module regardless.
     var pendingExternalPaths: Set<String> = []
+    var suppressedExternalPaths: [String: Date] = [:]
     var externalReindexTask: Task<Void, Never>?
     private var externalReindexInFlight = false
     private let externalReindexDebounce: Duration = .seconds(1.5)
     private let bulkExternalReindexThreshold = 8
-
-    // Current document metrics (chunk count is refreshed on open/switch/reindex;
-    // token estimate is computed live from content.count / 4)
-    var currentDocumentChunkCount: Int = 0
 
     // Git state
     var vaultIsGitRepo: Bool = false
@@ -148,12 +193,13 @@ final class AppState {
     var gitActivityDays: Int = UserDefaults.standard.object(forKey: "gitActivityDays") as? Int ?? 7
     var showGitActivity: Bool = false
 
-    // Vault performance observatory (the Metrics tab), read from `2nb metrics --json`.
-    var vaultMetrics: VaultMetrics?
-    var metricsLoading: Bool = false
-
     // AI state
     var aiStatus: AIStatusInfo?
+    var metricsReport: MetricsReport?
+    var metricsLoading = false
+    var showAIUsage = false
+    var localModelDownload: LocalModelDownload?
+    var localEngineStatus: EngineStatus?
     // Installed `2nb` CLI version ("X.Y.Z"), or nil if it couldn't be read.
     // Home compares this against `appVersion` to warn on a stale CLI — see
     // CLIVersion and refreshCLIVersion().
@@ -164,11 +210,6 @@ final class AppState {
     // a banner explaining why. Cleared on the next successful run.
     var lastSemanticWarnings: [String] = []
     var isIndexing = false
-    /// Single-flight claim for `models bench`, shared by EVERY bench entry
-    /// point (the Testing tab's Benchmarks pane and the catalog picker's
-    /// per-model Benchmark button), so no two surfaces can stream two
-    /// concurrent bench runs into the same bench.db.
-    let benchRun = BenchRunModel()
     var indexError: String?
     /// The most recent per-note reindex failure, from the watcher's
     /// `index --doc`. Distinct from `indexError`, which belongs to a full index
@@ -181,17 +222,17 @@ final class AppState {
     var indexProgress: IndexProgress?
     var showIndexProgress = false
 
-    // Local model download (`ai engine pull --json`) progress, driven by the
-    // AI Hub "Download local models" button. nil when no download is running.
-    var localModelDownload: LocalModelDownload?
-
-    // Vault Status panel
-    var showVaultStatus: Bool = false
-
     // Tools panels
     var showLintResults = false
     var isLinting = false
+    var isFixingVault = false
     var lintReport: LintReport?
+    var fixReport: FixVaultReport?
+    var lintError: String?
+    var fixPreviewError: String?
+    private var lastFixWrittenPaths: [String] = []
+    var canUndoPolishPath: String?
+    var canUndoPolishBacklinkPaths: [String] = []
     var showMCPSetup = false
     var mcpSetupText: String?
     var showMCPStatus = false
@@ -241,23 +282,8 @@ final class AppState {
     // Claude Code "Verify" health panel state.
     var verifying = false
     var healthChecks: [HealthCheck] = []
-    var spotlightIndexer: SpotlightIndexer?
-    var crashJournal: CrashJournal?
     var errorLogger: ErrorLogger?
-    var recoveryEntries: [RecoveryEntry] = []
-    var showRecoveryDialog = false
     var files: [FileItem] = []
-    var outline: [HeadingItem] = []
-
-    // Editor navigation — set by outline clicks, search-result opens, lint
-    // issue clicks, etc. The EditorArea.updateNSView reads this on every
-    // cycle, resolves it to an NSRange, scrolls + flashes, then clears it.
-    var editorScrollTarget: EditorScrollTarget?
-
-    // Request that the editor's NSTextView become first responder on the
-    // next updateNSView tick. Set by openDocument so focus lands in the
-    // editor after opening a file.
-    var pendingFirstResponder: Bool = false
 
     // Commit detail modal — loaded lazily via `2nb git show --json <hash>`
     // when the user clicks a commit in GitActivityView. The modal presents
@@ -272,37 +298,6 @@ final class AppState {
     // after each await and drops the stale result instead of publishing.
     // Cancellation prevents stale writes, not the subprocess itself.
     private var commitDetailTask: Task<Void, Never>?
-
-    // Invoked from outline row clicks. If the editor is currently in
-    // preview-only mode, switching back to source mode is the caller's
-    // responsibility (Phase A default: we stay in whatever mode is active
-    // and scroll the NSTextView; the EditorArea auto-switches to source
-    // if needed via editorMode binding).
-    func jumpToHeading(_ heading: HeadingItem) {
-        editorScrollTarget = .heading(heading)
-        log.info("jumpToHeading: level=\(heading.level) text=\(heading.text)")
-    }
-
-    func jumpToHeadingPath(_ path: String) {
-        editorScrollTarget = .headingPath(path)
-        log.info("jumpToHeadingPath: \(path)")
-    }
-
-    func jumpToLine(_ line: Int) {
-        editorScrollTarget = .line(line)
-        log.info("jumpToLine: \(line)")
-    }
-
-    var validTabIndex: Int? {
-        let idx = activeTabIndex
-        guard idx >= 0, idx < openDocuments.count else { return nil }
-        return idx
-    }
-
-    var currentDocument: DocumentTab? {
-        guard let idx = validTabIndex else { return nil }
-        return openDocuments[idx]
-    }
 
     /// Opens a user-picked folder as a vault after validating it is a real
     /// Obsidian vault and warning when it isn't the vault Obsidian currently has
@@ -328,19 +323,33 @@ final class AppState {
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return false }
         }
-        openVault(at: url)
-        UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+        openVault(at: url, persistLastVault: true)
         return true
     }
 
-    func openVault(at url: URL) {
+    func openVault(at url: URL, persistLastVault: Bool = true) {
         log.info("Opening vault at \(url.path)")
         // A recorded problem names a path inside the vault being left behind, so
         // carrying it across a switch shows a banner about a note the new vault
         // does not even have.
         lastIndexingProblem = nil
+        lintReport = nil
+        fixReport = nil
+        lintError = nil
+        fixPreviewError = nil
+        lastFixWrittenPaths = []
+        canUndoPolishPath = nil
+        canUndoPolishBacklinkPaths = []
+        metricsReport = nil
         let vm = VaultManager(rootURL: url)
         self.vault = vm
+        actionTracker.setVaultDotDir(vm.dotDirURL)
+
+        if persistLastVault,
+           ProcessInfo.processInfo.environment["2NB_TEST"] != "1",
+           LaunchOptions.current.vaultPath == nil {
+            UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+        }
 
         // Open the shared SQLite index (same DB the Go CLI writes to)
         if vm.isInitialized {
@@ -348,46 +357,67 @@ final class AppState {
                 self.database = try DatabaseManager(path: vm.indexDBPath)
                 log.info("Database opened: \(vm.indexDBPath)")
             } catch {
-                log.error("Failed to open index: \(error.localizedDescription)")
-                errorLogger?.log("Failed to open index", error: error)
+                let safeErr = Self.boundedRedacted(error.localizedDescription)
+                log.error("Failed to open index: \(safeErr)")
+                errorLogger?.log("Failed to open index: \(safeErr)")
+                actionTracker.record(
+                    category: .vault,
+                    action: "vault.open_db",
+                    phase: .failed,
+                    summary: "Failed to open SQLite index for \(vm.rootURL.lastPathComponent)",
+                    detail: error.localizedDescription
+                )
             }
             // No CLI sync needed: 2nb reads Obsidian's own registry to resolve
             // the active vault, the same source this app binds to, so a bare
             // terminal `2nb` already follows the open Obsidian vault.
         } else {
+            self.database = nil
             log.notice("Vault not initialized (no .2ndbrain dir): \(url.path)")
         }
 
-        // Initialize Spotlight indexer and index vault
-        let indexer = SpotlightIndexer()
-        self.spotlightIndexer = indexer
-        indexer.indexAll(vault: vm)
-
-        // Initialize crash recovery and error logging
-        let logger = ErrorLogger(vaultDotDir: vm.dotDirURL)
-        let journal = CrashJournal(vaultDotDir: vm.dotDirURL) { msg in
-            logger.log(msg, error: nil)
-        }
-        self.crashJournal = journal
-        self.errorLogger = logger
-
-        // Check for crash recovery entries
-        let entries = journal.recoverableDocuments()
-        if !entries.isEmpty {
-            self.recoveryEntries = entries
-            self.showRecoveryDialog = true
-        }
+        self.errorLogger = ErrorLogger(vaultDotDir: vm.dotDirURL)
 
         // Refresh file list
         refreshFiles()
         log.info("Vault loaded: \(self.files.count) files")
+
+        actionTracker.updateStatus { status in
+            status.vaultPath = vm.rootURL.path
+            status.vaultName = vm.rootURL.lastPathComponent
+            status.fileCount = self.files.count
+            status.lastError = nil
+            status.lastIndexError = nil
+            status.lastIndexingProblemPath = nil
+            status.lastIndexingProblemMessage = nil
+            status.indexEstimatedRemainingSeconds = nil
+            status.indexDocsPerSec = nil
+            status.aiUsage30dCostUSD = nil
+            status.aiUsage30dCloudCalls = nil
+            status.aiUsage30dLocalCalls = nil
+        }
+        actionTracker.record(
+            category: .vault,
+            action: "vault.open",
+            phase: .succeeded,
+            summary: "Opened vault \(vm.rootURL.lastPathComponent) (\(self.files.count) notes)",
+            metadata: [
+                "vault": vm.rootURL.lastPathComponent,
+                "path": vm.rootURL.path,
+                "initialized": String(vm.isInitialized),
+                "files": "\(self.files.count)",
+            ]
+        )
 
         // Refresh AI status, then catch up the index if notes were added or
         // removed in Obsidian while the app was closed (the file watcher only
         // sees changes from now on).
         Task {
             await refreshAIStatus()
-            syncOnBindIfStale()
+            await refreshMetrics()
+            if !LaunchOptions.current.noStartupSync {
+                syncOnBindIfStale()
+            }
         }
 
         // Start polling MCP server status (used by status bar indicator)
@@ -396,101 +426,41 @@ final class AppState {
         // Refresh git state (non-blocking)
         Task { await refreshGitStatus() }
 
-        // Start watching for changes. Filter accepts .md (document changes)
-        // and models.yaml (catalog changes written by the CLI wizard or
-        // enable/disable commands).
+        // Start watching for external changes (.md notes and config.yaml).
         fileWatcher?.stop()
         // The debounce queue is AppState-wide, not vault-scoped, so a change
         // queued against the vault being closed would drain 1.5s later against
-        // the one just opened. `relativePath(for:)` falls back to
-        // `lastPathComponent` for a path outside its root, so that drain could
-        // reindex a same-named note in the wrong vault, or record a problem
-        // naming a path the new vault does not have. Drop what is queued here,
-        // beside the watcher that queued it. A call already executing is pinned
-        // to the vault it was started with and correctly finishes there;
-        // cancellation is not cooperative inside runCLI, so this is a guarantee
-        // about what is QUEUED, not about what is already mid-flight.
+        // the one just opened.
         externalReindexTask?.cancel()
         externalReindexTask = nil
         pendingExternalPaths.removeAll()
-        for task in reindexTasks.values {
-            task.cancel()
-        }
-        reindexTasks.removeAll()
+        suppressedExternalPaths.removeAll()
         let watcher = FSEventsWatcher(
             path: url.path,
             filter: {
-                $0.hasSuffix(".md")
-                    || $0.hasSuffix("/models.yaml")
-                    || $0.hasSuffix("/config.yaml")
+                $0.hasSuffix(".md") || $0.hasSuffix("/config.yaml")
             }
         ) { @Sendable [weak self] paths in
             Task { @MainActor in
-                let mdPaths = paths.filter { $0.hasSuffix(".md") }
-                let catalogChanged = paths.contains { $0.hasSuffix("/models.yaml") }
+                let mdPaths = paths.filter { path in
+                    guard path.hasSuffix(".md"), let vault = self?.vault else { return false }
+                    return !Self.shouldExcludeExternalIndexPath(path, vault: vault)
+                }
                 let configChanged = paths.contains { $0.hasSuffix("/config.yaml") }
                 if !mdPaths.isEmpty {
                     self?.refreshFiles()
                     for path in mdPaths {
-                        self?.reloadIfOpen(path: path)
-                        // Index + embed notes changed outside the app (e.g. saved
-                        // in Obsidian) so search/AI see them without a manual
-                        // Rebuild. The app's own saves already reindexed, and are
-                        // skipped inside scheduleExternalReindex.
                         self?.scheduleExternalReindex(path: path)
                     }
                 }
-                if catalogChanged || configChanged {
-                    // Both feed the AI Hub: catalog for model rows,
-                    // config.yaml for active-model + provider-disable
-                    // changes the user made via `2nb config set`.
-                    self?.modelsCatalogVersion += 1
-                }
                 if configChanged {
                     await self?.refreshAIStatus()
+                    await self?.refreshMetrics()
                 }
             }
         }
         watcher.start()
         self.fileWatcher = watcher
-
-        // Second watcher for the user's global models catalog. Separate
-        // watcher because ~/.config/2nb is outside the vault tree.
-        startGlobalCatalogWatcher()
-    }
-
-    /// Watches ~/.config/2nb (or $XDG_CONFIG_HOME/2nb) for models.yaml
-    /// writes made by the CLI while the GUI is running. Idempotent — safe
-    /// to call multiple times; the previous watcher is stopped first.
-    private func startGlobalCatalogWatcher() {
-        globalCatalogWatcher?.stop()
-
-        let configRoot: String
-        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
-            configRoot = (xdg as NSString).appendingPathComponent("2nb")
-        } else {
-            configRoot = (NSHomeDirectory() as NSString).appendingPathComponent(".config/2nb")
-        }
-
-        // Ensure the directory exists — FSEventStreamCreate silently
-        // fails on a non-existent path, which would leave the watcher
-        // inert with no warning. A missing directory is the common case
-        // for users who've never run `2nb config set`.
-        try? FileManager.default.createDirectory(
-            atPath: configRoot,
-            withIntermediateDirectories: true
-        )
-
-        let watcher = FSEventsWatcher(
-            path: configRoot,
-            filter: { $0.hasSuffix("/models.yaml") }
-        ) { @Sendable [weak self] _ in
-            Task { @MainActor in
-                self?.modelsCatalogVersion += 1
-            }
-        }
-        watcher.start()
-        self.globalCatalogWatcher = watcher
     }
 
     func refreshFiles() {
@@ -507,377 +477,30 @@ final class AppState {
         self.files = items
     }
 
-    func openDocument(at url: URL) {
-        // Check if already open
-        if let idx = openDocuments.firstIndex(where: { $0.url == url }) {
-            activeTabIndex = idx
-            pendingFirstResponder = true
-            return
-        }
-
-        // Big-file guard: anything >100 MB gets an explicit warning + read-only
-        // fallback. This sits before the FrontmatterParser load so a huge file
-        // with malformed frontmatter doesn't block the user choice.
-        var forceReadOnly = false
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attrs[.size] as? Int64, size > 100 * 1024 * 1024 {
-            let alert = NSAlert()
-            alert.messageText = "Large file"
-            alert.informativeText = "\(url.lastPathComponent) is \(Self.formatBytes(size)). Opening it may be slow. It will open in read-only mode to protect your data."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Open Read-Only")
-            if alert.runModal() == .alertFirstButtonReturn {
-                return
-            }
-            forceReadOnly = true
-        }
-
-        do {
-            let doc = try FrontmatterParser.loadDocument(from: url)
-            let content = try String(contentsOf: url, encoding: .utf8)
-            var tab = DocumentTab(url: url, document: doc, content: content)
-            tab.lastSavedContent = content
-            tab.readOnly = forceReadOnly
-            openDocuments.append(tab)
-            activeTabIndex = openDocuments.count - 1
-            updateOutline()
-            // Request focus into the editor so typing starts immediately
-            // without an extra click. EditorArea.updateNSView reads this
-            // flag on the next cycle and calls makeFirstResponder.
-            pendingFirstResponder = true
-            log.info("Opened document: \(url.lastPathComponent) (type=\(doc.docType), id=\(doc.id.prefix(8))\(forceReadOnly ? ", read-only" : ""))")
-        } catch {
-            // Parse failed — the frontmatter is likely corrupt. Surface any
-            // available recovery snapshots so the user can restore rather than
-            // losing work. We can't target a specific snapshot because we can't
-            // recover the document ID from an unparseable file, so we show the
-            // whole queue and let the user pick.
-            log.error("Failed to open document \(url.lastPathComponent): \(error.localizedDescription)")
-            errorLogger?.log("Failed to open document", error: error)
-            if let journal = crashJournal {
-                let entries = journal.recoverableDocuments()
-                if !entries.isEmpty {
-                    recoveryEntries = entries
-                    showRecoveryDialog = true
-                    return
-                }
-            }
-            let alert = NSAlert()
-            alert.messageText = "Unable to open \(url.lastPathComponent)"
-            alert.informativeText = "The file's frontmatter could not be parsed: \(error.localizedDescription)"
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-        }
-    }
-
-    func closeTab(at index: Int) {
-        guard index >= 0, index < openDocuments.count else { return }
-        openDocuments.remove(at: index)
-        if activeTabIndex >= openDocuments.count {
-            activeTabIndex = max(0, openDocuments.count - 1)
-        }
-        updateOutline()
-    }
-
-    func closeTab(id: UUID) {
-        guard let index = openDocuments.firstIndex(where: { $0.id == id }) else { return }
-        closeTab(at: index)
-    }
-
-    func createNewDocument(type: String = "note", title: String = "Untitled") {
-        guard let vault else { return }
-        let id = UUID().uuidString
-        let now = ISO8601DateFormatter().string(from: Date())
-
-        let initialStatus: String
-        let extraFields: String
-        let bodyTemplate: String
-
-        switch type {
-        case "adr":
-            initialStatus = "proposed"
-            extraFields = ""
-            bodyTemplate = """
-            ## Status
-
-            proposed
-
-            ## Context
-
-            What is the issue that we're seeing that is motivating this decision or change?
-
-            ## Decision
-
-            What is the change that we're proposing and/or doing?
-
-            ## Consequences
-
-            What becomes easier or more difficult to do because of this change?
-            """
-        case "runbook":
-            initialStatus = "draft"
-            extraFields = "service: \nkeyword: "
-            bodyTemplate = """
-            ## Overview
-
-            Brief description of what this runbook addresses.
-
-            ## Prerequisites
-
-            - [ ] Access to relevant systems
-            - [ ] Required permissions
-
-            ## Steps
-
-            1. First step
-            2. Second step
-            3. Third step
-
-            ## Verification
-
-            How to verify the procedure was successful.
-
-            ## Rollback
-
-            Steps to undo if something goes wrong.
-            """
-        case "postmortem":
-            initialStatus = "draft"
-            extraFields = "incident-date: \(now.prefix(10))\nseverity: medium\nservices: []"
-            bodyTemplate = """
-            ## Summary
-
-            Brief summary of the incident.
-
-            ## Timeline
-
-            | Time | Event |
-            |------|-------|
-            | | Incident detected |
-            | | Investigation started |
-            | | Root cause identified |
-            | | Fix deployed |
-            | | Incident resolved |
-
-            ## Root Cause
-
-            What caused the incident?
-
-            ## Impact
-
-            Who/what was affected and for how long?
-
-            ## Action Items
-
-            - [ ] Action item 1
-            - [ ] Action item 2
-
-            ## Lessons Learned
-
-            What did we learn from this incident?
-            """
-        case "prd":
-            initialStatus = "draft"
-            extraFields = "owner: \npriority: p0"
-            bodyTemplate = """
-            ## Problem Statement
-
-            What problem are we solving? Who has this problem? Why does it matter?
-
-            ## Target Users
-
-            Who are the primary, secondary, and tertiary users?
-
-            ## Goals
-
-            | # | Goal | Rationale |
-            |---|------|-----------|
-            | 1 | | |
-
-            ## Non-Goals
-
-            - What are we explicitly not doing?
-
-            ## User Stories
-
-            - **As a** [user type], **I want** [action] **so that** [benefit]
-
-            ## Functional Requirements
-
-            ### P0 — MVP
-
-            | ID | Requirement |
-            |----|-------------|
-            | FR-1 | |
-
-            ## Non-Functional Requirements
-
-            | ID | Requirement | Target |
-            |----|-------------|--------|
-            | NFR-1 | | |
-
-            ## Success Metrics
-
-            | # | Metric | How to verify |
-            |---|--------|---------------|
-            | 1 | | |
-
-            ## Risks
-
-            | Risk | Likelihood | Impact | Mitigation |
-            |------|-----------|--------|------------|
-            | | | | |
-            """
-        case "prfaq":
-            initialStatus = "draft"
-            extraFields = "owner: "
-            bodyTemplate = """
-            ## Press Release
-
-            **FOR IMMEDIATE RELEASE**
-
-            ### [Headline: one sentence describing the product and its key benefit]
-
-            *[Subheadline: expand on the value proposition]*
-
-            **[City, State]** — Today, [company] announced [product], a [brief description]. [Product] enables [target user] to [key benefit] by [how it works at a high level].
-
-            [Problem paragraph: describe the pain point this solves]
-
-            [Quote from a leader or stakeholder about why this matters]
-
-            **How it works:**
-
-            1. [Step 1]
-            2. [Step 2]
-            3. [Step 3]
-
-            ---
-
-            ## Frequently Asked Questions
-
-            ### External FAQ (Customer Questions)
-
-            **Q: Who is this for?**
-            A:
-
-            **Q: How does it work?**
-            A:
-
-            **Q: How much does it cost?**
-            A:
-
-            ### Internal FAQ (Engineering / Business Questions)
-
-            **Q: Why now?**
-            A:
-
-            **Q: What's the technical approach?**
-            A:
-
-            **Q: What are the main risks?**
-            A:
-            """
-        default: // note
-            initialStatus = "draft"
-            extraFields = ""
-            bodyTemplate = ""
-        }
-
-        var frontmatter = """
-        ---
-        id: \(id)
-        title: \(title)
-        type: \(type)
-        status: \(initialStatus)
-        tags: []
-        created: \(now)
-        modified: \(now)
-        """
-        if !extraFields.isEmpty {
-            frontmatter += "\n\(extraFields)"
-        }
-        frontmatter += "\n---"
-
-        let content = "\(frontmatter)\n# \(title)\n\n\(bodyTemplate)\n"
-
-        let slug = title.lowercased()
-            .replacingOccurrences(of: " ", with: "-")
-            .filter { $0.isLetter || $0.isNumber || $0 == "-" }
-        let filename = slug.isEmpty ? "\(type)-\(id.prefix(8)).md" : "\(slug).md"
-        let url = uniqueFilename(base: filename, in: vault.rootURL)
-
-        do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
-            refreshFiles()
-            openDocument(at: url)
-            log.info("Created document: \(filename) (type=\(type))")
-        } catch {
-            log.error("Failed to create document \(filename): \(error.localizedDescription)")
-            errorLogger?.log("Failed to create document", error: error)
-        }
-    }
-
     func createVault(at url: URL) {
         do {
             try VaultManager.initializeVault(at: url)
-            openVault(at: url)
-            UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
+            openVault(at: url, persistLastVault: true)
+            actionTracker.record(
+                category: .vault,
+                action: "vault.create",
+                phase: .succeeded,
+                summary: "Initialized vault \(url.lastPathComponent)",
+                metadata: ["path": url.path]
+            )
             log.info("Created new vault at \(url.path)")
         } catch {
-            log.error("Failed to create vault at \(url.path): \(error.localizedDescription)")
-            errorLogger?.log("Failed to create vault", error: error)
-        }
-    }
-
-    func duplicateDocument(at url: URL) {
-        guard vault != nil else { return }
-        do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            var (frontmatter, body) = FrontmatterParser.parse(content)
-            // Fresh UUID so the duplicate has its own identity in the index.
-            frontmatter["id"] = UUID().uuidString.lowercased()
-            let now = ISO8601DateFormatter().string(from: Date())
-            frontmatter["created"] = now
-            frontmatter["modified"] = now
-            if let oldTitle = frontmatter["title"] as? String, !oldTitle.isEmpty {
-                frontmatter["title"] = "\(oldTitle) (copy)"
-            }
-            let newContent = FrontmatterParser.serialize(frontmatter: frontmatter, body: body)
-
-            let stem = url.deletingPathExtension().lastPathComponent
-            let ext = url.pathExtension
-            let baseCandidate = ext.isEmpty ? "\(stem)-copy" : "\(stem)-copy.\(ext)"
-            let parent = url.deletingLastPathComponent()
-            let target = uniqueFilename(base: baseCandidate, in: parent)
-
-            try newContent.write(to: target, atomically: true, encoding: .utf8)
-            refreshFiles()
-            openDocument(at: target)
-            log.info("Duplicated \(url.lastPathComponent) → \(target.lastPathComponent)")
-        } catch {
-            log.error("Failed to duplicate \(url.lastPathComponent): \(error.localizedDescription)")
-            errorLogger?.log("Failed to duplicate document", error: error)
-        }
-    }
-
-    func deleteDocument(at url: URL) {
-        let name = url.lastPathComponent
-        // Close tab if open
-        if let idx = openDocuments.firstIndex(where: { $0.url == url }) {
-            closeTab(at: idx)
-        }
-
-        // Delete file from disk
-        do {
-            try FileManager.default.removeItem(at: url)
-            refreshFiles()
-            log.info("Deleted document: \(name)")
-        } catch {
-            log.error("Failed to delete \(name): \(error.localizedDescription)")
-            errorLogger?.log("Failed to delete document", error: error)
+            let safeErr = Self.boundedRedacted(error.localizedDescription)
+            log.error("Failed to create vault at \(url.path): \(safeErr)")
+            errorLogger?.log("Failed to create vault: \(safeErr)")
+            actionTracker.record(
+                category: .vault,
+                action: "vault.create",
+                phase: .failed,
+                summary: "Failed to initialize vault \(url.lastPathComponent)",
+                detail: error.localizedDescription,
+                metadata: ["path": url.path]
+            )
         }
     }
 
@@ -887,11 +510,61 @@ final class AppState {
     // entry points — and cleared once the run begins.
     var pendingForceReembed: Bool = false
 
+    private func makeSeededIndexProgress(phase: IndexPhase, forceReembed: Bool) -> IndexProgress {
+        var progress = IndexProgress(phase: phase, forceReembed: forceReembed)
+        let unindexedVault = (aiStatus?.embeddingCount == 0) || (aiStatus?.portabilityStatus == "unindexed")
+        if let est = metricsReport?.reembedEstimate, forceReembed || unindexedVault {
+            progress.embeddingTotal = est.embeddableDocs
+            progress.chunksTotal = est.totalChunks
+            if est.estimatedSeconds > 0 {
+                progress.initialEstimatedSeconds = est.estimatedSeconds
+                progress.estimatedRemainingSeconds = est.estimatedSeconds
+            }
+            progress.estimatedCostUSD = est.estimatedCostUSD
+            progress.estimateIsCloud = est.isCloud
+            progress.estimateSpeedSource = est.speedSource
+        }
+        return progress
+    }
+
     func rebuildIndex(forceReembed: Bool = false) {
         guard vault != nil else { return }
         pendingForceReembed = forceReembed
-        indexProgress = IndexProgress(phase: .ready, forceReembed: forceReembed)
+        let initialProgress = makeSeededIndexProgress(phase: .ready, forceReembed: forceReembed)
+        indexProgress = initialProgress
         showIndexProgress = true
+        actionTracker.updateStatus { status in
+            status.indexSheetVisible = true
+            status.indexPhase = IndexPhase.ready.rawValue
+            status.indexForceReembed = forceReembed
+            status.indexEstimatedRemainingSeconds = initialProgress.estimatedRemainingSeconds
+        }
+        if metricsReport == nil {
+            Task { @MainActor [weak self] in
+                await self?.refreshMetrics()
+                guard let self, let cur = self.indexProgress, cur.phase == .ready else { return }
+                let updated = self.makeSeededIndexProgress(phase: .ready, forceReembed: cur.forceReembed)
+                self.indexProgress = updated
+                self.actionTracker.updateStatus { status in
+                    status.indexEstimatedRemainingSeconds = updated.estimatedRemainingSeconds
+                }
+            }
+        }
+        actionTracker.record(
+            category: .index,
+            action: "index.open_sheet",
+            phase: .succeeded,
+            summary: forceReembed ? "Opened Re-embed All confirmation" : "Opened Sync Index confirmation",
+            metadata: ["force_reembed": String(forceReembed)]
+        )
+    }
+
+    /// Starts `2nb index --force-reembed` directly in the background without opening
+    /// the main-window modal sheet (used by the Settings window and Menu Bar).
+    func startForceReembed() {
+        guard vault != nil, !isIndexing else { return }
+        pendingForceReembed = true
+        startIndex()
     }
 
     /// On vault bind, run ONE quiet incremental index if any note changed on
@@ -938,9 +611,35 @@ final class AppState {
         embeddingProgress = nil
         let forceReembed = pendingForceReembed
         pendingForceReembed = false
-        indexProgress = IndexProgress(phase: .indexingFiles, forceReembed: forceReembed)
+        let seededProgress = makeSeededIndexProgress(phase: .indexingFiles, forceReembed: forceReembed)
+        indexProgress = seededProgress
         log.info("Index rebuild started for vault: \(vault.rootURL.lastPathComponent) forceReembed=\(forceReembed)")
         let startTime = CFAbsoluteTimeGetCurrent()
+
+        actionTracker.updateStatus { status in
+            status.isIndexing = true
+            status.indexPhase = IndexPhase.indexingFiles.rawValue
+            status.indexForceReembed = forceReembed
+            status.indexFraction = 0.06
+            status.filesIndexed = 0
+            status.docsIndexed = 0
+            status.chunksCreated = 0
+            status.embeddingCurrent = 0
+            status.embeddingTotal = seededProgress.embeddingTotal
+            status.indexEstimatedRemainingSeconds = seededProgress.estimatedRemainingSeconds
+            status.indexDocsPerSec = nil
+            status.lastIndexError = nil
+        }
+        actionTracker.record(
+            category: .index,
+            action: "index.start",
+            phase: .started,
+            summary: forceReembed ? "Started full index & re-embed" : "Started index sync",
+            metadata: [
+                "vault": vault.rootURL.lastPathComponent,
+                "force_reembed": String(forceReembed),
+            ]
+        )
 
         Task {
             // Run the CLI without blocking the main actor. `AppState` is
@@ -955,7 +654,7 @@ final class AppState {
                 let result = try await withCheckedThrowingContinuation {
                     (continuation: CheckedContinuation<(exitCode: Int32, stdout: String, stderr: String), Error>) in
                     let process = Process()
-                    process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+                    process.executableURL = URL(fileURLWithPath: self.resolvedCLIPath())
                     // --json, so the run's outcome is a parsed contract rather
                     // than a scrape of prose. NOT --porcelain, which the
                     // single-doc path does pass: --porcelain silences the
@@ -998,32 +697,98 @@ final class AppState {
                         for line in text.split(separator: "\n") {
                             let l = String(line).trimmingCharacters(in: .whitespaces)
 
-                            // Embedding progress: "embedded N/M: path"
-                            let embedPattern = /[Ee]mbed\w*\s+(\d+)\/(\d+)/
-                            if let match = l.firstMatch(of: embedPattern) {
-                                let current = Int(match.1) ?? 0
-                                let total = Int(match.2) ?? 0
+                            if let parsed = IndexETAEstimator.parseProgressLine(l) {
                                 Task { @MainActor [weak self] in
                                     // Don't let a late progress update flip a
                                     // run that already finished back to
                                     // .embedding and re-wedge the sheet.
                                     guard let self, !self.indexReachedTerminalPhase else { return }
-                                    self.embeddingProgress = EmbeddingProgress(current: current, total: total)
+                                    let enteringEmbedding = self.indexProgress?.phase != .embedding
+                                    let elapsedNow = CFAbsoluteTimeGetCurrent() - startTime
+                                    let resolvedTotalChunks = parsed.chunksTotal ?? self.indexProgress?.chunksTotal
+                                    let resolvedRemaining = parsed.remainingSeconds ?? IndexETAEstimator.liveRemainingSeconds(
+                                        current: parsed.current,
+                                        total: parsed.total,
+                                        elapsedSeconds: elapsedNow,
+                                        initialEstimateSeconds: self.indexProgress?.initialEstimatedSeconds
+                                    )
+                                    let resolvedDPS = parsed.docsPerSec ?? (elapsedNow > 0.25 && parsed.current > 0 ? Double(parsed.current) / elapsedNow : nil)
+
+                                    self.embeddingProgress = EmbeddingProgress(
+                                        current: parsed.current,
+                                        total: parsed.total,
+                                        chunksDone: parsed.chunksDone,
+                                        chunksTotal: resolvedTotalChunks,
+                                        docsPerSec: resolvedDPS,
+                                        remainingSeconds: resolvedRemaining,
+                                        estimatedTotalSeconds: self.indexProgress?.initialEstimatedSeconds
+                                    )
                                     self.indexProgress?.phase = .embedding
-                                    self.indexProgress?.embeddingCurrent = current
-                                    self.indexProgress?.embeddingTotal = total
+                                    self.indexProgress?.embeddingCurrent = parsed.current
+                                    self.indexProgress?.embeddingTotal = parsed.total
+                                    if let cd = parsed.chunksDone { self.indexProgress?.chunksDone = cd }
+                                    if let ct = resolvedTotalChunks { self.indexProgress?.chunksTotal = ct }
+                                    self.indexProgress?.docsPerSec = resolvedDPS
+                                    self.indexProgress?.estimatedRemainingSeconds = resolvedRemaining
+                                    if enteringEmbedding {
+                                        self.actionTracker.record(
+                                            category: .index,
+                                            action: "index.phase",
+                                            phase: .progress,
+                                            summary: "Generating embeddings (\(parsed.total) document(s))",
+                                            metadata: ["phase": "embedding", "total": "\(parsed.total)"]
+                                        )
+                                    }
+                                    if enteringEmbedding || parsed.current == parsed.total || parsed.current % 5 == 0 {
+                                        self.actionTracker.updateStatus { status in
+                                            status.indexPhase = IndexPhase.embedding.rawValue
+                                            status.indexFraction = self.indexFraction
+                                            status.embeddingCurrent = parsed.current
+                                            status.embeddingTotal = parsed.total
+                                            status.indexEstimatedRemainingSeconds = resolvedRemaining
+                                            status.indexDocsPerSec = resolvedDPS
+                                        }
+                                    }
                                 }
                                 continue
                             }
 
-                            // Embedding count: "embedding N documents..."
-                            let embedCountPattern = /embedding\s+(\d+)\s+documents/
-                            if let match = l.firstMatch(of: embedCountPattern) {
-                                let total = Int(match.1) ?? 0
+                            if let startInfo = IndexETAEstimator.parseStartLine(l) {
                                 Task { @MainActor [weak self] in
                                     guard let self, !self.indexReachedTerminalPhase else { return }
+                                    let enteringEmbedding = self.indexProgress?.phase != .embedding
                                     self.indexProgress?.phase = .embedding
-                                    self.indexProgress?.embeddingTotal = total
+                                    self.indexProgress?.embeddingTotal = startInfo.totalDocs
+                                    if let ct = startInfo.totalChunks { self.indexProgress?.chunksTotal = ct }
+                                    if let est = startInfo.estimatedSeconds, est > 0 {
+                                        self.indexProgress?.initialEstimatedSeconds = est
+                                        self.indexProgress?.estimatedRemainingSeconds = est
+                                    }
+                                    let totalChunks = startInfo.totalChunks ?? self.indexProgress?.chunksTotal
+                                    let initEst = startInfo.estimatedSeconds ?? self.indexProgress?.initialEstimatedSeconds
+                                    self.embeddingProgress = EmbeddingProgress(
+                                        current: 0,
+                                        total: startInfo.totalDocs,
+                                        chunksDone: 0,
+                                        chunksTotal: totalChunks,
+                                        docsPerSec: nil,
+                                        remainingSeconds: initEst,
+                                        estimatedTotalSeconds: initEst
+                                    )
+                                    if enteringEmbedding {
+                                        self.actionTracker.record(
+                                            category: .index,
+                                            action: "index.phase",
+                                            phase: .progress,
+                                            summary: "Generating embeddings (\(startInfo.totalDocs) document(s))",
+                                            metadata: ["phase": "embedding", "total": "\(startInfo.totalDocs)"]
+                                        )
+                                    }
+                                    self.actionTracker.updateStatus { status in
+                                        status.indexPhase = IndexPhase.embedding.rawValue
+                                        status.embeddingTotal = startInfo.totalDocs
+                                        status.indexEstimatedRemainingSeconds = initEst
+                                    }
                                 }
                                 continue
                             }
@@ -1058,6 +823,7 @@ final class AppState {
                 }
 
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                let durationMs = Int((elapsed * 1000).rounded())
 
                 // Counters come from the parsed envelope, not from a regex over
                 // prose. The keys are contractual (always present, lists never
@@ -1070,314 +836,131 @@ final class AppState {
                 }
 
                 indexProgress?.elapsed = elapsed
-                if result.exitCode == 0 {
-                    indexProgress?.phase = .complete
-                    applyFullIndexOutcome(summary)
-                    log.info("Index rebuild completed in \(String(format: "%.1f", elapsed))s (exit 0)")
-                } else {
-                    // Surface the actual CLI failure (last stderr line) rather
-                    // than a bare exit code. Only the error line goes to the
-                    // system-wide unified log as .public — the full stderr
-                    // (which includes every indexed note's path) is kept in the
-                    // per-vault ErrorLogger file, not broadcast system-wide.
-                    let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let lastLine = detail.split(separator: "\n").last.map(String.init) ?? ""
-                    indexProgress?.phase = .failed
-                    indexProgress?.error = lastLine.isEmpty ? "CLI exited with code \(result.exitCode)" : lastLine
-                    log.warning("Index rebuild finished with exit code \(result.exitCode) in \(String(format: "%.1f", elapsed))s: \(lastLine, privacy: .public)")
-                    errorLogger?.log("Index rebuild exited \(result.exitCode): \(detail)")
-                }
 
-                // Reopen the database to pick up changes. A reopen failure does
-                // not undo a successful index, so log it without overwriting the
-                // completion phase.
+                // Reopen the database to pick up changes before flipping isIndexing.
                 do {
                     self.database = try DatabaseManager(path: vault.indexDBPath)
                 } catch {
-                    log.error("Failed to reopen index database after rebuild: \(error.localizedDescription)")
-                    errorLogger?.log("Failed to reopen index database after rebuild", error: error)
+                    let safeErr = Self.boundedRedacted(error.localizedDescription)
+                    log.error("Failed to reopen index database after rebuild: \(safeErr)")
+                    errorLogger?.log("Failed to reopen index database after rebuild: \(safeErr)")
+                }
+
+                isIndexing = false
+                embeddingProgress = nil
+                await refreshAIStatus()
+                await refreshMetrics()
+
+                if result.exitCode == 0 {
+                    indexProgress?.phase = .complete
+                    applyFullIndexOutcome(summary)
+                    let docsCount = summary?.docsIndexed ?? (indexProgress?.docsIndexed ?? 0)
+                    let chunksCount = summary?.chunksCreated ?? (indexProgress?.chunksCreated ?? 0)
+                    let linksCount = summary?.linksFound ?? (indexProgress?.linksFound ?? 0)
+                    let skippedCount = (summary?.unparseable.count ?? 0) + (summary?.unreadable.count ?? 0)
+                    actionTracker.updateStatus { status in
+                        status.isIndexing = false
+                        status.indexPhase = IndexPhase.complete.rawValue
+                        status.indexForceReembed = forceReembed
+                        status.indexFraction = nil
+                        status.indexEstimatedRemainingSeconds = nil
+                        status.indexDocsPerSec = nil
+                        status.filesIndexed = indexProgress?.filesIndexed ?? docsCount
+                        status.docsIndexed = docsCount
+                        status.chunksCreated = chunksCount
+                        status.lastIndexError = nil
+                        status.lastIndexingProblemPath = self.lastIndexingProblem?.path
+                        status.lastIndexingProblemMessage = self.lastIndexingProblem?.message
+                    }
+                    actionTracker.record(
+                        category: .index,
+                        action: "index.complete",
+                        phase: .succeeded,
+                        durationMs: durationMs,
+                        summary: "\(forceReembed ? "Re-embed" : "Index sync") complete: \(docsCount) docs, \(chunksCount) chunks, \(linksCount) links",
+                        metadata: [
+                            "docs_indexed": "\(docsCount)",
+                            "chunks_created": "\(chunksCount)",
+                            "links_found": "\(linksCount)",
+                            "force_reembed": String(forceReembed),
+                            "skipped_count": "\(skippedCount)",
+                        ]
+                    )
+                    log.info("Index rebuild completed in \(String(format: "%.1f", elapsed))s (exit 0)")
+                } else {
+                    // Surface the actionable CLI failure rather than a bare exit
+                    // code or a raw 120KB stderr progress dump. Keep the full
+                    // stderr in the per-vault ErrorLogger file, and cap the
+                    // action telemetry detail to the trailing lines.
+                    let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let rawErrMessage = AppState.extractIndexFailureMessage(
+                        stderr: detail,
+                        exitCode: result.exitCode
+                    )
+                    let errMessage = Self.boundedRedacted(rawErrMessage)
+                    let cappedDetail = detail
+                        .split(separator: "\n", omittingEmptySubsequences: false)
+                        .suffix(40)
+                        .joined(separator: "\n")
+                    indexError = errMessage
+                    indexProgress?.phase = .failed
+                    indexProgress?.error = errMessage
+                    actionTracker.updateStatus { status in
+                        status.isIndexing = false
+                        status.indexPhase = IndexPhase.failed.rawValue
+                        status.indexFraction = nil
+                        status.indexEstimatedRemainingSeconds = nil
+                        status.indexDocsPerSec = nil
+                        status.lastIndexError = errMessage
+                    }
+                    actionTracker.record(
+                        category: .index,
+                        action: "index.failed",
+                        phase: .failed,
+                        durationMs: durationMs,
+                        summary: "Index rebuild failed: \(errMessage)",
+                        detail: cappedDetail.isEmpty ? rawErrMessage : cappedDetail,
+                        metadata: [
+                            "exit_code": "\(result.exitCode)",
+                            "force_reembed": String(forceReembed),
+                        ]
+                    )
+                    log.warning("Index rebuild finished with exit code \(result.exitCode) in \(String(format: "%.1f", elapsed))s: \(errMessage, privacy: .public)")
+                    errorLogger?.log("Index rebuild exited \(result.exitCode): \(Self.boundedRedacted(detail))")
                 }
             } catch {
                 // Launch failure (process never started).
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-                log.error("Index rebuild failed to launch after \(String(format: "%.1f", elapsed))s: \(error.localizedDescription)")
-                errorLogger?.log("Failed to rebuild index", error: error)
-                indexError = error.localizedDescription
+                let durationMs = Int((elapsed * 1000).rounded())
+                let safeErr = Self.boundedRedacted(error.localizedDescription)
+                log.error("Index rebuild failed to launch after \(String(format: "%.1f", elapsed))s: \(safeErr)")
+                errorLogger?.log("Failed to rebuild index: \(safeErr)")
+                indexError = safeErr
                 indexProgress?.phase = .failed
-                indexProgress?.error = error.localizedDescription
+                indexProgress?.error = safeErr
                 indexProgress?.elapsed = elapsed
+                isIndexing = false
+                embeddingProgress = nil
+                await refreshAIStatus()
+                await refreshMetrics()
+                actionTracker.updateStatus { status in
+                    status.isIndexing = false
+                    status.indexPhase = IndexPhase.failed.rawValue
+                    status.indexFraction = nil
+                    status.indexEstimatedRemainingSeconds = nil
+                    status.indexDocsPerSec = nil
+                    status.lastIndexError = safeErr
+                }
+                actionTracker.record(
+                    category: .index,
+                    action: "index.failed",
+                    phase: .failed,
+                    durationMs: durationMs,
+                    summary: "Index rebuild failed to launch",
+                    detail: error.localizedDescription,
+                    metadata: ["force_reembed": String(forceReembed)]
+                )
             }
-
-            isIndexing = false
-            embeddingProgress = nil
-            await refreshAIStatus()
-        }
-    }
-
-    func saveCurrentDocument() {
-        let idx = activeTabIndex
-        guard idx >= 0, idx < openDocuments.count else { return }
-        _ = performSave(tabIdx: idx)
-    }
-
-    func saveSnapshotForCurrentDocument() {
-        guard let tab = currentDocument else { return }
-        crashJournal?.saveSnapshot(documentID: tab.document.id, content: tab.content)
-    }
-
-    /// Core save path. Returns true on success.
-    ///
-    /// The `isAutosave` parameter is gone with the autosave timer that was its
-    /// only `true` caller: every branch it guarded (suppressing the merge and
-    /// low-disk modals, and the log wording) existed for a background tick that
-    /// no longer happens, so keeping it meant four dead paths and a signature
-    /// that implied a caller which does not exist.
-    @discardableResult
-    private func performSave(tabIdx: Int) -> Bool {
-        guard tabIdx >= 0, tabIdx < openDocuments.count else { return false }
-        let tab = openDocuments[tabIdx]
-
-        if tab.hasExternalConflict {
-            let alert = NSAlert()
-            alert.messageText = "Unresolved merge conflict"
-            alert.informativeText = "\(tab.url.lastPathComponent) has unresolved external changes. Resolve the conflict before saving."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return false
-        }
-
-        if let avail = availableDiskSpace(at: tab.url), avail < Self.lowDiskThreshold {
-            let alert = NSAlert()
-            alert.messageText = "Low disk space"
-            alert.informativeText = "Only \(Self.formatBytes(avail)) free on this volume. Saving may fail."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Save Anyway")
-            if alert.runModal() == .alertFirstButtonReturn {
-                return false
-            }
-        }
-
-        do {
-            try crashJournal?.savePreWriteSnapshot(documentID: tab.document.id, content: tab.content)
-        } catch {
-            log.warning("Pre-write snapshot failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
-        }
-
-        do {
-            try tab.content.write(to: tab.url, atomically: true, encoding: .utf8)
-            openDocuments[tabIdx].isDirty = false
-            openDocuments[tabIdx].lastSavedContent = tab.content
-            markSelfWrite(path: tab.url.path)
-            crashJournal?.clearSnapshotSync(documentID: tab.document.id)
-            log.debug("Saved: \(tab.url.lastPathComponent)")
-            triggerIncrementalReindex(for: tab.url)
-            if vaultIsGitRepo {
-                Task { await refreshGitStatus() }
-            }
-            return true
-        } catch {
-            log.error("Save failed for \(tab.url.lastPathComponent): \(error.localizedDescription)")
-            errorLogger?.log("Failed to save document", error: error)
-            return false
-        }
-    }
-
-
-    // MARK: - Filesystem Helpers
-
-    private func availableDiskSpace(at url: URL) -> Int64? {
-        let dir = url.deletingLastPathComponent()
-        guard let values = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]) else {
-            return nil
-        }
-        return values.volumeAvailableCapacityForImportantUsage
-    }
-
-    private static func formatBytes(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useMB, .useGB]
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
-    }
-
-    private func markSelfWrite(path: String) {
-        recentSelfWrites[path] = Date().addingTimeInterval(selfWriteSuppressionInterval)
-    }
-
-    /// True when `path` was written by the app itself within the suppression
-    /// window. The app's own saves already reindex (saveDocument ->
-    /// triggerIncrementalReindex), so the file watcher must not reindex them a
-    /// second time. Unlike `shouldSuppressSelfWrite` this is non-mutating: the
-    /// watcher can fire several times for one save and every one should be
-    /// suppressed until the mark expires on its own.
-    private func isRecentSelfWrite(path: String) -> Bool {
-        let now = Date()
-        recentSelfWrites = recentSelfWrites.filter { $0.value > now }
-        return (recentSelfWrites[path] ?? .distantPast) > now
-    }
-
-    private func shouldSuppressSelfWrite(path: String, diskContent: String, tab: DocumentTab) -> Bool {
-        let now = Date()
-        recentSelfWrites = recentSelfWrites.filter { $0.value > now }
-        guard let expiresAt = recentSelfWrites[path], expiresAt > now else {
-            return false
-        }
-        if diskContent == tab.lastSavedContent || diskContent == tab.content {
-            recentSelfWrites.removeValue(forKey: path)
-            return true
-        }
-        return false
-    }
-
-    private func uniqueFilename(base: String, in dir: URL) -> URL {
-        let baseURL = dir.appendingPathComponent(base)
-        if !FileManager.default.fileExists(atPath: baseURL.path) {
-            return baseURL
-        }
-        let stem = (base as NSString).deletingPathExtension
-        let ext = (base as NSString).pathExtension
-        for counter in 1..<1000 {
-            let candidate = ext.isEmpty ? "\(stem)-\(counter)" : "\(stem)-\(counter).\(ext)"
-            let candidateURL = dir.appendingPathComponent(candidate)
-            if !FileManager.default.fileExists(atPath: candidateURL.path) {
-                return candidateURL
-            }
-        }
-        let suffix = String(UUID().uuidString.prefix(8))
-        let fallback = ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
-        return dir.appendingPathComponent(fallback)
-    }
-
-    func updateBodyOfCurrentDocument(_ newBody: String) {
-        guard let idx = validTabIndex else { return }
-        let (frontmatter, _) = FrontmatterParser.parse(openDocuments[idx].content)
-        openDocuments[idx].content = FrontmatterParser.serialize(frontmatter: frontmatter, body: newBody)
-        openDocuments[idx].isDirty = true
-    }
-
-    func recoverDocument(_ entry: RecoveryEntry) {
-        // Write recovered content to the vault
-        guard let vault else { return }
-        // Try to find the original file
-        let files = vault.listMarkdownFiles()
-        for file in files {
-            if let doc = try? FrontmatterParser.loadDocument(from: file), doc.id == entry.documentID {
-                try? entry.content.write(to: file, atomically: true, encoding: .utf8)
-                openDocument(at: file)
-                crashJournal?.clearSnapshot(documentID: entry.documentID)
-                log.info("Recovered document \(entry.documentID.prefix(8)) to \(file.lastPathComponent)")
-                return
-            }
-        }
-        // If original not found, create a new file
-        let recoveredPath = vault.rootURL.appendingPathComponent("recovered-\(entry.documentID.prefix(8)).md")
-        try? entry.content.write(to: recoveredPath, atomically: true, encoding: .utf8)
-        refreshFiles()
-        openDocument(at: recoveredPath)
-        crashJournal?.clearSnapshot(documentID: entry.documentID)
-        log.notice("Recovered document \(entry.documentID.prefix(8)) to new file (original not found)")
-    }
-
-    func dismissRecovery() {
-        crashJournal?.clearAll()
-        recoveryEntries = []
-        showRecoveryDialog = false
-    }
-
-    func updateOutline() {
-        guard let tab = currentDocument else {
-            outline = []
-            currentDocumentChunkCount = 0
-            return
-        }
-        // Extract body (skip frontmatter)
-        let (_, body) = FrontmatterParser.parse(tab.content)
-        outline = MarkdownRenderer.extractOutline(body)
-        refreshChunkCount()
-    }
-
-    func refreshChunkCount() {
-        guard let tab = currentDocument, let db = database else {
-            currentDocumentChunkCount = 0
-            return
-        }
-        currentDocumentChunkCount = (try? db.chunkCount(forDocID: tab.document.id)) ?? 0
-    }
-
-    func reindexSpotlight() {
-        guard let vault, let indexer = spotlightIndexer else { return }
-        indexer.clearAll()
-        indexer.indexAll(vault: vault)
-    }
-
-    private func reloadIfOpen(path: String) {
-        guard let idx = openDocuments.firstIndex(where: { $0.url.path == path }) else { return }
-        guard let diskContent = try? String(contentsOfFile: path, encoding: .utf8) else {
-            // File vanished or unreadable — leave the tab alone for now. External
-            // deletion handling is deferred; the user can still save to recreate it.
-            return
-        }
-        let tab = openDocuments[idx]
-        if shouldSuppressSelfWrite(path: path, diskContent: diskContent, tab: tab) {
-            return
-        }
-        // No external change if disk matches what we last saw.
-        if diskContent == tab.lastSavedContent {
-            return
-        }
-        // External change detected.
-        if !tab.isDirty {
-            // Safe to reload silently — editor has no unsaved work.
-            openDocuments[idx].content = diskContent
-            openDocuments[idx].lastSavedContent = diskContent
-            return
-        }
-        // Conflict: editor is dirty and disk changed under us.
-        if tab.hasExternalConflict {
-            return // already prompting the user
-        }
-        openDocuments[idx].hasExternalConflict = true
-        let filename = tab.url.lastPathComponent
-        let ancestor = tab.lastSavedContent
-        let mine = tab.content
-        let tabID = tab.id
-        let controller = MergeConflictController()
-        mergeControllers.append(controller)
-        controller.present(
-            filename: filename,
-            theirs: diskContent,
-            mine: mine,
-            ancestor: ancestor
-        ) { [weak self] resolution in
-            guard let self else { return }
-            self.handleMergeResolution(tabID: tabID, diskContent: diskContent, resolution: resolution)
-            self.mergeControllers.removeAll { $0 === controller }
-        }
-    }
-
-    private func handleMergeResolution(tabID: UUID, diskContent: String, resolution: MergeConflictResolution) {
-        guard let idx = openDocuments.firstIndex(where: { $0.id == tabID }) else { return }
-        switch resolution {
-        case .keepMine:
-            openDocuments[idx].hasExternalConflict = false
-            // lastSavedContent must equal diskContent before performSave so the
-            // next FSEvents tick from our own write isn't mistaken for another
-            // external change. We overwrite the external edits with ours.
-            openDocuments[idx].lastSavedContent = diskContent
-            performSave(tabIdx: idx)
-        case .useTheirs:
-            openDocuments[idx].content = diskContent
-            openDocuments[idx].lastSavedContent = diskContent
-            openDocuments[idx].isDirty = false
-            openDocuments[idx].hasExternalConflict = false
-        case .cancel:
-            // Dismiss without choosing: return to pre-conflict state so the
-            // tab isn't permanently locked from saving. Next save overwrites
-            // disk (same effect as keepMine); if the user wanted the disk
-            // version instead they should have picked "Use Theirs".
-            openDocuments[idx].hasExternalConflict = false
         }
     }
 
@@ -1392,6 +975,19 @@ final class AppState {
             let data = try await runCLI(["ai", "status", "--json", "--porcelain"], cwd: vault.rootURL)
             let status = try JSONDecoder().decode(AIStatusInfo.self, from: data)
             self.aiStatus = status
+            actionTracker.updateStatus { snapshot in
+                snapshot.aiProvider = status.provider
+                snapshot.embedProvider = status.effectiveEmbeddingProvider
+                snapshot.genProvider = status.effectiveGenerationProvider
+                snapshot.genModel = status.genModel
+                snapshot.embedModel = status.embeddingModel
+                snapshot.dimensions = status.dimensions
+                snapshot.embedAvailable = status.embedAvailable
+                snapshot.genAvailable = status.genAvailable
+                snapshot.documentCount = status.documentCount
+                snapshot.embeddingCount = status.embeddingCount
+                snapshot.portabilityStatus = status.portabilityStatus
+            }
             log.info("AI status: provider=\(status.provider) embed=\(status.embedAvailable) gen=\(status.genAvailable) docs=\(status.documentCount) embeddings=\(status.embeddingCount)")
         } catch {
             log.warning("AI status unavailable: \(error.localizedDescription)")
@@ -1399,110 +995,46 @@ final class AppState {
         }
     }
 
-    /// Downloads the bundled local model weights via `ai engine pull --json`,
-    /// streaming JSONL progress into `localModelDownload` for a progress bar.
-    /// The models cache is global (not vault-specific); the vault is passed only
-    /// when present, for consistency. Never throws — failures land on the state.
-    /// Streaming runner: not under the CLIWatchdog bound; the CLI's own 60s
-    /// idle watchdog aborts a stalled transfer, and a multi-GB download
-    /// legitimately outlives any fixed wall clock.
-    func downloadLocalModels(_ ids: [String]) async {
-        guard !ids.isEmpty, localModelDownload?.finished != false else { return }
-        localModelDownload = LocalModelDownload(models: ids)
-        log.info("Local model download started: \(ids.joined(separator: ","), privacy: .public)")
+    func refreshMetrics(limit: Int = 20) async {
+        guard let vault else {
+            metricsReport = nil
+            return
+        }
+        metricsLoading = true
+        defer { metricsLoading = false }
         do {
-            let result: (exitCode: Int32, stderr: String) = try await withCheckedThrowingContinuation { continuation in
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-                let sub = ["ai", "engine", "pull", "--json"] + ids
-                process.arguments = vault.map { CLIPath.args(sub, vault: $0.rootURL) } ?? sub
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-                let drain = PipeDrain()
-                let stream = PullEventStream() // buffers partial JSONL lines across chunks
-
-                stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                    let chunk = handle.availableData
-                    if chunk.isEmpty { handle.readabilityHandler = nil; return }
-                    let events = stream.ingest(chunk)
-                    guard !events.isEmpty else { return }
-                    Task { @MainActor [weak self] in
-                        for ev in events { self?.applyPullEvent(ev) }
-                    }
-                }
-                stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                    let d = handle.availableData
-                    if d.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(d) }
-                }
-                process.terminationHandler = { [weak self] proc in
-                    stdoutPipe.fileHandleForReading.readabilityHandler = nil
-                    stderrPipe.fileHandleForReading.readabilityHandler = nil
-                    // Drain any stdout buffered at exit: the readability source
-                    // can be cancelled by termination before the final "done"
-                    // line is delivered, which would under-count completed models.
-                    let tailEvents = stream.ingest(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
-                    if !tailEvents.isEmpty {
-                        Task { @MainActor [weak self] in
-                            for ev in tailEvents { self?.applyPullEvent(ev) }
-                        }
-                    }
-                    drain.appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
-                    let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
-                    continuation.resume(returning: (proc.terminationStatus, err))
-                }
-                do { try process.run() } catch { continuation.resume(throwing: error) }
+            let data = try await runCLI(["metrics", "--limit", String(limit), "--json", "--porcelain"], cwd: vault.rootURL)
+            let report = try JSONDecoder().decode(MetricsReport.self, from: data)
+            self.metricsReport = report
+            let summary30d = report.aiUsage?.last30d
+            actionTracker.updateStatus { snapshot in
+                snapshot.aiUsage30dCostUSD = summary30d?.cloudCostUSD
+                snapshot.aiUsage30dCloudCalls = summary30d?.cloudCalls
+                snapshot.aiUsage30dLocalCalls = summary30d?.localCalls
             }
-
-            localModelDownload?.finished = true
-            if result.exitCode != 0 {
-                localModelDownload?.failed = true
-                if localModelDownload?.error == nil {
-                    let trimmed = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                    localModelDownload?.error = trimmed.isEmpty ? "download failed (exit \(result.exitCode))" : trimmed
-                }
-            }
-            await refreshAIStatus()
         } catch {
-            localModelDownload?.finished = true
-            localModelDownload?.failed = true
-            localModelDownload?.error = error.localizedDescription
+            log.debug("Metrics refresh unavailable: \(error.localizedDescription)")
         }
     }
 
-    private func applyPullEvent(_ ev: PullEvent) {
-        guard localModelDownload != nil else { return }
-        localModelDownload?.currentModel = ev.model
-        switch ev.status {
-        case "progress":
-            localModelDownload?.done = ev.done ?? 0
-            localModelDownload?.total = ev.total ?? 0
-        case "done":
-            localModelDownload?.completed.append(ev.model)
-        case "error":
-            localModelDownload?.failed = true
-            localModelDownload?.error = ev.error
-        default:
-            break
+    func clearMetricsHistory() async throws {
+        guard let vault else { throw CLIError.noVault }
+        _ = try await trackAsyncAction(
+            category: .settings,
+            action: "settings.clear_metrics",
+            startSummary: "Clear AI usage and metrics history"
+        ) {
+            try await runCLI(["metrics", "clear", "--porcelain"], cwd: vault.rootURL)
         }
+        await refreshMetrics()
     }
 
-    /// Reads `2nb --version` from the binary the app actually uses
-    /// (`CLIPath.resolve()`) and stores the parsed version on `cliVersion`.
-    /// In a shipped release that binary is the one bundled inside the app
-    /// (Contents/Resources/2nb), so `cliVersion` equals `appVersion` and the
-    /// Home drift banner stays silent, so the app can no longer run against a
-    /// stale Homebrew CLI. The banner still fires for non-bundled dev builds
-    /// (`swift run`), where `resolve()` falls back to the Homebrew/PATH copy.
-    /// Needs no vault (cobra resolves `--version` before vault lookup) and is
-    /// best-effort: a launch failure leaves `cliVersion` nil and is logged, not
-    /// surfaced. Kept off `runCLI` because that always injects `--vault`.
     func refreshCLIVersion() async {
         let logger = self.errorLogger
+        let cliExecutable = resolvedCLIPath()
         let raw: String? = await withCheckedContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.executableURL = URL(fileURLWithPath: cliExecutable)
             process.arguments = ["--version"]
             let stdout = Pipe()
             process.standardOutput = stdout
@@ -1518,14 +1050,17 @@ final class AppState {
             do {
                 try process.run()
             } catch {
-                logger?.log("2nb --version failed to launch: \(error.localizedDescription)")
+                logger?.log("2nb --version failed to launch: \(Self.boundedRedacted(error.localizedDescription))")
                 continuation.resume(returning: nil)
             }
         }
         if let parsed = CLIVersion.parse(raw) {
-            cliVersion = "\(parsed.0).\(parsed.1).\(parsed.2)"
+            let formatted = "\(parsed.0).\(parsed.1).\(parsed.2)"
+            cliVersion = formatted
+            actionTracker.updateStatus { $0.cliVersion = formatted }
         } else {
             cliVersion = nil
+            actionTracker.updateStatus { $0.cliVersion = nil }
         }
     }
 
@@ -1534,45 +1069,54 @@ final class AppState {
     /// Kept off `runCLI` because the executable is brew, not 2nb, and no
     /// vault is involved. Throws with brew's stderr on a non-zero exit.
     func upgradeCLI(brewPath: String) async throws {
-        let logger = self.errorLogger
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: brewPath)
-            process.arguments = ["upgrade", "apresai/tap/twonb"]
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-            // Drain both pipes as data arrives; brew's download/pour chatter
-            // can exceed the pipe buffer and deadlock an undrained child.
-            let drain = PipeDrain()
-            stdout.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStdout(chunk) }
-            }
-            stderr.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(chunk) }
-            }
-            process.terminationHandler = { proc in
-                stdout.fileHandleForReading.readabilityHandler = nil
-                stderr.fileHandleForReading.readabilityHandler = nil
-                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
-                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
-                if proc.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    let errMsg = String(data: drain.stderrData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    logger?.log("brew upgrade twonb failed (exit \(proc.terminationStatus)): \(errMsg)")
-                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
+        try await trackAsyncAction(
+            category: .cli,
+            action: "cli.upgrade",
+            startSummary: "Upgrade 2nb CLI via Homebrew",
+            metadata: ["brewPath": brewPath]
+        ) {
+            let logger = self.errorLogger
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: brewPath)
+                process.arguments = ["upgrade", "apresai/tap/twonb"]
+                let stdout = Pipe()
+                let stderr = Pipe()
+                process.standardOutput = stdout
+                process.standardError = stderr
+                // Drain both pipes as data arrives; brew's download/pour chatter
+                // can exceed the pipe buffer and deadlock an undrained child.
+                let drain = PipeDrain()
+                stdout.fileHandleForReading.readabilityHandler = { handle in
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStdout(chunk) }
                 }
-            }
-            do {
-                try process.run()
-            } catch {
-                logger?.log("brew upgrade twonb launch failed", error: error)
-                continuation.resume(throwing: error)
+                stderr.fileHandleForReading.readabilityHandler = { handle in
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(chunk) }
+                }
+                process.terminationHandler = { proc in
+                    stdout.fileHandleForReading.readabilityHandler = nil
+                    stderr.fileHandleForReading.readabilityHandler = nil
+                    drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
+                    drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                    if proc.terminationStatus == 0 {
+                        continuation.resume()
+                    } else {
+                        let errMsg = String(data: drain.stderrData, encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let safeErrMsg = Self.boundedRedacted(errMsg)
+                        logger?.log("brew upgrade twonb failed (exit \(proc.terminationStatus)): \(safeErrMsg)")
+                        continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
+                    }
+                }
+                do {
+                    try process.run()
+                } catch {
+                    let safeErr = Self.boundedRedacted(error.localizedDescription)
+                    logger?.log("brew upgrade twonb launch failed: \(safeErr)")
+                    continuation.resume(throwing: error)
+                }
             }
         }
         await refreshCLIVersion()
@@ -1584,7 +1128,14 @@ final class AppState {
     /// the vault this dashboard shows).
     func installObsidianPlugin() async throws {
         guard let vault else { throw CLIError.noVault }
-        _ = try await runCLI(["plugin", "install"], cwd: vault.rootURL)
+        _ = try await trackAsyncAction(
+            category: .vault,
+            action: "plugin.install",
+            startSummary: "Install Obsidian plugin in \(vault.rootURL.lastPathComponent)",
+            metadata: ["vault": vault.rootURL.lastPathComponent]
+        ) {
+            try await runCLI(["plugin", "install"], cwd: vault.rootURL)
+        }
     }
 
     /// Checks for a newer 2ndbrain release via `2nb update --json` (the latest
@@ -1680,6 +1231,13 @@ final class AppState {
         verifying = true
         defer { verifying = false }
         healthChecks = []
+        actionTracker.record(
+            category: .mcp,
+            action: "mcp.verify",
+            phase: .started,
+            summary: "Run full MCP & AI verification"
+        )
+        let start = ContinuousClock.now
 
         async let skill = skillsDoctorReport()
         async let mcp = mcpDoctorReport()
@@ -1695,6 +1253,14 @@ final class AppState {
         checks.append(ClaudeCodeHealth.modelCheck(e, label: "Embedding"))
         checks.append(ClaudeCodeHealth.modelCheck(g, label: "Generation"))
         healthChecks = checks
+        actionTracker.record(
+            category: .mcp,
+            action: "mcp.verify",
+            phase: .succeeded,
+            durationMs: elapsedMilliseconds(since: start),
+            summary: "Completed \(checks.count) MCP & AI verification checks",
+            metadata: ["checks": String(checks.count)]
+        )
     }
 
     func mcpDoctorReport() async -> MCPDoctorInfo? {
@@ -1736,27 +1302,53 @@ final class AppState {
     /// PATH-resolve) is this app's version-matched binary, not a bare `2nb`.
     func setupClient(_ client: String) async throws -> [SetupClientResult] {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(
-            ["setup", "--client", client, "--command", CLIPath.resolve(), "--json", "--porcelain"],
-            cwd: vault.rootURL
-        )
-        return try JSONDecoder().decode([SetupClientResult].self, from: data)
+        return try await trackAsyncAction(
+            category: .mcp,
+            action: "mcp.setup_client",
+            startSummary: "Configure MCP client \(client)",
+            metadata: ["client": client],
+            successDetail: { results in
+                ("Configured MCP client \(client) (\(results.count) step(s))", [
+                    "client": client,
+                    "steps": String(results.count),
+                ])
+            }
+        ) {
+            let data = try await runCLI(
+                ["setup", "--client", client, "--command", resolvedCLIPath(), "--json", "--porcelain"],
+                cwd: vault.rootURL
+            )
+            return try JSONDecoder().decode([SetupClientResult].self, from: data)
+        }
     }
 
     /// Collapse the index WAL (`vault checkpoint`).
     func checkpointWAL() async throws -> VaultCheckpointResult {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["vault", "checkpoint", "--json"], cwd: vault.rootURL)
-        return try JSONDecoder().decode(VaultCheckpointResult.self, from: data)
+        return try await trackAsyncAction(
+            category: .vault,
+            action: "vault.checkpoint",
+            startSummary: "Checkpoint SQLite WAL"
+        ) {
+            let data = try await runCLI(["vault", "checkpoint", "--json"], cwd: vault.rootURL)
+            return try JSONDecoder().decode(VaultCheckpointResult.self, from: data)
+        }
     }
 
     /// Reap stale mcp-server processes (`mcp reap`). `dryRun` previews.
     func reapServers(dryRun: Bool) async throws -> MCPReapResult {
         guard let vault else { throw CLIError.noVault }
-        var args = ["mcp", "reap", "--json"]
-        if dryRun { args.append("--dry-run") }
-        let data = try await runCLI(args, cwd: vault.rootURL)
-        return try JSONDecoder().decode(MCPReapResult.self, from: data)
+        return try await trackAsyncAction(
+            category: .mcp,
+            action: "mcp.reap",
+            startSummary: dryRun ? "Preview stale MCP servers" : "Reap stale MCP servers",
+            metadata: ["dryRun": dryRun ? "true" : "false"]
+        ) {
+            var args = ["mcp", "reap", "--json"]
+            if dryRun { args.append("--dry-run") }
+            let data = try await runCLI(args, cwd: vault.rootURL)
+            return try JSONDecoder().decode(MCPReapResult.self, from: data)
+        }
     }
 
     /// Decode a `* doctor --json` report, tolerating the exit-2 a doctor returns
@@ -1779,7 +1371,18 @@ final class AppState {
     /// value surfaces as a `CLIError.nonZeroExit` the caller can show.
     func setMeta(path: String, key: String, value: String) async throws {
         guard let vault else { throw CLIError.noVault }
-        _ = try await runCLI(["meta", path, "--set", "\(key)=\(value)"], cwd: vault.rootURL)
+        suppressExternalReindex(paths: [path], duration: 15.0)
+        _ = try await trackAsyncAction(
+            category: .lint,
+            action: "note.set_meta",
+            startSummary: "Set metadata \(key) on \(path)",
+            metadata: ["path": path, "key": key]
+        ) {
+            let data = try await runCLI(["meta", path, "--set", "\(key)=\(value)"], cwd: vault.rootURL)
+            suppressExternalReindex(paths: [path], duration: 5.0)
+            refreshFiles()
+            return data
+        }
     }
 
     /// Deterministically repair the broken wikilink `target` in `path` via
@@ -1789,10 +1392,25 @@ final class AppState {
     /// single finding's button fixes only the link the user clicked.
     func repairLinks(path: String, target: String, preview: Bool = true) async throws -> PolishResult {
         guard let vault else { throw CLIError.noVault }
-        var args = ["repair-links", path, "--target", target, "--json", "--porcelain"]
-        if !preview { args.append("--write") }
-        let data = try await runCLI(args, cwd: vault.rootURL)
-        return try JSONDecoder().decode(PolishResult.self, from: data)
+        if !preview {
+            suppressExternalReindex(paths: [path], duration: 15.0)
+        }
+        return try await trackAsyncAction(
+            category: .lint,
+            action: "lint.repair_links",
+            startSummary: preview ? "Preview link repair for \(target)" : "Repair link \(target) in \(path)",
+            metadata: ["path": path, "target": target, "preview": preview ? "true" : "false"]
+        ) {
+            var args = ["repair-links", path, "--target", target, "--json", "--porcelain"]
+            if !preview { args.append("--write") }
+            let data = try await runCLI(args, cwd: vault.rootURL)
+            let result = try JSONDecoder().decode(PolishResult.self, from: data)
+            if !preview {
+                suppressExternalReindex(paths: [path, result.path], duration: 5.0)
+                refreshFiles()
+            }
+            return result
+        }
     }
 
     /// Repair every confident drift link (case / separator / whitespace) across
@@ -1808,20 +1426,36 @@ final class AppState {
     /// so the caller can report partial success instead of losing it.
     func repairAllDrift(paths: [String]) async throws -> (repaired: Int, failed: Int) {
         guard let vault else { throw CLIError.noVault }
-        var repaired = 0
-        var failed = 0
-        for path in paths {
-            do {
-                let data = try await runCLI(
-                    ["repair-links", path, "--write", "--json", "--porcelain"], cwd: vault.rootURL)
-                let res = try JSONDecoder().decode(PolishResult.self, from: data)
-                repaired += res.linksRepaired?.count ?? 0
-            } catch {
-                failed += 1
-                log.error("bulk repair-links failed for \(path): \(error.localizedDescription)")
+        suppressExternalReindex(paths: paths, duration: 30.0)
+        return try await trackAsyncAction(
+            category: .lint,
+            action: "lint.repair_all_drift",
+            startSummary: "Repair drift links across \(paths.count) note(s)",
+            metadata: ["count": String(paths.count)],
+            successDetail: { outcome in
+                ("Repaired \(outcome.repaired) link(s) (\(outcome.failed) failed)", [
+                    "repaired": String(outcome.repaired),
+                    "failed": String(outcome.failed),
+                ])
             }
+        ) {
+            var repaired = 0
+            var failed = 0
+            for path in paths {
+                do {
+                    let data = try await runCLI(
+                        ["repair-links", path, "--write", "--json", "--porcelain"], cwd: vault.rootURL)
+                    let res = try JSONDecoder().decode(PolishResult.self, from: data)
+                    repaired += res.linksRepaired?.count ?? 0
+                    suppressExternalReindex(paths: [path, res.path], duration: 5.0)
+                } catch {
+                    failed += 1
+                    log.error("bulk repair-links failed for \(path): \(error.localizedDescription)")
+                }
+            }
+            refreshFiles()
+            return (repaired, failed)
         }
-        return (repaired, failed)
     }
 
     /// Ranked "did you mean?" existing-note candidates for one broken wikilink
@@ -1872,7 +1506,8 @@ final class AppState {
             // badge; persist the cause to the vault error log so a failing
             // probe (throttling, stale CLI, bad JSON) is debuggable from
             // .2ndbrain/logs rather than invisible.
-            errorLogger?.log("suggest-target --verdict probe failed for [[\(target)]]", error: error)
+            let safeErr = Self.boundedRedacted((error as? CLIError)?.errorDescription ?? error.localizedDescription)
+            errorLogger?.log("suggest-target --verdict probe failed for [[\(target)]]: \(safeErr)")
             throw error
         }
     }
@@ -1882,10 +1517,25 @@ final class AppState {
     /// with `polish --undo`.
     func relink(path: String, from: String, to: String, preview: Bool = true) async throws -> PolishResult {
         guard let vault else { throw CLIError.noVault }
-        var args = ["relink", path, "--from", from, "--to", to, "--json", "--porcelain"]
-        if !preview { args.append("--write") }
-        let data = try await runCLI(args, cwd: vault.rootURL)
-        return try JSONDecoder().decode(PolishResult.self, from: data)
+        if !preview {
+            suppressExternalReindex(paths: [path], duration: 15.0)
+        }
+        return try await trackAsyncAction(
+            category: .lint,
+            action: "lint.relink",
+            startSummary: preview ? "Preview relink \(from) -> \(to) in \(path)" : "Relink \(from) -> \(to) in \(path)",
+            metadata: ["path": path, "from": from, "to": to, "preview": preview ? "true" : "false"]
+        ) {
+            var args = ["relink", path, "--from", from, "--to", to, "--json", "--porcelain"]
+            if !preview { args.append("--write") }
+            let data = try await runCLI(args, cwd: vault.rootURL)
+            let result = try JSONDecoder().decode(PolishResult.self, from: data)
+            if !preview {
+                suppressExternalReindex(paths: [path, result.path], duration: 5.0)
+                refreshFiles()
+            }
+            return result
+        }
     }
 
     /// Remove the broken wikilink `target` in `path`, keeping its visible text,
@@ -1893,10 +1543,25 @@ final class AppState {
     /// `polish --undo`.
     func unlink(path: String, target: String, preview: Bool = true) async throws -> PolishResult {
         guard let vault else { throw CLIError.noVault }
-        var args = ["unlink", path, "--target", target, "--json", "--porcelain"]
-        if !preview { args.append("--write") }
-        let data = try await runCLI(args, cwd: vault.rootURL)
-        return try JSONDecoder().decode(PolishResult.self, from: data)
+        if !preview {
+            suppressExternalReindex(paths: [path], duration: 15.0)
+        }
+        return try await trackAsyncAction(
+            category: .lint,
+            action: "lint.unlink",
+            startSummary: preview ? "Preview unlink \(target) in \(path)" : "Unlink \(target) in \(path)",
+            metadata: ["path": path, "target": target, "preview": preview ? "true" : "false"]
+        ) {
+            var args = ["unlink", path, "--target", target, "--json", "--porcelain"]
+            if !preview { args.append("--write") }
+            let data = try await runCLI(args, cwd: vault.rootURL)
+            let result = try JSONDecoder().decode(PolishResult.self, from: data)
+            if !preview {
+                suppressExternalReindex(paths: [path, result.path], duration: 5.0)
+                refreshFiles()
+            }
+            return result
+        }
     }
 
     /// Create a stub note titled `title` (so a broken `[[title]]` link resolves)
@@ -1904,41 +1569,730 @@ final class AppState {
     @discardableResult
     func createStub(title: String, subdir: String? = nil) async throws -> CreateResult {
         guard let vault else { throw CLIError.noVault }
-        var args = ["create", "--title", title, "--type", "note", "--json", "--porcelain"]
-        if let subdir, !subdir.isEmpty { args.append(contentsOf: ["--path", subdir]) }
-        let data = try await runCLI(args, cwd: vault.rootURL)
-        return try JSONDecoder().decode(CreateResult.self, from: data)
+        return try await trackAsyncAction(
+            category: .lint,
+            action: "note.create_stub",
+            startSummary: "Create stub note: \(title)",
+            metadata: ["title": title, "subdir": subdir ?? ""]
+        ) {
+            var args = ["create", "--title", title, "--type", "note", "--json", "--porcelain"]
+            if let subdir, !subdir.isEmpty { args.append(contentsOf: ["--path", subdir]) }
+            let data = try await runCLI(args, cwd: vault.rootURL)
+            let result = try JSONDecoder().decode(CreateResult.self, from: data)
+            suppressExternalReindex(paths: [result.path], duration: 5.0)
+            refreshFiles()
+            return result
+        }
     }
 
     func askAI(question: String) async throws -> AIAskResult {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["ask", "--json", "--porcelain", question], cwd: vault.rootURL)
-        let response = try JSONDecoder().decode(CLIAskResponse.self, from: data)
-        self.lastSemanticWarnings = response.warnings ?? []
+        let response = try await askVault(question: question)
         return AIAskResult(answer: response.answer, sources: response.sources)
     }
 
+    // MARK: - Gemini Vault Capabilities (Ask, Search, Polish, Obsidian Deep Links)
+
+    nonisolated static func askArgs(question: String, hasHistory: Bool) -> [String] {
+        var args = ["ask", "--json", "--porcelain"]
+        if hasHistory {
+            args.append(contentsOf: ["--history", "-"])
+        }
+        args.append(question)
+        return args
+    }
+
+    nonisolated static func searchArgs(query: String, limit: Int = 20, bm25Only: Bool = false) -> [String] {
+        var args = ["search", "--limit", String(limit), "--json", "--porcelain"]
+        if bm25Only { args.append("--bm25-only") }
+        args.append(query)
+        return args
+    }
+
+    nonisolated static func polishArgs(
+        path: String,
+        goal: String? = nil,
+        schema: Bool? = nil,
+        links: Bool,
+        repairLinks: Bool,
+        backlinks: Bool = false,
+        applyBacklinks: Bool = false,
+        write: Bool
+    ) -> [String] {
+        var args = ["polish", path, "--json", "--porcelain"]
+        if let trimmedGoal = goal?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmedGoal.isEmpty {
+            args.append(contentsOf: ["--goal", trimmedGoal])
+        }
+        if let schema {
+            args.append(schema ? "--schema" : "--no-schema")
+        }
+        if links { args.append("--links") }
+        if repairLinks { args.append("--repair-links") }
+        if backlinks || (write && applyBacklinks) {
+            args.append("--backlinks")
+        }
+        if write { args.append("--write") }
+        if write && applyBacklinks {
+            args.append("--apply-backlinks")
+        }
+        return args
+    }
+
+    nonisolated static func polishUndoArgs(path: String) -> [String] {
+        ["polish", path, "--undo", "--json", "--porcelain"]
+    }
+
+    func askVault(question: String, history: [AIChatTurn] = []) async throws -> CLIAskResponse {
+        guard let vault else { throw CLIError.noVault }
+        let previewQuestion = String(question.prefix(120))
+        actionTracker.updateStatus {
+            $0.lastAskQuestion = previewQuestion
+            $0.lastAskStatus = "asking"
+            $0.lastAskSourcesCount = nil
+        }
+        do {
+            let response = try await trackAsyncAction(
+                category: .ask,
+                action: "ask.query",
+                startSummary: "Ask Gemini: \(previewQuestion)",
+                metadata: [
+                    "question": previewQuestion,
+                    "history_turns": String(history.count),
+                ],
+                successDetail: { (res: CLIAskResponse) in
+                    (summary: "Answered query (\(res.sources.count) source(s))", metadata: [
+                        "sources": String(res.sources.count),
+                        "mode": res.mode,
+                    ])
+                }
+            ) {
+                let stdinData = history.isEmpty ? nil : try JSONEncoder().encode(history)
+                let args = Self.askArgs(question: question, hasHistory: !history.isEmpty)
+                let data = try await runCLI(args, cwd: vault.rootURL, stdin: stdinData)
+                return try JSONDecoder().decode(CLIAskResponse.self, from: data)
+            }
+            self.lastSemanticWarnings = response.warnings ?? []
+            actionTracker.updateStatus {
+                $0.lastAskStatus = "done"
+                $0.lastAskSourcesCount = response.sources.count
+                $0.semanticWarnings = response.warnings ?? []
+            }
+            Task { @MainActor [weak self] in await self?.refreshMetrics() }
+            return response
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            actionTracker.updateStatus { $0.lastAskStatus = "failed" }
+            throw error
+        }
+    }
+
+    func searchVault(query: String, limit: Int = 20, bm25Only: Bool = false) async throws -> CLISearchResponse {
+        guard let vault else { throw CLIError.noVault }
+        let mode = bm25Only ? "bm25" : "hybrid"
+        do {
+            let response = try await trackAsyncAction(
+                category: .search,
+                action: "search.query",
+                startSummary: "\(bm25Only ? "BM25" : "Hybrid") search: \(query)",
+                metadata: ["query": query, "mode": mode, "limit": String(limit)],
+                successDetail: { (res: CLISearchResponse) in
+                    (summary: "\(res.mode) search found \(res.results.count) hit(s) for \"\(query)\"", metadata: [
+                        "query": query,
+                        "mode": res.mode,
+                        "hits": String(res.results.count),
+                        "top_path": res.results.first?.path ?? "",
+                    ])
+                }
+            ) {
+                let args = Self.searchArgs(query: query, limit: limit, bm25Only: bm25Only)
+                let data = try await runCLI(args, cwd: vault.rootURL)
+                return try JSONDecoder().decode(CLISearchResponse.self, from: data)
+            }
+            if !bm25Only {
+                self.lastSemanticWarnings = response.warnings ?? []
+            }
+            actionTracker.updateStatus {
+                $0.lastSearchQuery = query
+                $0.lastSearchMode = response.mode
+                $0.lastSearchHitCount = response.results.count
+                $0.lastSearchTopPath = response.results.first?.path
+                if !bm25Only {
+                    $0.semanticWarnings = response.warnings ?? []
+                }
+            }
+            if !bm25Only {
+                Task { @MainActor [weak self] in await self?.refreshMetrics() }
+            }
+            return response
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            actionTracker.updateStatus { $0.lastSearchPhase = "failed" }
+            throw error
+        }
+    }
+
+    func listVaultNotes(limit: Int = 200) async throws -> [VaultNoteItem] {
+        guard let vault else { throw CLIError.noVault }
+        let data = try await runCLI(["list", "--limit", String(limit), "--sort", "modified", "--json", "--porcelain"], cwd: vault.rootURL)
+        return (try? JSONDecoder().decode([VaultNoteItem].self, from: data)) ?? []
+    }
+
+    /// Search-first note picker query across `DatabaseManager` (title, path,
+    /// and FTS5/chunk content), falling back off-main-actor to scanning disk
+    /// `.md` files only when the vault has not been indexed yet (`database == nil`
+    /// or `documentCount() == 0`).
+    func searchNotesForPicker(query: String, limit: Int = 50) async -> [NotePickerItem] {
+        guard let vault else { return [] }
+        let db = self.database
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return await Task.detached(priority: .userInitiated) {
+            if let db {
+                let docCount = (try? db.documentCount()) ?? 0
+                if docCount > 0 {
+                    return (try? db.searchNotes(query: trimmed, limit: limit)) ?? []
+                }
+            }
+            return Self.searchNotesOnDisk(vault: vault, query: trimmed, limit: limit)
+        }.value
+    }
+
+    nonisolated static func searchNotesOnDisk(vault: VaultManager, query: String, limit: Int = 50) -> [NotePickerItem] {
+        let boundedLimit = max(1, min(limit, 500))
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let excludedFolders = vault.obsidianTemplateFolders()
+        let files = vault.listMarkdownFiles().filter { url in
+            let rel = vault.relativePath(for: url)
+            return !VaultManager.isExcludedFolderPath(rel, excludedFolders: excludedFolders)
+        }
+        let iso = ISO8601DateFormatter()
+
+        if trimmed.isEmpty {
+            let withDates: [(url: URL, rel: String, modified: Date)] = files.map { url in
+                let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                return (url, vault.relativePath(for: url), vals?.contentModificationDate ?? .distantPast)
+            }
+            let sorted = withDates.sorted {
+                if $0.modified != $1.modified { return $0.modified > $1.modified }
+                return $0.rel < $1.rel
+            }
+            var items: [NotePickerItem] = []
+            items.reserveCapacity(min(boundedLimit, sorted.count))
+            for entry in sorted {
+                if Task.isCancelled { break }
+                let text = (try? String(contentsOf: entry.url, encoding: .utf8)) ?? ""
+                if VaultManager.hasTemplatePlaceholders(text) {
+                    continue
+                }
+                let (fm, _) = FrontmatterParser.parse(text)
+                let title = (fm["title"] as? String) ?? ""
+                let docType = (fm["type"] as? String) ?? ""
+                let status = (fm["status"] as? String) ?? ""
+                items.append(NotePickerItem(
+                    id: entry.rel,
+                    path: entry.rel,
+                    title: title,
+                    docType: docType,
+                    status: status,
+                    modifiedAt: entry.modified == .distantPast ? "" : iso.string(from: entry.modified),
+                    snippet: nil,
+                    matchSource: "recent"
+                ))
+                if items.count >= boundedLimit { break }
+            }
+            return items
+        }
+
+        var scored: [(score: Int, modified: Date, item: NotePickerItem)] = []
+        for url in files {
+            if Task.isCancelled { break }
+            let rel = vault.relativePath(for: url)
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            if VaultManager.hasTemplatePlaceholders(text) {
+                continue
+            }
+            let pathExact = rel.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            let pathMatch = rel.localizedCaseInsensitiveContains(trimmed)
+            let (fm, body) = FrontmatterParser.parse(text)
+            let title = (fm["title"] as? String) ?? ""
+            let titleExact = !title.isEmpty && title.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            let titleMatch = !title.isEmpty && title.localizedCaseInsensitiveContains(trimmed)
+            let bodyMatch = text.localizedCaseInsensitiveContains(trimmed)
+
+            guard pathMatch || titleMatch || bodyMatch else { continue }
+
+            let rank: Int
+            let source: String
+            if pathExact || titleExact {
+                rank = 0
+                source = titleExact ? "title" : "path"
+            } else if titleMatch {
+                rank = 1
+                source = "title"
+            } else if pathMatch {
+                rank = 2
+                source = "path"
+            } else {
+                rank = 3
+                source = "content"
+            }
+
+            let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            let modified = vals?.contentModificationDate ?? .distantPast
+            let snippet = bodyMatch ? Self.extractDiskSnippet(from: body.isEmpty ? text : body, matching: trimmed) : nil
+            let item = NotePickerItem(
+                id: rel,
+                path: rel,
+                title: title,
+                docType: (fm["type"] as? String) ?? "",
+                status: (fm["status"] as? String) ?? "",
+                modifiedAt: modified == .distantPast ? "" : iso.string(from: modified),
+                snippet: snippet,
+                matchSource: source
+            )
+            scored.append((rank, modified, item))
+        }
+
+        scored.sort {
+            if $0.score != $1.score { return $0.score < $1.score }
+            if $0.modified != $1.modified { return $0.modified > $1.modified }
+            return $0.item.path < $1.item.path
+        }
+        return Array(scored.prefix(boundedLimit).map(\.item))
+    }
+
+    nonisolated private static func extractDiskSnippet(from text: String, matching query: String) -> String? {
+        let collapsed = text
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty else { return nil }
+        guard let range = collapsed.range(of: query, options: .caseInsensitive) else {
+            return String(collapsed.prefix(140))
+        }
+        let start = collapsed.index(range.lowerBound, offsetBy: -40, limitedBy: collapsed.startIndex) ?? collapsed.startIndex
+        let end = collapsed.index(range.upperBound, offsetBy: 100, limitedBy: collapsed.endIndex) ?? collapsed.endIndex
+        return String(collapsed[start..<end])
+    }
+
+    func polishNote(
+        path: String,
+        goal: String? = nil,
+        schema: Bool = true,
+        links: Bool = true,
+        repairLinks: Bool = true,
+        backlinks: Bool = false,
+        applyBacklinks: Bool = false,
+        write: Bool = false,
+        expectedBacklinkPaths: [String] = []
+    ) async throws -> PolishResult {
+        guard let vault else { throw CLIError.noVault }
+        let trimmedGoal = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if write {
+            suppressExternalReindex(paths: [path] + expectedBacklinkPaths, duration: 60.0)
+        }
+        var meta: [String: String] = [
+            "path": path,
+            "write": write ? "true" : "false",
+            "links": links ? "true" : "false",
+            "repair_links": repairLinks ? "true" : "false",
+            "schema": schema ? "true" : "false",
+            "backlinks": backlinks ? "true" : "false",
+            "apply_backlinks": (write && applyBacklinks) ? "true" : "false",
+        ]
+        if let trimmedGoal, !trimmedGoal.isEmpty {
+            meta["goal"] = String(trimmedGoal.prefix(120))
+        }
+        let result: PolishResult
+        do {
+            result = try await trackAsyncAction(
+                category: .polish,
+                action: "polish.run",
+                startSummary: write ? "Polish and write \(path)" : "Preview polish for \(path)",
+                metadata: meta
+            ) {
+                let args = Self.polishArgs(
+                    path: path,
+                    goal: trimmedGoal,
+                    schema: schema,
+                    links: links,
+                    repairLinks: repairLinks,
+                    backlinks: backlinks,
+                    applyBacklinks: applyBacklinks,
+                    write: write
+                )
+                let data = try await runCLI(args, cwd: vault.rootURL)
+                let decoded = try JSONDecoder().decode(PolishResult.self, from: data)
+                if write {
+                    let appliedBacklinks = decoded.backlinkPreviews?
+                        .filter(\.applied)
+                        .map(\.path) ?? []
+                    suppressExternalReindex(
+                        paths: Array(Set([path, decoded.path] + expectedBacklinkPaths + appliedBacklinks)),
+                        duration: 5.0,
+                        clampExisting: true
+                    )
+                    refreshFiles()
+                }
+                return decoded
+            }
+        } catch {
+            if write {
+                suppressExternalReindex(
+                    paths: Array(Set([path] + expectedBacklinkPaths)),
+                    duration: 5.0,
+                    clampExisting: true
+                )
+            }
+            throw error
+        }
+        Task { @MainActor [weak self] in await self?.refreshMetrics() }
+        return result
+    }
+
+    func undoPolishNote(path: String, expectedBacklinkPaths: [String] = []) async throws -> PolishUndoResult {
+        guard let vault else { throw CLIError.noVault }
+        suppressExternalReindex(paths: [path] + expectedBacklinkPaths, duration: 15.0)
+        do {
+            return try await trackAsyncAction(
+                category: .polish,
+                action: "polish.undo",
+                startSummary: "Undo last polish for \(path)",
+                metadata: ["path": path],
+                successDetail: { res in
+                    let count = res.restoredPaths?.count ?? (res.reverted ? 1 : 0)
+                    return ("Restored \(count) file(s)", [
+                        "path": res.path,
+                        "restored_count": String(count),
+                    ])
+                }
+            ) {
+                let args = Self.polishUndoArgs(path: path)
+                let data = try await runCLI(args, cwd: vault.rootURL)
+                let res = try JSONDecoder().decode(PolishUndoResult.self, from: data)
+                let restored = (res.restoredPaths?.isEmpty == false) ? (res.restoredPaths ?? [res.path]) : [res.path]
+                suppressExternalReindex(
+                    paths: Array(Set([path] + expectedBacklinkPaths + restored)),
+                    duration: 5.0,
+                    clampExisting: true
+                )
+                refreshFiles()
+                return res
+            }
+        } catch {
+            suppressExternalReindex(
+                paths: Array(Set([path] + expectedBacklinkPaths)),
+                duration: 5.0,
+                clampExisting: true
+            )
+            throw error
+        }
+    }
+
+    func fetchStaleCount(sinceDays: Int = 90) async -> Int {
+        guard let vault else { return 0 }
+        guard let data = try? await runCLI(["stale", "--since", String(sinceDays), "--json", "--porcelain"], cwd: vault.rootURL) else {
+            return 0
+        }
+        return (try? JSONDecoder().decode([StaleDocInfo].self, from: data))?.count ?? 0
+    }
+
+    func openNoteInObsidian(relativePath: String) {
+        guard let vault else { return }
+        let fileURL = vault.rootURL.appendingPathComponent(relativePath)
+        let opened = ObsidianURL.open(
+            vaultName: vault.rootURL.lastPathComponent,
+            relativePath: relativePath,
+            absoluteFileURL: fileURL
+        )
+        actionTracker.record(
+            category: .navigation,
+            action: "obsidian.open_note",
+            phase: opened ? .succeeded : .failed,
+            summary: opened ? "Opened \(relativePath) in Obsidian" : "Failed to open \(relativePath) in Obsidian",
+            metadata: ["path": relativePath]
+        )
+    }
+
+    func openVaultInObsidian() {
+        guard let vault else { return }
+        let name = vault.rootURL.lastPathComponent
+        var opened = false
+        if let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+           let url = URL(string: "obsidian://open?vault=\(encoded)"),
+           NSWorkspace.shared.open(url) {
+            opened = true
+        } else {
+            opened = NSWorkspace.shared.open(vault.rootURL)
+        }
+        actionTracker.record(
+            category: .navigation,
+            action: "obsidian.open_vault",
+            phase: opened ? .succeeded : .failed,
+            summary: opened ? "Opened vault \(name) in Obsidian" : "Failed to open vault \(name)",
+            metadata: ["vault": name]
+        )
+    }
+
     // MARK: - Tools Integration
+
+    nonisolated static func fixVaultArgs(write: Bool, ai: Bool = false) -> [String] {
+        var args = ["fix"]
+        if write { args.append("--write") }
+        if ai { args.append("--ai") }
+        args.append(contentsOf: ["--json", "--porcelain"])
+        return args
+    }
+
+    nonisolated static func undoFixVaultArgs(force: Bool = false) -> [String] {
+        force ? ["fix", "--undo", "--force", "--json", "--porcelain"] : ["fix", "--undo", "--json", "--porcelain"]
+    }
+
+    private func fetchLintReport(vaultRoot: URL) async -> Result<LintReport, Error> {
+        do {
+            let result = try await runCLIAllowingNonZeroWithOutput(["lint", "--json", "--porcelain"], cwd: vaultRoot)
+            do {
+                let report = try JSONDecoder().decode(LintReport.self, from: result.stdout)
+                return .success(report)
+            } catch {
+                let errText = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !errText.isEmpty {
+                    let code = result.exitCode == 0 ? Int32(1) : result.exitCode
+                    return .failure(CLIError.nonZeroExit(code, message: errText))
+                }
+                return .failure(error)
+            }
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func fetchFixPreviewReport(vaultRoot: URL) async -> Result<FixVaultReport, Error> {
+        do {
+            let data = try await runCLI(Self.fixVaultArgs(write: false), cwd: vaultRoot)
+            let report = try JSONDecoder().decode(FixVaultReport.self, from: data)
+            return .success(report)
+        } catch {
+            return .failure(error)
+        }
+    }
 
     func runLint() async {
         guard let vault else { return }
         isLinting = true
         lintReport = nil
+        fixReport = nil
+        lintError = nil
+        fixPreviewError = nil
         log.info("Lint validation started for vault: \(vault.rootURL.lastPathComponent)")
-        let startTime = CFAbsoluteTimeGetCurrent()
-        do {
-            let data = try await runCLIAllowingNonZero(["lint", "--json", "--porcelain"], cwd: vault.rootURL)
-            let report = try JSONDecoder().decode(LintReport.self, from: data)
+        actionTracker.record(
+            category: .lint,
+            action: "lint.run",
+            phase: .started,
+            summary: "Run vault lint validation"
+        )
+        let start = ContinuousClock.now
+        async let lintOutcome = fetchLintReport(vaultRoot: vault.rootURL)
+        async let fixOutcome = fetchFixPreviewReport(vaultRoot: vault.rootURL)
+        let (lintResult, fixResult) = await (lintOutcome, fixOutcome)
+
+        let elapsedMs = elapsedMilliseconds(since: start)
+
+        switch fixResult {
+        case .success(let preview):
+            fixReport = preview
+        case .failure(let error):
+            let rawMsg = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+            let msg = Self.boundedRedacted(rawMsg)
+            fixPreviewError = msg
+            log.warning("Fix preview failed: \(msg, privacy: .public)")
+            errorLogger?.log("Fix preview failed: \(msg)")
+        }
+
+        switch lintResult {
+        case .success(let report):
             lintReport = report
-            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-            log.info("Lint completed in \(String(format: "%.1f", elapsed))s: \(report.filesChecked) files, \(report.errors) errors, \(report.warnings) warnings")
-        } catch {
-            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-            log.error("Lint failed after \(String(format: "%.1f", elapsed))s: \(error.localizedDescription)")
-            errorLogger?.log("Lint validation failed", error: error)
-            lintReport = LintReport(issues: [], filesChecked: 0, errors: 0, warnings: 0)
+            log.info("Lint completed in \(Formatters.duration(elapsedMs)): \(report.filesChecked) files, \(report.errors) errors, \(report.warnings) warnings")
+            actionTracker.record(
+                category: .lint,
+                action: "lint.run",
+                phase: .succeeded,
+                durationMs: elapsedMs,
+                summary: "Lint checked \(report.filesChecked) files (\(report.errors) error(s), \(report.warnings) warning(s))",
+                metadata: [
+                    "files": String(report.filesChecked),
+                    "errors": String(report.errors),
+                    "warnings": String(report.warnings),
+                ]
+            )
+        case .failure(let error):
+            let rawMsg = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+            let msg = Self.boundedRedacted(rawMsg)
+            lintError = msg
+            lintReport = nil
+            log.error("Lint failed after \(Formatters.duration(elapsedMs)): \(msg, privacy: .public)")
+            errorLogger?.log("Lint validation failed: \(msg)")
+            actionTracker.record(
+                category: .lint,
+                action: "lint.run",
+                phase: .failed,
+                durationMs: elapsedMs,
+                summary: "Vault lint failed",
+                detail: rawMsg
+            )
         }
         isLinting = false
+    }
+
+    nonisolated static func validateAppliedFixReport(_ report: FixVaultReport) throws {
+        guard !report.written else { return }
+        if let skipReason = report.aiSkippedReason, !skipReason.isEmpty {
+            throw CLIError.nonZeroExit(1, message: "AI repair skipped: \(skipReason)")
+        }
+        if let firstWarning = report.warnings.first(where: {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) {
+            throw CLIError.nonZeroExit(1, message: firstWarning)
+        }
+    }
+
+    @discardableResult
+    func applyVaultFix() async throws -> FixVaultReport {
+        guard let vault else { throw CLIError.noVault }
+        isFixingVault = true
+        defer { isFixingVault = false }
+        let predictedPaths = (fixReport?.notes.map(\.path) ?? [])
+            + (fixReport?.aiFixableIssues.map(\.path) ?? [])
+        suppressExternalReindex(paths: predictedPaths, duration: 60.0)
+        log.info("Fix Vault started for vault: \(vault.rootURL.lastPathComponent)")
+        actionTracker.record(
+            category: .lint,
+            action: "lint.fix_vault",
+            phase: .started,
+            summary: "Fix vault links, formatting, and schemas"
+        )
+        let start = ContinuousClock.now
+        do {
+            let data = try await runCLI(Self.fixVaultArgs(write: true, ai: false), cwd: vault.rootURL)
+            let report = try JSONDecoder().decode(FixVaultReport.self, from: data)
+            let elapsedMs = elapsedMilliseconds(since: start)
+
+            try Self.validateAppliedFixReport(report)
+
+            let writtenPaths = report.notes.map(\.path)
+            lastFixWrittenPaths = writtenPaths
+            suppressExternalReindex(
+                paths: Array(Set(predictedPaths + writtenPaths)),
+                duration: 5.0,
+                clampExisting: true
+            )
+            fixReport = report
+
+            var meta: [String: String] = [
+                "total_fixes": String(report.totalFixes),
+                "notes_changed": String(report.notesChanged),
+                "links_updated": String(report.linksUpdated),
+                "links_unlinked": String(report.linksUnlinked),
+                "formatting_fixed": String(report.formattingFixed),
+                "schema_updated": report.schemaUpdated ? "true" : "false",
+                "ai_applied": report.aiApplied ? "true" : "false",
+                "ai_fixes_applied": String(report.aiFixesApplied),
+            ]
+            if let provider = report.aiProvider, !provider.isEmpty {
+                meta["ai_provider"] = provider
+            }
+            if let model = report.aiModel, !model.isEmpty {
+                meta["ai_model"] = model
+            }
+            if let skip = report.aiSkippedReason, !skip.isEmpty {
+                meta["ai_skipped_reason"] = skip
+            }
+
+            actionTracker.record(
+                category: .lint,
+                action: "lint.fix_vault",
+                phase: .succeeded,
+                durationMs: elapsedMs,
+                summary: "Fixed \(report.totalFixes) item(s) across \(report.notesChanged) note(s)",
+                metadata: meta
+            )
+            refreshFiles()
+            Task { @MainActor [weak self] in await self?.refreshMetrics() }
+            await runLint()
+            return report
+        } catch {
+            suppressExternalReindex(paths: predictedPaths, duration: 5.0, clampExisting: true)
+            let elapsedMs = elapsedMilliseconds(since: start)
+            let rawMsg = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+            let safeMsg = Self.boundedRedacted(rawMsg)
+            errorLogger?.log("Fix Vault failed: \(safeMsg)")
+            actionTracker.record(
+                category: .lint,
+                action: "lint.fix_vault",
+                phase: .failed,
+                durationMs: elapsedMs,
+                summary: "Fix Vault failed",
+                detail: rawMsg
+            )
+            throw error
+        }
+    }
+
+    @discardableResult
+    func undoVaultFix(force: Bool = false) async throws -> FixUndoResult {
+        guard let vault else { throw CLIError.noVault }
+        isFixingVault = true
+        defer { isFixingVault = false }
+        let priorWrittenPaths = lastFixWrittenPaths
+        suppressExternalReindex(paths: priorWrittenPaths, duration: 15.0)
+        log.info("Undo Last Fix started for vault: \(vault.rootURL.lastPathComponent)")
+        actionTracker.record(
+            category: .lint,
+            action: "lint.undo_fix_vault",
+            phase: .started,
+            summary: "Undo last Fix Vault batch"
+        )
+        let start = ContinuousClock.now
+        do {
+            let data = try await runCLI(Self.undoFixVaultArgs(force: force), cwd: vault.rootURL)
+            let result = try JSONDecoder().decode(FixUndoResult.self, from: data)
+            let elapsedMs = elapsedMilliseconds(since: start)
+            suppressExternalReindex(
+                paths: Array(Set(priorWrittenPaths + result.paths)),
+                duration: 5.0,
+                clampExisting: true
+            )
+            lastFixWrittenPaths = []
+            actionTracker.record(
+                category: .lint,
+                action: "lint.undo_fix_vault",
+                phase: .succeeded,
+                durationMs: elapsedMs,
+                summary: "Restored \(result.filesRestored) file(s)\(result.schemaRestored ? " and schema" : "")",
+                metadata: [
+                    "files_restored": String(result.filesRestored),
+                    "schema_restored": result.schemaRestored ? "true" : "false",
+                ]
+            )
+            refreshFiles()
+            await runLint()
+            return result
+        } catch {
+            suppressExternalReindex(paths: priorWrittenPaths, duration: 5.0, clampExisting: true)
+            let elapsedMs = elapsedMilliseconds(since: start)
+            let rawMsg = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+            let safeMsg = Self.boundedRedacted(rawMsg)
+            errorLogger?.log("Undo Last Fix failed: \(safeMsg)")
+            actionTracker.record(
+                category: .lint,
+                action: "lint.undo_fix_vault",
+                phase: .failed,
+                durationMs: elapsedMs,
+                summary: "Undo Last Fix failed",
+                detail: rawMsg
+            )
+            throw error
+        }
     }
 
     func loadMCPSetup() async {
@@ -1947,27 +2301,100 @@ final class AppState {
             let data = try await runCLI(["mcp-setup"], cwd: vault.rootURL)
             mcpSetupText = String(data: data, encoding: .utf8) ?? ""
         } catch {
-            mcpSetupText = "Failed to load MCP setup: \(error.localizedDescription)"
+            let safeErr = Self.boundedRedacted((error as? CLIError)?.errorDescription ?? error.localizedDescription)
+            mcpSetupText = "Failed to load MCP setup: \(safeErr)"
         }
     }
 
     // MARK: - Incremental Re-Embed
 
-    /// Queue a note changed OUTSIDE the app (saved in Obsidian, synced, git) for
-    /// incremental indexing. Collects the path and (re)arms a single debounce
+    nonisolated static func canonicalWatcherPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    private func resolvedWatcherPath(for path: String) -> String {
+        if path.hasPrefix("/") {
+            return Self.canonicalWatcherPath(path)
+        }
+        if let root = vault?.rootURL {
+            return Self.canonicalWatcherPath(root.appendingPathComponent(path).path)
+        }
+        return Self.canonicalWatcherPath(path)
+    }
+
+    /// Suppress FSEventsWatcher reindexing for app-initiated writes (`fix`,
+    /// `polish`, `meta`, `repair-links`, etc.) that already updated `index.db`.
+    /// Evicts any matching entries from `pendingExternalPaths` while keeping
+    /// non-suppressed paths untouched. When `clampExisting` is true, replaces
+    /// any longer pre-write lease with `now + duration`.
+    func suppressExternalReindex(
+        paths: [String],
+        duration: TimeInterval = 5.0,
+        now: Date = Date(),
+        clampExisting: Bool = false
+    ) {
+        guard !paths.isEmpty else { return }
+        let expiry = now.addingTimeInterval(duration)
+        var suppressedCanon = Set<String>()
+        for rawPath in paths where !rawPath.isEmpty {
+            let canon = resolvedWatcherPath(for: rawPath)
+            if clampExisting {
+                suppressedExternalPaths[canon] = expiry
+            } else {
+                let existing = suppressedExternalPaths[canon] ?? .distantPast
+                suppressedExternalPaths[canon] = max(existing, expiry)
+            }
+            suppressedCanon.insert(canon)
+        }
+        if !suppressedCanon.isEmpty && !pendingExternalPaths.isEmpty {
+            pendingExternalPaths = pendingExternalPaths.filter {
+                !suppressedCanon.contains(Self.canonicalWatcherPath($0))
+            }
+            if pendingExternalPaths.isEmpty {
+                externalReindexTask?.cancel()
+                externalReindexTask = nil
+            }
+        }
+    }
+
+    nonisolated static func shouldExcludeExternalIndexPath(_ path: String, vault: VaultManager) -> Bool {
+        let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+            .replacingOccurrences(of: "\\", with: "/")
+        let segments = rel.split(separator: "/").map(String.init)
+        if segments.contains(where: { $0.hasPrefix(".") || $0 == "node_modules" }) {
+            return true
+        }
+        let excludedFolders = vault.obsidianTemplateFolders()
+        if VaultManager.isExcludedFolderPath(rel, excludedFolders: excludedFolders) {
+            return true
+        }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8),
+           VaultManager.hasTemplatePlaceholders(text) {
+            return true
+        }
+        return false
+    }
+
+    /// Queue a note changed outside the app (saved in Obsidian, synced, git)
+    /// for incremental indexing. Collects the path and (re)arms a single debounce
     /// timer; when it fires, `drainExternalReindex` processes every queued path
-    /// in one serial pass. Skips the app's own writes (already reindexed at save)
-    /// and deletes (a removed file can't be incrementally indexed; the next full
-    /// Sync's purgeStale reconciles it). This is what makes externally-edited
-    /// notes searchable/embedded without a manual Sync.
-    func scheduleExternalReindex(path: String) {
-        guard vault != nil else { return }
-        if isRecentSelfWrite(path: path) { return }
+    /// in one serial pass, skipping deletes (the next full Sync purges them).
+    func scheduleExternalReindex(path: String, now: Date = Date()) {
+        guard let vault else { return }
+        if Self.shouldExcludeExternalIndexPath(path, vault: vault) {
+            return
+        }
+        suppressedExternalPaths = suppressedExternalPaths.filter { $0.value > now }
+        let canon = Self.canonicalWatcherPath(path)
+        if let expiry = suppressedExternalPaths[canon], expiry > now {
+            return
+        }
         // A delete or rename-away leaves no file; `index --doc` would just error
         // on the missing path. Leave it for the next full Sync to purge.
         guard FileManager.default.fileExists(atPath: path) else { return }
 
         pendingExternalPaths.insert(path)
+        guard !pauseAutoSync else { return }
         externalReindexTask?.cancel()
         externalReindexTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: self?.externalReindexDebounce ?? .seconds(1.5))
@@ -1983,7 +2410,7 @@ final class AppState {
     /// (Obsidian sync, git pull, folder paste) collapses to a single throttled
     /// `2nb index` rather than spawning one subprocess per file.
     private func drainExternalReindex() async {
-        guard !externalReindexInFlight, let vault else { return }
+        guard !pauseAutoSync, !externalReindexInFlight, let vault else { return }
         // A full index (manual Sync or the startup catch-up) is already running
         // and will pick up every current file, so don't start a second, racing
         // `2nb index` on the same SQLite DB. Drop the queued paths — the running
@@ -2004,6 +2431,13 @@ final class AppState {
                 // throttles embeds in a single process, and refreshes status. It
                 // covers the whole burst, so stop draining; the watcher re-catches
                 // anything written after the full scan passes it.
+                actionTracker.record(
+                    category: .index,
+                    action: "index.external_burst",
+                    phase: .progress,
+                    summary: "Coalesced \(paths.count) external change(s) into full sync",
+                    metadata: ["count": String(paths.count)]
+                )
                 startIndex()
                 break
             }
@@ -2014,12 +2448,31 @@ final class AppState {
             // whole sync's worth of edits unindexed.
             for path in paths.sorted() {
                 guard FileManager.default.fileExists(atPath: path) else { continue }
+                if Self.shouldExcludeExternalIndexPath(path, vault: vault) { continue }
                 let rel = vault.relativePath(for: URL(fileURLWithPath: path))
+                let noteStart = ContinuousClock.now
                 do {
                     _ = try await runCLI(["index", "--doc", rel, "--json", "--porcelain"], cwd: vault.rootURL)
                     clearIndexingProblem(for: rel)
+                    actionTracker.record(
+                        category: .index,
+                        action: "index.external_file",
+                        phase: .succeeded,
+                        durationMs: elapsedMilliseconds(since: noteStart),
+                        summary: "Reindexed external edit: \(rel)",
+                        metadata: ["path": rel]
+                    )
                 } catch {
                     noteIndexingProblem(path: rel, message: error.localizedDescription)
+                    actionTracker.record(
+                        category: .index,
+                        action: "index.external_file",
+                        phase: .failed,
+                        durationMs: elapsedMilliseconds(since: noteStart),
+                        summary: "External reindex failed: \(rel)",
+                        detail: error.localizedDescription,
+                        metadata: ["path": rel]
+                    )
                 }
             }
             // Reflect the new/updated embeddings in the Index card's count.
@@ -2033,9 +2486,13 @@ final class AppState {
     /// dropping out of the index is a user-visible outcome, and the previous
     /// debug line meant nobody ever saw it.
     func noteIndexingProblem(path: String, message: String) {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.boundedRedacted(message.trimmingCharacters(in: .whitespacesAndNewlines))
         log.warning("index --doc failed for \(path, privacy: .public): \(trimmed, privacy: .public)")
         lastIndexingProblem = IndexingProblem(path: path, message: trimmed)
+        actionTracker.updateStatus {
+            $0.lastIndexingProblemPath = path
+            $0.lastIndexingProblemMessage = trimmed
+        }
     }
 
     /// Clears the problem when THAT path indexes cleanly. Scoped to the path so
@@ -2043,6 +2500,10 @@ final class AppState {
     func clearIndexingProblem(for path: String) {
         if lastIndexingProblem?.path == path {
             lastIndexingProblem = nil
+            actionTracker.updateStatus {
+                $0.lastIndexingProblemPath = nil
+                $0.lastIndexingProblemMessage = nil
+            }
         }
     }
 
@@ -2074,6 +2535,29 @@ final class AppState {
     static func parseFullIndexSummary(_ stdout: String) -> FullIndexSummary? {
         guard let data = stdout.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(FullIndexSummary.self, from: data)
+    }
+
+    /// Extracts an actionable single-line failure reason from multi-line `2nb index` stderr.
+    nonisolated static func extractIndexFailureMessage(stderr: String, exitCode: Int32) -> String {
+        let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "CLI exited with code \(exitCode)"
+        }
+        let lines = trimmed
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if let errorIdx = lines.lastIndex(where: { $0.hasPrefix("Error: ") }) {
+            let joined = lines[errorIdx...].joined(separator: " ")
+            let body = String(joined.dropFirst("Error: ".count)).trimmingCharacters(in: .whitespaces)
+            if !body.isEmpty {
+                return body
+            }
+        }
+        if let embedErr = lines.last(where: { $0.hasPrefix("embed error ") }) {
+            return embedErr
+        }
+        return lines.last ?? "CLI exited with code \(exitCode)"
     }
 
     /// Decides what a FULL index that exited cleanly should say about skipped
@@ -2110,33 +2594,9 @@ final class AppState {
         if skipped.count > 1 {
             message += " (and \(skipped.count - 1) more)"
         }
+        let safeMessage = Self.boundedRedacted(message)
         log.warning("Index rebuild skipped \(skipped.count, privacy: .public) note(s); reporting \(first.path, privacy: .public)")
-        lastIndexingProblem = IndexingProblem(path: first.path, message: message)
-    }
-
-    private func triggerIncrementalReindex(for url: URL) {
-        guard let vault else { return }
-        let relPath = vault.relativePath(for: url)
-        // Queue behind any in-flight task for the same path so we never race
-        // the CLI writing chunks to SQLite.
-        let previous = reindexTasks[relPath]
-        let task = Task { [weak self] in
-            if let previous {
-                _ = await previous.value
-            }
-            guard let self else { return }
-            do {
-                _ = try await self.runCLI(
-                    ["index", "--doc", relPath, "--json", "--porcelain"],
-                    cwd: vault.rootURL
-                )
-                self.clearIndexingProblem(for: relPath)
-            } catch {
-                self.noteIndexingProblem(path: relPath, message: error.localizedDescription)
-            }
-            self.reindexTasks.removeValue(forKey: relPath)
-        }
-        reindexTasks[relPath] = task
+        lastIndexingProblem = IndexingProblem(path: first.path, message: safeMessage)
     }
 
     // MARK: - Git Integration
@@ -2208,22 +2668,6 @@ final class AppState {
         }
     }
 
-    /// Loads the vault performance observatory from `2nb metrics --json`. Pinned
-    /// to the open vault by runCLI; best-effort (a CLI/decoder failure leaves the
-    /// last snapshot and logs, like the other read panels).
-    func refreshMetrics() async {
-        guard let vault else { return }
-        metricsLoading = true
-        defer { metricsLoading = false }
-        do {
-            let data = try await runCLI(["metrics", "--json"], cwd: vault.rootURL)
-            if data.isEmpty { return }
-            vaultMetrics = try JSONDecoder().decode(VaultMetrics.self, from: data)
-        } catch {
-            log.warning("metrics unavailable: \(error.localizedDescription)")
-        }
-    }
-
     func openGitActivity() {
         showGitActivity = true
     }
@@ -2264,7 +2708,8 @@ final class AppState {
                     log.debug("commitDetail: dropping stale error for \(hash)")
                     return
                 }
-                let msg = error.localizedDescription
+                let rawMsg = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+                let msg = Self.boundedRedacted(rawMsg)
                 self.commitDetailError = msg
                 log.warning("commitDetail load failed: \(msg)")
             }
@@ -2279,53 +2724,6 @@ final class AppState {
         commitDetailTask?.cancel()
         commitDetailTask = nil
         showCommitDetail = false
-    }
-
-    /// Resolves a search result (from `2nb search --json`) to an open
-    /// document + optional editor scroll to its heading path. Called by
-    /// SearchPanelView and Quick Open. If `headingPath` is empty, the
-    /// document opens normally with no scroll.
-    func openSearchResult(path: String, headingPath: String?) {
-        guard let vault else { return }
-        let url = vault.rootURL.appendingPathComponent(path)
-        openDocument(at: url)
-        if let headingPath, !headingPath.isEmpty {
-            jumpToHeadingPath(headingPath)
-        }
-        log.info("openSearchResult: path=\(path) headingPath=\(headingPath ?? "")")
-    }
-
-    /// Resolves a wikilink target `[[target]]`, `[[target#heading]]`, or
-    /// `[[target|alias]]` to a file path in the vault and opens it. The
-    /// target is matched against the existing in-memory file list by
-    /// filename (case-insensitive). Heading component (after `#`), if
-    /// present, sets editorScrollTarget after opening.
-    func openWikilink(_ target: String) {
-        guard vault != nil else { return }
-
-        // Strip alias (`target|alias` → `target`).
-        let withoutAlias = target.split(separator: "|").first.map(String.init) ?? target
-        // Split on `#` for heading component.
-        let parts = withoutAlias.split(separator: "#", maxSplits: 1).map(String.init)
-        let name = parts[0].trimmingCharacters(in: .whitespaces)
-        let heading = parts.count == 2 ? parts[1].trimmingCharacters(in: .whitespaces) : nil
-
-        // Resolve by filename (without extension, case-insensitive).
-        let match = files.first { file in
-            let stem = (file.name as NSString).deletingPathExtension
-            return stem.localizedCaseInsensitiveCompare(name) == .orderedSame
-        }
-
-        guard let file = match else {
-            log.warning("wikilink target not found: \(name)")
-            return
-        }
-
-        openDocument(at: file.url)
-        if let heading {
-            jumpToHeadingPath(heading)
-        }
-        log.info("openWikilink: target=\(name) heading=\(heading ?? "")")
     }
 
     // MARK: - MCP Observability
@@ -2371,230 +2769,157 @@ final class AppState {
     // MARK: - AI Setup Wizard
 
     func saveAIConfig(provider: String, embedModel: String, genModel: String,
-                      dims: Int, bedrockProfile: String, bedrockRegion: String,
-                      openrouterKey: String) async throws {
+                      dims: Int, bedrockProfile: String = "", bedrockRegion: String = "",
+                      openrouterKey: String = "",
+                      geminiProject: String = "", geminiLocation: String = "",
+                      geminiKey: String = "") async throws {
         guard let vault else { throw CLIError.noVault }
         log.info("Saving AI config: provider=\(provider) embed=\(embedModel) gen=\(genModel)")
         let cwd = vault.rootURL
+        _ = try await trackAsyncAction(
+            category: .settings,
+            action: "settings.save_ai",
+            startSummary: "Save AI config (\(provider): \(genModel) / \(embedModel))",
+            metadata: [
+                "provider": provider,
+                "embedModel": embedModel,
+                "genModel": genModel,
+                "dims": String(dims),
+                "hasGeminiKey": geminiKey.isEmpty ? "false" : "true",
+                "hasProject": geminiProject.isEmpty ? "false" : "true",
+            ]
+        ) {
+            // For Gemini, store API key if provided (Keychain and CLI keystore)
+            if (provider == "gemini" || provider == "google") && !geminiKey.isEmpty {
+                let sec = Process()
+                sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+                sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain",
+                                 "-a", "gemini", "-w", geminiKey, "-U"]
+                sec.standardOutput = FileHandle.nullDevice
+                sec.standardError = FileHandle.nullDevice
+                try? sec.run()
+                sec.waitUntilExit()
 
-        // For OpenRouter, store API key in Keychain first
-        if provider == "openrouter" && !openrouterKey.isEmpty {
-            let sec = Process()
-            sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-            sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain",
-                             "-a", "openrouter", "-w", openrouterKey, "-U"]
-            sec.standardOutput = FileHandle.nullDevice
-            sec.standardError = FileHandle.nullDevice
-            try sec.run()
-            sec.waitUntilExit()
-        }
-
-        // Write config values sequentially
-        _ = try await runCLI(["config", "set", "ai.provider", provider], cwd: cwd)
-        _ = try await runCLI(["config", "set", "ai.embedding_model", embedModel], cwd: cwd)
-        _ = try await runCLI(["config", "set", "ai.generation_model", genModel], cwd: cwd)
-        _ = try await runCLI(["config", "set", "ai.dimensions", String(dims)], cwd: cwd)
-
-        if provider == "bedrock" {
-            if !bedrockProfile.isEmpty {
-                _ = try await runCLI(["config", "set", "ai.bedrock.profile", bedrockProfile], cwd: cwd)
+                _ = try? await runCLIGlobal(["config", "set-key", "gemini"], stdin: Self.setKeyStdinData(geminiKey))
             }
-            if !bedrockRegion.isEmpty {
-                _ = try await runCLI(["config", "set", "ai.bedrock.region", bedrockRegion], cwd: cwd)
+
+            // For OpenRouter, store API key in Keychain first
+            if provider == "openrouter" && !openrouterKey.isEmpty {
+                let sec = Process()
+                sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+                sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain",
+                                 "-a", "openrouter", "-w", openrouterKey, "-U"]
+                sec.standardOutput = FileHandle.nullDevice
+                sec.standardError = FileHandle.nullDevice
+                try sec.run()
+                sec.waitUntilExit()
+            }
+
+            // Write config values sequentially
+            _ = try await runCLI(["config", "set", "ai.provider", provider], cwd: cwd)
+            _ = try await runCLI(["config", "set", "ai.embedding_model", embedModel], cwd: cwd)
+            _ = try await runCLI(["config", "set", "ai.generation_model", genModel], cwd: cwd)
+            _ = try await runCLI(["config", "set", "ai.dimensions", String(dims)], cwd: cwd)
+
+            if provider == "gemini" || provider == "google" {
+                if !geminiProject.isEmpty {
+                    _ = try await runCLI(["config", "set", "ai.gemini.project", geminiProject], cwd: cwd)
+                }
+                if !geminiLocation.isEmpty {
+                    _ = try await runCLI(["config", "set", "ai.gemini.location", geminiLocation], cwd: cwd)
+                }
+            }
+
+            if provider == "bedrock" {
+                if !bedrockProfile.isEmpty {
+                    _ = try await runCLI(["config", "set", "ai.bedrock.profile", bedrockProfile], cwd: cwd)
+                }
+                if !bedrockRegion.isEmpty {
+                    _ = try await runCLI(["config", "set", "ai.bedrock.region", bedrockRegion], cwd: cwd)
+                }
             }
         }
+    }
+
+    nonisolated static func boundedRedacted(_ raw: String) -> String {
+        GUIActionTracker.boundedRedactedTail(raw, limit: GUIActionTracker.maxStatusErrorChars)
     }
 
     func testModel(provider: String, modelID: String, modelType: String) async throws -> AIProbeResult {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLIAllowingNonZero(
-            ["models", "test", modelID, "--provider", provider, "--type", modelType, "--json", "--porcelain"],
-            cwd: vault.rootURL
-        )
-        return try JSONDecoder().decode(AIProbeResult.self, from: data)
-    }
-
-    func fetchModels(provider: String) async throws -> [CatalogModelInfo] {
-        guard let vault else { throw CLIError.noVault }
-        // --enabled-only hides user-disabled models from the standard
-        // dropdown. Power users can still see them via `2nb models list`.
-        let data = try await runCLI(
-            ["models", "list", "--json", "--porcelain", "--provider", provider, "--enabled-only"],
-            cwd: vault.rootURL
-        )
-        return try JSONDecoder().decode([CatalogModelInfo].self, from: data)
-    }
-
-    /// Argv for `models list --json`. `--discover` walks the vendor control
-    /// plane; omit it after a policy checkbox so we only re-read the merged
-    /// catalog.
-    nonisolated static func modelsListArgs(discover: Bool, sortBest: Bool = false) -> [String] {
-        var args = ["models", "list", "--json", "--porcelain"]
-        if discover { args.append("--discover") }
-        if sortBest { args.append(contentsOf: ["--sort", "best"]) }
-        return args
-    }
-
-    /// Fetches the merged catalog. `discover: true` is the Hub / first-load
-    /// / Validate path; after a vendor-policy write, pass false so a
-    /// checkbox does not re-walk Bedrock. `sortBest: true` asks the CLI for
-    /// its measured-evidence ranking (`--sort best`: bench quality, then
-    /// tested-passing, recommended, tier, latency); the Benchmarks model
-    /// picker uses it so bench data ranks the choices.
-    func fetchModelsCatalog(discover: Bool, sortBest: Bool = false) async throws -> [CatalogModelInfo] {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.modelsListArgs(discover: discover, sortBest: sortBest), cwd: vault.rootURL)
-        struct MergedList: Decodable {
-            let verified: [CatalogModelInfo]
-            let unverified: [CatalogModelInfo]?
+        return try await trackAsyncAction(
+            category: .settings,
+            action: "settings.test_model",
+            startSummary: "Probe \(modelType) model \(modelID) (\(provider))",
+            metadata: ["provider": provider, "model": modelID, "type": modelType],
+            successDetail: { result in
+                (
+                    result.ok
+                        ? "Probe passed: \(modelID) (\(result.latency))"
+                        : "Probe failed: \(modelID) (\(result.errorCode ?? "error"))",
+                    [
+                        "provider": provider,
+                        "model": modelID,
+                        "type": modelType,
+                        "ok": result.ok ? "true" : "false",
+                        "latency": result.latency,
+                        "detail": result.detail ?? "",
+                    ]
+                )
+            }
+        ) {
+            let args = ["models", "test", modelID, "--provider", provider, "--type", modelType, "--json", "--porcelain"]
+            let data: Data
+            if let vault {
+                data = try await runCLIAllowingNonZero(args, cwd: vault.rootURL)
+            } else {
+                let raw = try await runCLIGlobalRaw(args, expectNonZeroExit: true)
+                if raw.stdout.isEmpty && raw.status != 0 && !raw.stderrText.isEmpty {
+                    throw CLIError.nonZeroExit(raw.status, message: raw.stderrText)
+                }
+                data = raw.stdout
+            }
+            let result = try JSONDecoder().decode(AIProbeResult.self, from: data)
+            let boundedDetail = result.detail.map { Self.boundedRedacted($0) }
+            let resolvedModel = result.modelID.isEmpty ? modelID : result.modelID
+            let resolvedProvider = result.provider.isEmpty ? provider : result.provider
+            actionTracker.updateStatus { status in
+                if modelType == "generation" {
+                    status.lastGenProbeModel = resolvedModel
+                    status.lastGenProbeProvider = resolvedProvider
+                    status.lastGenProbeOK = result.ok
+                    status.lastGenProbeDetail = boundedDetail
+                    status.lastGenProbeLatency = result.latency
+                } else if modelType == "embedding" {
+                    status.lastEmbedProbeModel = resolvedModel
+                    status.lastEmbedProbeProvider = resolvedProvider
+                    status.lastEmbedProbeOK = result.ok
+                    status.lastEmbedProbeDetail = boundedDetail
+                    status.lastEmbedProbeLatency = result.latency
+                }
+            }
+            if vault != nil {
+                Task { @MainActor [weak self] in await self?.refreshMetrics() }
+            }
+            return result
         }
-        // The CLI currently emits a flat array for `models list`, but
-        // when --discover is set the response may be the MergedModelList
-        // wrapper. Try the wrapper first; fall back to flat array.
-        if let merged = try? JSONDecoder().decode(MergedList.self, from: data) {
-            return merged.verified + (merged.unverified ?? [])
-        }
-        return try JSONDecoder().decode([CatalogModelInfo].self, from: data)
     }
 
-    /// Fetches the full merged catalog including discovered-but-unverified
-    /// vendor models. Used by the Model Wizard / Hub where the user
-    /// explicitly wants to see everything available, verified or not.
-    func fetchModelsForWizard() async throws -> [CatalogModelInfo] {
-        try await fetchModelsCatalog(discover: true)
-    }
-
-    /// Argv for `models cost-preview --probe`. Extracted so Validate can pin
-    /// the same IDs the confirm showed onto `verifyModelsArgs`. Carries
-    /// `--discover` so the CLI resolves IDs against the discovered pool too:
-    /// a mantle-plane discovery has no catalog entry until verified, and
-    /// without the flag its estimate would silently resolve to $0,
-    /// under-stating the spend the Validate confirm is gating.
-    nonisolated static func costPreviewArgs(modelIDs: [String], probe: String) -> [String] {
-        var args = ["models", "cost-preview", "--json", "--porcelain", "--probe", probe, "--discover"]
-        args.append(contentsOf: modelIDs)
-        return args
-    }
-
-    func costPreview(modelIDs: [String], probe: String) async throws -> CostPreviewResponse {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.costPreviewArgs(modelIDs: modelIDs, probe: probe), cwd: vault.rootURL)
-        return try JSONDecoder().decode(CostPreviewResponse.self, from: data)
-    }
-
-    /// Recent benchmark runs from the vault's bench.db (`models bench
-    /// history --json`). The CLI emits JSON null (not []) when the history
-    /// is empty, so decode falls back to an empty list.
-    func fetchBenchHistory(limit: Int = 50) async throws -> [BenchRunInfo] {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["models", "bench", "history", "--limit", "\(limit)", "--json", "--porcelain"], cwd: vault.rootURL)
-        return (try? JSONDecoder().decode([BenchRunInfo].self, from: data)) ?? []
-    }
-
-    /// Benchmark favorites from the vault's bench.db (`models bench favs
-    /// --json`). Same null-for-empty CLI behavior as history, so decode falls
-    /// back to an empty list.
-    func fetchBenchFavorites() async throws -> [BenchFavoriteInfo] {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["models", "bench", "favs", "--json", "--porcelain"], cwd: vault.rootURL)
-        return (try? JSONDecoder().decode([BenchFavoriteInfo].self, from: data)) ?? []
-    }
-
-    /// Latest run per (model, probe) pair from bench.db (`models bench
-    /// compare --json`, the same []bench.Run shape as history; JSON null
-    /// when no runs are recorded, so decode falls back to an empty list).
-    func fetchBenchCompare() async throws -> [BenchRunInfo] {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["models", "bench", "compare", "--json", "--porcelain"], cwd: vault.rootURL)
-        return (try? JSONDecoder().decode([BenchRunInfo].self, from: data)) ?? []
-    }
-
-    /// Adds a model to the benchmark favorites (`models bench fav`).
-    /// Passing the provider explicitly (instead of the CLI's id inference)
-    /// keeps the stored favorite identical to the catalog row it came from.
-    func addBenchFavorite(modelID: String, provider: String) async throws {
-        guard let vault else { throw CLIError.noVault }
-        _ = try await runCLI(["models", "bench", "fav", modelID, "--provider", provider, "--porcelain"], cwd: vault.rootURL)
-    }
-
-    /// Removes a model from the benchmark favorites (`models bench unfav`).
-    func removeBenchFavorite(modelID: String, provider: String) async throws {
-        guard let vault else { throw CLIError.noVault }
-        _ = try await runCLI(["models", "bench", "unfav", modelID, "--provider", provider, "--porcelain"], cwd: vault.rootURL)
-    }
-
-    // MARK: - Quality eval (Testing tab Quality pane)
-
-    /// Argv for `2nb eval [answers|tune] --estimate --json`: the CLI-computed
-    /// cost preview for an eval run. Local (no model calls), and it works on
-    /// vaults the real run would refuse, so the pane can price the confirm
-    /// before any spend.
-    nonisolated static func evalEstimateArgs(subcommand: String?) -> [String] {
-        var args = ["eval"]
-        if let subcommand, !subcommand.isEmpty { args.append(subcommand) }
-        args += ["--estimate", "--json", "--porcelain"]
-        return args
-    }
-
-    /// Argv for a real eval run: `--yes` (the PaidOperationConfirm already
-    /// happened in the GUI) plus a derived `--cost-cap` so the CLI's spend
-    /// guard still trips on a runaway but never on the amount the user just
-    /// approved (the VerifyFlow convention).
-    nonisolated static func evalRunArgs(subcommand: String?, costCap: Double) -> [String] {
-        var args = ["eval"]
-        if let subcommand, !subcommand.isEmpty { args.append(subcommand) }
-        args += ["--json", "--yes", "--cost-cap", String(format: "%.4f", costCap), "--porcelain"]
-        return args
-    }
-
-    /// The CLI's own cost estimate for an eval run (nil subcommand = the
-    /// retrieval scorecard; "answers" / "tune" for the subcommands).
-    func evalEstimate(subcommand: String? = nil) async throws -> EvalEstimateInfo {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.evalEstimateArgs(subcommand: subcommand), cwd: vault.rootURL)
-        return try JSONDecoder().decode(EvalEstimateInfo.self, from: data)
-    }
-
-    /// Runs the retrieval scorecard (`2nb eval --json --yes --cost-cap`).
-    ///
-    /// Deliberately OUTSIDE the CLIWatchdog absolute bound (hangWatchdog:
-    /// false), like the streaming runners and embedProbe: an uncached run
-    /// makes n real generation calls (QA-set build) plus n query embeds,
-    /// each self-bounded by the CLI's strategy-aware transport deadlines,
-    /// and an app-side SIGTERM would bill the user for a QA set they never
-    /// see cached.
-    func runEvalScorecard(costCap: Double) async throws -> EvalReportInfo {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.evalRunArgs(subcommand: nil, costCap: costCap), cwd: vault.rootURL, hangWatchdog: false)
-        return try JSONDecoder().decode(EvalReportInfo.self, from: data)
-    }
-
-    /// Runs the answer-quality jury (`2nb eval answers`). Same watchdog
-    /// exemption rationale as runEvalScorecard, and this is the costly one
-    /// (n answers + n x judges gradings).
-    func runEvalAnswers(costCap: Double) async throws -> EvalAnswersInfo {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.evalRunArgs(subcommand: "answers", costCap: costCap), cwd: vault.rootURL, hangWatchdog: false)
-        return try JSONDecoder().decode(EvalAnswersInfo.self, from: data)
-    }
-
-    /// Runs the tuning sweep (`2nb eval tune`). Suggest-only on the CLI side:
-    /// nothing is written; the pane renders the suggested `config set`
-    /// commands and never applies them.
-    func runEvalTune(costCap: Double) async throws -> EvalTuneInfo {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.evalRunArgs(subcommand: "tune", costCap: costCap), cwd: vault.rootURL, hangWatchdog: false)
-        return try JSONDecoder().decode(EvalTuneInfo.self, from: data)
-    }
-
-    // MARK: - Advanced settings (config visibility)
-
-    /// Writes one vault config key via `2nb config set`. Validation lives in
-    /// the CLI (ranges, Matryoshka dimension checks); its stderr comes back
-    /// verbatim through CLIError.nonZeroExit so the UI can show the real rule.
     func setConfigValue(_ key: String, _ value: String) async throws {
         guard let vault else { throw CLIError.noVault }
-        _ = try await runCLI(["config", "set", key, value, "--porcelain"], cwd: vault.rootURL)
+        let lowerKey = key.lowercased()
+        let isSensitive = lowerKey.contains("key") || lowerKey.contains("token") || lowerKey.contains("secret")
+        let safeMetadata: [String: String] = [
+            "key": key,
+            "value": isSensitive ? "<REDACTED>" : value,
+        ]
+        _ = try await trackAsyncAction(
+            category: .settings,
+            action: "settings.set_config",
+            startSummary: isSensitive ? "Set config \(key)" : "Set config \(key)=\(value)",
+            metadata: safeMetadata
+        ) {
+            try await runCLI(["config", "set", key, value, "--porcelain"], cwd: vault.rootURL)
+        }
     }
 
     /// Reads one raw config value (`2nb config get --porcelain`), trimmed.
@@ -2604,98 +2929,231 @@ final class AppState {
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Machine-local Bedrock credentials (`2nb config bedrock --json`).
-    /// Does not require a bound vault.
-    func refreshBedrockMachineConfig() async throws -> BedrockMachineStatus {
-        let data = try await runCLIGlobal(["config", "bedrock", "--json", "--porcelain"])
-        return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
+    nonisolated static func doctorSelfTestArgs(vaultRoot: URL?) -> [String] {
+        vaultRoot.map { CLIPath.args(["doctor", "--json", "--porcelain"], vault: $0) }
+            ?? ["doctor", "--json", "--porcelain"]
     }
 
-    /// Builds the `config bedrock --set` argv. Pure and unit-testable.
-    /// `verifyRegions` semantics: nil leaves the stored region list untouched,
-    /// an empty array clears it (`--clear-regions`), a non-empty array
-    /// replaces it (`--regions a,b`).
-    nonisolated static func bedrockSetArgs(region: String, hasToken: Bool, verifyRegions: [String]?, preferStored: Bool? = nil) -> [String] {
-        var args = ["config", "bedrock", "--set", "--json", "--porcelain"]
-        if !region.isEmpty {
-            args += ["--region", region]
-        }
-        if let verifyRegions {
-            if verifyRegions.isEmpty {
-                args.append("--clear-regions")
-            } else {
-                args += ["--regions", verifyRegions.joined(separator: ",")]
+    nonisolated static func resolvedSlotProvider(
+        from report: SelfTestReport,
+        slot: ModelSlotTestResult.Slot,
+        fallback: String?
+    ) -> String {
+        if let providerCheck = report.checks.first(where: { $0.name == "provider known" && $0.ok }) {
+            let detail = providerCheck.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if detail.hasPrefix("embed: "), let genRange = detail.range(of: ", generation: ") {
+                let embedPart = String(detail["embed: ".endIndex..<genRange.lowerBound])
+                    .trimmingCharacters(in: .whitespaces)
+                let genPart = String(detail[genRange.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+                let picked = slot == .embedding ? embedPart : genPart
+                if !picked.isEmpty { return picked }
+            } else if !detail.isEmpty && !detail.contains(",") {
+                return detail
             }
         }
-        if let preferStored {
-            args.append(preferStored ? "--prefer-stored-token" : "--no-prefer-stored-token")
+        if let fallback, !fallback.isEmpty {
+            return fallback
         }
-        if hasToken {
-            args.append("--token-stdin")
-        }
-        return args
+        return report.provider
     }
 
-    func saveBedrockMachineConfig(region: String, token: String?, verifyRegions: [String]? = nil, preferStored: Bool? = nil) async throws -> BedrockMachineStatus {
-        let hasToken = !(token ?? "").isEmpty
-        let args = Self.bedrockSetArgs(region: region, hasToken: hasToken, verifyRegions: verifyRegions, preferStored: preferStored)
-        let stdin: Data? = hasToken ? Data(token!.utf8) : nil
-        let data = try await runCLIGlobal(args, stdin: stdin)
-        return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
-    }
-
-    func clearBedrockToken() async throws -> BedrockMachineStatus {
-        let data = try await runCLIGlobal(["config", "bedrock", "--clear-token", "--json", "--porcelain"])
-        return try JSONDecoder().decode(BedrockMachineStatus.self, from: data)
-    }
-
-    /// Runs the real end-to-end self-test (`2nb doctor --json`) and returns its
-    /// selftest block.
-    ///
-    /// Deliberately `runCLIGlobal`, not the vault-scoped runner: the CLI's tier
-    /// 1 (credentials + both active models) needs no vault, which is what makes
-    /// this usable from the Settings window during first-run setup — the exact
-    /// moment a user's key is wrong and no vault is bound yet. The CLI resolves
-    /// the vault itself, read-only, and skips its vault tier when none is
-    /// available.
-    ///
-    /// The command exits NON-ZERO exactly when the self-test finds a problem,
-    /// and the verdict the user needs is on stdout. So this reads stdout
-    /// regardless of exit status via runCLIGlobalRaw; a failing self-test is a
-    /// result to render, not an error to swallow. Only an unparseable payload
-    /// is a genuine failure, and then the CLI's stderr is the message.
     func runDoctorSelfTest(extraEnvironment: [String: String]? = nil) async throws -> SelfTestReport {
-        let result = try await runCLIGlobalRaw(
-            ["doctor", "--json", "--porcelain"],
-            expectNonZeroExit: true,
-            extraEnvironment: extraEnvironment
-        )
-        guard let report = try? JSONDecoder().decode(DoctorReport.self, from: result.stdout),
-              let selftest = report.selftest else {
-            let detail = result.stderrText.isEmpty
-                ? "the installed 2nb may predate `doctor --json`'s selftest block; run `brew upgrade apresai/tap/twonb`"
-                : result.stderrText
-            throw CLIError.nonZeroExit(result.status, message: detail)
+        try await trackAsyncAction(
+            category: .settings,
+            action: "settings.doctor_selftest",
+            startSummary: "Run doctor credential self-test",
+            successDetail: { report in
+                let modelsOK = SelfTestPresentation.modelsTestPassed(report)
+                return (
+                    "AI model test \(modelsOK ? "passed" : "failed") (\(report.credentials))",
+                    [
+                        "ok": modelsOK ? "true" : "false",
+                        "doctor_ok": report.ok ? "true" : "false",
+                        "provider": report.provider,
+                        "credentials": report.credentials,
+                    ]
+                )
+            }
+        ) {
+            let result = try await runCLIGlobalRaw(
+                Self.doctorSelfTestArgs(vaultRoot: vault?.rootURL),
+                expectNonZeroExit: true,
+                extraEnvironment: extraEnvironment
+            )
+            guard let report = try? JSONDecoder().decode(DoctorReport.self, from: result.stdout),
+                  let selftest = report.selftest else {
+                let detail = result.stderrText.isEmpty
+                    ? "the installed 2nb may predate `doctor --json`'s selftest block; run `brew upgrade apresai/tap/twonb`"
+                    : result.stderrText
+                throw CLIError.nonZeroExit(result.status, message: detail)
+            }
+            let modelsOK = SelfTestPresentation.modelsTestPassed(selftest)
+            let genProvider = extraEnvironment == nil
+                ? Self.resolvedSlotProvider(from: selftest, slot: .generation, fallback: aiStatus?.effectiveGenerationProvider)
+                : selftest.provider
+            let embedProvider = extraEnvironment == nil
+                ? Self.resolvedSlotProvider(from: selftest, slot: .embedding, fallback: aiStatus?.effectiveEmbeddingProvider)
+                : selftest.provider
+            let summary = Self.boundedRedacted(
+                SelfTestPresentation.modelsHeadline(selftest, genProvider: genProvider, embedProvider: embedProvider)
+            )
+            actionTracker.updateStatus { status in
+                status.lastModelsTestOK = modelsOK
+                status.lastDoctorOK = modelsOK
+                status.lastDoctorCredentials = selftest.credentials
+                status.lastDoctorSummary = summary
+                if extraEnvironment == nil {
+                    let slots = SelfTestPresentation.extractSlotResults(
+                        selftest,
+                        genProvider: genProvider,
+                        embedProvider: embedProvider
+                    )
+                    if let genSlot = slots.first(where: { $0.slot == .generation }) {
+                        if !genSlot.modelID.isEmpty {
+                            status.lastGenProbeModel = genSlot.modelID
+                        }
+                        if !genSlot.provider.isEmpty {
+                            status.lastGenProbeProvider = genSlot.provider
+                        }
+                        status.lastGenProbeOK = genSlot.ok
+                        let rawDetail = selftest.checks.first(where: { $0.name == "answer model" || $0.name.hasPrefix("answer model (") })?.detail ?? ""
+                        status.lastGenProbeDetail = Self.boundedRedacted(genSlot.responseProof.isEmpty ? rawDetail : genSlot.responseProof)
+                        status.lastGenProbeLatency = genSlot.latency
+                    }
+                    if let embedSlot = slots.first(where: { $0.slot == .embedding }) {
+                        if !embedSlot.modelID.isEmpty {
+                            status.lastEmbedProbeModel = embedSlot.modelID
+                        }
+                        if !embedSlot.provider.isEmpty {
+                            status.lastEmbedProbeProvider = embedSlot.provider
+                        }
+                        status.lastEmbedProbeOK = embedSlot.ok
+                        let rawDetail = selftest.checks.first(where: { $0.name == "search model" || $0.name.hasPrefix("search model (") })?.detail ?? ""
+                        status.lastEmbedProbeDetail = Self.boundedRedacted(embedSlot.responseProof.isEmpty ? rawDetail : embedSlot.responseProof)
+                        status.lastEmbedProbeLatency = embedSlot.latency
+                    }
+                }
+            }
+            if vault != nil {
+                Task { @MainActor [weak self] in await self?.refreshMetrics() }
+            }
+            return selftest
         }
-        return selftest
     }
 
-    /// Runs the self-test against a candidate bearer token WITHOUT storing it.
-    ///
-    /// `AWS_BEARER_TOKEN_BEDROCK` is the first rung of the CLI's token
-    /// precedence, so an env-only probe reaches Bedrock with the typed key while
-    /// `~/.config/2nb/bedrock.json` is untouched. That is what lets the Settings
-    /// page verify a key BEFORE accepting it — the claim its caption makes —
-    /// instead of overwriting a working credential and having no way back.
-    func probeBedrockToken(_ token: String) async throws -> SelfTestReport {
-        // The CANDIDATE key rides in via the env var; the ignore flag makes
-        // the env win even when prefer_stored_token is on — otherwise the
-        // probe would silently test the STORED key instead of the candidate
-        // and verify-before-accept would approve the wrong key.
-        try await runDoctorSelfTest(extraEnvironment: [
-            "AWS_BEARER_TOKEN_BEDROCK": token,
-            "2NB_BEDROCK_IGNORE_PREFER_STORED": "1",
-        ])
+    nonisolated static func credentialProbeEnvironment(
+        provider: String = "gemini",
+        apiKey: String? = nil,
+        project: String? = nil,
+        location: String? = nil
+    ) -> [String: String] {
+        var env: [String: String] = [:]
+        if !provider.isEmpty {
+            env["2NB_DOCTOR_PROBE_PROVIDER"] = (provider == "google" ? "gemini" : provider)
+        }
+        if provider == "gemini" || provider == "google" {
+            if let apiKey, !apiKey.isEmpty {
+                env["GEMINI_API_KEY"] = apiKey
+                env["2NB_DOCTOR_PROBE_GEMINI_MODE"] = "apikey"
+            } else if let project, !project.isEmpty {
+                env["GOOGLE_CLOUD_PROJECT"] = project
+                env["2NB_DOCTOR_PROBE_GEMINI_MODE"] = "vertex"
+                env["2NB_DOCTOR_PROBE_GCP_PROJECT"] = project
+                if let location, !location.isEmpty {
+                    env["GOOGLE_CLOUD_LOCATION"] = location
+                    env["2NB_DOCTOR_PROBE_GCP_LOCATION"] = location
+                }
+            }
+        } else if provider == "bedrock" {
+            if let apiKey, !apiKey.isEmpty {
+                env["AWS_BEARER_TOKEN_BEDROCK"] = apiKey
+                env["2NB_BEDROCK_IGNORE_PREFER_STORED"] = "1"
+            }
+        }
+        return env
+    }
+
+    /// Runs the self-test against candidate credentials without permanently storing them.
+    /// Supports Gemini (GEMINI_API_KEY / Google ADC / GCP project) and Bedrock.
+    func probeCredentials(provider: String = "gemini", apiKey: String? = nil, project: String? = nil, location: String? = nil) async throws -> SelfTestReport {
+        let env = Self.credentialProbeEnvironment(
+            provider: provider,
+            apiKey: apiKey,
+            project: project,
+            location: location
+        )
+        return try await runDoctorSelfTest(extraEnvironment: env.isEmpty ? nil : env)
+    }
+
+    /// Read stored Gemini API key from macOS Keychain if available.
+    func getStoredGeminiKey() -> String? {
+        let sec = Process()
+        sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        sec.arguments = ["find-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini", "-w"]
+        let pipe = Pipe()
+        sec.standardOutput = pipe
+        sec.standardError = FileHandle.nullDevice
+        do {
+            try sec.run()
+            sec.waitUntilExit()
+            if sec.terminationStatus == 0 {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let str, !str.isEmpty { return str }
+            }
+        } catch {}
+        return nil
+    }
+
+    static func setKeyStdinData(_ key: String) -> Data {
+        Data((key.trimmingCharacters(in: .whitespacesAndNewlines) + "\n").utf8)
+    }
+
+    /// Save Gemini API key to macOS Keychain and 2nb keystore.
+    func saveGeminiKey(_ key: String) async throws {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = try await trackAsyncAction(
+            category: .settings,
+            action: "settings.save_gemini_key",
+            startSummary: "Save Gemini API key to Keychain & CLI keystore"
+        ) {
+            let sec = Process()
+            sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini", "-w", trimmed, "-U"]
+            sec.standardOutput = FileHandle.nullDevice
+            sec.standardError = FileHandle.nullDevice
+            try? sec.run()
+            sec.waitUntilExit()
+
+            return try await runCLIGlobal(["config", "set-key", "gemini"], stdin: Self.setKeyStdinData(trimmed))
+        }
+    }
+
+    /// Clear Gemini API key from macOS Keychain.
+    func clearGeminiKey() async throws {
+        actionTracker.record(
+            category: .settings,
+            action: "settings.clear_gemini_key",
+            phase: .started,
+            summary: "Clear Gemini API key from Keychain"
+        )
+        let start = ContinuousClock.now
+        let sec = Process()
+        sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        sec.arguments = ["delete-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini"]
+        sec.standardOutput = FileHandle.nullDevice
+        sec.standardError = FileHandle.nullDevice
+        try? sec.run()
+        sec.waitUntilExit()
+        actionTracker.record(
+            category: .settings,
+            action: "settings.clear_gemini_key",
+            phase: .succeeded,
+            durationMs: elapsedMilliseconds(since: start),
+            summary: "Cleared Gemini API key from Keychain"
+        )
     }
 
     /// The full effective configuration (`2nb config show --json`), returned
@@ -2705,66 +3163,62 @@ final class AppState {
         return try await runCLI(["config", "show", "--json", "--porcelain"], cwd: vault.rootURL)
     }
 
-    /// Samples the vault's stored embeddings and saves a recommended
-    /// similarity threshold to the vault catalog. Free: pure cosine math
-    /// over stored vectors, no provider calls.
-    func calibrateThreshold() async throws -> CalibrationInfo {
+    func setGenerationSlot(provider: String, modelID: String) async throws {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["models", "calibrate", "--save", "--scope", "vault", "--json", "--porcelain"], cwd: vault.rootURL)
-        return try JSONDecoder().decode(CalibrationInfo.self, from: data)
+        if isIndexing { throw CLIError.indexRebuildInProgress }
+
+        _ = try await trackAsyncAction(
+            category: .settings,
+            action: "settings.set_generation_slot",
+            startSummary: "Set generation slot to \(modelID) (\(provider))",
+            metadata: ["type": "generation", "model": modelID, "provider": provider]
+        ) {
+            let embedProvData = try? await runCLI(["config", "get", "ai.embedding_provider"], cwd: vault.rootURL)
+            let currentEmbedProvider = embedProvData.flatMap {
+                String(data: $0, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            } ?? ""
+
+            _ = try await runCLI(["config", "set", "ai.generation_provider", provider], cwd: vault.rootURL)
+            _ = try await runCLI(["config", "set", "ai.generation_model", modelID], cwd: vault.rootURL)
+            if currentEmbedProvider == provider {
+                _ = try await runCLI(["config", "set", "ai.provider", provider], cwd: vault.rootURL)
+            }
+            await refreshAIStatus()
+        }
     }
 
-    /// Ramps embed concurrency over a discarded sample to find the account's
-    /// real throughput ceiling. PAID (real embedding calls) and slow
-    /// (minutes); callers must confirm first.
-    ///
-    /// Deliberately OUTSIDE the CLIWatchdog absolute bound
-    /// (hangWatchdog: false), for the same reason the streaming runners are:
-    /// the probe ramps hundreds of real embedding calls across escalating
-    /// concurrency levels with no overall CLI deadline, so a slow or
-    /// throttled account can legitimately hold it past the watchdog while
-    /// still making progress. The CLI's own bounds contain the run instead
-    /// (each ramp level runs under a 3-minute context in
-    /// cli/internal/cli/ai_embed_probe.go probeOneLevel, over a finite level
-    /// list, and every embed call carries its transport deadline), so a hang
-    /// still ends; an app-side SIGTERM would discard a still-progressing
-    /// PAID probe and bill the user for a result they never see.
-    func embedProbe() async throws -> EmbedProbeInfo {
+    func setEmbeddingSlot(provider: String, modelID: String, dimensions: Int? = nil) async throws {
         guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["ai", "embed-probe", "--json", "--porcelain"], cwd: vault.rootURL, hangWatchdog: false)
-        return try JSONDecoder().decode(EmbedProbeInfo.self, from: data)
+        if isIndexing { throw CLIError.indexRebuildInProgress }
+
+        var meta: [String: String] = ["type": "embedding", "model": modelID, "provider": provider]
+        if let dimensions {
+            meta["dimensions"] = String(dimensions)
+        }
+
+        _ = try await trackAsyncAction(
+            category: .settings,
+            action: "settings.set_embedding_slot",
+            startSummary: "Set embedding slot to \(modelID) (\(provider))",
+            metadata: meta
+        ) {
+            let genProvData = try? await runCLI(["config", "get", "ai.generation_provider"], cwd: vault.rootURL)
+            let currentGenProvider = genProvData.flatMap {
+                String(data: $0, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            } ?? ""
+
+            _ = try await runCLI(["config", "set", "ai.embedding_provider", provider], cwd: vault.rootURL)
+            _ = try await runCLI(["config", "set", "ai.embedding_model", modelID], cwd: vault.rootURL)
+            if let dimensions, dimensions > 0 {
+                _ = try await runCLI(["config", "set", "ai.dimensions", String(dimensions)], cwd: vault.rootURL)
+            }
+            if currentGenProvider == provider {
+                _ = try await runCLI(["config", "set", "ai.provider", provider], cwd: vault.rootURL)
+            }
+            await refreshAIStatus()
+        }
     }
 
-    /// Tests one model and saves it on pass. Matches the wizard flow step.
-    /// Returns the decoded AIProbeResult so the UI can render outcome + latency.
-    func testAndSave(modelID: String, provider: String, type: String, scope: String) async throws -> AIProbeResult {
-        guard let vault else { throw CLIError.noVault }
-        log.info("AI Hub action: test \(modelID, privacy: .public) (provider=\(provider, privacy: .public) type=\(type, privacy: .public) scope=\(scope, privacy: .public))")
-        let data = try await runCLI(
-            [
-                "models", "test", modelID,
-                "--provider", provider,
-                "--type", type,
-                "--save",
-                "--scope", scope,
-                "--json", "--porcelain",
-            ],
-            cwd: vault.rootURL
-        )
-        return try JSONDecoder().decode(AIProbeResult.self, from: data)
-    }
-
-    /// Writes ai.provider plus ai.embedding_model or ai.generation_model via `2nb config set`
-    /// so the AI Hub can swap the active model without shelling through the
-    /// full setup wizard. Caller is responsible for validating type is
-    /// "embedding" or "generation". Triggers a config.yaml FSEvent which
-    /// rolls the Hub's displayed state automatically.
-    ///
-    /// Refuses while an index rebuild is running — flipping the provider
-    /// mid-rebuild produces mixed-model embeddings in one DB. Snapshots the
-    /// current `ai.provider`; skips the provider write if unchanged, and
-    /// reverts it if the model-key write fails so the vault never sits with
-    /// a new provider against an old model.
     func setActiveModel(type: String, modelID: String, provider: String) async throws {
         guard let vault else { throw CLIError.noVault }
         if isIndexing { throw CLIError.indexRebuildInProgress }
@@ -2773,611 +3227,31 @@ final class AppState {
         // provider. Set its model + enable it without touching ai.provider or
         // the embed/gen model, which would disrupt those slots.
         if type == "rerank" {
-            log.info("AI Hub action: set ai.rerank.model=\(modelID, privacy: .public) and enable rerank")
-            _ = try await runCLI(["config", "set", "ai.rerank.model", modelID], cwd: vault.rootURL)
-            _ = try await runCLI(["config", "set", "ai.rerank.enabled", "true"], cwd: vault.rootURL)
+            _ = try await trackAsyncAction(
+                category: .settings,
+                action: "settings.set_active_model",
+                startSummary: "Set active rerank model to \(modelID) (\(provider))",
+                metadata: ["type": type, "model": modelID, "provider": provider]
+            ) {
+                log.info("AI Hub action: set ai.rerank.model=\(modelID, privacy: .public) and enable rerank")
+                _ = try await runCLI(["config", "set", "ai.rerank.model", modelID], cwd: vault.rootURL)
+                _ = try await runCLI(["config", "set", "ai.rerank.enabled", "true"], cwd: vault.rootURL)
+            }
             return
         }
 
-        let key: String
         switch type {
-        case "embedding": key = "ai.embedding_model"
-        case "generation": key = "ai.generation_model"
+        case "embedding":
+            let dims: Int? = ((provider == "gemini" || provider == "google") && (modelID == "gemini-embedding-2" || modelID == "gemini-embedding-001")) ? 768 : nil
+            try await setEmbeddingSlot(provider: provider, modelID: modelID, dimensions: dims)
+        case "generation":
+            try await setGenerationSlot(provider: provider, modelID: modelID)
         default:
-            throw CLIError.noVault  // fall through — callers must pass a known type
-        }
-
-        let oldProviderData = try await runCLI(
-            ["config", "get", "ai.provider"],
-            cwd: vault.rootURL
-        )
-        let oldProvider = String(data: oldProviderData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        log.info("AI Hub action: set ai.provider=\(provider, privacy: .public) and \(key, privacy: .public)=\(modelID, privacy: .public) (was provider=\(oldProvider, privacy: .public))")
-
-        let providerChanged = oldProvider != provider
-        if providerChanged {
-            _ = try await runCLI(
-                ["config", "set", "ai.provider", provider],
-                cwd: vault.rootURL
-            )
-        }
-        do {
-            _ = try await runCLI(
-                ["config", "set", key, modelID],
-                cwd: vault.rootURL
-            )
-        } catch {
-            if providerChanged && !oldProvider.isEmpty {
-                log.error("setActiveModel partial-write: ai.provider was set to \(provider, privacy: .public) but \(key, privacy: .public)=\(modelID, privacy: .public) failed; reverting ai.provider to \(oldProvider, privacy: .public)")
-                _ = try? await runCLI(
-                    ["config", "set", "ai.provider", oldProvider],
-                    cwd: vault.rootURL
-                )
-            }
-            throw error
+            throw CLIError.noVault
         }
     }
 
-    /// Enable or disable the optional rerank stage via `ai.rerank.enabled`.
-    /// The rerank stage ships OFF and is measured to hurt retrieval at this
-    /// scale, so the GUI exposes turning it off as first-class.
-    func setRerankEnabled(_ enabled: Bool) async throws {
-        guard let vault else { throw CLIError.noVault }
-        log.info("AI Hub action: set ai.rerank.enabled = \(enabled, privacy: .public)")
-        _ = try await runCLI(
-            ["config", "set", "ai.rerank.enabled", String(enabled)],
-            cwd: vault.rootURL
-        )
-    }
-
-    /// Atomically switch the vault to the local Gemma stack: provider=llama-local
-    /// + the local embedding + generation models + their dimension, then re-embed
-    /// (the embedding model + dimension change invalidate the stored vectors). One
-    /// `ai.provider` drives both slots, so this is all-or-nothing by design; the
-    /// whole slot set is written before any resolution so there is never a
-    /// transient mixed state (llama-local provider against a Bedrock embedder).
-    func activateLocalStack(embedID: String, genID: String, dimensions: Int) async throws {
-        guard let vault else { throw CLIError.noVault }
-        if isIndexing { throw CLIError.indexRebuildInProgress }
-        log.info("AI Hub action: activate llama-local stack embed=\(embedID, privacy: .public) gen=\(genID, privacy: .public) dims=\(dimensions)")
-        _ = try await runCLI(["config", "set", "ai.provider", "llama-local"], cwd: vault.rootURL)
-        _ = try await runCLI(["config", "set", "ai.embedding_model", embedID], cwd: vault.rootURL)
-        _ = try await runCLI(["config", "set", "ai.dimensions", String(dimensions)], cwd: vault.rootURL)
-        _ = try await runCLI(["config", "set", "ai.generation_model", genID], cwd: vault.rootURL)
-        await refreshAIStatus()
-        // Re-embed with the new (768-dim) local embedding model.
-        rebuildIndex(forceReembed: true)
-    }
-
-    /// Deletes cached local model weights via `ai engine rm --json` and returns
-    /// the bytes freed. Clears the download banner so the section returns to idle.
-    func deleteLocalModels(_ ids: [String]) async throws -> Int64 {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(["ai", "engine", "rm", "--json"] + ids, cwd: vault.rootURL)
-        struct RmResp: Decodable {
-            let freedBytes: Int64
-            enum CodingKeys: String, CodingKey { case freedBytes = "freed_bytes" }
-        }
-        let resp = try JSONDecoder().decode(RmResp.self, from: data)
-        localModelDownload = nil
-        await refreshAIStatus()
-        return resp.freedBytes
-    }
-
-    /// Flips ai.<provider>.disabled via `2nb config set`. The GUI uses
-    /// this to silence a provider without removing credentials.
-    func setProviderDisabled(_ provider: String, disabled: Bool) async throws {
-        guard let vault else { throw CLIError.noVault }
-        let key = "ai.\(provider).disabled"
-        log.info("AI Hub action: set \(key, privacy: .public) = \(disabled, privacy: .public)")
-        _ = try await runCLI(
-            ["config", "set", key, String(disabled)],
-            cwd: vault.rootURL
-        )
-    }
-
-    /// Enable or disable a single model in the user catalog so it shows /
-    /// hides from selection dropdowns. Mirrors `2nb models enable|disable`.
-    func setModelEnabled(_ modelID: String, provider: String, scope: String, enabled: Bool) async throws {
-        guard let vault else { throw CLIError.noVault }
-        let verb = enabled ? "enable" : "disable"
-        log.info("AI Hub action: models \(verb, privacy: .public) \(modelID, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public))")
-        _ = try await runCLI(
-            ["models", verb, modelID, "--provider", provider, "--scope", scope],
-            cwd: vault.rootURL
-        )
-    }
-
-    func setModelEnableState(_ modelID: String, provider: String, scope: String, state: String) async throws {
-        guard let vault else { throw CLIError.noVault }
-        log.info("AI Hub action: models enable-state \(modelID, privacy: .public) state=\(state, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public))")
-        _ = try await runCLI(
-            ["models", "enable-state", modelID, "--provider", provider, "--scope", scope, "--state", state],
-            cwd: vault.rootURL
-        )
-    }
-
-    /// Threshold-only update against the user catalog.
-    ///
-    /// Intentionally avoids passing `--price-in / --price-out / --price-request`
-    /// even when the in-memory model carries those values: Go's `mergeAddCatalogEntry`
-    /// derives `priceOverride` from `cmd.Flags().Changed(...)`, so any passed
-    /// price flag (even with the existing value) flips `PriceSource` to
-    /// `"user"` and disables future live-pricing refresh.
-    func setModelSimilarityThreshold(_ model: CatalogModelInfo, threshold: Double, scope: String) async throws {
-        guard let vault else { throw CLIError.noVault }
-        log.info("AI Hub action: models add \(model.modelID, privacy: .public) similarity_threshold=\(threshold, privacy: .public) scope=\(scope, privacy: .public)")
-        var args = [
-            "models", "add", model.modelID,
-            "--provider", model.provider,
-            "--type", model.modelType,
-            "--scope", scope,
-            "--similarity-threshold", String(format: "%.4f", threshold),
-        ]
-        if !model.name.isEmpty {
-            args.append(contentsOf: ["--name", model.name])
-        }
-        if let dimensions = model.dimensions, dimensions > 0 {
-            args.append(contentsOf: ["--dimensions", String(dimensions)])
-        }
-        if let contextLen = model.contextLen, contextLen > 0 {
-            args.append(contentsOf: ["--context-length", String(contextLen)])
-        }
-        if let notes = model.notes, !notes.isEmpty {
-            args.append(contentsOf: ["--notes", notes])
-        }
-        _ = try await runCLI(args, cwd: vault.rootURL)
-    }
-
-    /// Argv for `models bench --json`. A nil/empty modelID runs the favorites
-    /// battery (the CLI's own --model-less path: every favorited model, or the
-    /// active embedding + generation pair when no favorites exist); a
-    /// nil/empty probe runs the full battery appropriate to each model's type.
-    /// Extracted so the Testing tab's run buttons are argv-testable.
-    nonisolated static func benchArgs(modelID: String?, provider: String?, probe: String?) -> [String] {
-        var args = ["models", "bench"]
-        if let modelID, !modelID.isEmpty {
-            args += ["--model", modelID]
-            if let provider, !provider.isEmpty {
-                args += ["--provider", provider]
-            }
-        }
-        if let probe, !probe.isEmpty {
-            args += ["--probe", probe]
-        }
-        args += ["--json", "--porcelain"]
-        return args
-    }
-
-    func benchmarkModel(modelID: String, provider: String, type: String, probe: String, onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
-        try await streamBenchEvents(args: Self.benchArgs(modelID: modelID, provider: provider, probe: probe), onEvent: onEvent)
-    }
-
-    /// Runs the favorites battery: `models bench` with no --model (every
-    /// favorited model, falling back to the active models) and no --probe
-    /// (the full battery per model type), streaming the same NDJSON events.
-    func benchmarkFavorites(onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
-        try await streamBenchEvents(args: Self.benchArgs(modelID: nil, provider: nil, probe: nil), onEvent: onEvent)
-    }
-
-    /// Streaming runner: deliberately NOT under the CLIWatchdog absolute
-    /// bound. The CLI self-bounds each bench probe with a strategy-aware
-    /// deadline (cli/internal/ai/timeouts.go), and an app-side kill would
-    /// orphan a partially persisted run: bench.db rows and the per-model
-    /// summary land as the run streams, so killing it mid-run leaves history
-    /// that no completed run explains.
-    private func streamBenchEvents(args: [String], onEvent: @escaping @Sendable @MainActor (BenchmarkEvent) -> Void) async throws {
-        guard let vault else { throw CLIError.noVault }
-        let fullArgs = CLIPath.args(args, vault: vault.rootURL)
-        let cmd = "2nb " + fullArgs.joined(separator: " ")
-        log.info("AI Hub action: \(cmd, privacy: .public)")
-        let errorLogger = self.errorLogger
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-            process.arguments = fullArgs
-            process.currentDirectoryURL = vault.rootURL
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            let state = LineBuffer()
-            stdout.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                for line in state.append(data) {
-                    if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
-                        Task { @MainActor in onEvent(event) }
-                    }
-                }
-            }
-
-            process.terminationHandler = { proc in
-                stdout.fileHandleForReading.readabilityHandler = nil
-                for line in state.append(stdout.fileHandleForReading.readDataToEndOfFile()) {
-                    if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
-                        Task { @MainActor in onEvent(event) }
-                    }
-                }
-                for line in state.finish() {
-                    if let event = try? JSONDecoder().decode(BenchmarkEvent.self, from: Data(line.utf8)) {
-                        Task { @MainActor in onEvent(event) }
-                    }
-                }
-                if proc.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    let errMsg = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
-                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
-                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
-                errorLogger?.log("CLI \(cmd) launch failed", error: error)
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-
-    /// Streams `2nb models verify --events` for `provider`, invoking `onEvent`
-    /// on the main actor per decoded NDJSON event (`start` / `result` / `done`).
-    /// Restricts to the provider's effectively-enabled models via `--enabled-only`
-    /// by default; pass explicit `modelIDs` to verify exactly those (the
-    /// per-vendor action, since verify accepts model IDs as positional args).
-    /// `costCap` bounds the CLI's spend guard; see `VerifyFlow.costCap`.
-    ///
-    /// Clones the `benchmarkModel` streaming shape (a `Process` + `LineBuffer`
-    /// over stdout). A non-zero exit is surfaced as a thrown `CLIError.nonZeroExit`
-    /// carrying the stderr text (`VerifyFlow.classify`), so a cost-cap-exceeded
-    /// run (which exits non-zero with an empty stream and no error event) is a
-    /// visible failure rather than a silent no-op.
-    ///
-    /// Streaming runner: deliberately NOT under the CLIWatchdog absolute
-    /// bound. The CLI self-bounds the whole run (`models verify
-    /// --max-duration`, default 30m) and each probe inside it (strategy-aware
-    /// deadlines, cli/internal/ai/timeouts.go), and an app-side kill would
-    /// orphan a partially persisted run: verify persists every probe result
-    /// to the user catalog as it streams, so results already saved would
-    /// carry no `done` summary to explain them.
-    func verifyModels(
-        provider: String,
-        costCap: Double,
-        modelIDs: [String] = [],
-        onEvent: @escaping @Sendable @MainActor (VerifyEvent) -> Void
-    ) async throws {
-        guard let vault else { throw CLIError.noVault }
-        let verifyArgs = Self.verifyModelsArgs(provider: provider, costCap: costCap, modelIDs: modelIDs)
-        let fullArgs = CLIPath.args(verifyArgs, vault: vault.rootURL)
-        let cmd = "2nb " + fullArgs.joined(separator: " ")
-        log.info("AI Hub action: \(cmd, privacy: .public)")
-        let errorLogger = self.errorLogger
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-            process.arguments = fullArgs
-            process.currentDirectoryURL = vault.rootURL
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            let state = LineBuffer()
-            stdout.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                for line in state.append(data) {
-                    if let event = try? JSONDecoder().decode(VerifyEvent.self, from: Data(line.utf8)) {
-                        Task { @MainActor in onEvent(event) }
-                    }
-                }
-            }
-
-            process.terminationHandler = { proc in
-                stdout.fileHandleForReading.readabilityHandler = nil
-                for line in state.append(stdout.fileHandleForReading.readDataToEndOfFile()) {
-                    if let event = try? JSONDecoder().decode(VerifyEvent.self, from: Data(line.utf8)) {
-                        Task { @MainActor in onEvent(event) }
-                    }
-                }
-                for line in state.finish() {
-                    if let event = try? JSONDecoder().decode(VerifyEvent.self, from: Data(line.utf8)) {
-                        Task { @MainActor in onEvent(event) }
-                    }
-                }
-                let errMsg = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                switch VerifyFlow.classify(exitStatus: proc.terminationStatus, stderr: errMsg) {
-                case .success:
-                    continuation.resume()
-                case .failure(let message):
-                    log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(message, privacy: .public)")
-                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(message)")
-                    continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: message))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
-                errorLogger?.log("CLI \(cmd) launch failed", error: error)
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-
-    /// Enable or disable every model from a vendor within a provider in
-    /// one CLI call. The caller should pass the list of model IDs the
-    /// Hub has already rendered; this avoids a catalog-lookup round-
-    /// trip inside the CLI and, critically, covers discovered-only
-    /// models that haven't yet been tested/saved into the user catalog
-    /// (which the CLI's lookup wouldn't find). --vendor is passed for
-    /// logging / telemetry only.
-    func setVendorEnabled(vendor: String, provider: String, scope: String, enabled: Bool, modelIDs: [String]) async throws {
-        guard let vault else { throw CLIError.noVault }
-        let verb = enabled ? "enable" : "disable"
-        log.info("AI Hub action: models \(verb, privacy: .public) --vendor \(vendor, privacy: .public) (provider=\(provider, privacy: .public) scope=\(scope, privacy: .public) count=\(modelIDs.count))")
-        guard !modelIDs.isEmpty else { return }
-        var args = ["models", verb, "--vendor", vendor, "--provider", provider, "--scope", scope]
-        args.append(contentsOf: modelIDs)
-        _ = try await runCLI(args, cwd: vault.rootURL)
-    }
-
-    // MARK: - Discovery nudge (new-model "seen" snapshot)
-
-    /// Persisted set of `"provider|modelID"` keys already shown in the
-    /// Models tab discovery-nudge banner (`DiscoveryNudge`). App-side
-    /// (`UserDefaults`), deliberately not vault-side: a vault's
-    /// `.2ndbrain/` sidecar can sync across machines via Obsidian/git, and
-    /// a synced "seen" snapshot would mis-badge models as new (or not-new)
-    /// on a different machine than the one that actually saw them. The
-    /// CLI's own XDG discovery cache is a different namespace (a 24h-TTL
-    /// listing cache, not a per-viewer seen-set) and is not reused here.
-    ///
-    /// `nil` means no snapshot has ever been written (a fresh install, or
-    /// an app version predating this feature): SimpleModelsView reads
-    /// this distinction, together with `DiscoveryNudge.shouldSuppressFirstRun`'s
-    /// per-provider check, to seed the snapshot silently on first load
-    /// instead of badging the entire shipped catalog as "new".
-    var discoverySeenModelKeys: Set<String>? {
-        guard let stored = UserDefaults.standard.array(forKey: DiscoveryNudge.key) as? [String] else {
-            return nil
-        }
-        return Set(stored)
-    }
-
-    /// Merges `keys` into the persisted seen snapshot. Never removes an
-    /// existing entry, so a vendor momentarily absent from a reload (a
-    /// slow catalog fetch, a policy toggle mid-flight) can't un-badge a
-    /// model the user has already seen.
-    func recordDiscoverySeen(_ keys: Set<String>) {
-        guard !keys.isEmpty else { return }
-        let current = discoverySeenModelKeys ?? []
-        UserDefaults.standard.set(Array(current.union(keys)), forKey: DiscoveryNudge.key)
-    }
-
-    // MARK: - Discovery as a verb (models discover)
-
-    /// Whether the resolved CLI supports `2nb models discover`. nil = no
-    /// classified run yet this app session; the VERDICT settles on the first
-    /// classified run and is trusted afterwards (the discover command itself
-    /// still re-runs on reloads and refreshes). Kept in memory only, so a
-    /// `brew upgrade` mid-flight is picked up on the next launch. Detection is payload-shape based, never exit-code
-    /// based: a pre-discover CLI answers the verb as `models list` — exit 0,
-    /// top-level array (see `DiscoverCLIProbe`).
-    var modelsDiscoverSupported: Bool?
-
-    /// The most recent `models discover` envelope, shared between the
-    /// Testing tab's Discover card and the Models tab's nudge banner so both
-    /// render one run's listing instead of racing to re-run a command whose
-    /// NEW/GONE diff is one-shot (each run advances the CLI's machine-local
-    /// baseline).
-    var latestDiscoverReport: DiscoverReportInfo?
-
-    /// Session accumulation of the one-shot NEW/GONE diff across runs; see
-    /// `DiscoverDiffSession` for the rules.
-    var discoverDiffSession = DiscoverDiffSession.State()
-
-    /// Argv for `models discover`. `--yes` rides with `--validate` because
-    /// the GUI has already cost-confirmed (PaidOperationConfirm) and the CLI
-    /// refuses to spend on a non-interactive stdin without it; `costCap` is
-    /// the confirmed estimate's cap (VerifyFlow.costCap), passed explicitly
-    /// so the CLI's spend guard still trips on a runaway.
-    nonisolated static func modelsDiscoverArgs(refresh: Bool, add: [String], validate: Bool, costCap: Double?) -> [String] {
-        var args = ["models", "discover", "--json", "--porcelain"]
-        if refresh { args.append("--refresh") }
-        for id in add { args += ["--add", id] }
-        if validate {
-            args += ["--validate", "--yes"]
-            if let costCap {
-                args += ["--cost-cap", String(format: "%.4f", costCap)]
-            }
-        }
-        return args
-    }
-
-    /// Runs `2nb models discover` and folds the envelope into the shared
-    /// report + session diff. Settles `modelsDiscoverSupported` on the way:
-    /// a `models list`-shaped payload or an unknown-flag exit marks the CLI
-    /// pre-discover (returned as `.unsupported`, not thrown, so the nudge
-    /// probe can fall back silently); every other failure throws and leaves
-    /// the capability verdict untouched. A run that added or validated
-    /// models bumps `modelsCatalogVersion` (the user catalog changed).
-    @discardableResult
-    /// `addKeys` carries the clicked rows' provider-qualified "provider|id"
-    /// keys alongside the bare `add` ids the CLI takes, so the session-NEW
-    /// removal can target exactly the added rows (a bare id is ambiguous
-    /// across providers).
-    func runModelsDiscover(refresh: Bool = false, add: [String] = [], addKeys: [String] = [], validate: Bool = false, costCap: Double? = nil) async throws -> DiscoverRunOutcome {
-        guard let vault else { throw CLIError.noVault }
-        let args = Self.modelsDiscoverArgs(refresh: refresh, add: add, validate: validate, costCap: costCap)
-        log.info("Discover action: 2nb \(args.joined(separator: " "), privacy: .public)")
-        let data: Data
-        do {
-            data = try await runCLI(args, cwd: vault.rootURL)
-        } catch CLIError.nonZeroExit(_, let message) where DiscoverCLIProbe.indicatesUnsupported(stderr: message) {
-            modelsDiscoverSupported = false
-            return .unsupported
-        }
-        switch DiscoverCLIProbe.classify(data) {
-        case .supported(let report):
-            modelsDiscoverSupported = true
-            latestDiscoverReport = report
-            discoverDiffSession = DiscoverDiffSession.merged(discoverDiffSession, report: report)
-            if let added = report.added, !added.isEmpty {
-                discoverDiffSession = DiscoverDiffSession.afterAdd(discoverDiffSession, addedKeys: addKeys)
-                modelsCatalogVersion += 1
-            }
-            return .report(report)
-        case .unsupported:
-            modelsDiscoverSupported = false
-            return .unsupported
-        case .undecodable:
-            throw CLIError.nonZeroExit(0, message: "models discover returned an unrecognized payload")
-        }
-    }
-
-    /// The user has acted on (or dismissed) the provider's session-NEW set.
-    func clearDiscoverSessionNew(provider: String) {
-        discoverDiffSession = DiscoverDiffSession.clearingNew(discoverDiffSession, provider: provider)
-    }
-
-    // MARK: - Vendor policy (enable-only per provider)
-
-    /// GUI vendor policy is machine-local and sticky across vaults. Vault
-    /// scope fully overrides global in the CLI, so a leftover vault policy
-    /// would shadow every GUI write unless we clear it on apply.
-    nonisolated static let guiVendorPolicyScope = "global"
-
-    /// Argv for `models verify --events`. Empty IDs add `--enabled-only
-    /// --discover` (the CLI rebuilds the pool). Validate must pass the same
-    /// explicit IDs it cost-previewed so the confirm cannot under-state
-    /// spend; pinned IDs ALSO carry `--discover`, which only widens the
-    /// CLI's lookup pool (explicit IDs still pin the candidate set): a
-    /// pinned mantle-discovered ID would otherwise miss the hint-carrying
-    /// discovery row, fall to the hint-less fallback, classic-probe a plane
-    /// that cannot see it, and persist a spurious FAIL.
-    nonisolated static func verifyModelsArgs(provider: String, costCap: Double, modelIDs: [String]) -> [String] {
-        var args = [
-            "models", "verify",
-            "--provider", provider,
-            "--scope", "vault",
-            "--yes", "--events",
-            "--cost-cap", String(format: "%.4f", costCap),
-            "--discover",
-        ]
-        if modelIDs.isEmpty {
-            args.append("--enabled-only")
-        } else {
-            args.append(contentsOf: modelIDs)
-        }
-        return args
-    }
-
-    /// Argv for `models policy show` (every configured policy). Extracted so
-    /// the argv is unit-testable without spawning a subprocess.
-    nonisolated static func vendorPolicyShowArgs() -> [String] {
-        ["models", "policy", "show", "--json", "--porcelain"]
-    }
-
-    /// Argv for `models policy set --provider P --enable-only a,b`. Vendors are
-    /// joined with commas as the CLI expects; the caller guarantees a non-empty
-    /// list (the CLI refuses an empty one).
-    nonisolated static func vendorPolicySetArgs(provider: String, vendors: [String], scope: String) -> [String] {
-        [
-            "models", "policy", "set",
-            "--provider", provider,
-            "--enable-only", vendors.joined(separator: ","),
-            "--scope", scope,
-            "--json", "--porcelain",
-        ]
-    }
-
-    /// Argv for `models policy clear --provider P`.
-    nonisolated static func vendorPolicyClearArgs(provider: String, scope: String) -> [String] {
-        [
-            "models", "policy", "clear",
-            "--provider", provider,
-            "--scope", scope,
-            "--json", "--porcelain",
-        ]
-    }
-
-    /// Reads every configured vendor policy (`models policy show --json`). The
-    /// CLI emits a JSON array (possibly empty); a CLI predating `models policy`
-    /// exits non-zero (unknown command), which `runCLI` throws, so the caller
-    /// decides whether to degrade to no policies.
-    func fetchVendorPolicy() async throws -> [VendorPolicyResult] {
-        guard let vault else { throw CLIError.noVault }
-        let data = try await runCLI(Self.vendorPolicyShowArgs(), cwd: vault.rootURL)
-        return (try? JSONDecoder().decode([VendorPolicyResult].self, from: data)) ?? []
-    }
-
-    /// Sets an enable-only vendor policy for a provider (`models policy set`),
-    /// returning the effect so the caller can show "N enabled, M disabled".
-    /// Defaults to global (sticky across vaults). A global write also clears
-    /// any vault-scope policy so it cannot shadow. Bumps
-    /// `modelsCatalogVersion` so the AI Hub reloads: policies live in
-    /// models-policy.yaml, which the FSEvents catalog watcher doesn't track.
-    @discardableResult
-    func setVendorPolicy(provider: String, vendors: [String], scope: String = guiVendorPolicyScope) async throws -> VendorPolicyResult {
-        guard let vault else { throw CLIError.noVault }
-        let args = Self.vendorPolicySetArgs(provider: provider, vendors: vendors, scope: scope)
-        log.info("AI Hub action: models policy set --provider \(provider, privacy: .public) --enable-only \(vendors.joined(separator: ","), privacy: .public) scope=\(scope, privacy: .public)")
-        let data = try await runCLI(args, cwd: vault.rootURL)
-        let res = try JSONDecoder().decode(VendorPolicyResult.self, from: data)
-        if scope == Self.guiVendorPolicyScope {
-            // Vault fully overrides global. Clear a leftover vault policy
-            // (idempotent when none exists) so the GUI write is the one that
-            // list/verify honor.
-            let clearArgs = Self.vendorPolicyClearArgs(provider: provider, scope: "vault")
-            log.info("AI Hub action: models policy clear --provider \(provider, privacy: .public) scope=vault (unshadow global)")
-            _ = try await runCLI(clearArgs, cwd: vault.rootURL)
-        }
-        modelsCatalogVersion += 1
-        return res
-    }
-
-    /// Removes the vendor policy for a provider (`models policy clear`). Bumps
-    /// `modelsCatalogVersion` so the Hub reloads (see `setVendorPolicy`).
-    func clearVendorPolicy(provider: String, scope: String = guiVendorPolicyScope) async throws {
-        guard let vault else { throw CLIError.noVault }
-        let args = Self.vendorPolicyClearArgs(provider: provider, scope: scope)
-        log.info("AI Hub action: models policy clear --provider \(provider, privacy: .public) scope=\(scope, privacy: .public)")
-        _ = try await runCLI(args, cwd: vault.rootURL)
-        modelsCatalogVersion += 1
-    }
-
-    /// Clears both GUI (global) and vault policies so neither remains to
-    /// restrict the catalog. Used by Manage vendors' Clear, which must undo
-    /// a GUI write and any leftover vault shadow.
-    func clearGUIVendorPolicies(provider: String) async throws {
-        guard let vault else { throw CLIError.noVault }
-        let argv = Self.guiVendorPolicyClearArgv(provider: provider)
-        log.info("AI Hub action: models policy clear --provider \(provider, privacy: .public) scope=global+vault")
-        _ = try await runCLI(argv.global, cwd: vault.rootURL)
-        _ = try await runCLI(argv.vault, cwd: vault.rootURL)
-        modelsCatalogVersion += 1
-    }
-
-    /// Argv pair for clearing the GUI policy and its vault-scope shadow.
-    nonisolated static func guiVendorPolicyClearArgv(provider: String) -> (global: [String], vault: [String]) {
-        (
-            vendorPolicyClearArgs(provider: provider, scope: guiVendorPolicyScope),
-            vendorPolicyClearArgs(provider: provider, scope: "vault")
-        )
-    }
-
-    /// Fetches the full AIStatusInfo envelope including providers[] for
-    /// the AI Hub's provider cards and active-model section.
+    /// Fetches the active vault AI status snapshot (`2nb ai status --json`).
     func fetchAIStatus() async throws -> AIStatusInfo {
         guard let vault else { throw CLIError.noVault }
         let data = try await runCLI(
@@ -3387,24 +3261,408 @@ final class AppState {
         return try JSONDecoder().decode(AIStatusInfo.self, from: data)
     }
 
-    func checkOllamaStatus() async -> OllamaReadiness {
-        guard let vault else { return OllamaReadiness(installed: false, running: false) }
+    // MARK: - Local Gemma & Engine Methods
+
+    /// Downloads the bundled local model weights via `ai engine pull --json`,
+    /// streaming JSONL progress into `localModelDownload` for a progress bar.
+    func downloadLocalModels(_ ids: [String]) async {
+        guard !ids.isEmpty, localModelDownload?.finished != false else { return }
+        localModelDownload = LocalModelDownload(models: ids)
+        log.info("Local model download started: \(ids.joined(separator: ","), privacy: .public)")
+
+        let start = ContinuousClock.now
+        actionTracker.record(
+            category: .engine,
+            action: "local_model.download",
+            phase: .started,
+            summary: "Starting download of \(ids.count) local model(s): \(ids.joined(separator: ", "))",
+            metadata: ["models": ids.joined(separator: ",")]
+        )
+        actionTracker.updateStatus { status in
+            status.localModelDownloading = true
+            status.localModelTotalCount = ids.count
+            status.localModelCompletedCount = 0
+            status.localModelDownloadError = nil
+            status.localModelDownloadFraction = 0.0
+        }
+
+        let cliExecutable = resolvedCLIPath()
         do {
-            let data = try await runCLIAllowingNonZero(
-                ["ai", "local", "--json", "--porcelain"],
-                cwd: vault.rootURL
-            )
-            let report = try JSONDecoder().decode(OllamaReport.self, from: data)
-            return report.ollama
+            let result: (exitCode: Int32, stderr: String, tailEvents: [PullEvent]) = try await withCheckedThrowingContinuation { continuation in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: cliExecutable)
+                let sub = ["ai", "engine", "pull", "--json"] + ids
+                process.arguments = vault.map { CLIPath.args(sub, vault: $0.rootURL) } ?? sub
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
+                let drain = PipeDrain()
+                let stream = PullEventStream()
+
+                stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { handle.readabilityHandler = nil; return }
+                    let events = stream.ingest(chunk)
+                    guard !events.isEmpty else { return }
+                    Task { @MainActor [weak self] in
+                        for ev in events { self?.applyPullEvent(ev, totalModels: ids.count) }
+                    }
+                }
+                stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let d = handle.availableData
+                    if d.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(d) }
+                }
+                process.terminationHandler = { proc in
+                    stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                    stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    var tailEvents = stream.ingest(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+                    tailEvents.append(contentsOf: stream.flush())
+                    drain.appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                    let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
+                    continuation.resume(returning: (proc.terminationStatus, err, tailEvents))
+                }
+                do { try process.run() } catch { continuation.resume(throwing: error) }
+            }
+
+            for ev in result.tailEvents {
+                self.applyPullEvent(ev, totalModels: ids.count)
+            }
+
+            let elapsedMs = elapsedMilliseconds(since: start)
+            localModelDownload?.finished = true
+            if result.exitCode == 0 && !(localModelDownload?.failed ?? false) {
+                actionTracker.record(
+                    category: .engine,
+                    action: "local_model.download",
+                    phase: .succeeded,
+                    durationMs: elapsedMs,
+                    summary: "Successfully downloaded \(ids.count) local model(s)",
+                    metadata: ["models": ids.joined(separator: ",")]
+                )
+                actionTracker.updateStatus { status in
+                    status.localModelDownloading = false
+                    status.localModelDownloadFraction = 1.0
+                    status.localModelCompletedCount = ids.count
+                    status.localModelDownloadError = nil
+                }
+            } else {
+                localModelDownload?.failed = true
+                let rawErr = localModelDownload?.error ?? (result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "download failed (exit \(result.exitCode))"
+                    : result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+                let err = Self.boundedRedacted(rawErr)
+                localModelDownload?.error = err
+
+                actionTracker.record(
+                    category: .engine,
+                    action: "local_model.download",
+                    phase: .failed,
+                    durationMs: elapsedMs,
+                    summary: "Local model download failed: \(ids.joined(separator: ", "))",
+                    detail: rawErr,
+                    metadata: ["models": ids.joined(separator: ",")]
+                )
+                actionTracker.updateStatus { status in
+                    status.localModelDownloading = false
+                    status.localModelDownloadError = err
+                }
+            }
+            await refreshAIStatus()
         } catch {
-            return OllamaReadiness(installed: false, running: false)
+            let elapsedMs = elapsedMilliseconds(since: start)
+            let safeErr = Self.boundedRedacted(error.localizedDescription)
+            localModelDownload?.finished = true
+            localModelDownload?.failed = true
+            localModelDownload?.error = safeErr
+
+            actionTracker.record(
+                category: .engine,
+                action: "local_model.download",
+                phase: .failed,
+                durationMs: elapsedMs,
+                summary: "Local model download launch failed",
+                detail: error.localizedDescription,
+                metadata: ["models": ids.joined(separator: ",")]
+            )
+            actionTracker.updateStatus { status in
+                status.localModelDownloading = false
+                status.localModelDownloadError = safeErr
+            }
+        }
+    }
+
+    private func applyPullEvent(_ ev: PullEvent, totalModels: Int) {
+        guard localModelDownload != nil else { return }
+        let previousModel = localModelDownload?.currentModel ?? ""
+        localModelDownload?.currentModel = ev.model
+
+        // Record model progress action on boundary transition
+        if !ev.model.isEmpty && ev.model != previousModel {
+            actionTracker.record(
+                category: .engine,
+                action: "local_model.download",
+                phase: .progress,
+                summary: "Downloading local model: \(ev.model)",
+                metadata: [
+                    "model": ev.model,
+                    "completed": String(localModelDownload?.completed.count ?? 0),
+                    "total": String(totalModels)
+                ]
+            )
+        }
+
+        switch ev.status {
+        case "progress":
+            localModelDownload?.done = ev.done ?? 0
+            localModelDownload?.total = ev.total ?? 0
+            let fraction = localModelDownload?.fraction ?? 0
+            actionTracker.updateStatus { status in
+                status.localModelDownloadCurrent = ev.model
+                status.localModelDownloadDone = ev.done
+                status.localModelDownloadTotal = ev.total
+                status.localModelDownloadFraction = fraction
+            }
+        case "done":
+            if !(localModelDownload?.completed.contains(ev.model) ?? false) {
+                localModelDownload?.completed.append(ev.model)
+            }
+            actionTracker.updateStatus { status in
+                status.localModelCompletedCount = localModelDownload?.completed.count
+            }
+        case "error":
+            localModelDownload?.failed = true
+            localModelDownload?.error = ev.error.map { Self.boundedRedacted($0) }
+        default:
+            break
+        }
+    }
+
+    func deleteLocalModels(_ ids: [String]) async throws -> Int64 {
+        try await trackAsyncAction(
+            category: .engine,
+            action: "local_model.delete",
+            startSummary: "Delete \(ids.count) local model weight(s)",
+            metadata: ["models": ids.joined(separator: ",")],
+            successDetail: { freedBytes in
+                (
+                    summary: "Deleted \(ids.count) local model weight(s), freed \(ByteCountFormatter.string(fromByteCount: freedBytes, countStyle: .file))",
+                    metadata: [
+                        "models": ids.joined(separator: ","),
+                        "freedBytes": String(freedBytes)
+                    ]
+                )
+            }
+        ) {
+            let sub = ["ai", "engine", "rm", "--json"] + ids
+            let data: Data
+            if let vault {
+                data = try await runCLI(sub, cwd: vault.rootURL)
+            } else {
+                data = try await runCLIGlobal(sub)
+            }
+            struct RmResponse: Decodable {
+                let removed: [RmItem]?
+                let freedBytes: Int64
+                enum CodingKeys: String, CodingKey {
+                    case removed
+                    case freedBytes = "freed_bytes"
+                }
+            }
+            struct RmItem: Decodable {
+                let model: String
+                let freedBytes: Int64?
+                let ok: Bool
+                enum CodingKeys: String, CodingKey {
+                    case model
+                    case freedBytes = "freed_bytes"
+                    case ok
+                }
+            }
+            let resp = try JSONDecoder().decode(RmResponse.self, from: data)
+            actionTracker.updateStatus { status in
+                status.localModelCompletedCount = 0
+                status.localModelDownloadFraction = nil
+            }
+            await refreshAIStatus()
+            return resp.freedBytes
+        }
+    }
+
+    func activateLocalStack(embedID: String, genID: String, dimensions: Int) async throws {
+        guard let vault else { throw CLIError.noVault }
+        if isIndexing { throw CLIError.indexRebuildInProgress }
+        try await trackAsyncAction(
+            category: .engine,
+            action: "local_model.activate",
+            startSummary: "Activate local Gemma models (\(embedID), \(genID), \(dimensions)d)",
+            metadata: [
+                "embedModel": embedID,
+                "genModel": genID,
+                "dimensions": String(dimensions),
+                "provider": "llama-local"
+            ],
+            successDetail: { _ in
+                (
+                    summary: "Activated local Gemma models (\(embedID), \(genID), \(dimensions)d)",
+                    metadata: [
+                        "embedModel": embedID,
+                        "genModel": genID,
+                        "dimensions": String(dimensions),
+                        "provider": "llama-local"
+                    ]
+                )
+            }
+        ) {
+            _ = try await runCLI(["config", "set", "ai.provider", "llama-local"], cwd: vault.rootURL)
+            _ = try await runCLI(["config", "set", "ai.embedding_model", embedID], cwd: vault.rootURL)
+            _ = try await runCLI(["config", "set", "ai.dimensions", String(dimensions)], cwd: vault.rootURL)
+            _ = try await runCLI(["config", "set", "ai.generation_model", genID], cwd: vault.rootURL)
+
+            await refreshAIStatus()
+            actionTracker.updateStatus { status in
+                status.aiProvider = "llama-local"
+                status.embedModel = embedID
+                status.genModel = genID
+                status.dimensions = dimensions
+                status.localMatryoshkaDim = dimensions
+            }
+            startForceReembed()
+        }
+    }
+
+    func startEngine() async throws {
+        try await trackAsyncAction(
+            category: .engine,
+            action: "engine.start",
+            startSummary: "Start local llama-server engine daemon"
+        ) {
+            if let vault {
+                _ = try await runCLI(["ai", "engine", "start"], cwd: vault.rootURL)
+            } else {
+                _ = try await runCLIGlobal(["ai", "engine", "start"])
+            }
+            for _ in 0..<20 {
+                let poll = await fetchEngineStatus(recordTelemetry: false)
+                if poll?.isHealthy == true {
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            let st = await fetchEngineStatus(recordTelemetry: true)
+            actionTracker.updateStatus { status in
+                status.localEngineRunning = st?.isRunning ?? true
+                status.localEnginePid = st?.primaryPid
+                status.localEngineHealthy = st?.isHealthy ?? false
+                status.localEngineError = nil
+            }
+        }
+    }
+
+    func stopEngine() async throws {
+        try await trackAsyncAction(
+            category: .engine,
+            action: "engine.stop",
+            startSummary: "Stop local llama-server engine daemon"
+        ) {
+            if let vault {
+                _ = try await runCLI(["ai", "engine", "stop"], cwd: vault.rootURL)
+            } else {
+                _ = try await runCLIGlobal(["ai", "engine", "stop"])
+            }
+            actionTracker.updateStatus { status in
+                status.localEngineRunning = false
+                status.localEnginePid = nil
+                status.localEngineHealthy = false
+                status.localEngineRoles = nil
+            }
+            _ = await fetchEngineStatus(recordTelemetry: false)
+        }
+    }
+
+    @discardableResult
+    func fetchEngineStatus(recordTelemetry: Bool = false) async -> EngineStatus? {
+        let start = ContinuousClock.now
+        do {
+            let data: Data
+            if let vault {
+                data = try await runCLIAllowingNonZero(["ai", "engine", "status", "--json"], cwd: vault.rootURL)
+            } else {
+                let res = try await runCLIGlobalRaw(["ai", "engine", "status", "--json"], expectNonZeroExit: true)
+                data = res.stdout
+            }
+            let statusInfo = try JSONDecoder().decode(EngineStatus.self, from: data)
+            self.localEngineStatus = statusInfo
+            let elapsedMs = elapsedMilliseconds(since: start)
+
+            let prevRunning = actionTracker.status.localEngineRunning
+            let prevHealthy = actionTracker.status.localEngineHealthy
+            let stateChanged = (prevRunning != statusInfo.isRunning) || (prevHealthy != statusInfo.isHealthy)
+
+            if recordTelemetry || stateChanged {
+                actionTracker.record(
+                    category: .engine,
+                    action: "engine.status",
+                    phase: .succeeded,
+                    durationMs: elapsedMs,
+                    summary: "Engine status: running=\(statusInfo.isRunning), healthy=\(statusInfo.isHealthy)",
+                    metadata: [
+                        "running": statusInfo.isRunning ? "true" : "false",
+                        "healthy": statusInfo.isHealthy ? "true" : "false",
+                        "enginePath": statusInfo.enginePath,
+                        "roles": statusInfo.roles?.map { "\($0.role):\($0.port)" }.joined(separator: ",") ?? ""
+                    ]
+                )
+            }
+
+            actionTracker.updateStatus { s in
+                s.localEngineRunning = statusInfo.isRunning
+                s.localEnginePid = statusInfo.primaryPid
+                s.localEngineHealthy = statusInfo.isHealthy
+                s.localEngineRoles = statusInfo.roles?.map { "\($0.role):\($0.port)" }
+                s.localEngineError = nil
+            }
+            return statusInfo
+        } catch {
+            let elapsedMs = elapsedMilliseconds(since: start)
+            if recordTelemetry {
+                actionTracker.record(
+                    category: .engine,
+                    action: "engine.status",
+                    phase: .failed,
+                    durationMs: elapsedMs,
+                    summary: "Engine status check failed",
+                    detail: error.localizedDescription
+                )
+            }
+            actionTracker.updateStatus { s in
+                s.localEngineRunning = false
+                s.localEnginePid = nil
+                s.localEngineHealthy = false
+                s.localEngineError = GUIActionTracker.boundedRedactedTail(error.localizedDescription, limit: GUIActionTracker.maxStatusErrorChars)
+            }
+            return nil
+        }
+    }
+
+    func setMatryoshkaDimension(_ dim: Int) async throws {
+        try await setConfigValue("ai.dimensions", String(dim))
+        actionTracker.updateStatus { status in
+            status.dimensions = dim
+            status.localMatryoshkaDim = dim
+        }
+    }
+
+    func setTaskPrefixPreset(_ preset: String) async throws {
+        try await setConfigValue("ai.llama.task_prefix", preset)
+        actionTracker.updateStatus { status in
+            status.localTaskPrefixPreset = preset
         }
     }
 
     // MARK: - CLI Execution
 
-    /// Vault-independent CLI spawn (machine-local commands such as
-    /// `config bedrock`). Never logs stdin.
+    /// Vault-independent CLI spawn. Never logs stdin.
     /// Runs a vault-independent `2nb` command, throwing on a non-zero exit.
     /// Hang-guarded via runCLIGlobalRaw's CLIWatchdog.
     func runCLIGlobal(_ args: [String], stdin: Data? = nil) async throws -> Data {
@@ -3445,9 +3703,11 @@ final class AppState {
         let cmd = "2nb " + args.joined(separator: " ")
         log.info("CLI exec (global): \(cmd, privacy: .public)")
         let errorLogger = self.errorLogger
+        let actionTracker = self.actionTracker
+        let cliExecutable = resolvedCLIPath()
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.executableURL = URL(fileURLWithPath: cliExecutable)
             process.arguments = args
             if let extraEnvironment, !extraEnvironment.isEmpty {
                 var env = ProcessInfo.processInfo.environment
@@ -3492,7 +3752,7 @@ final class AppState {
                 errorLogger?.log(message)
             }
 
-            process.terminationHandler = { proc in
+            process.terminationHandler = { [actionTracker] proc in
                 watchdog.cancel()
                 stdout.fileHandleForReading.readabilityHandler = nil
                 stderr.fileHandleForReading.readabilityHandler = nil
@@ -3502,8 +3762,22 @@ final class AppState {
                     let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !errMsg.isEmpty {
-                        log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
-                        errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
+                        let safeCmd = GUIActionTracker.redact(cmd)
+                        let safeErrMsg = Self.boundedRedacted(errMsg)
+                        log.error("CLI \(safeCmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(safeErrMsg, privacy: .public)")
+                        errorLogger?.log("CLI \(safeCmd) failed (exit \(proc.terminationStatus)): \(safeErrMsg)")
+                    }
+                    let summary = "CLI failed (exit \(proc.terminationStatus)): \(cmd)"
+                    let detail = errMsg.isEmpty ? nil : errMsg
+                    Task { @MainActor in
+                        actionTracker.record(
+                            category: .cli,
+                            action: "cli.exec",
+                            phase: .failed,
+                            summary: summary,
+                            detail: detail,
+                            metadata: ["exitCode": String(proc.terminationStatus)]
+                        )
                     }
                 }
                 continuation.resume(returning: CLIRawResult(
@@ -3517,8 +3791,20 @@ final class AppState {
                 try process.run()
                 watchdog.arm()
             } catch {
-                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
-                errorLogger?.log("CLI \(cmd) launch failed", error: error)
+                let safeCmd = GUIActionTracker.redact(cmd)
+                let errText = error.localizedDescription
+                let safeErrText = Self.boundedRedacted(errText)
+                log.error("CLI \(safeCmd) launch failed: \(safeErrText)")
+                errorLogger?.log("CLI \(safeCmd) launch failed: \(safeErrText)")
+                Task { @MainActor [actionTracker] in
+                    actionTracker.record(
+                        category: .cli,
+                        action: "cli.exec",
+                        phase: .failed,
+                        summary: "CLI launch failed: \(safeCmd)",
+                        detail: errText
+                    )
+                }
                 continuation.resume(throwing: error)
             }
         }
@@ -3530,7 +3816,7 @@ final class AppState {
     ///   progress (only `ai embed-probe` today; see `embedProbe` for the
     ///   rationale, which mirrors the streaming runners'). Every other call
     ///   keeps the default `true`.
-    func runCLI(_ args: [String], cwd: URL, hangWatchdog: Bool = true) async throws -> Data {
+    func runCLI(_ args: [String], cwd: URL, stdin: Data? = nil, hangWatchdog: Bool = true) async throws -> Data {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("CLI exec: \(cmd, privacy: .public)")
@@ -3538,15 +3824,23 @@ final class AppState {
         // can record a genuine CLI failure to the per-vault `.2ndbrain/logs` file
         // — the surface the user's "read the logs to debug" workflow targets.
         let errorLogger = self.errorLogger
+        let actionTracker = self.actionTracker
+        let cliExecutable = resolvedCLIPath()
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.executableURL = URL(fileURLWithPath: cliExecutable)
             process.arguments = fullArgs
             process.currentDirectoryURL = cwd
             let stdout = Pipe()
             let stderr = Pipe()
             process.standardOutput = stdout
             process.standardError = stderr
+            if let stdin {
+                let input = Pipe()
+                process.standardInput = input
+                input.fileHandleForWriting.write(stdin)
+                try? input.fileHandleForWriting.close()
+            }
 
             // Drain both pipes as data arrives. Without this the child blocks
             // on write() once its stdout exceeds the ~16-64KB pipe buffer
@@ -3580,7 +3874,7 @@ final class AppState {
                 }
                 : nil
 
-            process.terminationHandler = { proc in
+            process.terminationHandler = { [actionTracker] proc in
                 watchdog?.cancel()
                 // Detach the handlers so no late reads fire after we resume.
                 stdout.fileHandleForReading.readabilityHandler = nil
@@ -3594,10 +3888,24 @@ final class AppState {
                 } else {
                     let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if !errMsg.isEmpty {
-                        log.error("CLI \(cmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(errMsg, privacy: .public)")
+                    let safeCmd = GUIActionTracker.redact(cmd)
+                    let safeErrMsg = Self.boundedRedacted(errMsg)
+                    if !safeErrMsg.isEmpty {
+                        log.error("CLI \(safeCmd, privacy: .public) failed (exit \(proc.terminationStatus)): \(safeErrMsg, privacy: .public)")
                     }
-                    errorLogger?.log("CLI \(cmd) failed (exit \(proc.terminationStatus)): \(errMsg)")
+                    errorLogger?.log("CLI \(safeCmd) failed (exit \(proc.terminationStatus)): \(safeErrMsg)")
+                    let summary = "CLI failed (exit \(proc.terminationStatus)): \(cmd)"
+                    let detail = errMsg.isEmpty ? nil : errMsg
+                    Task { @MainActor in
+                        actionTracker.record(
+                            category: .cli,
+                            action: "cli.exec",
+                            phase: .failed,
+                            summary: summary,
+                            detail: detail,
+                            metadata: ["exitCode": String(proc.terminationStatus)]
+                        )
+                    }
                     continuation.resume(throwing: CLIError.nonZeroExit(proc.terminationStatus, message: errMsg))
                 }
             }
@@ -3606,8 +3914,20 @@ final class AppState {
                 try process.run()
                 watchdog?.arm()
             } catch {
-                log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
-                errorLogger?.log("CLI \(cmd) launch failed", error: error)
+                let safeCmd = GUIActionTracker.redact(cmd)
+                let errText = error.localizedDescription
+                let safeErrText = Self.boundedRedacted(errText)
+                log.error("CLI \(safeCmd) launch failed: \(safeErrText)")
+                errorLogger?.log("CLI \(safeCmd) launch failed: \(safeErrText)")
+                Task { @MainActor [actionTracker] in
+                    actionTracker.record(
+                        category: .cli,
+                        action: "cli.exec",
+                        phase: .failed,
+                        summary: "CLI launch failed: \(safeCmd)",
+                        detail: errText
+                    )
+                }
                 continuation.resume(throwing: error)
             }
         }
@@ -3616,17 +3936,26 @@ final class AppState {
     /// Like runCLI but returns stdout regardless of exit code.
     /// Needed for `2nb lint` which exits 2 on validation errors but still emits valid JSON.
     private func runCLIAllowingNonZero(_ args: [String], cwd: URL) async throws -> Data {
+        try await runCLIAllowingNonZeroWithOutput(args, cwd: cwd).stdout
+    }
+
+    private func runCLIAllowingNonZeroWithOutput(
+        _ args: [String],
+        cwd: URL
+    ) async throws -> (stdout: Data, stderr: String, exitCode: Int32) {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("CLI exec (non-zero ok): \(cmd)")
+        let cliExecutable = resolvedCLIPath()
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
+            process.executableURL = URL(fileURLWithPath: cliExecutable)
             process.arguments = fullArgs
             process.currentDirectoryURL = cwd
             let stdout = Pipe()
+            let stderr = Pipe()
             process.standardOutput = stdout
-            process.standardError = FileHandle.nullDevice
+            process.standardError = stderr
             let drain = PipeDrain()
             stdout.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
@@ -3634,6 +3963,14 @@ final class AppState {
                     handle.readabilityHandler = nil
                 } else {
                     drain.appendStdout(chunk)
+                }
+            }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    drain.appendStderr(chunk)
                 }
             }
             // Absolute hang guard (see CLIWatchdog): fires only on a genuine
@@ -3644,11 +3981,15 @@ final class AppState {
             process.terminationHandler = { proc in
                 watchdog.cancel()
                 stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
                 drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
+                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                let errMsg = String(data: drain.stderrData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if proc.terminationStatus != 0 {
                     log.debug("CLI \(cmd) exited \(proc.terminationStatus) (allowed)")
                 }
-                continuation.resume(returning: drain.stdoutData)
+                continuation.resume(returning: (drain.stdoutData, errMsg, proc.terminationStatus))
             }
             do {
                 try process.run()
@@ -3657,6 +3998,60 @@ final class AppState {
                 log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 continuation.resume(throwing: error)
             }
+        }
+    }
+
+    // MARK: - Action Instrumentation Helpers
+
+    private func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
+        let duration = ContinuousClock.now - start
+        return Int(duration.components.seconds * 1000) + Int(duration.components.attoseconds / 1_000_000_000_000_000)
+    }
+
+    private func trackAsyncAction<T>(
+        category: GUIActionCategory,
+        action: String,
+        startSummary: String,
+        metadata: [String: String] = [:],
+        successDetail: ((T) -> (summary: String, metadata: [String: String]))? = nil,
+        operation: () async throws -> T
+    ) async throws -> T {
+        actionTracker.record(
+            category: category,
+            action: action,
+            phase: .started,
+            summary: startSummary,
+            metadata: metadata
+        )
+        let start = ContinuousClock.now
+        do {
+            let result = try await operation()
+            let elapsedMs = elapsedMilliseconds(since: start)
+            let resolved: (summary: String, metadata: [String: String]) = successDetail?(result)
+                ?? (summary: startSummary, metadata: metadata)
+            actionTracker.record(
+                category: category,
+                action: action,
+                phase: .succeeded,
+                durationMs: elapsedMs,
+                summary: resolved.summary,
+                metadata: resolved.metadata
+            )
+            return result
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let elapsedMs = elapsedMilliseconds(since: start)
+            actionTracker.record(
+                category: category,
+                action: action,
+                phase: .failed,
+                durationMs: elapsedMs,
+                summary: "\(startSummary) failed",
+                detail: error.localizedDescription,
+                metadata: metadata
+            )
+            throw error
         }
     }
 }
@@ -3699,6 +4094,8 @@ final class PipeDrain: @unchecked Sendable {
 
 struct AIStatusInfo: Codable {
     let provider: String
+    let embeddingProvider: String?
+    let generationProvider: String?
     let embeddingModel: String
     let genModel: String
     let dimensions: Int
@@ -3744,8 +4141,28 @@ struct AIStatusInfo: Codable {
     /// when the CLI reports it, else the raw document count (older CLI).
     var embeddableDenominator: Int { vaultEmbeddableDocs ?? documentCount }
 
+    var effectiveEmbeddingProvider: String {
+        if let embeddingProvider, !embeddingProvider.isEmpty {
+            return embeddingProvider
+        }
+        return provider
+    }
+
+    var effectiveGenerationProvider: String {
+        if let generationProvider, !generationProvider.isEmpty {
+            return generationProvider
+        }
+        return provider
+    }
+
+    var isMixedProviders: Bool {
+        !effectiveEmbeddingProvider.isEmpty && !effectiveGenerationProvider.isEmpty && effectiveEmbeddingProvider != effectiveGenerationProvider
+    }
+
     enum CodingKeys: String, CodingKey {
         case provider
+        case embeddingProvider = "embedding_provider"
+        case generationProvider = "generation_provider"
         case embeddingModel = "embedding_model"
         case genModel = "generation_model"
         case dimensions
@@ -3808,71 +4225,6 @@ struct ProviderStatusInfo: Codable, Identifiable {
         case reason
         case detail
         case tokenSource = "token_source"
-    }
-}
-
-/// Redacted `2nb config bedrock --json` payload. The token itself is never present.
-struct BedrockMachineStatus: Codable, Equatable {
-    let path: String
-    let region: String
-    let tokenSet: Bool
-    /// Last 4 characters of the resolved token, or "" when unset or when the
-    /// CLI suppressed it (tokens under 12 chars) — or when running against a
-    /// pre-0.18 CLI that predates the field. Lets the UI render a masked value
-    /// the user can recognize without the app ever holding the secret.
-    let tokenSuffix: String
-    let tokenSource: String
-    /// Additional included regions for model verification/discovery. Empty on
-    /// older CLIs or when unconfigured (single-region behavior).
-    let regions: [String]
-    /// RFC3339 timestamp of the last STORED-token change; "" on older CLIs.
-    /// Compared against model_access.last_verified_at to flag verdicts that
-    /// predate the current key.
-    let tokenUpdatedAt: String
-    /// True when AWS_BEARER_TOKEN_BEDROCK in the CLI's environment overrides
-    /// a DIFFERENT saved key (the terminal/app split-brain). Never true when
-    /// preferStoredToken is on.
-    let envOverridesStored: Bool
-    /// Inverted precedence: the saved key wins over the env var for all 2nb use.
-    let preferStoredToken: Bool
-    /// Suffix of the STORED key when it diverges from the env token.
-    let storedTokenSuffix: String
-    let error: String?
-
-    enum CodingKeys: String, CodingKey {
-        case path
-        case region
-        case tokenSet = "token_set"
-        case tokenSuffix = "token_suffix"
-        case tokenSource = "token_source"
-        case regions
-        case tokenUpdatedAt = "token_updated_at"
-        case envOverridesStored = "env_overrides_stored"
-        case storedTokenSuffix = "stored_token_suffix"
-        case preferStoredToken = "prefer_stored_token"
-        case error
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        path = try c.decode(String.self, forKey: .path)
-        region = try c.decodeIfPresent(String.self, forKey: .region) ?? ""
-        tokenSet = try c.decode(Bool.self, forKey: .tokenSet)
-        tokenSuffix = try c.decodeIfPresent(String.self, forKey: .tokenSuffix) ?? ""
-        tokenSource = try c.decode(String.self, forKey: .tokenSource)
-        regions = try c.decodeIfPresent([String].self, forKey: .regions) ?? []
-        tokenUpdatedAt = try c.decodeIfPresent(String.self, forKey: .tokenUpdatedAt) ?? ""
-        envOverridesStored = try c.decodeIfPresent(Bool.self, forKey: .envOverridesStored) ?? false
-        storedTokenSuffix = try c.decodeIfPresent(String.self, forKey: .storedTokenSuffix) ?? ""
-        preferStoredToken = try c.decodeIfPresent(Bool.self, forKey: .preferStoredToken) ?? false
-        error = try c.decodeIfPresent(String.self, forKey: .error)
-    }
-
-    /// A masked rendering of the stored key: dots plus enough tail to tell two
-    /// keys apart, or a plain "set" when the CLI withheld a suffix.
-    var maskedToken: String {
-        guard tokenSet else { return "not set" }
-        return tokenSuffix.isEmpty ? "••••••••" : "••••••••\(tokenSuffix)"
     }
 }
 
@@ -3950,44 +4302,115 @@ struct AIAskResult: Codable {
     let sources: [String]
 }
 
+struct AIChatTurn: Codable, Equatable {
+    let role: String
+    let content: String
+}
+
 // CLIAskResponse is the envelope `2nb ask --json` now returns.
-// Breaking change from pre-Phase-1: used to be AIAskResult directly.
-struct CLIAskResponse: Codable {
+struct CLIAskResponse: Codable, Equatable {
     let mode: String
     let warnings: [String]?
     let answer: String
     let sources: [String]
+    let rewrittenQuery: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mode, warnings, answer, sources
+        case rewrittenQuery = "rewritten_query"
+    }
 }
 
 // CLISearchResponse is the envelope `2nb search --json` now returns.
-// Breaking change from pre-Phase-1: used to be [CLISearchResult] directly.
 struct CLISearchResponse: Codable {
     let mode: String
     let warnings: [String]?
     let results: [CLISearchResult]
 }
 
-struct CLISearchResult: Codable {
+struct CLISearchResult: Codable, Identifiable, Equatable {
     let docID: String
     let path: String
     let title: String
     let docType: String?
+    let chunkID: String?
     let headingPath: String?
+    let content: String?
     let score: Double
+    let vectorScore: Double?
     let status: String?
+
+    var id: String { chunkID ?? "\(docID)|\(path)|\(headingPath ?? "")" }
 
     enum CodingKeys: String, CodingKey {
         case docID = "doc_id"
         case path, title
         case docType = "type"
+        case chunkID = "chunk_id"
         case headingPath = "heading_path"
-        case score, status
+        case content
+        case score
+        case vectorScore = "vector_score"
+        case status
+    }
+}
+
+struct VaultNoteItem: Codable, Identifiable, Equatable {
+    let id: String
+    let path: String
+    let title: String
+    let docType: String?
+    let status: String?
+    let modifiedAt: String?
+
+    var displayTitle: String {
+        title.isEmpty ? (path as NSString).lastPathComponent : title
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, path, title, status
+        case docType = "type"
+        case modifiedAt = "modified_at"
+    }
+}
+
+struct PolishUndoResult: Codable, Equatable {
+    let path: String
+    let reverted: Bool
+    let restoredPaths: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case path, reverted
+        case restoredPaths = "restored_paths"
+    }
+
+    init(path: String, reverted: Bool, restoredPaths: [String]? = nil) {
+        self.path = path
+        self.reverted = reverted
+        self.restoredPaths = restoredPaths
+    }
+}
+
+struct StaleDocInfo: Codable, Identifiable, Equatable {
+    var id: String { path }
+    let path: String
+    let title: String
+    let daysStale: Int
+
+    enum CodingKeys: String, CodingKey {
+        case path, title
+        case daysStale = "days_stale"
     }
 }
 
 struct EmbeddingProgress {
     var current: Int
     var total: Int
+    var chunksDone: Int?
+    var chunksTotal: Int?
+    var docsPerSec: Double?
+    var remainingSeconds: Double?
+    var estimatedTotalSeconds: Double?
 }
 
 enum IndexPhase: String {
@@ -3996,56 +4419,6 @@ enum IndexPhase: String {
     case embedding = "Generating embeddings"
     case complete = "Complete"
     case failed = "Failed"
-}
-
-/// Progress state for a local-model download (`ai engine pull --json`).
-struct LocalModelDownload {
-    let models: [String]
-    var currentModel: String = ""
-    var done: Int64 = 0
-    var total: Int64 = 0
-    var completed: [String] = []
-    var failed = false
-    var error: String?
-    var finished = false
-    /// Fraction of the CURRENT model (the CLI reports per-file, not aggregate).
-    var fraction: Double { total > 0 ? min(1, Double(done) / Double(total)) : 0 }
-}
-
-/// One line-delimited event from `ai engine pull --json`.
-struct PullEvent: Codable, Sendable {
-    let model: String
-    let status: String
-    let done: Int64?
-    let total: Int64?
-    let path: String?
-    let error: String?
-}
-
-/// Buffers a byte stream and yields decoded `PullEvent`s per complete JSONL
-/// line, holding any trailing partial line across chunks. `@unchecked Sendable`
-/// because a Pipe's `readabilityHandler` invokes `ingest` serially (never
-/// concurrently), so the internal buffer + decoder need no extra locking —
-/// mirroring `PipeDrain`.
-final class PullEventStream: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
-    private let decoder = JSONDecoder()
-
-    func ingest(_ chunk: Data) -> [PullEvent] {
-        lock.lock()
-        defer { lock.unlock() }
-        data.append(chunk)
-        var events: [PullEvent] = []
-        while let nl = data.firstIndex(of: 0x0A) {
-            let line = data.subdata(in: data.startIndex..<nl)
-            data.removeSubrange(data.startIndex...nl)
-            if let ev = try? decoder.decode(PullEvent.self, from: line) {
-                events.append(ev)
-            }
-        }
-        return events
-    }
 }
 
 struct IndexProgress {
@@ -4059,6 +4432,14 @@ struct IndexProgress {
     var filesIndexed: Int = 0
     var embeddingCurrent: Int = 0
     var embeddingTotal: Int = 0
+    var chunksDone: Int = 0
+    var chunksTotal: Int = 0
+    var docsPerSec: Double?
+    var initialEstimatedSeconds: Double?
+    var estimatedRemainingSeconds: Double?
+    var estimatedCostUSD: Double?
+    var estimateIsCloud: Bool = false
+    var estimateSpeedSource: String?
     var docsIndexed: Int = 0
     var chunksCreated: Int = 0
     var linksFound: Int = 0
@@ -4084,10 +4465,37 @@ struct LintIssue: Codable, Identifiable {
     let target: String?
     let fix: String?
     let driftTarget: String?
+    let kind: String?
+    let field: String?
+    let candidates: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case path, line, level, message, target, fix
+        case path, line, level, message, target, fix, kind, field, candidates
         case driftTarget = "drift_target"
+    }
+
+    init(
+        path: String,
+        line: Int?,
+        level: String,
+        message: String,
+        target: String?,
+        fix: String?,
+        driftTarget: String?,
+        kind: String? = nil,
+        field: String? = nil,
+        candidates: [String]? = nil
+    ) {
+        self.path = path
+        self.line = line
+        self.level = level
+        self.message = message
+        self.target = target
+        self.fix = fix
+        self.driftTarget = driftTarget
+        self.kind = kind
+        self.field = field
+        self.candidates = candidates
     }
 }
 
@@ -4100,6 +4508,273 @@ struct LintReport: Codable {
     enum CodingKeys: String, CodingKey {
         case issues, errors, warnings
         case filesChecked = "files_checked"
+    }
+}
+
+struct FixLinkAction: Codable, Equatable, Identifiable {
+    var id: String { "\(action)|\(from)|\(to ?? "")|\(reason)" }
+    let action: String
+    let from: String
+    let to: String?
+    let count: Int
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case action, from, to, count, reason
+    }
+}
+
+struct FixFieldChange: Codable, Equatable, Identifiable {
+    var id: String { "\(field)|\(to)|\(reason)" }
+    let field: String
+    let from: String?
+    let to: String
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case field, from, to, reason
+    }
+}
+
+struct FixNoteChange: Codable, Equatable, Identifiable {
+    var id: String { path }
+    let path: String
+    let linkActions: [FixLinkAction]
+    let frontmatterFixes: [FixFieldChange]
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case linkActions = "link_actions"
+        case frontmatterFixes = "frontmatter_fixes"
+    }
+
+    init(path: String, linkActions: [FixLinkAction], frontmatterFixes: [FixFieldChange]) {
+        self.path = path
+        self.linkActions = linkActions
+        self.frontmatterFixes = frontmatterFixes
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        linkActions = try c.decodeIfPresent([FixLinkAction].self, forKey: .linkActions) ?? []
+        frontmatterFixes = try c.decodeIfPresent([FixFieldChange].self, forKey: .frontmatterFixes) ?? []
+    }
+}
+
+struct FixAmbiguousLink: Codable, Equatable, Identifiable {
+    var id: String { "\(path)|\(target)" }
+    let path: String
+    let target: String
+    let candidates: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case path, target, candidates
+    }
+
+    init(path: String, target: String, candidates: [String]) {
+        self.path = path
+        self.target = target
+        self.candidates = candidates
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        target = try c.decode(String.self, forKey: .target)
+        candidates = try c.decodeIfPresent([String].self, forKey: .candidates) ?? []
+    }
+}
+
+struct AIFixableIssue: Codable, Equatable, Identifiable {
+    var id: String { "\(path)|\(kind)|\(target ?? "")|\(message)" }
+    let path: String
+    let kind: String
+    let message: String
+    let target: String?
+
+    init(path: String, kind: String, message: String, target: String? = nil) {
+        self.path = path
+        self.kind = kind
+        self.message = message
+        self.target = target
+    }
+}
+
+struct FixVaultReport: Codable, Equatable {
+    let filesScanned: Int
+    let notesChanged: Int
+    let totalFixes: Int
+    let schemaUpdated: Bool
+    let schemaStatusesAdded: [String]
+    let schemaIssuesResolved: Int
+    let linksUpdated: Int
+    let linksUnlinked: Int
+    let formattingFixed: Int
+    let written: Bool
+    let undoAvailable: Bool
+    let notes: [FixNoteChange]
+    let ambiguous: [FixAmbiguousLink]
+    let aiFixableCount: Int
+    let aiFixableIssues: [AIFixableIssue]
+    let aiApplied: Bool
+    let aiFixesApplied: Int
+    let aiProvider: String?
+    let aiModel: String?
+    let aiSkippedReason: String?
+    let warnings: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case filesScanned = "files_scanned"
+        case notesChanged = "notes_changed"
+        case totalFixes = "total_fixes"
+        case schemaUpdated = "schema_updated"
+        case schemaStatusesAdded = "schema_statuses_added"
+        case schemaIssuesResolved = "schema_issues_resolved"
+        case linksUpdated = "links_updated"
+        case linksUnlinked = "links_unlinked"
+        case formattingFixed = "formatting_fixed"
+        case written
+        case undoAvailable = "undo_available"
+        case notes, ambiguous
+        case aiFixableCount = "ai_fixable_count"
+        case aiFixableIssues = "ai_fixable_issues"
+        case aiApplied = "ai_applied"
+        case aiFixesApplied = "ai_fixes_applied"
+        case aiProvider = "ai_provider"
+        case aiModel = "ai_model"
+        case aiSkippedReason = "ai_skipped_reason"
+        case warnings
+    }
+
+    init(
+        filesScanned: Int,
+        notesChanged: Int,
+        totalFixes: Int,
+        schemaUpdated: Bool,
+        schemaStatusesAdded: [String],
+        schemaIssuesResolved: Int,
+        linksUpdated: Int,
+        linksUnlinked: Int,
+        formattingFixed: Int,
+        written: Bool,
+        undoAvailable: Bool,
+        notes: [FixNoteChange],
+        ambiguous: [FixAmbiguousLink],
+        aiFixableCount: Int = 0,
+        aiFixableIssues: [AIFixableIssue] = [],
+        aiApplied: Bool = false,
+        aiFixesApplied: Int = 0,
+        aiProvider: String? = nil,
+        aiModel: String? = nil,
+        aiSkippedReason: String? = nil,
+        warnings: [String] = []
+    ) {
+        self.filesScanned = filesScanned
+        self.notesChanged = notesChanged
+        self.totalFixes = totalFixes
+        self.schemaUpdated = schemaUpdated
+        self.schemaStatusesAdded = schemaStatusesAdded
+        self.schemaIssuesResolved = schemaIssuesResolved
+        self.linksUpdated = linksUpdated
+        self.linksUnlinked = linksUnlinked
+        self.formattingFixed = formattingFixed
+        self.written = written
+        self.undoAvailable = undoAvailable
+        self.notes = notes
+        self.ambiguous = ambiguous
+        self.aiFixableCount = aiFixableCount
+        self.aiFixableIssues = aiFixableIssues
+        self.aiApplied = aiApplied
+        self.aiFixesApplied = aiFixesApplied
+        self.aiProvider = aiProvider
+        self.aiModel = aiModel
+        self.aiSkippedReason = aiSkippedReason
+        self.warnings = warnings
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        filesScanned = try c.decodeIfPresent(Int.self, forKey: .filesScanned) ?? 0
+        notesChanged = try c.decodeIfPresent(Int.self, forKey: .notesChanged) ?? 0
+        totalFixes = try c.decodeIfPresent(Int.self, forKey: .totalFixes) ?? 0
+        schemaUpdated = try c.decodeIfPresent(Bool.self, forKey: .schemaUpdated) ?? false
+        schemaStatusesAdded = try c.decodeIfPresent([String].self, forKey: .schemaStatusesAdded) ?? []
+        schemaIssuesResolved = try c.decodeIfPresent(Int.self, forKey: .schemaIssuesResolved) ?? 0
+        linksUpdated = try c.decodeIfPresent(Int.self, forKey: .linksUpdated) ?? 0
+        linksUnlinked = try c.decodeIfPresent(Int.self, forKey: .linksUnlinked) ?? 0
+        formattingFixed = try c.decodeIfPresent(Int.self, forKey: .formattingFixed) ?? 0
+        written = try c.decodeIfPresent(Bool.self, forKey: .written) ?? false
+        undoAvailable = try c.decodeIfPresent(Bool.self, forKey: .undoAvailable) ?? false
+        notes = try c.decodeIfPresent([FixNoteChange].self, forKey: .notes) ?? []
+        ambiguous = try c.decodeIfPresent([FixAmbiguousLink].self, forKey: .ambiguous) ?? []
+        aiFixableCount = try c.decodeIfPresent(Int.self, forKey: .aiFixableCount) ?? 0
+        aiFixableIssues = try c.decodeIfPresent([AIFixableIssue].self, forKey: .aiFixableIssues) ?? []
+        aiApplied = try c.decodeIfPresent(Bool.self, forKey: .aiApplied) ?? false
+        aiFixesApplied = try c.decodeIfPresent(Int.self, forKey: .aiFixesApplied) ?? 0
+        aiProvider = try c.decodeIfPresent(String.self, forKey: .aiProvider)
+        aiModel = try c.decodeIfPresent(String.self, forKey: .aiModel)
+        aiSkippedReason = try c.decodeIfPresent(String.self, forKey: .aiSkippedReason)
+        warnings = try c.decodeIfPresent([String].self, forKey: .warnings) ?? []
+    }
+}
+
+struct FixUndoResult: Codable, Equatable {
+    let reverted: Bool
+    let filesRestored: Int
+    let schemaRestored: Bool
+    let paths: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case reverted
+        case filesRestored = "files_restored"
+        case schemaRestored = "schema_restored"
+        case paths
+    }
+
+    init(reverted: Bool, filesRestored: Int, schemaRestored: Bool, paths: [String]) {
+        self.reverted = reverted
+        self.filesRestored = filesRestored
+        self.schemaRestored = schemaRestored
+        self.paths = paths
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        reverted = try c.decodeIfPresent(Bool.self, forKey: .reverted) ?? false
+        filesRestored = try c.decodeIfPresent(Int.self, forKey: .filesRestored) ?? 0
+        schemaRestored = try c.decodeIfPresent(Bool.self, forKey: .schemaRestored) ?? false
+        paths = try c.decodeIfPresent([String].self, forKey: .paths) ?? []
+    }
+}
+
+struct PolishBacklinkChange: Codable, Identifiable, Equatable {
+    var id: String { path }
+    let path: String
+    let original: String
+    let polished: String
+    let changes: [String]
+    let applied: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path, original, polished, changes, applied
+    }
+
+    init(path: String, original: String, polished: String, changes: [String] = [], applied: Bool = false) {
+        self.path = path
+        self.original = original
+        self.polished = polished
+        self.changes = changes
+        self.applied = applied
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        original = try c.decodeIfPresent(String.self, forKey: .original) ?? ""
+        polished = try c.decodeIfPresent(String.self, forKey: .polished) ?? ""
+        changes = try c.decodeIfPresent([String].self, forKey: .changes) ?? []
+        applied = try c.decodeIfPresent(Bool.self, forKey: .applied) ?? false
     }
 }
 
@@ -4117,13 +4792,60 @@ struct PolishResult: Codable {
     let linksRepaired: [RepairLinkRepair]?
     let linksSkipped: [RepairLinkRepair]?
     let warning: String?
+    let goal: String?
+    let frontmatterFixes: [FixFieldChange]?
+    let schemaRepaired: Bool?
+    let backlinkPreviews: [PolishBacklinkChange]?
+    let backlinksApplied: Int?
+    let undoBatchAvailable: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case path, original, polished, provider, model, warning
+        case path, original, polished, provider, model, warning, goal
         case durationMs = "duration_ms"
         case linksAdded = "links_added"
         case linksRepaired = "links_repaired"
         case linksSkipped = "links_skipped"
+        case frontmatterFixes = "frontmatter_fixes"
+        case schemaRepaired = "schema_repaired"
+        case backlinkPreviews = "backlink_previews"
+        case backlinksApplied = "backlinks_applied"
+        case undoBatchAvailable = "undo_batch_available"
+    }
+
+    init(
+        path: String,
+        original: String,
+        polished: String,
+        provider: String,
+        model: String,
+        durationMs: Int,
+        linksAdded: [String]? = nil,
+        linksRepaired: [RepairLinkRepair]? = nil,
+        linksSkipped: [RepairLinkRepair]? = nil,
+        warning: String? = nil,
+        goal: String? = nil,
+        frontmatterFixes: [FixFieldChange]? = nil,
+        schemaRepaired: Bool? = nil,
+        backlinkPreviews: [PolishBacklinkChange]? = nil,
+        backlinksApplied: Int? = nil,
+        undoBatchAvailable: Bool? = nil
+    ) {
+        self.path = path
+        self.original = original
+        self.polished = polished
+        self.provider = provider
+        self.model = model
+        self.durationMs = durationMs
+        self.linksAdded = linksAdded
+        self.linksRepaired = linksRepaired
+        self.linksSkipped = linksSkipped
+        self.warning = warning
+        self.goal = goal
+        self.frontmatterFixes = frontmatterFixes
+        self.schemaRepaired = schemaRepaired
+        self.backlinkPreviews = backlinkPreviews
+        self.backlinksApplied = backlinksApplied
+        self.undoBatchAvailable = undoBatchAvailable
     }
 }
 
@@ -4210,7 +4932,7 @@ struct CreateResult: Codable {
 
 // MARK: - AI Setup Wizard Types
 
-struct AIProbeResult: Codable {
+struct AIProbeResult: Codable, Sendable {
     let modelID: String
     let provider: String
     let modelType: String
@@ -4235,470 +4957,6 @@ struct AIProbeResult: Codable {
         case errorCode = "code"
         case invokeStrategy = "invoke_strategy"
     }
-}
-
-struct CatalogModelInfo: Codable, Identifiable {
-    /// Route-qualified, because a model can now appear on more than one
-    /// endpoint. Identity used to be `provider|modelID`, which produced
-    /// DUPLICATE Identifiable ids the moment a model had two routes (grok 4.6
-    /// on both planes, or one model in three regions), and duplicate ids
-    /// corrupt `List`/`ForEach` cell reuse rather than merely looking odd.
-    /// Plane and region are absent on non-Bedrock rows and on a pre-0.21 CLI,
-    /// where this collapses back to exactly the old value.
-    var id: String { provider + "|" + modelID + "|" + (plane ?? "") + "|" + (region ?? "") }
-
-    /// The model id in the CLI's canonical route form, `id@plane/region`.
-    ///
-    /// This is what `2nb config set ai.<slot>_model` should be given. Passing
-    /// the bare id makes the CLI refuse whenever the model has more than one
-    /// route, and the app has no way to answer that refusal, so it surfaced
-    /// as an opaque nonzero exit with the useful part (the qualified forms)
-    /// stuck in stderr. Sending the route the user actually clicked removes
-    /// the ambiguity at the source.
-    ///
-    /// Falls back to the bare id for non-Bedrock rows, for an unpinned
-    /// template, and for a pre-0.21 CLI that reports no plane — all cases
-    /// where the bare id is already unambiguous.
-    var routeQualifiedID: String {
-        guard let plane, !plane.isEmpty else { return modelID }
-        guard let region, !region.isEmpty else { return modelID + "@" + plane }
-        return modelID + "@" + plane + "/" + region
-    }
-    let modelID: String
-    let name: String
-    let provider: String
-    let modelType: String
-    let vendor: String?
-    let vendorDisplay: String?
-    let family: String?
-    let versionSortKey: String?
-    let dimensions: Int?
-    let priceIn: Double?
-    let priceOut: Double?
-    let priceRequest: Double?
-    let priceSource: String?
-    let reachable: Bool?
-    let credentials: Bool?
-    let rateLimitRPS: Double?
-    let rateLimitTPM: Int?
-    let priceOverride: Bool?
-    let contextLen: Int?
-    let recommendedSimilarityThreshold: Double?
-    let local: Bool?
-    let tier: String?
-    let invokeStrategy: String?
-    /// Bedrock invocation plane: "classic" or "mantle". Part of the row's
-    /// route identity alongside `region`, not a display hint. Absent on
-    /// non-Bedrock rows and on a pre-0.21 CLI.
-    let plane: String?
-    /// The Bedrock region whose endpoint this route calls. Part of route
-    /// identity: the same model in two regions is two independently-entitled
-    /// endpoints. Absent when the row is an unpinned template.
-    let region: String?
-    let enabled: Bool?
-    let active: Bool?
-    let configHint: String?
-    let notes: String?
-    let testedAt: String?
-    let testLatencyMs: Int64?
-    let testError: String?
-    // Classified failure code from the probe taxonomy (access_denied,
-    // bad_credentials, ...). Optional: absent on pre-taxonomy CLIs.
-    let testErrorCode: String?
-    let benchmark: CatalogBenchmarkSummary?
-    let compatible: Bool?
-    let compatibilityReason: String?
-    // Curation flag: the short list 2nb suggests per provider. Optional:
-    // absent on pre-curation CLIs (curated view falls back to verified+tested).
-    let recommended: Bool?
-    // Matryoshka output widths the model accepts (e.g. Nova-2:
-    // 256/384/1024/3072). Optional: absent for fixed-width models.
-    let supportedDimensions: [Int]?
-    /// CLI working-set flag: this account probed the model successfully,
-    /// or it is an *untested* active embed/gen slot. A failed probe on the
-    /// active model is `false`. Absent on older CLIs (key missing).
-    let working: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case modelID = "id"
-        case name, provider
-        case modelType = "type"
-        case vendor
-        case vendorDisplay = "vendor_display"
-        case family
-        case versionSortKey = "version_sort_key"
-        case dimensions
-        case priceIn = "price_input_per_million"
-        case priceOut = "price_output_per_million"
-        case priceRequest = "price_per_request"
-        case priceSource = "price_source"
-        case reachable
-        case credentials
-        case rateLimitRPS = "rate_limit_rps"
-        case rateLimitTPM = "rate_limit_tpm"
-        case priceOverride = "price_override"
-        case contextLen = "context_length"
-        case recommendedSimilarityThreshold = "recommended_similarity_threshold"
-        case local
-        case tier
-        case invokeStrategy = "invoke_strategy"
-        case plane
-        case region
-        case enabled
-        case active
-        case configHint = "config_hint"
-        case notes
-        case testedAt = "tested_at"
-        case testLatencyMs = "test_latency_ms"
-        case testError = "test_error"
-        case testErrorCode = "test_error_code"
-        case benchmark
-        case compatible
-        case compatibilityReason = "compatibility_reason"
-        case recommended
-        case supportedDimensions = "supported_dimensions"
-        case working
-    }
-}
-
-struct CatalogBenchmarkSummary: Codable, Equatable {
-    let ranAt: String?
-    let avgLatencyMs: Int64?
-    let qualityScore: Double?
-    let vaultDocCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case ranAt = "ran_at"
-        case avgLatencyMs = "avg_latency_ms"
-        case qualityScore = "quality_score"
-        case vaultDocCount = "vault_doc_count"
-    }
-}
-
-struct BenchmarkEvent: Codable, Identifiable {
-    var id = UUID()
-    let event: String
-    let modelID: String?
-    let provider: String?
-    let modelType: String?
-    let probe: String?
-    let result: BenchmarkProbeResult?
-    let benchmark: CatalogBenchmarkSummary?
-    let message: String?
-
-    enum CodingKeys: String, CodingKey {
-        case event
-        case modelID = "model_id"
-        case provider
-        case modelType = "type"
-        case probe
-        case result
-        case benchmark
-        case message
-    }
-}
-
-struct BenchmarkProbeResult: Codable, Equatable {
-    let probe: String
-    let latencyMs: Int64
-    let ok: Bool
-    let skipped: Bool?
-    let detail: String?
-    let qualityScore: Double?
-    let vaultDocCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case probe
-        case latencyMs = "latency_ms"
-        case ok
-        case skipped
-        case detail
-        case qualityScore = "quality_score"
-        case vaultDocCount = "vault_doc_count"
-    }
-}
-
-/// One line-delimited JSON progress event from `2nb models verify --events`,
-/// mirroring the Go `verifyEvent`. `start` carries `total` + `estimatedUsd`;
-/// each `result` carries `n`/`total` + the probe `result`; `done` carries
-/// `total` + `summary` + `savedScope`. The zero-candidate `done` omits
-/// `summary` (Go `omitempty` on an empty map), so it decodes to nil; treat an
-/// absent summary as an empty result set.
-struct VerifyEvent: Codable {
-    let event: String
-    let n: Int?
-    let total: Int?
-    let estimatedUsd: Double?
-    let result: VerifyProbeResult?
-    let summary: [String: Int]?
-    let savedScope: String?
-
-    enum CodingKeys: String, CodingKey {
-        case event, n, total, result, summary
-        case estimatedUsd = "estimated_usd"
-        case savedScope = "saved_scope"
-    }
-}
-
-/// One model's outcome inside a verify `result` event, mirroring the Go
-/// `ai.TestProbeResult`. `code`/`remediation` classify a failure via the shared
-/// probe taxonomy; both are empty on a pass.
-struct VerifyProbeResult: Codable {
-    let modelID: String
-    let provider: String
-    let modelType: String
-    let ok: Bool
-    let detail: String?
-    let latency: String?
-    let code: String?
-    let remediation: String?
-
-    enum CodingKeys: String, CodingKey {
-        case modelID = "model_id"
-        case provider
-        case modelType = "type"
-        case ok, detail, latency, code, remediation
-    }
-}
-
-/// Pure helpers for the AI Hub "Validate models" streamed flow, split out so
-/// the cost-cap math, the empty-stream failure classification, and the
-/// verify-vocabulary summary text are unit-testable without AppKit or a live CLI.
-enum VerifyFlow {
-    /// The `--cost-cap` to pass a verify run given the confirmed estimate:
-    /// double the preview plus a cent of headroom, so the CLI's spend guard
-    /// still trips on a runaway but never on the exact amount the user just
-    /// approved. A nil preview (the estimator itself failed) falls back to the
-    /// CLI's own default guard (models_verify.go `--cost-cap`, $0.50) — the
-    /// value is passed as an explicit flag, so it must match the CLI default
-    /// rather than silently tightening it.
-    static func costCap(preview: CostPreviewResponse?) -> Double {
-        guard let preview else { return 0.50 }
-        return preview.totalUSD * 2 + 0.01
-    }
-
-    enum StreamOutcome: Equatable {
-        case success
-        case failure(String)
-    }
-
-    /// Classifies the terminal state of a `models verify --events` run. A
-    /// non-zero exit is always a failure surfacing the stderr text, EVEN when
-    /// no events streamed: a cost-cap-exceeded `--events` run exits non-zero
-    /// with an empty stdout and no error event, so "no done event" must not be
-    /// read as success.
-    static func classify(exitStatus: Int32, stderr: String) -> StreamOutcome {
-        if exitStatus == 0 { return .success }
-        let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        return .failure(msg.isEmpty ? "models verify exited with status \(exitStatus)" : msg)
-    }
-
-    /// Renders a verify `done` summary map into a display line, mapping the
-    /// `ok` count to "verified" (the model_access naming) and each failure code
-    /// to a readable label; unknown codes fall back to their raw slug so nothing
-    /// is dropped. An absent/empty summary reads as "No models validated".
-    static func summaryText(_ summary: [String: Int]?) -> String {
-        let counts = summary ?? [:]
-        let ordered: [(key: String, label: String)] = [
-            ("ok", "verified"),
-            ("access_denied", "no access"),
-            ("throttled", "throttled"),
-            ("bad_credentials", "bad credentials"),
-            ("not_found", "not found"),
-            ("provider_unreachable", "unreachable"),
-            ("invalid_request", "invalid request"),
-            ("incompatible", "incompatible"),
-            ("timeout", "timeout"),
-            ("unknown", "other"),
-        ]
-        var parts: [String] = []
-        var covered = Set<String>()
-        for (key, label) in ordered {
-            covered.insert(key)
-            if let n = counts[key], n > 0 { parts.append("\(n) \(label)") }
-        }
-        for (key, n) in counts.sorted(by: { $0.key < $1.key }) where n > 0 && !covered.contains(key) {
-            parts.append("\(n) \(key)")
-        }
-        return parts.isEmpty ? "No models validated" : parts.joined(separator: ", ")
-    }
-}
-
-/// One `2nb models policy show` entry, and the result of `models policy set`,
-/// mirroring the Go `policyResult`. A vendor policy is a durable "enable only
-/// these vendors" statement for one provider: models from vendors not in the
-/// list are disabled, including ones discovered in the future.
-struct VendorPolicyResult: Codable, Identifiable {
-    // Two policies can exist for one provider (vault + global scope), so the
-    // identity includes the scope to keep ForEach keys unique.
-    var id: String { provider + "|" + scope }
-    let provider: String
-    let mode: String
-    let vendors: [String]
-    let scope: String
-    let dryRun: Bool
-    let effect: VendorPolicyEffect
-    let warnings: [String]
-    let clearedModelOverrides: [String]
-    /// Slugs the user may enable-only for this provider, including vendors
-    /// with zero catalog rows yet (xai, openai). Absent on older CLIs.
-    let knownVendors: [String]?
-
-    enum CodingKeys: String, CodingKey {
-        case provider, mode, vendors, scope, effect, warnings
-        case dryRun = "dry_run"
-        case clearedModelOverrides = "cleared_model_overrides"
-        case knownVendors = "known_vendors"
-    }
-}
-
-/// The per-provider effect of applying a vendor policy: final enabled/disabled
-/// counts, how many models an explicit per-model override decided instead of
-/// the policy, and the per-vendor verdict.
-struct VendorPolicyEffect: Codable, Equatable {
-    let enabled: Int
-    let disabled: Int
-    let overridden: Int
-    let byVendor: [String: VendorEffectEntry]
-
-    enum CodingKeys: String, CodingKey {
-        case enabled, disabled, overridden
-        case byVendor = "by_vendor"
-    }
-}
-
-/// One vendor's slice of a policy effect: how many models it has and the
-/// policy's verdict ("enabled" or "disabled") for the vendor.
-struct VendorEffectEntry: Codable, Equatable {
-    let models: Int
-    let state: String
-}
-
-struct CostEstimate: Codable, Identifiable {
-    var id: String { modelID }
-    let modelID: String
-    let provider: String
-    let requests: Int
-    let inputTokens: Int
-    let outputTokens: Int
-    let probe: String
-    let usd: Double
-    let knownPricing: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case modelID = "model_id"
-        case provider, requests, probe, usd
-        case inputTokens = "input_tokens"
-        case outputTokens = "output_tokens"
-        case knownPricing = "known_pricing"
-    }
-}
-
-struct CostPreviewResponse: Codable {
-    let estimates: [CostEstimate]
-    let totalUSD: Double
-
-    enum CodingKeys: String, CodingKey {
-        case estimates
-        case totalUSD = "total_usd"
-    }
-}
-
-/// One row of `2nb models bench history --json` (bench.Run in the CLI).
-struct BenchRunInfo: Codable, Identifiable {
-    let id: Int
-    let timestamp: String
-    let provider: String
-    let modelID: String
-    let probe: String
-    let latencyMs: Int64
-    let ok: Bool
-    let detail: String?
-    let vaultDocCount: Int?
-    let plane: String?
-    let region: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, timestamp, provider, probe, ok, detail, plane, region
-        case modelID = "model_id"
-        case latencyMs = "latency_ms"
-        case vaultDocCount = "vault_doc_count"
-    }
-}
-
-/// One row of `2nb models bench favs --json` (bench.Favorite in the CLI).
-struct BenchFavoriteInfo: Codable, Identifiable {
-    var id: String { provider + "|" + modelID }
-    let provider: String
-    let modelID: String
-    let modelType: String
-    let addedAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case provider
-        case modelID = "model_id"
-        case modelType = "model_type"
-        case addedAt = "added_at"
-    }
-}
-
-/// `2nb models calibrate --json` payload (calibrationResult in the CLI).
-struct CalibrationInfo: Codable {
-    let provider: String
-    let model: String
-    let sampleCount: Int?
-    let p50: Double?
-    let p95: Double?
-    let recommendedThreshold: Double
-    let activeThreshold: Double?
-    let activeSource: String?
-    let savedTo: String?
-
-    enum CodingKeys: String, CodingKey {
-        case provider, model, p50, p95
-        case sampleCount = "sample_count"
-        case recommendedThreshold = "recommended_threshold"
-        case activeThreshold = "active_threshold"
-        case activeSource = "active_source"
-        case savedTo = "saved_to"
-    }
-}
-
-/// `2nb ai embed-probe --json` payload (ProbeResult in the CLI).
-struct EmbedProbeInfo: Codable {
-    struct Level: Codable, Identifiable {
-        var id: Int { concurrency }
-        let concurrency: Int
-        let durationMs: Int64?
-        let textsPerSec: Double?
-        let errors: Int?
-
-        enum CodingKeys: String, CodingKey {
-            case concurrency, errors
-            case durationMs = "duration_ms"
-            case textsPerSec = "texts_per_sec"
-        }
-    }
-
-    let provider: String
-    let model: String
-    let sampleSize: Int?
-    let levels: [Level]
-    let recommended: Int
-
-    enum CodingKeys: String, CodingKey {
-        case provider, model, levels, recommended
-        case sampleSize = "sample_size"
-    }
-}
-
-struct OllamaReadiness: Codable {
-    let installed: Bool
-    let running: Bool
-}
-
-struct OllamaReport: Codable {
-    let ollama: OllamaReadiness
 }
 
 /// One note the incremental reindex could not index, with the CLI's own reason.
@@ -4734,101 +4992,121 @@ struct FileItem: Identifiable {
     let relativePath: String
 }
 
-enum FileTreeNode: Identifiable {
-    case directory(id: String, name: String, path: String, children: [FileTreeNode])
-    case file(FileItem)
+// MARK: - Local Gemma & Engine Types
 
-    var id: String {
-        switch self {
-        case .directory(let id, _, _, _): return id
-        case .file(let item): return item.id.uuidString
-        }
-    }
-
-    var name: String {
-        switch self {
-        case .directory(_, let name, _, _): return name
-        case .file(let item): return item.name
-        }
-    }
-
-    var fileCount: Int {
-        switch self {
-        case .directory(_, _, _, let children):
-            return children.reduce(0) { $0 + ($1.isFile ? 1 : $1.fileCount) }
-        case .file: return 1
-        }
-    }
-
-    var isFile: Bool {
-        if case .file = self { return true }
-        return false
-    }
+/// Progress state for a local-model download (`ai engine pull --json`).
+struct LocalModelDownload {
+    let models: [String]
+    var currentModel: String = ""
+    var done: Int64 = 0
+    var total: Int64 = 0
+    var completed: [String] = []
+    var failed = false
+    var error: String?
+    var finished = false
+    /// Fraction of the CURRENT model (the CLI reports per-file, not aggregate).
+    var fraction: Double { total > 0 ? min(1, max(0, Double(done) / Double(total))) : 0 }
 }
 
-func buildFileTree(from files: [FileItem]) -> [FileTreeNode] {
-    // Group files by their top-level directory
-    var dirFiles: [String: [FileItem]] = [:]
-    var rootFiles: [FileItem] = []
+/// One line-delimited event from `ai engine pull --json`.
+struct PullEvent: Codable, Sendable {
+    let model: String
+    let status: String
+    let done: Int64?
+    let total: Int64?
+    let path: String?
+    let error: String?
+}
 
-    for file in files {
-        let parts = file.relativePath.split(separator: "/").map(String.init)
-        if parts.count > 1 {
-            dirFiles[parts[0], default: []].append(file)
-        } else {
-            rootFiles.append(file)
-        }
-    }
+/// Buffers a byte stream and yields decoded `PullEvent`s per complete JSONL line.
+/// Thread-safe accumulator with NSLock protecting the Data buffer.
+final class PullEventStream: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private let decoder = JSONDecoder()
 
-    // Recursively build subtrees
-    func subtree(files: [FileItem], prefix: String) -> [FileTreeNode] {
-        var subdirs: [String: [FileItem]] = [:]
-        var leaves: [FileItem] = []
-
-        for file in files {
-            let remainder = String(file.relativePath.dropFirst(prefix.count))
-            let parts = remainder.split(separator: "/").map(String.init)
-            if parts.count > 1 {
-                subdirs[parts[0], default: []].append(file)
-            } else {
-                leaves.append(file)
+    func ingest(_ chunk: Data) -> [PullEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+        var events: [PullEvent] = []
+        while let nl = data.firstIndex(of: 0x0A) {
+            let line = data.subdata(in: data.startIndex..<nl)
+            data.removeSubrange(data.startIndex...nl)
+            if let ev = try? decoder.decode(PullEvent.self, from: line) {
+                events.append(ev)
             }
         }
+        return events
+    }
 
-        var nodes: [FileTreeNode] = subdirs.keys.sorted().map { dir in
-            let path = prefix + dir + "/"
-            return .directory(id: "dir:" + path, name: dir, path: path, children: subtree(files: subdirs[dir]!, prefix: path))
+    /// Flushes any remaining un-newline-terminated JSON line in buffer upon stream completion.
+    func flush() -> [PullEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        var events: [PullEvent] = []
+        while let nl = data.firstIndex(of: 0x0A) {
+            let line = data.subdata(in: data.startIndex..<nl)
+            data.removeSubrange(data.startIndex...nl)
+            if let ev = try? decoder.decode(PullEvent.self, from: line) {
+                events.append(ev)
+            }
         }
-        nodes += leaves.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.map { .file($0) }
-        return nodes
+        if !data.isEmpty {
+            let remaining = data
+            data.removeAll()
+            if let str = String(data: remaining, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !str.isEmpty,
+               let trimmedData = str.data(using: .utf8),
+               let ev = try? decoder.decode(PullEvent.self, from: trimmedData) {
+                events.append(ev)
+            }
+        }
+        return events
     }
-
-    // Build top-level tree: directories first, then root files
-    var tree: [FileTreeNode] = dirFiles.keys.sorted().map { dir in
-        let path = dir + "/"
-        return .directory(id: "dir:" + path, name: dir, path: path, children: subtree(files: dirFiles[dir]!, prefix: path))
-    }
-    tree += rootFiles.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.map { .file($0) }
-    return tree
 }
 
-struct DocumentTab: Identifiable {
-    let id = UUID()
-    let url: URL
-    var document: MarkdownDocument
-    var content: String
-    var isDirty: Bool = false
-    /// Content as it was on disk at the last successful load or save.
-    /// Used as the common ancestor for merge conflict detection.
-    var lastSavedContent: String = ""
-    /// True when external changes were detected and the user deferred resolution.
-    /// Blocks further saves until resolved via the merge conflict dialog.
-    var hasExternalConflict: Bool = false
-    /// True when the file was opened in read-only mode (e.g. because it's huge).
-    /// The editor disables text input when this is set; autosave skips the tab.
-    var readOnly: Bool = false
+/// Status of an individual supervised `llama-server` role.
+struct RoleStatus: Codable, Sendable, Equatable, Identifiable {
+    var id: String { "\(role)-\(port)-\(pid)" }
+    let role: String
+    let pid: Int
+    let port: Int
+    let model: String
+    let startedAt: String?
+    let healthy: Bool
 
-    var title: String {
-        document.title.isEmpty ? url.deletingPathExtension().lastPathComponent : document.title
+    enum CodingKeys: String, CodingKey {
+        case role, pid, port, model, healthy
+        case startedAt = "started_at"
+    }
+}
+
+/// Aggregated status of the local `llama-server` engine daemon (`2nb ai engine status --json`).
+struct EngineStatus: Codable, Sendable, Equatable {
+    let enginePath: String
+    let agentLoaded: Bool
+    let roles: [RoleStatus]?
+
+    enum CodingKeys: String, CodingKey {
+        case enginePath = "engine_path"
+        case agentLoaded = "agent_loaded"
+        case roles
+    }
+
+    var isRunning: Bool {
+        agentLoaded || (roles?.contains(where: { $0.pid > 0 }) ?? false)
+    }
+
+    var isHealthy: Bool {
+        guard let roles, !roles.isEmpty else { return false }
+        return roles.allSatisfy { $0.healthy }
+    }
+
+    var primaryPid: Int32? {
+        if let pid = roles?.first?.pid {
+            return Int32(pid)
+        }
+        return nil
     }
 }

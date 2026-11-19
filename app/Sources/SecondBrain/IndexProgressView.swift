@@ -47,14 +47,38 @@ struct IndexProgressView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         phaseHeader(progress.phase.rawValue)
                         if progress.embeddingTotal > 0 {
+                            let useChunks = progress.chunksTotal > 0
+                            let progressValue = useChunks
+                                ? Double(progress.chunksDone)
+                                : Double(progress.embeddingCurrent)
+                            let progressTotal = useChunks
+                                ? Double(progress.chunksTotal)
+                                : Double(progress.embeddingTotal)
                             ProgressView(
-                                value: Double(progress.embeddingCurrent),
-                                total: Double(progress.embeddingTotal)
+                                value: min(progressValue, progressTotal),
+                                total: max(1, progressTotal)
                             )
                             .progressViewStyle(.linear)
-                            Text("\(progress.embeddingCurrent) / \(progress.embeddingTotal) documents")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            HStack {
+                                let docText = "\(progress.embeddingCurrent) / \(progress.embeddingTotal) documents"
+                                let chunkSuffix = progress.chunksTotal > 0
+                                    ? " · \(progress.chunksDone)/\(progress.chunksTotal) chunks"
+                                    : ""
+                                Text(docText + chunkSuffix)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                                Spacer()
+                                if let rem = progress.estimatedRemainingSeconds {
+                                    let ratePrefix = progress.docsPerSec.map {
+                                        String(format: "%.1f docs/s · ", locale: Locale(identifier: "en_US_POSIX"), $0)
+                                    } ?? ""
+                                    Text("\(ratePrefix)~\(Formatters.eta(rem)) left")
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(.secondary)
+                                        .monospacedDigit()
+                                }
+                            }
                         } else {
                             ProgressView()
                                 .progressViewStyle(.linear)
@@ -68,9 +92,14 @@ struct IndexProgressView: View {
                     statsView(progress)
 
                 case .failed:
-                    Label(progress.error ?? "Unknown error", systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.red)
+                    ScrollView {
+                        Label(progress.error ?? "Unknown error", systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 110)
                 }
 
                 // Elapsed time (after completion)
@@ -90,6 +119,7 @@ struct IndexProgressView: View {
                         isPresented = false
                     }
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("indexSheet.cancelButton")
                 }
                 Spacer()
                 switch phase {
@@ -99,6 +129,7 @@ struct IndexProgressView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("indexSheet.confirmButton")
                 case .indexingFiles, .embedding:
                     Button("Running...") {}
                         .buttonStyle(.borderedProminent)
@@ -109,11 +140,37 @@ struct IndexProgressView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("indexSheet.doneButton")
                 }
             }
         }
         .padding(20)
-        .frame(width: 400, height: 280)
+        .frame(width: 430, height: 310)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: appState.guiInputBridge.pendingButtonCommand) { _, cmd in
+            applyButtonCommand(cmd)
+        }
+    }
+
+    private func applyButtonCommand(_ cmd: GUIButtonCommand?) {
+        guard let cmd else { return }
+        switch cmd.targetIdentifier {
+        case "indexSheet.cancelButton":
+            guard phase == .ready else { return }
+            isPresented = false
+            appState.guiInputBridge.acknowledgeButtonClicked(cmd.id, label: "Cancel")
+        case "indexSheet.confirmButton":
+            guard phase == .ready else { return }
+            let label = isReembed ? "Re-embed All" : "Sync Index"
+            appState.startIndex()
+            appState.guiInputBridge.acknowledgeButtonClicked(cmd.id, label: label)
+        case "indexSheet.doneButton":
+            guard phase == .complete || phase == .failed else { return }
+            isPresented = false
+            appState.guiInputBridge.acknowledgeButtonClicked(cmd.id, label: "Done")
+        default:
+            break
+        }
     }
 
     private var phase: IndexPhase {
@@ -151,6 +208,8 @@ struct IndexProgressView: View {
 
     @ViewBuilder
     private var readyView: some View {
+        let est = appState.metricsReport?.reembedEstimate
+        let showCorpusEst = isReembed || (appState.aiStatus?.embeddingCount == 0)
         VStack(alignment: .leading, spacing: 10) {
             Text(isReembed
                  ? "Re-embed every document in this vault from scratch."
@@ -166,14 +225,31 @@ struct IndexProgressView: View {
                     .foregroundStyle(.tertiary)
             }
 
+            if showCorpusEst, let est, est.embeddableDocs > 0 {
+                let etaText = est.estimatedSeconds > 0 ? "~\(Formatters.eta(est.estimatedSeconds))" : "—"
+                let sourceText = est.speedSource == "history" ? "from vault history" : "baseline estimate"
+                Text("Estimated time: \(etaText) (\(est.totalChunks) chunks, ~\(Formatters.tokens(est.estimatedTokens)) tokens · \(sourceText))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
             if isReembed, let ai = appState.aiStatus, ai.embedAvailable {
-                // Re-embed clears every stored embedding and regenerates it, so
-                // it re-runs a paid embedding call for every document — unlike
-                // an incremental Rebuild, which only embeds changed docs.
-                Label("Regenerates every embedding — re-runs paid \(ai.embeddingModel) calls for all documents.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                let effectiveProvider = est?.provider ?? ai.effectiveEmbeddingProvider
+                let isCloud = est?.isCloud ?? (effectiveProvider != "llama-local" && effectiveProvider != "ollama")
+                if !isCloud {
+                    Label("Runs on-device (\(ai.embeddingModel)) — $0.00 cloud cost.",
+                          systemImage: "cpu")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    let costLabel = est.map {
+                        "est. \(Formatters.usd($0.estimatedCostUSD, knownPricing: $0.knownPricing))"
+                    } ?? "paid calls"
+                    Label("Regenerates every embedding on \(ProviderDisplay.name(effectiveProvider)) (\(ai.embeddingModel)) — \(costLabel).",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             } else if let ai = appState.aiStatus, ai.embedAvailable {
                 Label("Embeddings will be updated (\(ai.embeddingModel))", systemImage: "brain.head.profile")
                     .font(.caption)

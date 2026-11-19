@@ -319,11 +319,15 @@ func InitOpenRouter(ctx context.Context, reg *Registry, cfg OpenRouterConfig, ai
 		}
 	}
 
-	embedder := NewOpenRouterEmbedder(apiKey, aiCfg.EmbeddingModel, aiCfg.Dimensions)
-	reg.RegisterEmbedder("openrouter", embedder)
+	if ep := aiCfg.EffectiveEmbeddingProvider(); ep == "" || ep == "openrouter" {
+		embedder := NewOpenRouterEmbedder(apiKey, aiCfg.EmbeddingModel, aiCfg.Dimensions)
+		reg.RegisterEmbedder("openrouter", embedder)
+	}
 
-	generator := NewOpenRouterGenerator(apiKey, aiCfg.GenerationModel)
-	reg.RegisterGenerator("openrouter", generator)
+	if gp := aiCfg.EffectiveGenerationProvider(); gp == "" || gp == "openrouter" {
+		generator := NewOpenRouterGenerator(apiKey, aiCfg.GenerationModel)
+		reg.RegisterGenerator("openrouter", generator)
+	}
 
 	return nil
 }

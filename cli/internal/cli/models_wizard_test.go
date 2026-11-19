@@ -33,11 +33,11 @@ func TestWriteActiveModelConfig_WritesAllSlots(t *testing.T) {
 	v, _ := newContractVault(t)
 
 	// Start from a clean, deliberately-mismatched dimension so the resync is
-	// observable: picking the 1024-dim Nova-2 embedder must move dimensions to
-	// 1024 via the same resync runConfigSet uses.
+	// observable: picking the 768-dim Gemini Embedding 2 model must move dimensions to
+	// 768 via the same resync runConfigSet uses.
 	v.Config.AI.Dimensions = 512
 
-	d := ai.DefaultAIConfig() // bedrock + Nova-2 + Haiku 4.5
+	d := ai.DefaultAIConfig() // gemini + Gemini Embedding 2 + Gemini 4 Hydrogen
 	events := newWizardEventSink(false, &strings.Builder{}, &strings.Builder{})
 
 	if err := writeActiveModelConfig(v, d.Provider, d.EmbeddingModel, d.GenerationModel, events); err != nil {
@@ -79,7 +79,7 @@ func TestWriteActiveModelConfig_LogsConfigSetTrail(t *testing.T) {
 	v, _ := newContractVault(t)
 	buf := captureSlog(t)
 
-	d := ai.DefaultAIConfig() // bedrock + Nova-2 + Haiku 4.5
+	d := ai.DefaultAIConfig() // gemini + Gemini Embedding 2 + Gemini 4 Hydrogen
 	events := newWizardEventSink(false, &strings.Builder{}, &strings.Builder{})
 
 	if err := writeActiveModelConfig(v, d.Provider, d.EmbeddingModel, d.GenerationModel, events); err != nil {
@@ -146,11 +146,11 @@ func TestShouldSetActive(t *testing.T) {
 
 // TestModelsWizardSetActive_EndToEnd runs the full `models wizard --set-active`
 // CLI path against a real provider and asserts the config keys were written.
-// It is gated on Bedrock being reachable (the default provider) and skips when
+// It is gated on Gemini being reachable (the default provider) and skips when
 // no credentials are configured, per the no-mock policy.
 func TestModelsWizardSetActive_EndToEnd(t *testing.T) {
-	if !ai.CheckBedrockCredentials(context.Background(), ai.DefaultAIConfig().Bedrock) {
-		t.Skip("no Bedrock credentials configured; skipping live wizard test")
+	if !ai.CheckGeminiCredentials(context.Background(), ai.DefaultAIConfig().Gemini) {
+		t.Skip("no Gemini credentials configured; skipping live wizard test")
 	}
 
 	v, root := newContractVault(t)
@@ -174,5 +174,42 @@ func TestModelsWizardSetActive_EndToEnd(t *testing.T) {
 	}
 	if reloaded.AI.EmbeddingModel == "" && reloaded.AI.GenerationModel == "" {
 		t.Error("models wizard --set-active wrote neither an embedding nor a generation model")
+	}
+}
+
+func TestProbeProviderStatus_GeminiFirst(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "fake-key")
+	status := probeProviderStatus(context.Background(), ai.DefaultAIConfig())
+	if len(status) == 0 {
+		t.Fatal("probeProviderStatus returned empty slice")
+	}
+	if status[0].Name != "gemini" {
+		t.Errorf("status[0].Name = %q, want %q", status[0].Name, "gemini")
+	}
+	if !status[0].Available {
+		t.Errorf("status[0].Available = false with GEMINI_API_KEY set, want true")
+	}
+}
+
+func TestEasyModeIndices_PicksRecommendedGeminiModels(t *testing.T) {
+	cfg := ai.DefaultAIConfig()
+	catalog := ai.BuiltinCatalog()
+	idxs := easyModeIndices(catalog, cfg)
+	picks := subset(catalog, idxs)
+
+	var gotEmbed, gotGen string
+	for _, m := range picks {
+		switch m.Type {
+		case "embedding":
+			gotEmbed = m.ID
+		case "generation":
+			gotGen = m.ID
+		}
+	}
+	if gotEmbed != ai.DefaultGeminiEmbeddingModel {
+		t.Errorf("embedding pick = %q, want %q", gotEmbed, ai.DefaultGeminiEmbeddingModel)
+	}
+	if gotGen != ai.DefaultGeminiGenerationModel {
+		t.Errorf("generation pick = %q, want %q", gotGen, ai.DefaultGeminiGenerationModel)
 	}
 }

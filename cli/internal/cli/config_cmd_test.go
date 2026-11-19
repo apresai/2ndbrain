@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -100,17 +101,18 @@ func TestConfigSetEmbeddingModel_SyncsDimensions(t *testing.T) {
 	_, root := newContractVault(t)
 
 	// Put the vault on a non-default (but valid Matryoshka) dimension — the
-	// state a model switch that failed to sync dims would leave behind. (256 is
-	// a supported Nova-2 width; an unsupported value is now refused at set time.)
-	if _, err := runCLIArgs(t, root, "config", "set", "ai.dimensions", "256"); err != nil {
-		t.Fatalf("config set ai.dimensions 256: %v", err)
+	// state a model switch that failed to sync dims would leave behind. (1024 is
+	// a supported gemini-embedding-2 / gemini-embedding-001 width; an unsupported value is now refused at set time.)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.dimensions", "1024"); err != nil {
+		t.Fatalf("config set ai.dimensions 1024: %v", err)
 	}
 
-	// Re-selecting the catalog's default Nova-2 (1024-dim) embedding model must
-	// resync ai.dimensions to 1024. Regression guard: deleting the dims-sync
+	// Re-selecting the catalog's default embedding model must
+	// resync ai.dimensions to its declared dimensions. Regression guard: deleting the dims-sync
 	// block in runConfigSet leaves the dimension stuck at 256 and this fails.
-	nova := ai.DefaultAIConfig().EmbeddingModel
-	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", nova); err != nil {
+	embedModel := ai.DefaultAIConfig().EmbeddingModel
+	expectedDims := fmt.Sprintf("%d", ai.DefaultAIConfig().Dimensions)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", embedModel); err != nil {
 		t.Fatalf("config set ai.embedding_model: %v", err)
 	}
 
@@ -118,8 +120,8 @@ func TestConfigSetEmbeddingModel_SyncsDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config get ai.dimensions: %v", err)
 	}
-	if got := strings.TrimSpace(string(out)); got != "1024" {
-		t.Errorf("ai.dimensions after embedding-model switch = %q, want 1024 (dims-sync did not run)", got)
+	if got := strings.TrimSpace(string(out)); got != expectedDims {
+		t.Errorf("ai.dimensions after embedding-model switch = %q, want %s (dims-sync did not run)", got, expectedDims)
 	}
 }
 
@@ -161,6 +163,7 @@ func TestSetConfigValue_ReasoningEffort(t *testing.T) {
 		{"low", "low", "", "low"},
 		{"medium", "medium", "", "medium"},
 		{"high", "high", "", "high"},
+		{"xhigh", "xhigh", "", "xhigh"},
 		{"uppercase normalizes", "HIGH", "", "high"},
 		{"surrounding space trimmed", "  medium  ", "", "medium"},
 		{"empty clears", "", "", ""},
@@ -225,10 +228,12 @@ func TestSettableConfigKeys_includesThreshold(t *testing.T) {
 // provider key needs a real provider name to pass validation).
 func dummyConfigValue(key string) string {
 	switch key {
-	case "ai.provider":
+	case "ai.provider", "ai.embedding_provider", "ai.generation_provider", "ai.rerank.provider":
 		return "bedrock"
 	case "ai.dimensions":
 		return "1024"
+	case "ai.task_preset", "ai.llama.task_prefix":
+		return "code"
 	case "ai.similarity_threshold":
 		return "0.5"
 	case "ai.bm25_weight", "ai.vector_weight":
@@ -239,7 +244,7 @@ func dummyConfigValue(key string) string {
 		return "8"
 	case "ai.reasoning_effort":
 		return "medium"
-	case "ai.rerank.enabled":
+	case "ai.rerank.enabled", "ai.gemini.use_vertex_ai":
 		return "true"
 	case "ai.rerank.candidate_docs":
 		return "40"
@@ -293,5 +298,219 @@ func TestConfigGetSetKeyParity(t *testing.T) {
 	cfg := ai.DefaultAIConfig()
 	if err := setConfigValue(&cfg, bogus, "x"); err == nil {
 		t.Errorf("setConfigValue(%q) accepted a key absent from settableConfigKeys", bogus)
+	}
+}
+
+func TestReadAPIKeyLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr string
+	}{
+		{"with newline", "AIza-test-key\n", "AIza-test-key", ""},
+		{"without newline EOF", "AIza-test-key", "AIza-test-key", ""},
+		{"padded CRLF", "  AIza-test-key \r\n", "AIza-test-key", ""},
+		{"empty EOF", "", "", "read key: EOF"},
+		{"whitespace newline", "   \n", "", "empty key"},
+		{"whitespace EOF", "   ", "", "empty key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := readAPIKeyLine(strings.NewReader(tt.input))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("readAPIKeyLine(%q) unexpected error: %v", tt.input, err)
+				}
+				if got != tt.want {
+					t.Fatalf("readAPIKeyLine(%q) = %q, want %q", tt.input, got, tt.want)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("readAPIKeyLine(%q) = %q, want error containing %q", tt.input, got, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("readAPIKeyLine(%q) error = %q, want substring %q", tt.input, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSettableConfigKeys_includesTaskPreset(t *testing.T) {
+	var foundPreset, foundPrefix bool
+	for _, k := range settableConfigKeys {
+		if k == "ai.task_preset" {
+			foundPreset = true
+		}
+		if k == "ai.llama.task_prefix" {
+			foundPrefix = true
+		}
+	}
+	if !foundPreset {
+		t.Error("ai.task_preset missing from settableConfigKeys — shell completion + error messages will be wrong")
+	}
+	if !foundPrefix {
+		t.Error("ai.llama.task_prefix missing from settableConfigKeys — GUI compatibility alias missing")
+	}
+}
+
+func TestSetConfigValue_TaskPreset(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr string
+		wantVal string
+	}{
+		{"search default", "search", "", "search"},
+		{"code retrieval", "code", "", "code"},
+		{"question answering", "qa", "", "qa"},
+		{"none raw", "none", "", "none"},
+		{"symmetric alias normalizes to none", "symmetric", "", "none"},
+		{"uppercase normalizes", "CODE", "", "code"},
+		{"surrounding space trimmed", "  qa  ", "", "qa"},
+		{"empty clears", "", "", ""},
+		{"whitespace clears", "   ", "", ""},
+		{"unknown preset rejected", "summarize", "must be one of", ""},
+		{"numeric rejected", "123", "must be one of", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ai.AIConfig{TaskPreset: "search"}
+			err := setConfigValue(&cfg, "ai.task_preset", tt.value)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %q, want to contain %q", err.Error(), tt.wantErr)
+				}
+				if cfg.TaskPreset != "search" {
+					t.Errorf("rejected value must leave config untouched, got %q", cfg.TaskPreset)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.TaskPreset != tt.wantVal {
+				t.Errorf("cfg.TaskPreset = %q, want %q", cfg.TaskPreset, tt.wantVal)
+			}
+			got, err := getConfigValue(cfg, "ai.task_preset")
+			if err != nil {
+				t.Fatalf("getConfigValue: %v", err)
+			}
+			wantGot := tt.wantVal
+			if wantGot == "" {
+				wantGot = ai.DefaultTaskPreset
+			}
+			if got != wantGot {
+				t.Errorf("getConfigValue = %q, want %q", got, wantGot)
+			}
+		})
+	}
+}
+
+func TestSetConfigValue_TaskPrefixAlias(t *testing.T) {
+	cfg := ai.AIConfig{}
+	if err := setConfigValue(&cfg, "ai.llama.task_prefix", "code"); err != nil {
+		t.Fatalf("setConfigValue(ai.llama.task_prefix): %v", err)
+	}
+	if cfg.TaskPreset != "code" {
+		t.Errorf("cfg.TaskPreset = %q, want code", cfg.TaskPreset)
+	}
+	got, err := getConfigValue(cfg, "ai.llama.task_prefix")
+	if err != nil {
+		t.Fatalf("getConfigValue(ai.llama.task_prefix): %v", err)
+	}
+	if got != "code" {
+		t.Errorf("getConfigValue = %q, want code", got)
+	}
+}
+
+func TestConfigSetTaskPreset_RoundTripAndValidation(t *testing.T) {
+	_, root := newContractVault(t)
+
+	// 1. Set valid preset "code"
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.task_preset", "code"); err != nil {
+		t.Fatalf("config set ai.task_preset code: %v", err)
+	}
+	out, err := runCLIArgs(t, root, "config", "get", "ai.task_preset")
+	if err != nil {
+		t.Fatalf("config get ai.task_preset: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "code" {
+		t.Errorf("config get ai.task_preset = %q, want code", got)
+	}
+
+	// 2. Reject invalid preset
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.task_preset", "unsupported"); err == nil {
+		t.Error("config set ai.task_preset unsupported should error")
+	}
+
+	// 3. Switch to "qa" using GUI alias
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.llama.task_prefix", "qa"); err != nil {
+		t.Fatalf("config set ai.llama.task_prefix qa: %v", err)
+	}
+	out, err = runCLIArgs(t, root, "config", "get", "ai.task_preset")
+	if err != nil {
+		t.Fatalf("config get ai.task_preset: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "qa" {
+		t.Errorf("config get ai.task_preset = %q, want qa", got)
+	}
+}
+
+func TestConfigSetPerSlotProviders_ComboAndReset(t *testing.T) {
+	_, root := newContractVault(t)
+
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_provider", "llama-local"); err != nil {
+		t.Fatalf("config set ai.embedding_provider llama-local: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", "embeddinggemma-2"); err != nil {
+		t.Fatalf("config set ai.embedding_model embeddinggemma-2: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.generation_provider", "gemini"); err != nil {
+		t.Fatalf("config set ai.generation_provider gemini: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.generation_model", "gemini-4-hydrogen"); err != nil {
+		t.Fatalf("config set ai.generation_model gemini-4-hydrogen: %v", err)
+	}
+
+	checkGet := func(key, want string) {
+		t.Helper()
+		out, err := runCLIArgs(t, root, "config", "get", key)
+		if err != nil {
+			t.Fatalf("config get %s: %v", key, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	checkGet("ai.embedding_provider", "llama-local")
+	checkGet("ai.embedding_model", "embeddinggemma-2")
+	checkGet("ai.generation_provider", "gemini")
+	checkGet("ai.generation_model", "gemini-4-hydrogen")
+
+	// Clearing a per-slot override via "" inherits ai.provider again.
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_provider", ""); err != nil {
+		t.Fatalf("clear ai.embedding_provider: %v", err)
+	}
+	checkGet("ai.embedding_provider", "gemini")
+
+	// Re-apply mixed override, then verify setting unified ai.provider clears all per-slot overrides.
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_provider", "llama-local"); err != nil {
+		t.Fatalf("re-set ai.embedding_provider: %v", err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "ollama"); err != nil {
+		t.Fatalf("set unified ai.provider ollama: %v", err)
+	}
+	checkGet("ai.provider", "ollama")
+	checkGet("ai.embedding_provider", "ollama")
+	checkGet("ai.generation_provider", "ollama")
+
+	// Unknown provider rejected on slot key.
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_provider", "not-a-provider"); err == nil {
+		t.Error("expected error for unknown provider on ai.embedding_provider")
 	}
 }

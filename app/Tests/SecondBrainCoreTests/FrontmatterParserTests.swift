@@ -138,3 +138,23 @@ func loadDocumentFromFile() throws {
     #expect(doc.status == "proposed")
     #expect(doc.tags.contains("arch"))
 }
+
+@Test("parse and frontmatterLength handle CRLF notes and EOF-closed fences accurately")
+func parseCRLFAndEOFClosedFrontmatter() {
+    let crlfInput = "---\r\ntitle: Edge Note\r\ntype: note\r\nstatus: complete\r\n---\r\n\r\nBody line 1\r\n"
+    let (crlfFM, crlfBody) = FrontmatterParser.parse(crlfInput)
+    #expect(crlfFM["title"] as? String == "Edge Note")
+    #expect(crlfFM["type"] as? String == "note")
+    #expect(crlfFM["status"] as? String == "complete")
+    #expect(crlfBody == "\r\nBody line 1\r\n")
+    let crlfFMLen = FrontmatterParser.frontmatterLength(in: crlfInput)
+    #expect(crlfFMLen == "---\r\ntitle: Edge Note\r\ntype: note\r\nstatus: complete\r\n---\r\n".utf16.count)
+    #expect(crlfFMLen + crlfBody.utf16.count == crlfInput.utf16.count)
+
+    let eofInput = "---\ntitle: EOF Title\ntype: note\n---"
+    let (eofFM, eofBody) = FrontmatterParser.parse(eofInput)
+    #expect(eofFM["title"] as? String == "EOF Title")
+    #expect(eofFM["type"] as? String == "note")
+    #expect(eofBody == "")
+    #expect(FrontmatterParser.frontmatterLength(in: eofInput) == eofInput.utf16.count)
+}

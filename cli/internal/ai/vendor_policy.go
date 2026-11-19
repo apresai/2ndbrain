@@ -263,6 +263,9 @@ func KnownVendorSlugs(provider string, models []ModelInfo) map[string]bool {
 			known[slug] = true
 		}
 	}
+	if provider == "gemini" {
+		known["google"] = true
+	}
 	return known
 }
 

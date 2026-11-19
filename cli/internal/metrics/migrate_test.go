@@ -124,3 +124,55 @@ func TestMigrateForwardVersionLeftUntouched(t *testing.T) {
 		t.Errorf("recent = %d rows (err %v), want 1 (readable on a forward-version db)", len(ops), err)
 	}
 }
+
+func TestMigrateV3ToV4BackfillsEmbeddingUsage(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "metrics.db")
+	raw, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range append(metricsSchemaV2, metricsSchemaV3...) {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := raw.Exec(`INSERT INTO schema_version (version) VALUES (3)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO operations (ts, operation, duration_ms, ok, embedded, input_tokens, embedding_model)
+		 VALUES ('2026-10-01T12:00:00Z', 'reembed', 4000, 1, 10, 4000, 'gemini-embedding-2')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	db, err := Open(p)
+	if err != nil {
+		t.Fatalf("open/migrate v3->v4: %v", err)
+	}
+	defer db.Close()
+
+	var version int
+	if err := db.conn.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 4 {
+		t.Fatalf("version = %d, want 4", version)
+	}
+
+	rows, err := db.UsageEntries("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("backfilled rows = %d, want 1 (%+v)", len(rows), rows)
+	}
+	if rows[0].Day != "2026-10-01" || rows[0].Provider != "gemini" || rows[0].Model != "gemini-embedding-2" ||
+		rows[0].Slot != "embedding" || !rows[0].IsCloud || rows[0].Calls != 10 || rows[0].InputTokens != 4000 {
+		t.Errorf("backfilled row mismatch: %+v", rows[0])
+	}
+}

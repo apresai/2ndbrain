@@ -7,10 +7,11 @@ import Foundation
 enum ProviderDisplay {
     static func name(_ raw: String) -> String {
         switch raw {
+        case "gemini", "google": return "Google Gemini (GCP)"
         case "bedrock": return "AWS Bedrock"
         case "openrouter": return "OpenRouter"
         case "ollama": return "Ollama (local)"
-        case "llama-local": return "Local (llama.cpp)"
+        case "llama-local": return "Local Gemma (On-Device)"
         default: return raw.capitalized
         }
     }

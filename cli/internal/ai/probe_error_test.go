@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/aws/smithy-go"
+	"google.golang.org/genai"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestClassifyProbeError(t *testing.T) {
@@ -27,6 +30,9 @@ func TestClassifyProbeError(t *testing.T) {
 		{"incompatible wrapped", "bedrock", fmt.Errorf("preflight: %w", &IncompatibleModelError{Reason: "x"}), TestErrIncompatible},
 		{"deadline", "bedrock", context.DeadlineExceeded, TestErrTimeout},
 		{"deadline wrapped", "openrouter", fmt.Errorf("probe: %w", context.DeadlineExceeded), TestErrTimeout},
+		{"engine not running", "llama-local", errors.New("llama-local embedding engine not running (start it: 2nb ai engine start)"), TestErrProviderUnreachable},
+		{"engine not running generation", "llama-local", errors.New("llama-local generation engine not running (start it: 2nb ai engine start)"), TestErrProviderUnreachable},
+		{"not running generic", "llama-local", errors.New("something is not running"), TestErrProviderUnreachable},
 
 		// Bedrock smithy codes. AccessDeniedException is the staged frontier
 		// rollout gate: the listing shows the model, the runtime 403s.
@@ -113,6 +119,18 @@ func TestClassifyProbeError(t *testing.T) {
 		{"stringly connection reset", "openrouter", errors.New("read tcp: connection reset by peer"), TestErrProviderUnreachable},
 		{"stringly deadline", "bedrock", errors.New("operation error: context deadline exceeded"), TestErrTimeout},
 
+		// Gemini / Google Cloud GenAI SDK & gRPC error classification
+		{"gemini 401 unauthenticated", "gemini", &genai.APIError{Code: 401, Message: "API key not valid"}, TestErrBadCredentials},
+		{"gemini 403 access denied", "gemini", &genai.APIError{Code: 403, Message: "Permission denied on resource"}, TestErrAccessDenied},
+		{"gemini 404 not found", "gemini", &genai.APIError{Code: 404, Message: "models/gemini-not-found is not found"}, TestErrNotFound},
+		{"gemini 429 throttled", "gemini", &genai.APIError{Code: 429, Message: "Resource exhausted"}, TestErrThrottled},
+		{"gemini grpc unauthenticated", "gemini", status.Error(codes.Unauthenticated, "bad token"), TestErrBadCredentials},
+		{"gemini grpc permission denied", "gemini", status.Error(codes.PermissionDenied, "missing role"), TestErrAccessDenied},
+		{"gemini grpc not found", "gemini", status.Error(codes.NotFound, "model not found"), TestErrNotFound},
+		{"gemini grpc resource exhausted", "gemini", status.Error(codes.ResourceExhausted, "quota exceeded"), TestErrThrottled},
+		{"gemini missing api key string", "gemini", errors.New("GEMINI_API_KEY is not set: set GEMINI_API_KEY or run `2nb config set-key gemini`"), TestErrBadCredentials},
+		{"gemini prohibited google api key", "gemini", errors.New("GOOGLE_API_KEY is prohibited by project policy; unset it and use GEMINI_API_KEY or Vertex AI ADC"), TestErrBadCredentials},
+
 		{"opaque", "bedrock", errors.New("something inexplicable"), TestErrUnknown},
 	}
 	for _, tt := range tests {
@@ -152,8 +170,48 @@ func TestRemediationFor(t *testing.T) {
 	if got := RemediationFor(TestErrProviderUnreachable, "ollama", ""); !strings.Contains(got, "ollama serve") {
 		t.Errorf("ollama unreachable remediation missing serve hint: %q", got)
 	}
+	if got := RemediationFor(TestErrProviderUnreachable, "llama-local", ""); !strings.Contains(got, "2nb ai engine start") {
+		t.Errorf("llama-local unreachable remediation missing engine start hint: %q", got)
+	}
 	if got := RemediationFor(TestErrUnknown, "bedrock", ""); got != "" {
 		t.Errorf("unknown code should have no remediation, got %q", got)
+	}
+}
+
+// TestProbeClassification_OfflineLlama drives the real probe path against an
+// unstarted engine and dead endpoint: verifies classification and remediation.
+func TestProbeClassification_OfflineLlama(t *testing.T) {
+	// Isolate state dir so any live engine on the host machine is not seen.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("TWONB_SKIP_ENGINE_AUTOSTART", "1")
+
+	cfg := AIConfig{}
+	// Engine not started (endpoint empty) -> baseURL returns "engine not running"
+	result, err := TestProbeModel(context.Background(), cfg, "embeddinggemma-2", "llama-local", "embedding", "")
+	if err != nil {
+		t.Fatalf("TestProbeModel returned hard error: %v", err)
+	}
+	if result.OK {
+		t.Fatal("probe against unstarted llama-local unexpectedly passed")
+	}
+	if result.Code != TestErrProviderUnreachable {
+		t.Errorf("code = %q (detail %q), want provider_unreachable", result.Code, result.Detail)
+	}
+	if !strings.Contains(result.Remediation, "2nb ai engine start") {
+		t.Errorf("remediation = %q, want '2nb ai engine start' hint", result.Remediation)
+	}
+
+	// Also verify with an unreachable URL port
+	cfg.Llama.EmbedEndpoint = "http://127.0.0.1:9"
+	result2, err := TestProbeModel(context.Background(), cfg, "embeddinggemma-2", "llama-local", "embedding", "")
+	if err != nil {
+		t.Fatalf("TestProbeModel returned hard error: %v", err)
+	}
+	if result2.OK {
+		t.Fatal("probe against dead endpoint unexpectedly passed")
+	}
+	if result2.Code != TestErrProviderUnreachable && result2.Code != TestErrTimeout {
+		t.Errorf("code = %q (detail %q), want provider_unreachable", result2.Code, result2.Detail)
 	}
 }
 

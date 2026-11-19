@@ -1,107 +1,99 @@
 #!/bin/bash
-# GUI Test Suite: Polish diff view (Cmd+Option+P)
-# Polishes the current document via the LLM and asserts the diff view appears
-# and that rejecting leaves the original unchanged. Accept/Reject paths are
-# exercised via keyboard equivalents.
-#
-# SKIPs if no AI provider is configured — polish needs a live generation
-# provider, same as the `2nb polish` CLI command.
-#
-# Uses a temp vault so nothing touches the user's real $VAULT.
-set -e
+# GUI Test Suite: Gemini Note Polish Preview, Apply, & Undo Flow (Cmd+Shift+P)
+set -euo pipefail
 cd "$(dirname "$0")/.."
 source tests/gui-helpers.sh
 
-echo "=== GUI Test: AI Polish ==="
-echo ""
+echo "=== GUI Test: Gemini Note Polish ==="
 
-# Provider gate — polish hits the generation API.
-if [ -z "${AWS_ACCESS_KEY_ID:-}${AWS_PROFILE:-}${OPENROUTER_API_KEY:-}" ]; then
-    echo "SKIP: no AI provider credentials available (need AWS_PROFILE or OPENROUTER_API_KEY)"
-    exit 0
-fi
-
-POLISH_VAULT="/tmp/sb-polish-$$"
-PRIOR_VAULT=$(defaults read dev.apresai.2ndbrain lastVaultPath 2>/dev/null || echo "")
-
+TEST_VAULT=$(mktemp -d /tmp/sb-gui-polish.XXXXXX)
 cleanup() {
     kill_app
-    rm -rf "$POLISH_VAULT"
-    # Restore whatever vault the developer had open before the test. If no
-    # prior value existed (first-time user), DELETE the key instead of writing
-    # an empty string — otherwise the app would launch against the deleted
-    # /tmp/sb-polish-$$ path.
-    if [ -n "$PRIOR_VAULT" ]; then
-        defaults write dev.apresai.2ndbrain lastVaultPath "$PRIOR_VAULT"
-    else
-        defaults delete dev.apresai.2ndbrain lastVaultPath 2>/dev/null || true
-    fi
-    rm -f /tmp/polish-seed.err
+    rm -rf "$TEST_VAULT" "$GUI_LOG_DIR"
 }
 trap cleanup EXIT
 
-# --- Seed the temp vault with something worth polishing ---
-2nb vault create "$POLISH_VAULT" >/dev/null 2>/tmp/polish-seed.err || {
-    echo "failed to create polish vault: $(cat /tmp/polish-seed.err)"
-    exit 1
-}
-2nb --vault "$POLISH_VAULT" create "GUI Test Polish" --type note >/dev/null 2>/tmp/polish-seed.err || {
-    echo "failed to seed polish doc: $(cat /tmp/polish-seed.err)"
-    exit 1
-}
-rm -f /tmp/polish-seed.err
-
-DOC="$POLISH_VAULT/gui-test-polish.md"
-# Append obvious prose issues so the polish diff has something to suggest.
-cat >> "$DOC" << 'EOF'
-
-this document have some gramatical issues to polish. the prose is not very
-good and could benefit from a revision pass by the ai. we want to see the
-diff view apear when we invoke the polish command.
-EOF
-
-2nb --vault "$POLISH_VAULT" index >/dev/null 2>&1
-
-# --- Launch app pointed at the temp vault ---
-defaults write dev.apresai.2ndbrain lastVaultPath "$POLISH_VAULT"
-launch_app
+setup_temp_vault "$TEST_VAULT"
+_=$(seed_note "$TEST_VAULT" "Project Beacon" "Reference target note for wikilink suggestion.")
 sleep 1
+DOC_REL=$(seed_note "$TEST_VAULT" "GUI Polish Target" "this note have some gramatical mistakes that gemini can clean up clearly. also refer to Project Beacon.")
+DOC_ABS="$TEST_VAULT/$DOC_REL"
+env 2NB_TEST=1 "$CLI_BIN" index --vault "$TEST_VAULT" >/dev/null
 
-# Open the doc via Quick Open so polish targets it.
-open_quick_open
-type_text "gui-test-polish"
-sleep 1
-press_return
-sleep 2
-screenshot "polish-00-open"
+launch_app_on_vault "$TEST_VAULT"
 
-# Trigger polish (Cmd+Option+P — see SecondBrain keyboard shortcut table).
-POLISH_START=$(date +%s)
-cmd_opt_key "p"
-# Polish calls the generation API; give it generous time.
-sleep 15
-POLISH_ELAPSED=$(( $(date +%s) - POLISH_START ))
-echo "Polish invocation elapsed: ${POLISH_ELAPSED}s"
-screenshot "polish-01-diff-view"
+click_menu_item "AI" "Polish Note with Gemini…"
+wait_gui_state 'state.get("activeTab") == "Notes" and state.get("activeSection") == "AI Polish"' 10
+screenshot "polish-01-opened"
+pass "AI > Polish Note with Gemini… opened Notes > AI Polish"
 
-# Assertion 1: polish does NOT write to disk on its own — the original body
-# must still be present. A regression that auto-applies polish would fail this.
-if file_contains "$DOC" "gramatical issues"; then
-    pass "Polish did not clobber disk (expected — polish is preview-only)"
+if probe_gemini_capability "generation" "$TEST_VAULT"; then
+    sleep 0.5
+    select_polish_note "$DOC_REL"
+    click_ax_button "polish.previewButton"
+    for _ in $(seq 1 90); do
+        if grep -q '"action":"polish.run"' "$GUI_LOG_DIR/gui-actions.jsonl" 2>/dev/null && \
+           python3 -c 'import json,sys
+for line in open(sys.argv[1]):
+    ev=json.loads(line)
+    if ev.get("action")=="polish.run" and ev.get("phase")=="succeeded":
+        sys.exit(0)
+sys.exit(1)' "$GUI_LOG_DIR/gui-actions.jsonl"; then
+            break
+        fi
+        sleep 0.5
+    done
+    sleep 0.2
+    screenshot "polish-02-preview"
+    assert_gui_action "polish.run" "succeeded" "Gemini polish preview succeeded"
+
+    if file_contains "$DOC_ABS" "gramatical mistakes"; then
+        pass "Preview Polish left original note untouched on disk"
+    else
+        fail "Preview Polish unexpectedly modified disk" "$DOC_ABS"
+    fi
+
+    # Apply if the Apply button is enabled (changes were proposed)
+    if click_ax_button "polish.applyButton" 2>/dev/null; then
+        for _ in $(seq 1 90); do
+            if python3 -c 'import json,sys
+for line in open(sys.argv[1]):
+    ev=json.loads(line)
+    if ev.get("action")=="polish.run" and ev.get("phase")=="succeeded" and ev.get("metadata",{}).get("write")=="true":
+        sys.exit(0)
+sys.exit(1)' "$GUI_LOG_DIR/gui-actions.jsonl"; then
+                break
+            fi
+            sleep 0.5
+        done
+        sleep 0.2
+        screenshot "polish-03-applied"
+
+        # Undo Last Polish and verify original prose returns
+        click_ax_button "polish.undoButton"
+        for _ in $(seq 1 30); do
+            if python3 -c 'import json,sys
+for line in open(sys.argv[1]):
+    ev=json.loads(line)
+    if ev.get("action")=="polish.undo" and ev.get("phase")=="succeeded":
+        sys.exit(0)
+sys.exit(1)' "$GUI_LOG_DIR/gui-actions.jsonl"; then
+                break
+            fi
+            sleep 0.25
+        done
+        if file_contains "$DOC_ABS" "gramatical mistakes"; then
+            pass "Apply + Undo Last Polish restored original content cleanly"
+        else
+            fail "Undo did not restore original content" "$DOC_ABS"
+        fi
+    else
+        echo "Note: Apply button disabled (preview proposed zero diff changes)"
+    fi
 else
-    fail "Polish mutated disk directly" "polish should be diff-only"
+    echo "SKIP: Live Note Polish preview/apply (gemini-4-hydrogen generation probe unavailable)"
 fi
 
-# Assertion 2: dismiss via Escape and verify body still unchanged.
-press_escape
-sleep 1
-screenshot "polish-02-dismissed"
-
-if file_contains "$DOC" "gramatical issues"; then
-    pass "Reject: original body preserved after Escape"
-else
-    fail "Reject: body was mutated despite dismissing diff" ""
-fi
-
+assert_no_leaked_secrets
 print_results
 [ "$FAIL" -eq 0 ]

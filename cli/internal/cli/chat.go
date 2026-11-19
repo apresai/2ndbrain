@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
 )
@@ -49,12 +51,13 @@ func runChat(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	generator, err := ai.DefaultRegistry.Generator(cfg.Provider)
+	genProvider := cfg.EffectiveGenerationProvider()
+	generator, err := ai.DefaultRegistry.Generator(genProvider)
 	if err != nil {
 		return fmt.Errorf("no generation provider: %w\nRun `2nb ai status` to check provider configuration", err)
 	}
 	if ready, code := ai.Availability(ctx, generator); !ready {
-		return generatorNotReadyError(cfg.Provider, code)
+		return generatorNotReadyError(genProvider, code)
 	}
 
 	fmt.Fprintf(os.Stderr, "2ndbrain chat: vault %q. Answers cite source notes. Type 'exit' or Ctrl-D to quit.\n", v.Config.Name)
@@ -87,7 +90,9 @@ func chatLoop(ctx context.Context, v *vault.Vault, generator ai.GenerationProvid
 			break
 		}
 
+		turnStart := time.Now()
 		resp, err := askOnce(ctx, v, generator, question, history)
+		recordMetric(v, askMetricOperation(v, metrics.OpChat, turnStart, resp, err))
 		if err != nil {
 			// Render the error and keep the session alive; the failed turn
 			// is not recorded, so the next question starts clean.

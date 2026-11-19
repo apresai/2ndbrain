@@ -16,6 +16,7 @@ import (
 	"github.com/apresai/2ndbrain/internal/embed"
 	gitpkg "github.com/apresai/2ndbrain/internal/git"
 	graphpkg "github.com/apresai/2ndbrain/internal/graph"
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/ragctx"
 	"github.com/apresai/2ndbrain/internal/retrieve"
@@ -129,10 +130,12 @@ func (h *handlers) handleKBInfo(ctx context.Context, request mcplib.CallToolRequ
 
 	// AI status
 	aiStatus := map[string]any{
-		"provider":         cfg.AI.Provider,
-		"embedding_model":  cfg.AI.EmbeddingModel,
-		"generation_model": cfg.AI.GenerationModel,
-		"embeddings":       embCount,
+		"provider":            cfg.AI.Provider,
+		"embedding_provider":  cfg.AI.EffectiveEmbeddingProvider(),
+		"generation_provider": cfg.AI.EffectiveGenerationProvider(),
+		"embedding_model":     cfg.AI.EmbeddingModel,
+		"generation_model":    cfg.AI.GenerationModel,
+		"embeddings":          embCount,
 	}
 
 	info := map[string]any{
@@ -181,7 +184,7 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 	walkUnparseable, walkUnreadable := stats.Unparseable, stats.Unreadable
 	var embedUnparseable, embedUnreadable []vault.UnparseableDoc
 	cfg := h.vault.Config.AI
-	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.EffectiveEmbeddingProvider())
 	if embErr == nil && embedder.Available(ctx) {
 		es, eerr := vault.EmbedDocuments(ctx, h.vault, cfg, embedder, vault.EmbedOpts{})
 		if eerr != nil {
@@ -211,13 +214,18 @@ func (h *handlers) handleKBIndex(ctx context.Context, request mcplib.CallToolReq
 		h.invalidateEmbeddings()
 	}
 
-	// Record doc/embedding counts + an embed-token estimate (Nova reports no
-	// usage, so chars/4 as on the CLI index path) into the observatory row.
+	// Record doc/embedding counts + slot-attributed token/cost usage into the observatory row.
 	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
 		d.DocsIndexed = stats.DocsIndexed
 		d.Embedded = embedded
 		d.TotalChars = embeddedChars
-		d.InputTokens = embeddedChars / 4
+		if embedded > 0 {
+			inTok := embeddedChars / 4
+			if embeddedChars > 0 && inTok == 0 {
+				inTok = 1
+			}
+			attachMCPUsageLegs(d, buildMCPUsageLeg(h.vault.Root, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel, "embedding", metrics.OpIndex, embedded, inTok, 0))
+		}
 	})
 
 	result := map[string]any{
@@ -275,13 +283,17 @@ func (h *handlers) handleKBSearch(ctx context.Context, request mcplib.CallToolRe
 	}
 	results, mode := res.Results, res.Mode
 
-	// Record result count + the query-embedding token estimate (only the hybrid
-	// path embeds the query; chars/4, mirroring the CLI search row).
+	// Record result count + slot-attributed query-embedding usage (hybrid only).
+	cfg := h.vault.Config.AI
 	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
 		d.ResultCount = len(results)
 		d.Mode = string(mode)
 		if mode == search.ModeHybrid {
-			d.InputTokens = len(query) / 4
+			inTok := len(query) / 4
+			if inTok == 0 {
+				inTok = 1
+			}
+			attachMCPUsageLegs(d, buildMCPUsageLeg(h.vault.Root, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel, "embedding", metrics.OpSearch, 1, inTok, 0))
 		}
 	})
 
@@ -307,14 +319,15 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 	}
 
 	cfg := h.vault.Config.AI
+	genProvider := cfg.EffectiveGenerationProvider()
 
 	// Get generator
-	generator, err := ai.DefaultRegistry.Generator(cfg.Provider)
+	generator, err := ai.DefaultRegistry.Generator(genProvider)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no generation provider: %v", err)), nil
 	}
 	if ready, code := ai.Availability(ctx, generator); !ready {
-		return mcplib.NewToolResultError(ai.NotReadyMessage("generation", cfg.Provider, code)), nil
+		return mcplib.NewToolResultError(ai.NotReadyMessage("generation", genProvider, code)), nil
 	}
 
 	// Retrieve relevant context via the shared pipeline (the SAME path `2nb ask`
@@ -355,10 +368,9 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 		return mcplib.NewToolResultError(fmt.Sprintf("RAG failed: %v", err)), nil
 	}
 
-	// Token usage: prefer the provider's actual generation usage (Bedrock reports
-	// it via UsageGenerator); estimate at chars/4 when it isn't reported. Add the
-	// query-embedding tokens to the input side. Mirrors the CLI `ask` row so the
-	// observatory reads the same whether driven by the CLI or an MCP client.
+	// Token usage: prefer the provider's actual generation usage (Bedrock/Gemini/llama
+	// report it via UsageGenerator); estimate at chars/4 when it isn't reported, and
+	// attribute the hybrid query embedding to the embedding slot separately.
 	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
 		inTokens, outTokens := result.InputTokens, result.OutputTokens
 		if inTokens == 0 && outTokens == 0 {
@@ -369,9 +381,16 @@ func (h *handlers) handleKBAsk(ctx context.Context, request mcplib.CallToolReque
 			inTokens = (ctxChars + len(question)) / 4
 			outTokens = len(result.Answer) / 4
 		}
-		inTokens += len(question) / 4
-		d.InputTokens = inTokens
-		d.OutputTokens = outTokens
+		var legs []metrics.UsageLeg
+		legs = append(legs, buildMCPUsageLeg(h.vault.Root, genProvider, cfg.GenerationModel, "generation", metrics.OpAsk, 1, inTokens, outTokens))
+		if mode == "hybrid" {
+			qTok := len(question) / 4
+			if qTok == 0 {
+				qTok = 1
+			}
+			legs = append(legs, buildMCPUsageLeg(h.vault.Root, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel, "embedding", metrics.OpAsk, 1, qTok, 0))
+		}
+		attachMCPUsageLegs(d, legs...)
 		d.ResultCount = len(result.Sources)
 		d.Mode = mode
 	})
@@ -513,7 +532,7 @@ func (h *handlers) handleKBCreate(ctx context.Context, request mcplib.CallToolRe
 
 	// Embed inline if provider available
 	cfg := h.vault.Config.AI
-	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.EffectiveEmbeddingProvider())
 	if embErr == nil && embedder.Available(ctx) {
 		embed.Document(ctx, h.vault.DB, embedder, doc.ID, doc, cfg.EmbeddingModel)
 		h.invalidateEmbeddings()
@@ -801,51 +820,121 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 	if strings.Contains(path, "..") {
 		return mcplib.NewToolResultError("path traversal not allowed"), nil
 	}
-	systemPrompt, _ := request.GetArguments()["system"].(string)
-	if systemPrompt == "" {
-		systemPrompt = polish.DefaultPolishSystem
-	}
+	systemOverride, _ := request.GetArguments()["system"].(string)
+	goal := strings.TrimSpace(argString(request, "goal"))
 	links, _ := request.GetArguments()["links"].(bool)
+	repairLinks, _ := request.GetArguments()["repair_links"].(bool)
+	schemaOpt, _ := request.GetArguments()["schema"].(bool)
+	backlinksOpt, _ := request.GetArguments()["backlinks"].(bool)
 
 	absPath := h.vault.AbsPath(path)
 	if !h.vault.ContainsPath(absPath) {
 		return mcplib.NewToolResultError("path outside vault"), nil
 	}
 
+	origBytes, err := os.ReadFile(absPath)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("read source: %v", err)), nil
+	}
 	parsed, err := document.ParseFile(absPath)
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("parse source: %v", err)), nil
+		if !schemaOpt {
+			return mcplib.NewToolResultError(fmt.Sprintf("parse source: %v", err)), nil
+		}
+		parsed = nil
+	} else if parsed != nil && parsed.Frontmatter == nil && document.HasUnclosedFrontmatter(origBytes) {
+		if !schemaOpt {
+			return mcplib.NewToolResultError("parse source: unclosed YAML frontmatter fence"), nil
+		}
 	}
 
 	cfg := h.vault.Config.AI
-	generator, err := ai.DefaultRegistry.Generator(cfg.Provider)
+	genProvider := cfg.EffectiveGenerationProvider()
+	generator, err := ai.DefaultRegistry.Generator(genProvider)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no generation provider: %v", err)), nil
 	}
 	if ready, code := ai.Availability(ctx, generator); !ready {
-		return mcplib.NewToolResultError(ai.NotReadyMessage("generation", cfg.Provider, code)), nil
+		return mcplib.NewToolResultError(ai.NotReadyMessage("generation", genProvider, code)), nil
 	}
 
+	var totalGenCalls, totalGenIn, totalGenOut int
+	var totalEmbedCalls, totalEmbedIn int
+	docsProcessed := 0
+	var warnings []string
+	defer func() {
+		if docsProcessed == 0 && totalGenCalls == 0 && totalEmbedCalls == 0 {
+			return
+		}
+		recordMCPDetail(ctx, func(d *mcpMetricDetail) {
+			d.DocsIndexed = docsProcessed
+			var legs []metrics.UsageLeg
+			if totalGenCalls > 0 {
+				legs = append(legs, buildMCPUsageLeg(h.vault.Root, genProvider, cfg.GenerationModel, "generation", metrics.OpPolish, totalGenCalls, totalGenIn, totalGenOut))
+			}
+			if totalEmbedCalls > 0 && totalEmbedIn > 0 {
+				legs = append(legs, buildMCPUsageLeg(h.vault.Root, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel, "embedding", metrics.OpPolish, totalEmbedCalls, totalEmbedIn, 0))
+			}
+			attachMCPUsageLegs(d, legs...)
+		})
+	}()
+
+	var frontmatterFixes []polish.FixFieldChange
+	schemaRepaired := false
+	workingBytes := origBytes
+	if schemaOpt {
+		sres, serr := polish.RepairNoteSchema(ctx, h.vault, path, origBytes, parsed, generator, cfg.ResolveReasoningEffort())
+		totalGenCalls += sres.Usage.GenCalls
+		totalGenIn += sres.Usage.GenInTokens
+		totalGenOut += sres.Usage.GenOutTokens
+		warnings = append(warnings, sres.Warnings...)
+		if serr != nil {
+			return mcplib.NewToolResultError(serr.Error()), nil
+		}
+		parsed = sres.Doc
+		workingBytes = sres.Bytes
+		frontmatterFixes = sres.Fixes
+		schemaRepaired = sres.Repaired
+	}
+	if parsed == nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("parse source: unable to parse %s", path)), nil
+	}
+
+	systemPrompt := polish.BuildPolishSystemPrompt(systemOverride, goal, links)
 	userMessage := parsed.Body
 	var candidates []polish.LinkCandidate
-	var warning string
+
+	embedder, embErr := ai.DefaultRegistry.Embedder(cfg.EffectiveEmbeddingProvider())
+	embedAvailable := embErr == nil && embedder != nil && embedder.Available(ctx)
+	var docIDs []string
+	var embeddings [][]float32
+	if embedAvailable {
+		docIDs, embeddings, _ = h.getCachedEmbeddings()
+	} else {
+		embedder = nil
+	}
+
 	if links {
-		embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
-		var docIDs []string
-		var embeddings [][]float32
-		if embErr == nil && embedder != nil && embedder.Available(ctx) {
-			docIDs, embeddings, _ = h.getCachedEmbeddings()
-		} else {
-			embedder = nil
+		var candWarn string
+		if embedAvailable && len(embeddings) > 0 && len(embeddings) == len(docIDs) {
+			if r := []rune(parsed.Body); len(r) > 0 {
+				if len(r) > 2000 {
+					r = r[:2000]
+				}
+				totalEmbedCalls++
+				totalEmbedIn += max(1, len(string(r))/4)
+			}
 		}
-		candidates, warning, _ = polish.GatherCandidates(ctx, h.vault, embedder, polish.CandidateInput{
+		candidates, candWarn, _ = polish.GatherCandidates(ctx, h.vault, embedder, polish.CandidateInput{
 			Source:     parsed,
 			SourcePath: path,
 			DocIDs:     docIDs,
 			Embeddings: embeddings,
 			Threshold:  h.threshold(),
 		})
-		systemPrompt += polish.LinkInstructions
+		if candWarn != "" {
+			warnings = append(warnings, candWarn)
+		}
 		userMessage = polish.BuildPolishUserMessage(parsed.Body, candidates)
 	}
 
@@ -855,42 +944,160 @@ func (h *handlers) handleKBPolish(ctx context.Context, request mcplib.CallToolRe
 		SystemPrompt:    systemPrompt,
 		ReasoningEffort: cfg.ResolveReasoningEffort(),
 	}
-	polished, err := generator.Generate(ctx, userMessage, opts)
+	var (
+		polished string
+		genUsage ai.GenUsage
+	)
+	if ug, ok := generator.(ai.UsageGenerator); ok {
+		polished, genUsage, err = ug.GenerateWithUsage(ctx, userMessage, opts)
+	} else {
+		polished, err = generator.Generate(ctx, userMessage, opts)
+	}
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("polish generation failed: %v", err)), nil
 	}
-	polished = strings.TrimSpace(polished)
+	if genUsage.InputTokens == 0 && genUsage.OutputTokens == 0 {
+		genUsage.InputTokens = max(1, (len(systemPrompt)+len(userMessage))/4)
+		genUsage.OutputTokens = max(1, len(strings.TrimSpace(polished))/4)
+	}
+	totalGenCalls++
+	totalGenIn += genUsage.InputTokens
+	totalGenOut += genUsage.OutputTokens
 
-	var linksAdded []string
-	if links {
-		allowed := polish.AllowedLinkSet(candidates, parsed.Body)
-		var removed []string
-		polished, removed = polish.StripInventedLinks(polished, allowed)
-		if len(removed) > 0 {
-			dropped := fmt.Sprintf("dropped %d link(s) to notes that don't exist", len(removed))
-			if warning == "" {
-				warning = dropped
+	allowed := polish.AllowedLinkSet(candidates, parsed.Body)
+	cleaned, removed, violations := polish.ValidatePolishedBody(parsed.Body, polished, allowed)
+	if len(violations) > 0 {
+		var origRawLinks []string
+		for _, l := range document.ExtractWikiLinks(strings.ReplaceAll(parsed.Body, "\r\n", "\n")) {
+			origRawLinks = append(origRawLinks, l.Raw)
+		}
+		retryUser := userMessage + "\n\nCRITICAL CORRECTION: Your previous draft violated hard constraints (" +
+			strings.Join(violations, ", ") +
+			"). Return ONLY the Markdown body reproducing EVERY existing link verbatim (do not drop, shorten, or add |aliases to: " +
+			strings.Join(origRawLinks, ", ") +
+			"), every fenced/inline code span, and every heading line exactly."
+		var retryOut string
+		var retryUsage ai.GenUsage
+		var retryErr error
+		if ug, ok := generator.(ai.UsageGenerator); ok {
+			retryOut, retryUsage, retryErr = ug.GenerateWithUsage(ctx, retryUser, opts)
+		} else {
+			retryOut, retryErr = generator.Generate(ctx, retryUser, opts)
+		}
+		if retryErr == nil {
+			if retryUsage.InputTokens == 0 && retryUsage.OutputTokens == 0 {
+				retryUsage.InputTokens = max(1, (len(systemPrompt)+len(retryUser))/4)
+				retryUsage.OutputTokens = max(1, len(strings.TrimSpace(retryOut))/4)
+			}
+			totalGenCalls++
+			totalGenIn += retryUsage.InputTokens
+			totalGenOut += retryUsage.OutputTokens
+			cleanedRetry, removedRetry, violationsRetry := polish.ValidatePolishedBody(parsed.Body, retryOut, allowed)
+			if len(violationsRetry) == 0 {
+				cleaned = cleanedRetry
+				removed = removedRetry
+				violations = nil
 			} else {
-				warning += "; " + dropped
+				violations = violationsRetry
 			}
 		}
-		for _, l := range polish.NewLinks(parsed.Body, polished) {
+	}
+	if len(violations) > 0 {
+		cleaned = strings.TrimSpace(strings.ReplaceAll(parsed.Body, "\r\n", "\n"))
+		removed = nil
+		warnings = append(warnings, fmt.Sprintf("kept original body prose because polished output violated hard preservation invariants (%s)", strings.Join(violations, ", ")))
+	}
+	polished = cleaned
+
+	if len(removed) > 0 {
+		warnings = append(warnings, fmt.Sprintf("dropped %d link(s) to notes that don't exist", len(removed)))
+	}
+	var linksAdded []string
+	if links {
+		normOrig := strings.ReplaceAll(parsed.Body, "\r\n", "\n")
+		for _, l := range polish.NewLinks(normOrig, polished) {
 			linksAdded = append(linksAdded, l.Target)
 		}
 	}
 
+	var linksRepaired, linksSkipped []polish.LinkRepair
+	if repairLinks {
+		rr, rerr := polish.RepairOutgoingLinks(ctx, h.vault, path, polished, generator, embedder, embedAvailable, h.threshold(), true)
+		totalGenCalls += rr.Usage.GenCalls
+		totalGenIn += rr.Usage.GenInTokens
+		totalGenOut += rr.Usage.GenOutTokens
+		totalEmbedCalls += rr.Usage.EmbedCalls
+		totalEmbedIn += rr.Usage.EmbedInTokens
+		warnings = append(warnings, rr.Warnings...)
+		if rerr != nil {
+			warnings = append(warnings, fmt.Sprintf("link repair skipped: %v", rerr))
+		} else {
+			polished = rr.Body
+			linksRepaired = rr.Repaired
+			linksSkipped = rr.Skipped
+		}
+	}
+
+	polishedDisplay, _ := polish.FormatBodyLikeOriginal(parsed.Body, workingBytes, polished)
+
+	var backlinkPreviews []polish.PolishBacklinkChange
+	if backlinksOpt {
+		backlinkPreviews = make([]polish.PolishBacklinkChange, 0)
+		blPlan, berr := polish.PlanBacklinkUpdates(ctx, h.vault, polish.BacklinkPlanInput{
+			TargetRel:       path,
+			TargetDoc:       parsed,
+			TargetOrigBody:  parsed.Body,
+			TargetNewBody:   polishedDisplay,
+			Goal:            goal,
+			Generator:       generator,
+			ReasoningEffort: cfg.ResolveReasoningEffort(),
+		})
+		totalGenCalls += blPlan.Usage.GenCalls
+		totalGenIn += blPlan.Usage.GenInTokens
+		totalGenOut += blPlan.Usage.GenOutTokens
+		warnings = append(warnings, blPlan.Warnings...)
+		if berr != nil {
+			warnings = append(warnings, fmt.Sprintf("backlinks preview skipped: %v", berr))
+		} else if len(blPlan.Items) > 0 {
+			backlinkPreviews = make([]polish.PolishBacklinkChange, len(blPlan.Items))
+			for i, item := range blPlan.Items {
+				backlinkPreviews[i] = item.Change
+			}
+		}
+	}
+
+	docsProcessed = 1
+
 	result := map[string]any{
 		"path":     path,
 		"original": parsed.Body,
-		"polished": polished,
-		"provider": cfg.Provider,
+		"polished": polishedDisplay,
+		"provider": genProvider,
 		"model":    cfg.GenerationModel,
+	}
+	if goal != "" {
+		result["goal"] = goal
 	}
 	if links {
 		result["links_added"] = linksAdded
-		if warning != "" {
-			result["warning"] = warning
-		}
+	}
+	if len(linksRepaired) > 0 {
+		result["links_repaired"] = linksRepaired
+	}
+	if len(linksSkipped) > 0 {
+		result["links_skipped"] = linksSkipped
+	}
+	if len(frontmatterFixes) > 0 {
+		result["frontmatter_fixes"] = frontmatterFixes
+	}
+	if schemaOpt {
+		result["schema_repaired"] = schemaRepaired
+	}
+	if backlinksOpt {
+		result["backlink_previews"] = backlinkPreviews
+	}
+	if len(warnings) > 0 {
+		result["warning"] = strings.Join(warnings, "; ")
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	return mcplib.NewToolResultText(string(data)), nil
@@ -978,10 +1185,25 @@ func (h *handlers) writeBodyAndReindex(ctx context.Context, doc *document.Docume
 	// provider is available, then invalidate the cache.
 	doc.ComputeContentHash()
 	cfg := h.vault.Config.AI
-	if embedder, embErr := ai.DefaultRegistry.Embedder(cfg.Provider); embErr == nil && embedder.Available(ctx) {
-		embed.Document(ctx, h.vault.DB, embedder, doc.ID, doc, cfg.EmbeddingModel)
+	embeddedCount := 0
+	if embedder, embErr := ai.DefaultRegistry.Embedder(cfg.EffectiveEmbeddingProvider()); embErr == nil && embedder.Available(ctx) {
+		if n, derr := embed.Document(ctx, h.vault.DB, embedder, doc.ID, doc, cfg.EmbeddingModel); derr == nil && n > 0 {
+			embeddedCount = 1
+		}
 		h.invalidateEmbeddings()
 	}
+	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
+		d.DocsIndexed = 1
+		d.Embedded = embeddedCount
+		d.TotalChars = len(doc.Body)
+		if embeddedCount > 0 {
+			inTok := len(doc.Body) / 4
+			if len(doc.Body) > 0 && inTok == 0 {
+				inTok = 1
+			}
+			attachMCPUsageLegs(d, buildMCPUsageLeg(h.vault.Root, cfg.EffectiveEmbeddingProvider(), cfg.EmbeddingModel, "embedding", metrics.OpIndexDoc, 1, inTok, 0))
+		}
+	})
 
 	return nil
 }
@@ -1219,22 +1441,27 @@ func (h *handlers) handleKBSuggestLinks(ctx context.Context, request mcplib.Call
 	parsed.Path = path
 
 	cfg := h.vault.Config.AI
-	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	embedder, err := ai.DefaultRegistry.Embedder(embedProvider)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no embedding provider: %v", err)), nil
 	}
 	if ready, code := ai.Availability(ctx, embedder); !ready {
-		return mcplib.NewToolResultError(ai.NotReadyMessage("embedding", cfg.Provider, code)), nil
+		return mcplib.NewToolResultError(ai.NotReadyMessage("embedding", embedProvider, code)), nil
 	}
 
 	runes := []rune(parsed.Body)
 	if len(runes) > 2000 {
 		runes = runes[:2000]
 	}
-	queryVecs, err := embedder.Embed(ctx, []string{string(runes)}, ai.WithPurpose(ai.PurposeQuery))
+	queryText := string(runes)
+	queryVecs, err := embedder.Embed(ctx, []string{queryText}, ai.WithPurpose(ai.PurposeQuery))
 	if err != nil || len(queryVecs) == 0 {
 		return mcplib.NewToolResultError(fmt.Sprintf("embed source: %v", err)), nil
 	}
+	recordMCPDetail(ctx, func(d *mcpMetricDetail) {
+		attachMCPUsageLegs(d, buildMCPUsageLeg(h.vault.Root, embedProvider, cfg.EmbeddingModel, "embedding", metrics.OpSuggest, 1, max(1, len(queryText)/4), 0))
+	})
 
 	docIDs, embeddings, err := h.getCachedEmbeddings()
 	if err != nil {

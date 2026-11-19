@@ -22,6 +22,19 @@ func launchAgentPlistPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", AgentLabel+".plist"), nil
 }
 
+// AgentPlistExists reports whether the LaunchAgent plist file has been written.
+func AgentPlistExists() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	plistPath, err := launchAgentPlistPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(plistPath)
+	return err == nil
+}
+
 // engineLogPath returns ~/Library/Logs/2nb/engine.log (created on install).
 func engineLogPath() (string, error) {
 	home, err := os.UserHomeDir()

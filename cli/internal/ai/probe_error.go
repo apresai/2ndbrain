@@ -8,6 +8,9 @@ import (
 	"strings"
 
 	"github.com/aws/smithy-go"
+	"google.golang.org/genai"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestErrorCode classifies a failed model test probe into a small, stable
@@ -119,6 +122,19 @@ func ClassifyProbeError(provider string, err error) TestErrorCode {
 		return classifyHTTPStatus(httpErr.StatusCode)
 	}
 
+	var genaiErr *genai.APIError
+	if errors.As(err, &genaiErr) {
+		return classifyGenaiError(genaiErr)
+	}
+	var genaiValErr genai.APIError
+	if errors.As(err, &genaiValErr) {
+		return classifyGenaiError(&genaiValErr)
+	}
+
+	if s, ok := status.FromError(err); ok && s.Code() != codes.OK {
+		return classifyGRPCError(s.Code())
+	}
+
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		return classifySmithyError(apiErr)
@@ -141,7 +157,11 @@ func ClassifyProbeError(provider string, err error) TestErrorCode {
 	case strings.Contains(msg, "connection refused"),
 		strings.Contains(msg, "no such host"),
 		strings.Contains(msg, "dial tcp"),
-		strings.Contains(msg, "connection reset"):
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "engine not running"),
+		strings.Contains(msg, "not running"),
+		strings.Contains(msg, "not available for embedding"),
+		strings.Contains(msg, "not available for generation"):
 		return TestErrProviderUnreachable
 	case strings.Contains(msg, "context deadline exceeded"):
 		return TestErrTimeout
@@ -170,10 +190,75 @@ func isCredentialResolutionFailure(msg string) bool {
 		strings.Contains(msg, "no ec2 imds role found"),
 		strings.Contains(msg, "failed to retrieve credentials"),
 		strings.Contains(msg, "sso session"),
-		strings.Contains(msg, "static credentials are empty"):
+		strings.Contains(msg, "static credentials are empty"),
+		strings.Contains(msg, "gemini_api_key"),
+		strings.Contains(msg, "google_api_key"),
+		strings.Contains(msg, "could not find default credentials"),
+		strings.Contains(msg, "no gcp project configured"),
+		strings.Contains(msg, "missing credentials"):
 		return true
 	}
 	return false
+}
+
+func classifyGenaiError(e *genai.APIError) TestErrorCode {
+	switch e.Code {
+	case 401:
+		return TestErrBadCredentials
+	case 403:
+		if isBadKeyMessage(e.Message) {
+			return TestErrBadCredentials
+		}
+		return TestErrAccessDenied
+	case 404:
+		return TestErrNotFound
+	case 408:
+		return TestErrTimeout
+	case 429:
+		return TestErrThrottled
+	case 500, 502, 503, 504:
+		return TestErrProviderUnreachable
+	case 400:
+		return TestErrInvalidRequest
+	}
+	switch strings.ToUpper(e.Status) {
+	case "UNAUTHENTICATED":
+		return TestErrBadCredentials
+	case "PERMISSION_DENIED":
+		return TestErrAccessDenied
+	case "NOT_FOUND":
+		return TestErrNotFound
+	case "RESOURCE_EXHAUSTED":
+		return TestErrThrottled
+	case "DEADLINE_EXCEEDED":
+		return TestErrTimeout
+	case "UNAVAILABLE", "INTERNAL":
+		return TestErrProviderUnreachable
+	case "INVALID_ARGUMENT":
+		return TestErrInvalidRequest
+	}
+	return TestErrUnknown
+}
+
+func classifyGRPCError(code codes.Code) TestErrorCode {
+	switch code {
+	case codes.Unauthenticated:
+		return TestErrBadCredentials
+	case codes.PermissionDenied:
+		return TestErrAccessDenied
+	case codes.NotFound:
+		return TestErrNotFound
+	case codes.ResourceExhausted:
+		return TestErrThrottled
+	case codes.DeadlineExceeded:
+		return TestErrTimeout
+	case codes.Unavailable, codes.Internal:
+		return TestErrProviderUnreachable
+	case codes.InvalidArgument:
+		return TestErrInvalidRequest
+	default:
+		return TestErrUnknown
+	}
 }
 
 // isBadKeyMessage reports whether an access-denied body is really about the
@@ -314,6 +399,9 @@ func RemediationFor(code TestErrorCode, provider, strategy string) string {
 	mantle := strategy == StrategyBedrockMantleResponses
 	switch code {
 	case TestErrAccessDenied:
+		if provider == "gemini" {
+			return "Your GCP principal lacks permission on your configured GCP project (roles/aiplatform.user) or the Vertex AI API is not enabled. Check IAM permissions in the Google Cloud Console."
+		}
 		if provider == "bedrock" {
 			if mantle {
 				return "Your AWS account isn't entitled to this model on the Bedrock mantle plane. This is AWS's staged, per-account rollout, not a 2nb or credential problem, and your other models still work. Request access by contacting AWS Sales (https://aws.amazon.com/contact-us/sales-support/); the Bedrock console's Model access page does not govern mantle models, so it can't unblock this one."
@@ -323,6 +411,8 @@ func RemediationFor(code TestErrorCode, provider, strategy string) string {
 		return "Your account doesn't have access to this model. Check your plan or entitlements with the provider."
 	case TestErrBadCredentials:
 		switch provider {
+		case "gemini":
+			return "Gemini credentials are missing, expired, or invalid. Set GEMINI_API_KEY for local tools or run `gcloud auth application-default login` for Vertex AI. Remember: GOOGLE_API_KEY is prohibited."
 		case "bedrock":
 			if mantle {
 				return "The Bedrock API key was rejected by the mantle plane (invalid or expired bearer token). Store a valid key in Settings (Cmd+,) or `2nb config bedrock --set` / `2nb config set-key bedrock`; the mantle plane is bearer-token only and does not accept SigV4 credentials."
@@ -335,13 +425,22 @@ func RemediationFor(code TestErrorCode, provider, strategy string) string {
 	case TestErrThrottled:
 		return "The request was rate-limited, so the model very likely works. Retry in a minute, or lower ai.embed_concurrency if this happened during indexing."
 	case TestErrNotFound:
+		if provider == "gemini" {
+			return "The Gemini model ID was not found. Note that text-embedding-004 and legacy gemini-2.5-* / gemini-3.x models are retired or superseded; use gemini-embedding-2 (or gemini-embedding-001) for embeddings and gemini-4-hydrogen (or gemini-4-argon / gemini-4-carbon) for generation."
+		}
 		if provider == "bedrock" {
 			return "The model ID wasn't found in this region. Check ai.bedrock.region, or use the region-prefixed inference-profile ID (us., eu., global.)."
 		}
 		return "The model ID wasn't found. Check the spelling, or whether the provider still offers it."
 	case TestErrProviderUnreachable:
+		if provider == "gemini" {
+			return "The Google Cloud / Gemini endpoint is unreachable. Check your network or Google Cloud Service Health."
+		}
 		if provider == "ollama" {
 			return "Ollama isn't reachable. Start it with `ollama serve`, or fix ai.ollama.endpoint."
+		}
+		if provider == "llama-local" {
+			return "The local engine isn't running. Start it with '2nb ai engine start' (or install with '2nb ai engine install')."
 		}
 		return "The provider endpoint is unreachable. Check your network, or the provider's status page."
 	case TestErrTimeout:

@@ -44,10 +44,12 @@ func init() {
 }
 
 type AIStatus struct {
-	Provider       string `json:"provider"`
-	EmbeddingModel string `json:"embedding_model"`
-	GenModel       string `json:"generation_model"`
-	Dimensions     int    `json:"dimensions"`
+	Provider           string `json:"provider"`
+	EmbeddingProvider  string `json:"embedding_provider,omitempty"`
+	GenerationProvider string `json:"generation_provider,omitempty"`
+	EmbeddingModel     string `json:"embedding_model"`
+	GenModel           string `json:"generation_model"`
+	Dimensions         int    `json:"dimensions"`
 	EmbedAvailable bool   `json:"embed_available"`
 	GenAvailable   bool   `json:"gen_available"`
 	// Rerank stage (optional cross-encoder that reorders hybrid candidates;
@@ -106,12 +108,18 @@ type ModelAccessSummary struct {
 }
 
 // summarizeModelAccess folds the user catalog's persisted test results for
-// the active provider into counts the GUI and `ai status` can render.
-func summarizeModelAccess(vaultRoot, provider string) *ModelAccessSummary {
+// active providers into counts the GUI and `ai status` can render.
+func summarizeModelAccess(vaultRoot string, providers ...string) *ModelAccessSummary {
+	activeSet := make(map[string]bool, len(providers))
+	for _, p := range providers {
+		if p != "" {
+			activeSet[p] = true
+		}
+	}
 	var out ModelAccessSummary
 	any := false
 	for _, m := range ai.LoadUserCatalog(vaultRoot) {
-		if m.Provider != provider || m.TestedAt == "" {
+		if !activeSet[m.Provider] || m.TestedAt == "" {
 			continue
 		}
 		any = true
@@ -155,10 +163,14 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	initAIProviders(v)
 	ctx := context.Background()
 	cfg := v.Config.AI
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	genProvider := cfg.EffectiveGenerationProvider()
 
 	threshold, thresholdSource := cfg.ResolveSimilarityThresholdFull(v.Root)
 	status := AIStatus{
 		Provider:                  cfg.Provider,
+		EmbeddingProvider:         embedProvider,
+		GenerationProvider:        genProvider,
 		EmbeddingModel:            cfg.EmbeddingModel,
 		GenModel:                  cfg.GenerationModel,
 		Dimensions:                cfg.Dimensions,
@@ -170,12 +182,12 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	if status.RerankEnabled {
 		status.RerankModel = cfg.ResolveRerankModel()
 	}
-	emb, embErr := ai.DefaultRegistry.Embedder(cfg.Provider)
-	gen, genErr := ai.DefaultRegistry.Generator(cfg.Provider)
+	emb, embErr := ai.DefaultRegistry.Embedder(embedProvider)
+	gen, genErr := ai.DefaultRegistry.Generator(genProvider)
 	var rr ai.RerankProvider
 	var rrErr error
 	if status.RerankEnabled {
-		rr, rrErr = ai.DefaultRegistry.Reranker(cfg.Provider)
+		rr, rrErr = ai.DefaultRegistry.Reranker(cfg.EffectiveRerankProvider())
 	}
 
 	// Probe each role ONCE. The verdict is then carried to every place that
@@ -226,9 +238,14 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		vault.CheckIndexFreshness(v.DB),
 	)
 
-	status.Providers = collectProviderStatus(ctx, cfg, embedReady)
-	status.ModelAccess = summarizeModelAccess(v.Root, cfg.Provider)
-	status.ActiveProviderDisabled = cfg.ProviderDisabled(cfg.Provider)
+	status.Providers = collectProviderStatus(ctx, cfg, embedReady, genReady)
+	status.ModelAccess = summarizeModelAccess(v.Root, cfg.ActiveProviders()...)
+	for _, p := range cfg.ActiveProviders() {
+		if cfg.ProviderDisabled(p) {
+			status.ActiveProviderDisabled = true
+			break
+		}
+	}
 	status.EmbedRetryAdvice = embedRetryAdvice(v)
 
 	format := getFormat(cmd)
@@ -240,15 +257,23 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	embedModel, _ := lookupModelInfo(models, cfg.Provider, cfg.EmbeddingModel)
-	genModel, _ := lookupModelInfo(models, cfg.Provider, cfg.GenerationModel)
+	embedModel, _ := lookupModelInfo(models, embedProvider, cfg.EmbeddingModel)
+	genModel, _ := lookupModelInfo(models, genProvider, cfg.GenerationModel)
 
 	// Pretty output
-	fmt.Printf("Provider:         %s\n", status.Provider)
+	if cfg.IsMixedProviders() {
+		fmt.Printf("Provider:         mixed (embed: %s, generation: %s)\n", embedProvider, genProvider)
+	} else {
+		fmt.Printf("Provider:         %s\n", status.Provider)
+	}
 	if status.ActiveProviderDisabled {
-		fmt.Printf("  ⚠ ai.%s.disabled is true for the ACTIVE provider. Disabled only hides its models\n"+
-			"    from catalogs and dropdowns (it still executes), so the GUI and CLI will disagree.\n"+
-			"    Fix: `2nb config set ai.%s.disabled false`\n", status.Provider, status.Provider)
+		for _, p := range cfg.ActiveProviders() {
+			if cfg.ProviderDisabled(p) {
+				fmt.Printf("  ⚠ ai.%s.disabled is true for an ACTIVE provider. Disabled only hides its models\n"+
+					"    from catalogs and dropdowns (it still executes), so the GUI and CLI will disagree.\n"+
+					"    Fix: `2nb config set ai.%s.disabled false`\n", p, p)
+			}
+		}
 	}
 	fmt.Printf("Embedding model:  %s\n", status.EmbeddingModel)
 	fmt.Printf("  pricing:        %s\n", ai.VerbosePriceLabel(embedModel))
@@ -275,7 +300,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	// A threshold 2nb decided to ignore has to be SAID, not silently dropped:
 	// the user set a number, search stopped using it, and nothing else in the
 	// output would tell them which file to look at.
-	if notice := unstampedThresholdNotice(v.Root, cfg.Provider, cfg.EmbeddingModel); notice != "" {
+	if notice := unstampedThresholdNotice(v.Root, embedProvider, cfg.EmbeddingModel); notice != "" {
 		fmt.Print(notice)
 	}
 	if ma := status.ModelAccess; ma != nil && (ma.Verified > 0 || ma.AccessDenied > 0 || ma.OtherFailures > 0) {
@@ -297,7 +322,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 		switch status.SimilarityThresholdSource {
 		case ai.ThresholdSourceUserCalibration:
 			fmt.Printf("    It is a saved calibration: %s\n",
-				thresholdCalibrationOrigin(v.Root, cfg.Provider, cfg.EmbeddingModel))
+				thresholdCalibrationOrigin(v.Root, embedProvider, cfg.EmbeddingModel))
 		case ai.ThresholdSourceVaultConfig:
 			fmt.Printf("    It comes from ai.similarity_threshold in this vault's config.yaml.\n")
 		default:
@@ -321,7 +346,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Printf("  As-embedded:    (no embeddings yet), %d docs\n", status.VaultEmbeddableDocs)
 	}
-	fmt.Printf("  Current cfg:    %s / %s (%dd)\n", cfg.Provider, cfg.EmbeddingModel, cfg.Dimensions)
+	fmt.Printf("  Current cfg:    %s / %s (%dd)\n", embedProvider, cfg.EmbeddingModel, cfg.Dimensions)
 	fmt.Printf("  Status:         %s\n", strings.ToUpper(strings.ReplaceAll(status.PortabilityStatus, "_", " ")))
 	if status.PortabilityAction != "" {
 		fmt.Printf("  Action:         %s\n", status.PortabilityAction)
@@ -354,7 +379,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Suggest local alternative for paid providers
-	if cfg.Provider != "ollama" && ai.HasKnownPricing(embedModel) && !ai.IsExplicitlyFree(embedModel) {
+	if embedProvider != "ollama" && embedProvider != "llama-local" && ai.HasKnownPricing(embedModel) && !ai.IsExplicitlyFree(embedModel) {
 		fmt.Fprintf(os.Stderr, "\nTip: run `2nb ai setup` for free local AI with Ollama\n")
 	}
 
@@ -366,6 +391,7 @@ func runAIStatus(cmd *cobra.Command, args []string) error {
 // stable public contract — Swift and automation consumers switch on
 // these strings, so renames are a breaking change.
 func derivePortability(cfg ai.AIConfig, embedder ai.EmbeddingProvider, embed readinessResolver, vaultDim int, vaultModels []string, totalDocs, embeddedDocs, embeddableUnembedded int, freshness vault.IndexFreshness) (status, action string) {
+	embedProvider := cfg.EffectiveEmbeddingProvider()
 	// Empty notes (no chunk) can never be embedded, so they're excluded from
 	// every decision here and from the counts callers display (the embeddable
 	// total = embeddedDocs+embeddableUnembedded). A vault whose only gap is
@@ -378,7 +404,7 @@ func derivePortability(cfg ai.AIConfig, embedder ai.EmbeddingProvider, embed rea
 		// No AI provider configured yet → keep the onboarding nudge, even when
 		// the only docs so far are empty notes (saying "ok / fully embedded"
 		// would be misleading when semantic search isn't set up at all).
-		if cfg.Provider == "" {
+		if embedProvider == "" {
 			return "no_provider", "Run `2nb ai setup` to enable semantic search. Keyword search works today."
 		}
 		// Provider is set but nothing is embedded. If every doc is an empty
@@ -390,18 +416,18 @@ func derivePortability(cfg ai.AIConfig, embedder ai.EmbeddingProvider, embed rea
 		}
 		return "unindexed", "Run `2nb index` to generate embeddings. Keyword search works today."
 	}
-	if cfg.Provider == "" {
+	if embedProvider == "" {
 		return "no_provider", "Run `2nb ai setup` to enable semantic search."
 	}
 	if embedder == nil {
-		return "no_provider", fmt.Sprintf("Provider %q is configured but not registered. Run `2nb ai setup` to repair.", cfg.Provider)
+		return "no_provider", fmt.Sprintf("Provider %q is configured but not registered. Run `2nb ai setup` to repair.", embedProvider)
 	}
 	// The LABEL is the stable contract (config_doctor and the macOS
 	// VaultStatusView both switch on it); only the hint text changes, and it now
 	// names the classified cause instead of listing every provider's likeliest
 	// problem and leaving the user to guess which one applies.
 	if r := embed(); !r.ready {
-		return "provider_unavailable", r.hint(cfg.Provider)
+		return "provider_unavailable", r.hint(embedProvider)
 	}
 	providerDim := embedder.Dimensions()
 	if providerDim != vaultDim {
@@ -448,14 +474,15 @@ func runAIEmbed(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	embedder, err := ai.DefaultRegistry.Embedder(embedProvider)
 	if err != nil {
 		return fmt.Errorf("no embedding provider: %w", err)
 	}
 
 	text := strings.Join(args, " ")
 	if !flagPorcelain {
-		fmt.Fprintf(os.Stderr, "Embedding %d chars via %s...\n", len(text), cfg.Provider)
+		fmt.Fprintf(os.Stderr, "Embedding %d chars via %s...\n", len(text), embedProvider)
 	}
 
 	vecs, err := embedder.Embed(ctx, []string{text})
@@ -479,9 +506,20 @@ func runAIEmbed(cmd *cobra.Command, args []string) error {
 // repeat for free; carrying it also guarantees both surfaces report the SAME
 // answer). A provider that is not the active one was never asked and resolves
 // its own.
-func collectProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness) []ProviderStatus {
+func slotVerdictFor(providerName string, cfg ai.AIConfig, embedReady providerReadiness, genActive ...providerReadiness) (providerReadiness, bool) {
+	if cfg.EffectiveEmbeddingProvider() == providerName && embedReady.resolved {
+		return embedReady, true
+	}
+	if len(genActive) > 0 && cfg.EffectiveGenerationProvider() == providerName && genActive[0].resolved {
+		return genActive[0], true
+	}
+	return providerReadiness{}, false
+}
+
+func collectProviderStatus(ctx context.Context, cfg ai.AIConfig, embedReady, genReady providerReadiness) []ProviderStatus {
 	out := []ProviderStatus{
-		bedrockProviderStatus(ctx, cfg, active),
+		geminiProviderStatus(ctx, cfg, embedReady, genReady),
+		bedrockProviderStatus(ctx, cfg, embedReady, genReady),
 		openrouterProviderStatus(cfg),
 		ollamaProviderStatus(ctx, cfg),
 		llamaProviderStatus(ctx, cfg),
@@ -489,9 +527,61 @@ func collectProviderStatus(ctx context.Context, cfg ai.AIConfig, active provider
 	return out
 }
 
+func geminiProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness, genActive ...providerReadiness) ProviderStatus {
+	useVertex := cfg.Gemini.UseVertexAI
+	project := ai.ResolveGCPProject(cfg.Gemini.Project)
+	location := cfg.Gemini.Location
+	if location == "" {
+		location = "us-central1"
+	}
+
+	hasKey := ai.HasAPIKey("gemini") || os.Getenv("GEMINI_API_KEY") != ""
+	var detail string
+	if useVertex || project != "" {
+		if project == "" {
+			detail = fmt.Sprintf("vertex:true location:%s (no project configured)", location)
+		} else {
+			detail = fmt.Sprintf("project:%s location:%s (vertex:true)", project, location)
+		}
+	} else if hasKey {
+		detail = "APIKey:GEMINI_API_KEY"
+	} else {
+		detail = "unconfigured (set GEMINI_API_KEY or configure Vertex AI)"
+	}
+
+	s := ProviderStatus{
+		Name:          "gemini",
+		Disabled:      cfg.Gemini.Disabled,
+		ConfigPresent: useVertex || project != "" || hasKey,
+		Detail:        detail,
+	}
+	if s.Disabled {
+		s.Reason = "disabled in vault config"
+		return s
+	}
+
+	if v, ok := slotVerdictFor("gemini", cfg, active, genActive...); ok {
+		s.Reachable = v.ready
+		s.Reason = v.shortReason()
+		return s
+	}
+	if emb, err := ai.DefaultRegistry.Embedder("gemini"); err == nil {
+		r := resolveReadiness(ctx, emb)
+		s.Reachable = r.ready
+		s.Reason = r.shortReason()
+	} else {
+		if ai.CheckGeminiCredentials(ctx, cfg.Gemini) {
+			s.Reachable = true
+		} else {
+			s.Reason = "credentials missing or unreachable"
+		}
+	}
+	return s
+}
+
 // llamaProviderStatus reports readiness of the bundled-engine "llama-local"
-// provider: whether the engine binary is locatable and whether any engine role
-// is answering /health.
+// provider: whether the engine binary is locatable, and whether any engine role
+// is running or ready for on-demand startup from cached weights.
 func llamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 	s := ProviderStatus{
 		Name:     "llama-local",
@@ -501,7 +591,7 @@ func llamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 	s.ConfigPresent = enginePath != ""
 	if enginePath == "" {
 		s.Detail = "engine not installed"
-		s.Reason = "llama-server not found (run: 2nb ai engine install)"
+		s.Reason = "llama-server not found"
 		return s
 	}
 	s.Detail = enginePath
@@ -516,12 +606,24 @@ func llamaProviderStatus(ctx context.Context, cfg ai.AIConfig) ProviderStatus {
 		}
 	}
 	if !s.Reachable {
-		s.Reason = "engine not running (run: 2nb ai engine start)"
+		embedModel := llama.DefaultEmbedModelID
+		if cfg.EffectiveEmbeddingProvider() == "llama-local" && cfg.EmbeddingModel != "" {
+			embedModel = cfg.EmbeddingModel
+		}
+		genModel := "gemma4-e2b"
+		if cfg.EffectiveGenerationProvider() == "llama-local" && cfg.GenerationModel != "" {
+			genModel = cfg.GenerationModel
+		}
+		if llama.RoleCanStart(llama.RoleEmbed, embedModel) || llama.RoleCanStart(llama.RoleGen, genModel) {
+			s.Reachable = true
+		} else {
+			s.Reason = "local model weights not downloaded"
+		}
 	}
 	return s
 }
 
-func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness) ProviderStatus {
+func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig, active providerReadiness, genActive ...providerReadiness) ProviderStatus {
 	resolved := ai.ResolveBedrockConfig(cfg.Bedrock)
 	_, src := ai.ResolveBedrockToken()
 	detail := resolved.Region
@@ -543,20 +645,10 @@ func bedrockProviderStatus(ctx context.Context, cfg ai.AIConfig, active provider
 		s.Reason = "region not set (ai.bedrock.region)"
 		return s
 	}
-	// Reachability: the embedder probe covers "creds work + AWS API reachable"
-	// in one cheap control-plane call. When bedrock is the ACTIVE provider the
-	// caller already resolved exactly this verdict, so reuse it rather than
-	// asking the same embedder again within one command.
-	//
-	// Reuse only a verdict that was actually PROBED. When bedrock is active but
-	// its embedder never registered, the caller has no verdict, and reporting the
-	// zero value would state a cause nobody observed ("credentials missing or
-	// region unreachable") while the same run's portability line correctly says
-	// the provider is not registered. Fall through to the registry lookup, which
-	// produces the honest message.
-	if cfg.Provider == "bedrock" && active.resolved {
-		s.Reachable = active.ready
-		s.Reason = active.shortReason()
+	// Reuse only a verdict that was actually PROBED for the active slot.
+	if v, ok := slotVerdictFor("bedrock", cfg, active, genActive...); ok {
+		s.Reachable = v.ready
+		s.Reason = v.shortReason()
 		return s
 	}
 	if emb, err := ai.DefaultRegistry.Embedder("bedrock"); err == nil {

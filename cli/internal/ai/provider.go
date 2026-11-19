@@ -8,7 +8,7 @@ import (
 // KnownProviders is the canonical list of AI providers 2nb supports.
 // Used by shell completion, wizard defaults, and test assertions — when
 // adding a new provider, append it here so every site stays in sync.
-var KnownProviders = []string{"bedrock", "openrouter", "ollama", "llama-local"}
+var KnownProviders = []string{"gemini", "bedrock", "openrouter", "ollama", "llama-local"}
 
 // IsKnownProvider reports whether name is one of the providers 2nb supports.
 func IsKnownProvider(name string) bool {
@@ -20,8 +20,8 @@ func IsKnownProvider(name string) bool {
 	return false
 }
 
-// Embedding purposes. Models like Amazon Nova-2 are asymmetric: a stored
-// document and a search query are embedded differently. PurposeIndex is the
+// Embedding purposes. Models like Amazon Nova-2 and Google Gemini are asymmetric:
+// a stored document and a search query are embedded differently. PurposeIndex is the
 // default (stored content); PurposeQuery is for the query side of retrieval.
 // Providers that don't distinguish (Ollama, OpenRouter) ignore the purpose.
 const (
@@ -40,6 +40,7 @@ const (
 type EmbedConfig struct {
 	Purpose   string // PurposeIndex (default) or PurposeQuery
 	Dimension int    // 0 = the model/config default
+	Title     string // optional title for document embeddings (e.g. Gemini RETRIEVAL_DOCUMENT)
 }
 
 // EmbedOption tunes a single Embed call (functional-options pattern so the
@@ -52,6 +53,9 @@ func WithPurpose(p string) EmbedOption { return func(c *EmbedConfig) { c.Purpose
 // WithDimension overrides the output embedding dimension for this call
 // (Matryoshka models like Nova-2 support 256/384/1024/3072). 0 = default.
 func WithDimension(d int) EmbedOption { return func(c *EmbedConfig) { c.Dimension = d } }
+
+// WithTitle sets the document title for asymmetric document indexing.
+func WithTitle(title string) EmbedOption { return func(c *EmbedConfig) { c.Title = title } }
 
 // ResolveEmbedOptions folds options into an EmbedConfig with PurposeIndex default.
 func ResolveEmbedOptions(opts ...EmbedOption) EmbedConfig {

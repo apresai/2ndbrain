@@ -46,6 +46,22 @@ func TestTimeoutBudgetsNested(t *testing.T) {
 		t.Errorf("OpenRouterWorstCase = %v does not contain %d attempts x %v + %v backoff", OpenRouterWorstCase, openRouterMaxAttempts, OpenRouterAttemptTimeout, orBackoff)
 	}
 
+	// Gemini: geminiMaxAttempts x GeminiAttemptTimeout + bounded retry backoff (up to geminiMaxRetryDelay each).
+	var geminiBackoff time.Duration
+	for a := 0; a < geminiMaxAttempts-1; a++ {
+		w := retryBackoff(a)
+		if geminiMaxRetryDelay > w {
+			w = geminiMaxRetryDelay
+		}
+		geminiBackoff += w
+	}
+	if geminiRetryBackoffWorstTotal < geminiBackoff {
+		t.Errorf("geminiRetryBackoffWorstTotal = %v < the loop's real worst backoff %v", geminiRetryBackoffWorstTotal, geminiBackoff)
+	}
+	if GeminiWorstCase < geminiMaxAttempts*GeminiAttemptTimeout+geminiRetryBackoffWorstTotal {
+		t.Errorf("GeminiWorstCase = %v does not contain %d attempts x %v + %v backoff", GeminiWorstCase, geminiMaxAttempts, GeminiAttemptTimeout, geminiRetryBackoffWorstTotal)
+	}
+
 	// Classic Bedrock: the declared worst-case backoff must contain the real
 	// maximum sleep of bedrockRetryDelay (jitter tops out at the full
 	// exponential base, per-round cap 10s) across 2nb's retry rounds.
@@ -76,6 +92,7 @@ func TestTimeoutBudgetsNested(t *testing.T) {
 		name, provider, strategy string
 		inner                    time.Duration
 	}{
+		{"gemini", "gemini", "", GeminiWorstCase},
 		{"mantle", "bedrock", StrategyBedrockMantleResponses, MantleWorstCase},
 		{"bedrock classic", "bedrock", "", BedrockClassicWorstCase},
 		{"bedrock classic converse", "bedrock", StrategyBedrockConverse, BedrockClassicWorstCase},

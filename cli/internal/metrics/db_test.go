@@ -219,3 +219,127 @@ func mustRecord(t *testing.T, db *DB, op Operation) {
 		t.Fatalf("record: %v", err)
 	}
 }
+
+func TestUsageLedgerSurvivesOperationPrune(t *testing.T) {
+	db := openTestDB(t)
+	for i := 0; i < 205; i++ {
+		mustRecord(t, db, Operation{
+			Timestamp:         "2026-11-17T10:00:00Z",
+			Operation:         OpSearch,
+			DurationMs:        15,
+			OK:                true,
+			EmbeddingProvider: "gemini",
+			EmbeddingModel:    "gemini-embedding-2",
+			EmbedInputTokens:  100,
+			CostUSD:           0.00002,
+			KnownPricing:      true,
+			InputTokens:       100,
+			UsageLegs: []UsageLeg{{
+				Provider:     "gemini",
+				Model:        "gemini-embedding-2",
+				Slot:         "embedding",
+				Operation:    OpSearch,
+				IsCloud:      true,
+				Calls:        1,
+				InputTokens:  100,
+				CostUSD:      0.00002,
+				KnownPricing: true,
+			}},
+		})
+	}
+	ops, err := db.Recent(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != DefaultPerTypeCap {
+		t.Fatalf("pruned operations = %d, want %d", len(ops), DefaultPerTypeCap)
+	}
+	rows, err := db.UsageEntries("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Calls != 205 || rows[0].InputTokens != 20500 {
+		t.Fatalf("ledger after prune = %+v, want 1 row with 205 calls and 20500 input tokens", rows)
+	}
+	if wantUSD := 205 * 0.00002; rows[0].CostUSD < wantUSD-1e-9 || rows[0].CostUSD > wantUSD+1e-9 {
+		t.Fatalf("ledger cost_usd = %v, want %v", rows[0].CostUSD, wantUSD)
+	}
+}
+
+func TestUsageLedgerHybridMultiLegAndClear(t *testing.T) {
+	db := openTestDB(t)
+	mustRecord(t, db, Operation{
+		Timestamp:          "2026-11-17T11:00:00Z",
+		Operation:          OpAsk,
+		DurationMs:         800,
+		OK:                 true,
+		EmbeddingProvider:  "llama-local",
+		EmbeddingModel:     "embeddinggemma-2",
+		GenerationProvider: "gemini",
+		GenerationModel:    "gemini-4-hydrogen",
+		EmbedInputTokens:   50,
+		GenInputTokens:     4000,
+		GenOutputTokens:    400,
+		InputTokens:        4050,
+		OutputTokens:       400,
+		CostUSD:            0.009,
+		KnownPricing:       true,
+		UsageLegs: []UsageLeg{
+			{
+				Provider: "llama-local", Model: "embeddinggemma-2", Slot: "embedding", Operation: OpAsk,
+				IsCloud: false, Calls: 1, InputTokens: 50, CostUSD: 0, KnownPricing: true,
+			},
+			{
+				Provider: "gemini", Model: "gemini-4-hydrogen", Slot: "generation", Operation: OpAsk,
+				IsCloud: true, Calls: 1, InputTokens: 4000, OutputTokens: 400, CostUSD: 0.009, KnownPricing: true,
+			},
+		},
+	})
+
+	rows, err := db.UsageEntries("2026-11-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 ledger rows (embed + gen), got %+v", rows)
+	}
+
+	cleared, err := db.Clear()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared != 1 {
+		t.Fatalf("cleared = %d, want 1", cleared)
+	}
+	if left, _ := db.UsageEntries(""); len(left) != 0 {
+		t.Fatalf("ledger after Clear() = %+v, want empty", left)
+	}
+}
+
+func TestHistoricalEmbedThroughput(t *testing.T) {
+	db := openTestDB(t)
+	// Below threshold (<3 embedded) -> ignored
+	mustRecord(t, db, Operation{
+		Operation: OpReembed, OK: true, Embedded: 2, TotalChars: 1000, EmbedMs: 500,
+		EmbeddingProvider: "llama-local", EmbeddingModel: "embeddinggemma-2",
+	})
+	if _, _, ok := db.HistoricalEmbedThroughput("llama-local", "embeddinggemma-2"); ok {
+		t.Fatal("expected <3 embedded build to be ignored")
+	}
+
+	// Older matching build (with legacy empty provider)
+	mustRecord(t, db, Operation{
+		Operation: OpReembed, OK: true, Embedded: 10, TotalChars: 20000, EmbedMs: 2000,
+		EmbeddingProvider: "", EmbeddingModel: "embeddinggemma-2",
+	})
+	// Failed newer build -> ignored
+	mustRecord(t, db, Operation{
+		Operation: OpReembed, OK: false, Embedded: 50, TotalChars: 50000, EmbedMs: 1000,
+		EmbeddingProvider: "llama-local", EmbeddingModel: "embeddinggemma-2",
+	})
+
+	dps, cps, ok := db.HistoricalEmbedThroughput("llama-local", "embeddinggemma-2")
+	if !ok || dps != 5.0 || cps != 10000.0 {
+		t.Fatalf("got (%v, %v, %v), want (5.0, 10000.0, true)", dps, cps, ok)
+	}
+}

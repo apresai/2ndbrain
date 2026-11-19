@@ -343,9 +343,14 @@ func basenameNoExt(s string) string {
 	return strings.TrimSuffix(filepath.Base(s), ".md")
 }
 
-// isLikelyAsset reports whether a wikilink target names a non-markdown file (an
-// image, pdf, etc.) rather than a note, so the repair pass leaves it alone.
+// isLikelyAsset reports whether a wikilink target names a non-note file (an
+// image, pdf, etc.) rather than a note or canvas/base, so the repair pass leaves it alone.
 func isLikelyAsset(target string) bool {
 	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(target)))
-	return ext != "" && ext != ".md"
+	switch ext {
+	case "", ".md", ".canvas", ".base":
+		return false
+	default:
+		return true
+	}
 }

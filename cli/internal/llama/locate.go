@@ -24,6 +24,9 @@ const engineBinaryName = "llama-server"
 // lookPath is exec.LookPath, indirected so tests can control PATH resolution.
 var lookPath = exec.LookPath
 
+// executable is os.Executable, indirected so tests can control sibling resolution.
+var executable = os.Executable
+
 // Role names a llama-server process. llama-server's --embeddings and
 // --reranking flags are mutually exclusive, so embeddings, reranking, and
 // generation each require their own process.
@@ -104,11 +107,16 @@ func ModelPath(id, file string) (string, error) {
 
 // LocateEngine resolves the llama-server binary, checking, in order:
 //  1. override (config ai.llama.engine_path), when set;
-//  2. a bundled sibling of the running executable — in the macOS app this is
-//     SecondBrain.app/Contents/Resources/llama-server (next to the bundled
-//     2nb), in the Obsidian plugin <plugin>/bin/llama-server;
-//  3. the downloaded copy in EngineCacheDir();
-//  4. anything named llama-server on PATH.
+//  2. TWONB_ENGINE_PATH env var;
+//  3. a bundled sibling of the running executable — in the macOS app this is
+//     SecondBrain.app/Contents/Resources/llama-server or
+//     SecondBrain.app/Contents/Resources/llama/llama-server (next to the
+//     bundled 2nb), in the Obsidian plugin <plugin>/bin/llama-server;
+//  4. $APP/Contents/Resources/llama/llama-server (when $APP is set);
+//  5. ~/Applications/SecondBrain.app/Contents/Resources/llama/llama-server;
+//  6. /Applications/SecondBrain.app/Contents/Resources/llama/llama-server;
+//  7. the downloaded copy in EngineCacheDir();
+//  8. anything named llama-server on PATH.
 //
 // Returns "" when none is found; callers decide whether to error, download, or
 // mark the provider unavailable.
@@ -116,7 +124,10 @@ func LocateEngine(override string) string {
 	if override != "" && isExecutableFile(override) {
 		return override
 	}
-	if exe, err := os.Executable(); err == nil {
+	if envPath := os.Getenv("TWONB_ENGINE_PATH"); envPath != "" && isExecutableFile(envPath) {
+		return envPath
+	}
+	if exe, err := executable(); err == nil {
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = resolved
 		}
@@ -124,6 +135,26 @@ func LocateEngine(override string) string {
 		if isExecutableFile(sibling) {
 			return sibling
 		}
+		nested := filepath.Join(filepath.Dir(exe), "llama", engineBinaryName)
+		if isExecutableFile(nested) {
+			return nested
+		}
+	}
+	if app := os.Getenv("APP"); app != "" {
+		appServer := filepath.Join(app, "Contents", "Resources", "llama", engineBinaryName)
+		if isExecutableFile(appServer) {
+			return appServer
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		userAppServer := filepath.Join(home, "Applications", "SecondBrain.app", "Contents", "Resources", "llama", engineBinaryName)
+		if isExecutableFile(userAppServer) {
+			return userAppServer
+		}
+	}
+	systemAppServer := filepath.Join("/Applications", "SecondBrain.app", "Contents", "Resources", "llama", engineBinaryName)
+	if isExecutableFile(systemAppServer) {
+		return systemAppServer
 	}
 	if dir, err := EngineCacheDir(); err == nil {
 		cached := filepath.Join(dir, engineBinaryName)
@@ -132,6 +163,59 @@ func LocateEngine(override string) string {
 		}
 	}
 	if p, err := lookPath(engineBinaryName); err == nil {
+		return p
+	}
+	return ""
+}
+
+// LocateCLI resolves the 2nb CLI binary across environment overrides, running
+// executable location, bundled sibling within SecondBrain.app, and standard paths.
+func LocateCLI() string {
+	if p := os.Getenv("TWONB_CLI_PATH"); p != "" && isExecutableFile(p) {
+		return p
+	}
+	if exe, err := executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		if filepath.Base(exe) == "2nb" && isExecutableFile(exe) {
+			return exe
+		}
+		cand := filepath.Join(filepath.Dir(exe), "2nb")
+		if isExecutableFile(cand) {
+			return cand
+		}
+	}
+	if app := os.Getenv("APP"); app != "" {
+		appCLI := filepath.Join(app, "Contents", "Resources", "2nb")
+		if isExecutableFile(appCLI) {
+			return appCLI
+		}
+	}
+	if eng := LocateEngine(""); eng != "" {
+		cand := filepath.Clean(filepath.Join(filepath.Dir(eng), "..", "2nb"))
+		if isExecutableFile(cand) {
+			return cand
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		userAppCLI := filepath.Join(home, "Applications", "SecondBrain.app", "Contents", "Resources", "2nb")
+		if isExecutableFile(userAppCLI) {
+			return userAppCLI
+		}
+	}
+	sysAppCLI := "/Applications/SecondBrain.app/Contents/Resources/2nb"
+	if isExecutableFile(sysAppCLI) {
+		return sysAppCLI
+	}
+	for _, rel := range []string{"cli/bin/2nb", "bin/2nb"} {
+		if isExecutableFile(rel) {
+			if abs, err := filepath.Abs(rel); err == nil {
+				return abs
+			}
+		}
+	}
+	if p, err := lookPath("2nb"); err == nil {
 		return p
 	}
 	return ""

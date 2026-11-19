@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
 	"github.com/apresai/2ndbrain/internal/document"
+	"github.com/apresai/2ndbrain/internal/metrics"
+	"github.com/apresai/2ndbrain/internal/polish"
 	"github.com/apresai/2ndbrain/internal/search"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"github.com/spf13/cobra"
@@ -35,33 +38,9 @@ func init() {
 }
 
 // SuggestLinkResult is one ranked suggestion returned by `2nb suggest-links`
-// and `2nb suggest-target`.
-type SuggestLinkResult struct {
-	Path    string  `json:"path"`
-	Title   string  `json:"title"`
-	Score   float64 `json:"score"`
-	Snippet string  `json:"snippet"`
-	// Confidence grades how likely this candidate is THE note a broken target
-	// meant: "high", "medium", or "low". Set only by suggest-target (additive;
-	// absent from suggest-links output). The rule is deterministic: fold the
-	// target and the candidate's title AND basename with the same normalization
-	// the repair index uses (polish.NormalizeName: lower-case, hyphen/underscore
-	// to space, collapse whitespace). Call it a WORD MATCH when the folded
-	// target equals, or is a whole-word subset of, the folded title or basename;
-	// call the candidate DOMINANT when it is the sole candidate or its score is
-	// at least 1.4x the best other candidate's score. "high" iff word match AND
-	// dominant (a tier-1 drift candidate that is the unique repair match is
-	// inherently high, since it may have matched via an alias); "medium" when
-	// exactly one of the two holds; "low" otherwise. A "high" candidate is safe
-	// to offer as a one-click / Fix-all apply; "medium"/"low" are recommendations
-	// only (top 2–3 shown for human pick).
-	Confidence string `json:"confidence,omitempty"`
-	// Reason is a short human-readable explanation of why this candidate was
-	// ranked here. Set by suggest-target's optional --llm re-rank (additive;
-	// absent from suggest-links and from the deterministic tiers). Never
-	// required to apply a fix.
-	Reason string `json:"reason,omitempty"`
-}
+// and `2nb suggest-target`. Aliased to polish.SuggestLinkResult so the shared
+// polish engine and CLI emit the identical JSON schema.
+type SuggestLinkResult = polish.SuggestLinkResult
 
 func runSuggestLinks(cmd *cobra.Command, args []string) error {
 	// Before the provider work below. This command embeds the source note, a
@@ -98,12 +77,13 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	cfg := v.Config.AI
 
-	embedder, err := ai.DefaultRegistry.Embedder(cfg.Provider)
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	embedder, err := ai.DefaultRegistry.Embedder(embedProvider)
 	if err != nil {
 		return fmt.Errorf("no embedding provider: %w\nRun `2nb ai status` to check provider configuration", err)
 	}
 	if ready, code := ai.Availability(ctx, embedder); !ready {
-		return embedderNotReadyError(cfg.Provider, code)
+		return embedderNotReadyError(embedProvider, code)
 	}
 
 	// Truncate body to the same window used by `ask.go`
@@ -113,7 +93,20 @@ func runSuggestLinks(cmd *cobra.Command, args []string) error {
 	}
 	queryText := string(runes)
 
+	start := time.Now()
 	queryVecs, err := embedder.Embed(ctx, []string{queryText}, ai.WithPurpose(ai.PurposeQuery))
+	{
+		op := metrics.Operation{
+			Operation:  metrics.OpSuggest,
+			DurationMs: time.Since(start).Milliseconds(),
+			OK:         err == nil && len(queryVecs) > 0,
+			Error:      errString(err),
+		}
+		if err == nil && len(queryVecs) > 0 {
+			attachUsageLegs(&op, buildUsageLeg(v.Root, embedProvider, cfg.EmbeddingModel, "embedding", metrics.OpSuggest, 1, max(1, len(queryText)/4), 0))
+		}
+		recordMetric(v, op)
+	}
 	if err != nil {
 		return fmt.Errorf("embed source: %w", err)
 	}

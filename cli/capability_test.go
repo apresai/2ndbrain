@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -95,11 +96,25 @@ func requireEmbeddingHostHome(t *testing.T) {
 // own tooling authenticate; omitting it would skip a fully working setup.
 // Under the real HOME, the file-based sources count too.
 func hasAnyProviderCredentialSource(hostHome bool) bool {
-	if hasBedrockCredentialEnv() || hasOpenRouterKey() {
-		return true
+	return hasGeminiCredentialSource(hostHome) || hasBedrockCredentialSource(hostHome) || hasOpenRouterKey()
+}
+
+// hasGeminiCredentialSource reports whether a Gemini API key or GCP Vertex AI
+// project env/Keychain source is visible in this execution mode.
+func hasGeminiCredentialSource(hostHome bool) bool {
+	for _, env := range []string{"GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT"} {
+		if os.Getenv(env) != "" {
+			return true
+		}
 	}
-	// File-based sources exist only where the real home is visible.
-	return hostHome && hasBedrockCredentialFile()
+	if hostHome && runtime.GOOS == "darwin" &&
+		os.Getenv("2NB_BEDROCK_SKIP_KEYCHAIN") == "" && os.Getenv("2NB_SKIP_KEYCHAIN") == "" {
+		cmd := exec.Command("security", "find-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini")
+		if cmd.Run() == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // hasBedrockCredentialEnv reports the environment variables this pre-filter

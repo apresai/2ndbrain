@@ -45,37 +45,65 @@ func reportUnroutedSlot(err error) bool {
 }
 
 func initAIProvidersFor(cfg ai.AIConfig, vaultRoot string) {
-	// Skip if already registered (safe for repeated calls in MCP server)
-	if _, err := ai.DefaultRegistry.Embedder(cfg.Provider); err == nil {
-		return
-	}
-
 	ctx := context.Background()
 
-	switch cfg.Provider {
-	case "bedrock":
-		if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg, vaultRoot); err != nil {
-			if !reportUnroutedSlot(err) && !flagPorcelain {
-				fmt.Fprintf(os.Stderr, "warning: bedrock init: %v\n", err)
-			}
+	for _, providerName := range cfg.ActiveProviders() {
+		if providerSlotsRegistered(ai.DefaultRegistry, cfg, providerName) {
+			continue
 		}
-	case "ollama":
-		if err := ai.InitOllama(ctx, ai.DefaultRegistry, cfg.Ollama, cfg); err != nil {
-			if !flagPorcelain {
-				fmt.Fprintf(os.Stderr, "warning: ollama init: %v\n", err)
+		switch providerName {
+		case "gemini":
+			if err := ai.InitGemini(ctx, ai.DefaultRegistry, cfg.Gemini, cfg); err != nil {
+				if !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "warning: gemini init: %v\n", err)
+				}
 			}
-		}
-	case "openrouter":
-		if err := ai.InitOpenRouter(ctx, ai.DefaultRegistry, cfg.OpenRouter, cfg); err != nil {
-			if !flagPorcelain {
-				fmt.Fprintf(os.Stderr, "warning: openrouter init: %v\n", err)
+		case "bedrock":
+			if err := ai.InitBedrock(ctx, ai.DefaultRegistry, cfg.Bedrock, cfg, vaultRoot); err != nil {
+				if !reportUnroutedSlot(err) && !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "warning: bedrock init: %v\n", err)
+				}
 			}
-		}
-	case "llama-local":
-		if err := ai.InitLlama(ctx, ai.DefaultRegistry, cfg.Llama, cfg); err != nil {
-			if !flagPorcelain {
-				fmt.Fprintf(os.Stderr, "warning: llama-local init: %v\n", err)
+		case "ollama":
+			if err := ai.InitOllama(ctx, ai.DefaultRegistry, cfg.Ollama, cfg); err != nil {
+				if !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "warning: ollama init: %v\n", err)
+				}
+			}
+		case "openrouter":
+			if err := ai.InitOpenRouter(ctx, ai.DefaultRegistry, cfg.OpenRouter, cfg); err != nil {
+				if !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "warning: openrouter init: %v\n", err)
+				}
+			}
+		case "llama-local":
+			if err := ai.InitLlama(ctx, ai.DefaultRegistry, cfg.Llama, cfg); err != nil {
+				if !flagPorcelain {
+					fmt.Fprintf(os.Stderr, "warning: llama-local init: %v\n", err)
+				}
 			}
 		}
 	}
+}
+
+func providerSlotsRegistered(reg *ai.Registry, cfg ai.AIConfig, providerName string) bool {
+	if providerName == "" {
+		return true
+	}
+	if cfg.EffectiveEmbeddingProvider() == providerName {
+		if _, err := reg.Embedder(providerName); err != nil {
+			return false
+		}
+	}
+	if cfg.EffectiveGenerationProvider() == providerName {
+		if _, err := reg.Generator(providerName); err != nil {
+			return false
+		}
+	}
+	if cfg.RerankEnabled() && cfg.EffectiveRerankProvider() == providerName {
+		if _, err := reg.Reranker(providerName); err != nil {
+			return false
+		}
+	}
+	return true
 }

@@ -94,8 +94,16 @@ const condenseSystemPrompt = "You rewrite follow-up questions into standalone qu
 // and no API call is made, so single-shot asks are unaffected. Callers must
 // treat an error as non-fatal: fall back to the raw question and warn.
 func CondenseQuestion(ctx context.Context, gen GenerationProvider, history []ChatTurn, question string, opts ...GenOption) (string, error) {
+	rewritten, _, err := CondenseQuestionWithUsage(ctx, gen, history, question, opts...)
+	return rewritten, err
+}
+
+// CondenseQuestionWithUsage behaves identically to CondenseQuestion and also
+// returns token usage for the condense call (provider-reported when the
+// generator implements UsageGenerator, otherwise a chars/4 estimate).
+func CondenseQuestionWithUsage(ctx context.Context, gen GenerationProvider, history []ChatTurn, question string, opts ...GenOption) (string, GenUsage, error) {
 	if len(history) == 0 {
-		return question, nil
+		return question, GenUsage{}, nil
 	}
 	tail := TrimHistory(history)
 	if len(tail) > condenseHistoryTurns {
@@ -114,16 +122,31 @@ Rewrite the follow-up question as a single standalone question that can be under
 	// off switch, and the old 128 truncated mid-reasoning, breaking every
 	// multi-turn ask on a working model. Budgets bound runaway cost; they
 	// must never fail a working model.
-	raw, err := gen.Generate(ctx, prompt, applyGenOptions(GenOpts{
+	genOpts := applyGenOptions(GenOpts{
 		MaxTokens:    1024,
 		Temperature:  Ptr(0.0),
 		SystemPrompt: condenseSystemPrompt,
-	}, opts))
+	}, opts)
+
+	var raw string
+	var usage GenUsage
+	var err error
+	if ug, ok := gen.(UsageGenerator); ok {
+		raw, usage, err = ug.GenerateWithUsage(ctx, prompt, genOpts)
+	} else {
+		raw, err = gen.Generate(ctx, prompt, genOpts)
+	}
 	if err != nil {
-		return "", err
+		return "", GenUsage{}, err
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		usage = GenUsage{
+			InputTokens:  len(prompt) / 4,
+			OutputTokens: len(raw) / 4,
+		}
 	}
 	result, _ := sanitizeCondensed(raw, question)
-	return result, nil
+	return result, usage, nil
 }
 
 // sanitizeCondensed normalizes a condense-model response: first non-empty

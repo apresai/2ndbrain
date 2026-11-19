@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/apresai/2ndbrain/internal/ai"
+	"github.com/apresai/2ndbrain/internal/llama"
+	"github.com/apresai/2ndbrain/internal/metrics"
 	"github.com/apresai/2ndbrain/internal/vault"
 	"gopkg.in/yaml.v3"
 )
@@ -53,6 +57,33 @@ const (
 func runSelfTest(ctx context.Context) SelfTestReport {
 	root, hasSidecar := resolve2nbVaultRoot()
 	cfg := readAIConfigReadOnly(root)
+	if probeOverride := strings.TrimSpace(os.Getenv("2NB_DOCTOR_PROBE_PROVIDER")); probeOverride != "" {
+		if probeOverride == "google" {
+			probeOverride = "gemini"
+		}
+		cfg.Provider = probeOverride
+		cfg.EmbeddingProvider = probeOverride
+		cfg.GenerationProvider = probeOverride
+		if probeOverride == "gemini" {
+			if cfg.EmbeddingModel == "" || ai.InferProvider(cfg.EmbeddingModel) != "gemini" {
+				cfg.EmbeddingModel = ai.DefaultGeminiEmbeddingModel
+				cfg.Dimensions = ai.DefaultGeminiDimensions
+			}
+			if cfg.GenerationModel == "" || ai.InferProvider(cfg.GenerationModel) != "gemini" {
+				cfg.GenerationModel = ai.DefaultGeminiGenerationModel
+			}
+		}
+		if probeOverride == "llama-local" {
+			if cfg.EmbeddingModel == "" || ai.InferProvider(cfg.EmbeddingModel) != "llama-local" {
+				cfg.EmbeddingModel = llama.DefaultEmbedModelID
+				cfg.Dimensions = 768
+			}
+			if cfg.GenerationModel == "" || ai.InferProvider(cfg.GenerationModel) != "llama-local" {
+				cfg.GenerationModel = "gemma4-e2b"
+			}
+		}
+	}
+	applyDoctorGeminiProbeMode(&cfg)
 
 	r := SelfTestReport{
 		VaultBound: hasSidecar,
@@ -66,7 +97,7 @@ func runSelfTest(ctx context.Context) SelfTestReport {
 	// env == stored and a later divergence read reports nothing — hiding
 	// the key-source check in exactly the scenario it exists to surface.
 	var keyDivergence ai.TokenDivergence
-	if cfg.Provider == "bedrock" {
+	if cfg.EffectiveGenerationProvider() == "bedrock" || cfg.EffectiveEmbeddingProvider() == "bedrock" {
 		keyDivergence = ai.BedrockTokenDivergence()
 	}
 
@@ -77,10 +108,32 @@ func runSelfTest(ctx context.Context) SelfTestReport {
 
 	// Each tier carries its own deadline so a slow provider in tier 1 cannot
 	// starve tier 2 into reporting a timeout as an index defect.
+	probeStart := time.Now()
 	modelCtx, cancelModels := context.WithTimeout(ctx, doctorModelTierTimeout)
-	tier1, creds := selfTestModels(modelCtx, cfg, root, keyDivergence)
+	tier1, creds, credProvider, embedRes, genRes := selfTestModelsWithResults(modelCtx, cfg, root, keyDivergence)
 	cancelModels()
+	if hasSidecar && root != "" && (embedRes != nil || genRes != nil) {
+		var legs []metrics.UsageLeg
+		if embedRes != nil && embedRes.OK {
+			legs = append(legs, buildUsageLeg(root, embedRes.Provider, embedRes.ModelID, "embedding", metrics.OpProbe, 1, 20, 0))
+		}
+		if genRes != nil && genRes.OK {
+			legs = append(legs, buildUsageLeg(root, genRes.Provider, genRes.ModelID, "generation", metrics.OpProbe, 1, 20, 16))
+		}
+		if len(legs) > 0 {
+			op := metrics.Operation{
+				Operation:  metrics.OpProbe,
+				DurationMs: time.Since(probeStart).Milliseconds(),
+				OK:         true,
+			}
+			attachUsageLegs(&op, legs...)
+			recordMetricAtDotDir(filepath.Join(root, ".2ndbrain"), op)
+		}
+	}
 	r.Credentials = creds
+	if credProvider != "" {
+		r.Provider = credProvider
+	}
 	r.Checks = append(r.Checks, tier1...)
 
 	vaultCtx, cancelVault := context.WithTimeout(ctx, doctorVaultTierTimeout)
@@ -96,33 +149,108 @@ func runSelfTest(ctx context.Context) SelfTestReport {
 	return r
 }
 
+// applyDoctorGeminiProbeMode pins WHICH Gemini credential path the self-test
+// judges, from the environment the macOS app sets while verifying keys before
+// saving them:
+//
+//	2NB_DOCTOR_PROBE_GEMINI_MODE=apikey  judge GEMINI_API_KEY alone (no Vertex)
+//	2NB_DOCTOR_PROBE_GEMINI_MODE=vertex  judge Vertex AI on the given project
+//	                                     (2NB_DOCTOR_PROBE_GCP_PROJECT /
+//	                                     2NB_DOCTOR_PROBE_GCP_LOCATION)
+func applyDoctorGeminiProbeMode(cfg *ai.AIConfig) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("2NB_DOCTOR_PROBE_GEMINI_MODE"))) {
+	case "apikey":
+		cfg.Gemini.UseVertexAI = false
+		cfg.Gemini.Project = ""
+	case "vertex":
+		cfg.Gemini.UseVertexAI = true
+		if v := strings.TrimSpace(os.Getenv("2NB_DOCTOR_PROBE_GCP_PROJECT")); v != "" {
+			cfg.Gemini.Project = v
+		}
+		if v := strings.TrimSpace(os.Getenv("2NB_DOCTOR_PROBE_GCP_LOCATION")); v != "" {
+			cfg.Gemini.Location = v
+		}
+	}
+}
+
 // selfTestModels is tier 1: a real embed call and a real generation call
 // against the ACTIVE models, plus the credential verdict derived from how they
 // failed. No vault required.
 // keyDivergence must be captured by the caller BEFORE provider init (see
 // runSelfTest): reading it here would race the hydrate shim's env overwrite.
-func selfTestModels(ctx context.Context, cfg ai.AIConfig, vaultRoot string, keyDivergence ai.TokenDivergence) ([]DoctorCheck, string) {
-	embed := probeActiveModel(ctx, cfg, cfg.EmbeddingModel, "embedding", vaultRoot)
-	gen := probeActiveModel(ctx, cfg, cfg.GenerationModel, "generation", vaultRoot)
+func isKeylessLocalProvider(p string) bool {
+	return p == "llama-local" || p == "ollama"
+}
 
-	creds, why := deriveCredentialVerdict(embed, gen)
+func selfTestModels(ctx context.Context, cfg ai.AIConfig, vaultRoot string, keyDivergence ai.TokenDivergence) ([]DoctorCheck, string, string) {
+	checks, creds, credProvider, _, _ := selfTestModelsWithResults(ctx, cfg, vaultRoot, keyDivergence)
+	return checks, creds, credProvider
+}
+
+func selfTestModelsWithResults(ctx context.Context, cfg ai.AIConfig, vaultRoot string, keyDivergence ai.TokenDivergence) ([]DoctorCheck, string, string, *ai.TestProbeResult, *ai.TestProbeResult) {
+	embedProvider := cfg.EffectiveEmbeddingProvider()
+	genProvider := cfg.EffectiveGenerationProvider()
+
+	embed := probeActiveModel(ctx, cfg, cfg.EmbeddingModel, embedProvider, "embedding", vaultRoot)
+	gen := probeActiveModel(ctx, cfg, cfg.GenerationModel, genProvider, "generation", vaultRoot)
+
+	var keyedResults []*ai.TestProbeResult
+	credProvider := ""
+	if embedProvider != "" && !isKeylessLocalProvider(embedProvider) {
+		credProvider = embedProvider
+		if embed != nil {
+			keyedResults = append(keyedResults, embed)
+		}
+	}
+	if genProvider != "" && !isKeylessLocalProvider(genProvider) {
+		if credProvider == "" || genProvider == "bedrock" || genProvider == "gemini" {
+			credProvider = genProvider
+		}
+		if gen != nil {
+			keyedResults = append(keyedResults, gen)
+		}
+	}
+
+	var creds, apiDetail, apiFix string
+	if len(keyedResults) > 0 || credProvider != "" {
+		var why string
+		creds, why = deriveCredentialVerdict(keyedResults...)
+		apiDetail = credentialDetail(credProvider, creds, why)
+		apiFix = credentialFix(credProvider, creds)
+	} else {
+		credProvider = genProvider
+		if credProvider == "" {
+			credProvider = embedProvider
+		}
+		creds, _ = deriveCredentialVerdict(embed, gen)
+		if creds == credAccepted {
+			apiDetail = "no API key required (on-device)"
+		} else {
+			if creds == credUnknown {
+				creds = credUnreachable
+			}
+			apiDetail = "local model runtime unreachable"
+			apiFix = "ensure local Gemma model weights are downloaded and retry"
+		}
+	}
+
 	checks := []DoctorCheck{
 		{
 			Name:   "api key",
 			OK:     creds == credAccepted,
 			Warn:   creds != credAccepted && creds != credRejected,
-			Detail: credentialDetail(cfg.Provider, creds, why),
-			Fix:    credentialFix(cfg.Provider, creds),
+			Detail: apiDetail,
+			Fix:    apiFix,
 		},
 		modelCheck("search model", cfg.EmbeddingModel, embed),
 		modelCheck("answer model", cfg.GenerationModel, gen),
 	}
-	if cfg.Provider == "bedrock" {
+	if embedProvider == "bedrock" || genProvider == "bedrock" {
 		if check := bedrockKeySourceCheck(keyDivergence); check != nil {
 			checks = append(checks, *check)
 		}
 	}
-	return checks, creds
+	return checks, creds, credProvider, embed, gen
 }
 
 // bedrockKeySourceCheck renders the env-vs-stored key divergence. Zero
@@ -157,18 +285,18 @@ func bedrockKeySourceCheck(div ai.TokenDivergence) *DoctorCheck {
 // probeActiveModel runs one real provider call. A nil result means the probe
 // could not even be attempted (no model configured), which the caller renders
 // distinctly from a probe that ran and failed.
-func probeActiveModel(ctx context.Context, cfg ai.AIConfig, modelID, modelType, vaultRoot string) *ai.TestProbeResult {
+func probeActiveModel(ctx context.Context, cfg ai.AIConfig, modelID, slotProvider, modelType, vaultRoot string) *ai.TestProbeResult {
 	if modelID == "" {
 		return nil
 	}
-	res, err := ai.TestProbeModel(ctx, cfg, modelID, cfg.Provider, modelType, vaultRoot)
+	res, err := ai.TestProbeModel(ctx, cfg, modelID, slotProvider, modelType, vaultRoot)
 	if err != nil {
 		return &ai.TestProbeResult{
 			ModelID:  modelID,
-			Provider: cfg.Provider,
+			Provider: slotProvider,
 			Type:     modelType,
 			Detail:   err.Error(),
-			Code:     ai.ClassifyProbeError(cfg.Provider, err),
+			Code:     ai.ClassifyProbeError(slotProvider, err),
 		}
 	}
 	return res
@@ -193,13 +321,28 @@ func modelCheck(label, modelID string, res *ai.TestProbeResult) DoctorCheck {
 	case res == nil:
 		return DoctorCheck{Name: name, OK: false, Detail: "probe did not run"}
 	case res.OK:
-		return DoctorCheck{Name: name, OK: true, Detail: "responded in " + res.Latency}
+		return DoctorCheck{Name: name, OK: true, Detail: modelOKDetail(res)}
 	default:
 		detail := trimDetail(res.Detail)
 		if res.Code != "" {
 			detail = fmt.Sprintf("%s (%s)", detail, res.Code)
 		}
 		return DoctorCheck{Name: name, OK: false, Detail: detail, Fix: res.Remediation}
+	}
+}
+
+// modelOKDetail renders a passing probe WITH its proof: the latency prefix is
+// stable ("responded in "), followed by what the model actually returned (the
+// generation reply, or the embedding's dimensions and norm).
+func modelOKDetail(res *ai.TestProbeResult) string {
+	d := strings.TrimSpace(res.Detail)
+	switch {
+	case d == "":
+		return "responded in " + res.Latency
+	case res.Type == "generation":
+		return fmt.Sprintf("responded in %s (replied %q)", res.Latency, d)
+	default:
+		return fmt.Sprintf("responded in %s (%s)", res.Latency, d)
 	}
 }
 
@@ -281,8 +424,11 @@ func credentialDetail(provider, verdict, why string) string {
 func credentialFix(provider, verdict string) string {
 	switch verdict {
 	case credRejected:
+		if provider == "gemini" {
+			return "set a working key in Settings > Gemini (macOS app), export GEMINI_API_KEY=..., or run gcloud auth application-default login for Vertex AI"
+		}
 		if provider == "bedrock" {
-			return "set a working key: `2nb config bedrock --set --token-stdin` (or Settings in the app)"
+			return "set a working key: 2nb config bedrock --set --token-stdin"
 		}
 		return fmt.Sprintf("set a working key: `2nb config set-key %s`", provider)
 	case credUnreachable:
@@ -330,7 +476,7 @@ func selfTestVault(ctx context.Context, root string, hasSidecar bool) []DoctorCh
 	// Config coherence, then the engine + retrieval assertion. Both are reused
 	// wholesale from the commands that own them, so `doctor` can never drift
 	// from `config doctor` / `mcp doctor`.
-	embedder, _ := ai.DefaultRegistry.Embedder(v.Config.AI.Provider)
+	embedder, _ := ai.DefaultRegistry.Embedder(v.Config.AI.EffectiveEmbeddingProvider())
 	checks = append(checks, buildDoctorChecks(ctx, v.Root, v.Config.AI, embedder, gatherDoctorVaultState(v))...)
 	checks = append(checks, buildMCPDoctorReport(ctx, v).Checks...)
 	return checks

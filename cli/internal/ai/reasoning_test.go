@@ -18,6 +18,7 @@ func TestResolveReasoningEffort(t *testing.T) {
 		{"low", "low", "low"},
 		{"medium", "medium", "medium"},
 		{"high", "high", "high"},
+		{"xhigh", "xhigh", "xhigh"},
 		{"uppercase", "HIGH", "high"},
 		{"mixed case", "Medium", "medium"},
 		{"padded", "  low  ", "low"},

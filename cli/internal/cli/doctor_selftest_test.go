@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -268,5 +271,170 @@ func TestBedrockKeySourceCheck(t *testing.T) {
 	}
 	if !strings.Contains(info.Detail, "prefer_stored_token is on") || !strings.Contains(info.Detail, "RT0=") {
 		t.Errorf("info detail wrong: %s", info.Detail)
+	}
+}
+
+func TestModelCheck_OKDetailCarriesProof(t *testing.T) {
+	tests := []struct {
+		name string
+		res  *ai.TestProbeResult
+		want string
+	}{
+		{"generation with reply", &ai.TestProbeResult{OK: true, Type: "generation", Latency: "812ms", Detail: "4"}, `responded in 812ms (replied "4")`},
+		{"embedding with dims", &ai.TestProbeResult{OK: true, Type: "embedding", Latency: "90ms", Detail: "dims=256, L2=1.00"}, "responded in 90ms (dims=256, L2=1.00)"},
+		{"generation without detail", &ai.TestProbeResult{OK: true, Type: "generation", Latency: "1s"}, "responded in 1s"},
+		{"embedding without detail", &ai.TestProbeResult{OK: true, Type: "embedding", Latency: "1s"}, "responded in 1s"},
+		{"whitespace-only detail", &ai.TestProbeResult{OK: true, Type: "generation", Latency: "1s", Detail: "  \n"}, "responded in 1s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := modelCheck("answer model", "m", tt.res)
+			if !c.OK || c.Detail != tt.want {
+				t.Errorf("modelCheck = ok:%v detail:%q, want ok:true detail:%q", c.OK, c.Detail, tt.want)
+			}
+			if !strings.HasPrefix(c.Detail, "responded in ") {
+				t.Errorf("detail lost its stable prefix: %q", c.Detail)
+			}
+		})
+	}
+	// A failure never claims a response.
+	fail := modelCheck("answer model", "m", &ai.TestProbeResult{OK: false, Detail: "boom", Code: ai.TestErrUnknown})
+	if fail.OK || strings.Contains(fail.Detail, "responded in") {
+		t.Errorf("failure rendered as success: %+v", fail)
+	}
+}
+
+func TestApplyDoctorGeminiProbeMode(t *testing.T) {
+	base := func() ai.AIConfig {
+		cfg := ai.DefaultAIConfig()
+		cfg.Gemini.UseVertexAI = true
+		cfg.Gemini.Project = "saved-proj"
+		cfg.Gemini.Location = "us-central1"
+		return cfg
+	}
+
+	t.Run("unset leaves config alone", func(t *testing.T) {
+		t.Setenv("2NB_DOCTOR_PROBE_GEMINI_MODE", "")
+		cfg := base()
+		applyDoctorGeminiProbeMode(&cfg)
+		if !cfg.Gemini.UseVertexAI || cfg.Gemini.Project != "saved-proj" {
+			t.Errorf("config mutated: %+v", cfg.Gemini)
+		}
+	})
+	t.Run("apikey clears vertex and project", func(t *testing.T) {
+		t.Setenv("2NB_DOCTOR_PROBE_GEMINI_MODE", "apikey")
+		cfg := base()
+		applyDoctorGeminiProbeMode(&cfg)
+		if cfg.Gemini.UseVertexAI || cfg.Gemini.Project != "" {
+			t.Errorf("apikey mode left Vertex state behind: %+v", cfg.Gemini)
+		}
+	})
+	t.Run("vertex applies project and location", func(t *testing.T) {
+		t.Setenv("2NB_DOCTOR_PROBE_GEMINI_MODE", "vertex")
+		t.Setenv("2NB_DOCTOR_PROBE_GCP_PROJECT", "typed-proj")
+		t.Setenv("2NB_DOCTOR_PROBE_GCP_LOCATION", "europe-west4")
+		cfg := ai.DefaultAIConfig()
+		applyDoctorGeminiProbeMode(&cfg)
+		if !cfg.Gemini.UseVertexAI || cfg.Gemini.Project != "typed-proj" || cfg.Gemini.Location != "europe-west4" {
+			t.Errorf("vertex mode: %+v", cfg.Gemini)
+		}
+	})
+	t.Run("vertex without overrides keeps saved project", func(t *testing.T) {
+		t.Setenv("2NB_DOCTOR_PROBE_GEMINI_MODE", "vertex")
+		t.Setenv("2NB_DOCTOR_PROBE_GCP_PROJECT", "")
+		t.Setenv("2NB_DOCTOR_PROBE_GCP_LOCATION", "")
+		cfg := base()
+		applyDoctorGeminiProbeMode(&cfg)
+		if !cfg.Gemini.UseVertexAI || cfg.Gemini.Project != "saved-proj" || cfg.Gemini.Location != "us-central1" {
+			t.Errorf("vertex mode clobbered saved values: %+v", cfg.Gemini)
+		}
+	})
+}
+
+// modelsTestProbeOffline runs `models test` for a local model that cannot start
+// (no weights, hermetic state) so the probe fails fast and deterministically.
+func modelsTestProbeOffline(t *testing.T, root string, extra ...string) (res struct {
+	OK   bool   `json:"ok"`
+	Code string `json:"code"`
+}) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("TWONB_SKIP_ENGINE_AUTOSTART", "1")
+	argv := append([]string{"models", "test", "embeddinggemma-2", "--provider", "llama-local", "--json", "--porcelain"}, extra...)
+	got, err := runCLIArgs(t, root, argv...)
+	if err != nil {
+		t.Fatalf("models test: %v (out=%s)", err, truncate(got, 400))
+	}
+	if err := json.Unmarshal(got, &res); err != nil {
+		t.Fatalf("models test JSON: %v (body=%s)", err, truncate(got, 400))
+	}
+	return res
+}
+
+// `models test` is a probe, not a vault operation: on a plain Obsidian folder
+// (no .2ndbrain/) it must run and must NOT mint a sidecar.
+func TestModelsTest_NoSidecarOnPlainObsidianFolder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".obsidian"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := modelsTestProbeOffline(t, root)
+	if res.OK {
+		t.Fatal("probe of an unstartable local model unexpectedly passed")
+	}
+	if res.Code != string(ai.TestErrProviderUnreachable) {
+		t.Errorf("code = %q, want provider_unreachable", res.Code)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".2ndbrain")); !os.IsNotExist(err) {
+		t.Errorf("models test created a .2ndbrain sidecar on an uninitialized folder (stat err=%v)", err)
+	}
+}
+
+// With no vault resolving at all (the Settings window's first-run state) the
+// probe still runs.
+func TestModelsTest_NoVaultBound(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "does-not-exist")
+	res := modelsTestProbeOffline(t, root)
+	if res.OK || res.Code != string(ai.TestErrProviderUnreachable) {
+		t.Errorf("no-vault probe: %+v", res)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("models test created %s (stat err=%v)", root, err)
+	}
+}
+
+// A GLOBAL-scoped --save needs no vault either, and still leaves no sidecar.
+func TestModelsTest_GlobalSaveNeedsNoSidecar(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".obsidian"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := modelsTestProbeOffline(t, root, "--save", "--scope", "global")
+	if res.OK {
+		t.Fatal("probe unexpectedly passed")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".2ndbrain")); !os.IsNotExist(err) {
+		t.Errorf("global --save created a .2ndbrain sidecar (stat err=%v)", err)
+	}
+	var saved bool
+	for _, m := range ai.LoadUserCatalog("") {
+		if m.ID == "embeddinggemma-2" && m.TestErrorCode == string(ai.TestErrProviderUnreachable) {
+			saved = true
+		}
+	}
+	if !saved {
+		t.Error("global --save did not persist the classified failure")
+	}
+}
+
+// An existing sidecar is still honored: the vault opens and its config governs.
+func TestModelsTest_SidecarVaultStillOpens(t *testing.T) {
+	_, root := newContractVault(t)
+	res := modelsTestProbeOffline(t, root)
+	if res.OK {
+		t.Fatal("probe unexpectedly passed")
 	}
 }

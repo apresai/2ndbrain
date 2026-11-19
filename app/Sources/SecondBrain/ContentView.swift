@@ -4,86 +4,148 @@ import UniformTypeIdentifiers
 
 /// The dashboard's sidebar.
 ///
-/// This was eight entries, one per surface, which meant "is my vault healthy?"
-/// was answered across three of them and "what has been happening?" across two.
-/// Now that configuration lives in the Settings window (Cmd+,), everything left
-/// here is status, so it groups by the question rather than the subsystem.
-///
-/// `aiSettings` became `models` in name and scope: it is the model catalog, and
-/// calling a catalog browser "AI Settings" is what sent people looking for their
-/// API key in a 67-control grid instead of in Settings.
+/// Focused Gemini-first companion layout (Beta): four capability-oriented tabs
+/// (`Home`, `Ask & Search`, `Notes`, `Activity`), while all configuration lives
+/// in the dedicated Settings window (Cmd+,).
 enum DashboardTab: String, CaseIterable, Identifiable {
     case home = "Home"
-    case models = "Models"
+    case askSearch = "Ask & Search"
     case notes = "Notes"
-    /// Everything measurable in one place: validation, benchmarks, the
-    /// performance observatory (moved in from Health), and quality next.
-    /// Before Health: measuring comes up more often than product parity.
-    case testing = "Testing"
-    case health = "Health"
     case activity = "Activity"
-    /// The same four-tab Settings content as Cmd+,, hosted inline
-    /// (`SettingsView(isInline: true)`). Kept LAST: it is a destination, not a
-    /// status group, and Mac sidebars put settings at the bottom of the list.
-    case settings = "Settings"
 
     var id: String { self.rawValue }
 
-    /// Everything below Home. No longer labelled "Advanced": with the knobs
-    /// moved out, these are ordinary status views, and calling them advanced
-    /// discouraged people from opening the ones that answer real questions.
-    static var secondary: [DashboardTab] { [.models, .notes, .testing, .health, .activity, .settings] }
+    /// Everything below Home in the sidebar Workspace section.
+    static var secondary: [DashboardTab] { [.askSearch, .notes, .activity] }
 
     var systemImage: String {
         switch self {
         case .home: return "house"
-        case .models: return "bolt.horizontal"
+        case .askSearch: return "sparkles"
         case .notes: return "checkmark.seal"
-        case .testing: return "gauge"
-        case .health: return "stethoscope"
         case .activity: return "clock.arrow.circlepath"
-        case .settings: return "gearshape"
         }
+    }
+}
+
+/// Compact pill badge marking the focused Beta GUI surface.
+struct BetaBadge: View {
+    var body: some View {
+        Text("BETA")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.6)
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.orange.opacity(0.14), in: Capsule())
     }
 }
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
+    @Environment(\.openSettings) private var openSettings
     @State private var selection: DashboardTab = .home
-    // Owned here so a menu item can deep-link to a specific pane inside a group
-    // tab, and so the pane survives leaving and returning to the tab.
-    @State private var healthSection: HealthView.Section = .vault
-    @State private var activitySection: ActivityView.Section = .git
-    @State private var testingSection: TestingView.Section = .validate
-    // Owned here for the same reason as the sections: the Benchmarks pane's
-    // single-flight claim must survive the pane being torn down and recreated
-    // while a bench run's Task is still streaming (see BenchRunModel).
+    // Owned here so menu items and Home quick actions can deep-link to a
+    // specific pane inside a group tab, and so the pane survives switching tabs.
+    @State private var notesSection: NotesView.Section = .linksAndSchema
+    @State private var activitySection: ActivityView.Section = .actions
+    @State private var checkedFirstRunOnboarding = false
 
     var body: some View {
+        @Bindable var state = appState
         mainLayout
-            // Routing lives in DashboardRoute so it is testable. Two of these
-            // land on the same tab and differ only in the pane, which is exactly
-            // the wiring that shipped wrong once.
-            .onChange(of: appState.showAIHub) { _, show in
-                if show { route(.aiHub); appState.showAIHub = false }
+            // Routing lives in DashboardRoute so it is testable. Pairs of
+            // targets land on the same tab and differ only in the section.
+            .onChange(of: appState.requestedTab) { _, tab in
+                if let tab {
+                    selection = tab
+                    appState.requestedTab = nil
+                }
             }
-            .onChange(of: appState.showMCPStatus) { _, show in
-                if show { route(.mcpStatus); appState.showMCPStatus = false }
-            }
-            .onChange(of: appState.showGitActivity) { _, show in
-                if show { route(.gitActivity); appState.showGitActivity = false }
+            .onChange(of: appState.showAskSearch) { _, show in
+                if show { route(.askSearch); appState.showAskSearch = false }
             }
             .onChange(of: appState.showLintResults) { _, show in
                 if show { route(.lintResults); appState.showLintResults = false }
             }
-            .onChange(of: appState.showVaultStatus) { _, show in
-                if show { route(.vaultStatus); appState.showVaultStatus = false }
+            .onChange(of: appState.showNotePolish) { _, show in
+                if show { route(.notePolish); appState.showNotePolish = false }
             }
-            .onChange(of: appState.showSettingsPane) { _, show in
-                if show { route(.settings); appState.showSettingsPane = false }
+            .onChange(of: appState.showGUIActions) { _, show in
+                if show { route(.guiActions); appState.showGUIActions = false }
             }
-            .onChange(of: appState.showTesting) { _, show in
-                if show { route(.testing); appState.showTesting = false }
+            .onChange(of: appState.showGitActivity) { _, show in
+                if show { route(.gitActivity); appState.showGitActivity = false }
+            }
+            .onChange(of: appState.showMCPStatus) { _, show in
+                if show { route(.mcpStatus); appState.showMCPStatus = false }
+            }
+            .onChange(of: appState.showAIUsage) { _, show in
+                if show { route(.aiUsage); appState.showAIUsage = false }
+            }
+            .onChange(of: selection) { _, newValue in
+                appState.actionTracker.record(
+                    category: .navigation,
+                    action: "nav.tab",
+                    phase: .succeeded,
+                    summary: "Switched tab to \(newValue.rawValue)",
+                    metadata: ["tab": newValue.rawValue]
+                )
+                appState.actionTracker.updateStatus { status in
+                    status.activeTab = newValue.rawValue
+                    status.activeSection = activeSectionName(for: newValue)
+                }
+            }
+            .onChange(of: notesSection) { _, newValue in
+                appState.actionTracker.record(
+                    category: .navigation,
+                    action: "nav.section",
+                    phase: .succeeded,
+                    summary: "Switched Notes pane to \(newValue.rawValue)",
+                    metadata: ["tab": DashboardTab.notes.rawValue, "section": newValue.rawValue]
+                )
+                if selection == .notes {
+                    appState.actionTracker.updateStatus { $0.activeSection = newValue.rawValue }
+                }
+            }
+            .onChange(of: activitySection) { _, newValue in
+                appState.actionTracker.record(
+                    category: .navigation,
+                    action: "nav.section",
+                    phase: .succeeded,
+                    summary: "Switched Activity pane to \(newValue.rawValue)",
+                    metadata: ["tab": DashboardTab.activity.rawValue, "section": newValue.rawValue]
+                )
+                if selection == .activity {
+                    appState.actionTracker.updateStatus { $0.activeSection = newValue.rawValue }
+                }
+            }
+            .onChange(of: appState.showOnboarding) { _, visible in
+                appState.actionTracker.updateStatus { $0.onboardingVisible = visible }
+            }
+            .onChange(of: appState.showIndexProgress) { _, visible in
+                appState.actionTracker.updateStatus { $0.indexSheetVisible = visible }
+            }
+            .onChange(of: appState.showSettingsRequest) { _, show in
+                if show {
+                    appState.showSettingsRequest = false
+                    NSApp.activate()
+                    openSettings()
+                }
+            }
+            .task {
+                guard !checkedFirstRunOnboarding else { return }
+                checkedFirstRunOnboarding = true
+                let isTest = ProcessInfo.processInfo.environment["2NB_TEST"] == "1"
+                let skipOnboarding = LaunchOptions.current.skipOnboarding || LaunchOptions.current.vaultPath != nil
+                let completed = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+                if !isTest && !skipOnboarding && !completed && appState.vault == nil {
+                    appState.showOnboarding = true
+                }
+            }
+            .sheet(isPresented: $state.showOnboarding) {
+                OnboardingView()
+                    .environment(appState)
             }
             .sheet(isPresented: Binding(
                 get: { appState.showMCPSetup },
@@ -123,14 +185,21 @@ struct ContentView: View {
             }
     }
 
-    /// Select the tab a deep link names, and the pane inside it when that tab
-    /// is a group. Setting the pane BEFORE the tab means the group renders with
-    /// the right section already selected rather than flashing its default.
     private func route(_ target: DashboardRoute.Target) {
-        if let health = DashboardRoute.healthSection(for: target) { healthSection = health }
+        if let notes = DashboardRoute.notesSection(for: target) { notesSection = notes }
         if let activity = DashboardRoute.activitySection(for: target) { activitySection = activity }
-        if let testing = DashboardRoute.testingSection(for: target) { testingSection = testing }
         selection = DashboardRoute.tab(for: target)
+    }
+
+    private func activeSectionName(for tab: DashboardTab) -> String? {
+        switch tab {
+        case .home, .askSearch:
+            return nil
+        case .notes:
+            return notesSection.rawValue
+        case .activity:
+            return activitySection.rawValue
+        }
     }
 
     @ViewBuilder
@@ -143,31 +212,46 @@ struct ContentView: View {
                     NavigationLink(value: DashboardTab.home) {
                         Label(DashboardTab.home.rawValue, systemImage: DashboardTab.home.systemImage)
                     }
-                    ForEach(DashboardTab.secondary) { tab in
-                        NavigationLink(value: tab) {
-                            Label(tab.rawValue, systemImage: tab.systemImage)
+                    Section("Workspace") {
+                        ForEach(DashboardTab.secondary) { tab in
+                            NavigationLink(value: tab) {
+                                Label(tab.rawValue, systemImage: tab.systemImage)
+                            }
                         }
                     }
                 }
+                .safeAreaInset(edge: .bottom) {
+                    HStack(spacing: 8) {
+                        BetaBadge()
+                        Spacer()
+                        Button {
+                            appState.noteSettingsOpened(tab: .ai)
+                            openSettings()
+                        } label: {
+                            Label("Settings…", systemImage: "gearshape")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.bar)
+                }
                 .navigationTitle(appState.vault?.rootURL.lastPathComponent ?? "2ndbrain")
                 .listStyle(.sidebar)
+                .navigationSplitViewColumnWidth(min: 195, ideal: 220, max: 255)
             } detail: {
                 Group {
                     switch selection {
                     case .home:
                         HomeView()
-                    case .models:
-                        SimpleModelsView()
+                    case .askSearch:
+                        AskSearchView()
                     case .notes:
-                        LintResultsView(isPresented: .constant(true), isInline: true)
-                    case .testing:
-                        TestingView(section: $testingSection, benchRun: appState.benchRun)
-                    case .health:
-                        HealthView(section: $healthSection)
+                        NotesView(section: $notesSection)
                     case .activity:
                         ActivityView(section: $activitySection)
-                    case .settings:
-                        SettingsView(isInline: true)
                     }
                 }
                 .navigationTitle(selection.rawValue)
@@ -184,42 +268,59 @@ struct WelcomeView: View {
     @Environment(AppState.self) var appState
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 64))
-                .foregroundStyle(.secondary)
+        VStack(spacing: 20) {
+            ThemedCard(style: .prominent, padding: 28) {
+                VStack(spacing: 16) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 56))
+                        .foregroundStyle(AppTheme.geminiAccent)
 
-            Text("2ndbrain")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+                    HStack(spacing: 8) {
+                        Text("2ndbrain")
+                            .font(.largeTitle.weight(.bold))
+                        BetaBadge()
+                    }
 
-            Text("AI Companion & Configuration Dashboard")
-                .font(.title3)
-                .foregroundStyle(.secondary)
+                    Text("Gemini Companion for Obsidian")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
 
-            // Default to the vault Obsidian currently has open so the dashboard
-            // binds to the same vault you're editing in Obsidian.
-            if let obsidian = ObsidianRegistry.load()?.openVault, obsidian.exists {
-                Button("Open your Obsidian vault: \(obsidian.name)") {
-                    appState.openPickedVault(at: obsidian.url)
+                    VStack(spacing: 10) {
+                        Button {
+                            appState.showOnboarding = true
+                        } label: {
+                            Label("Run 3-Step Setup Guide…", systemImage: "sparkles")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+
+                        if let obsidian = ObsidianRegistry.load()?.openVault, obsidian.exists {
+                            Button {
+                                appState.openPickedVault(at: obsidian.url)
+                            } label: {
+                                Text("Open Obsidian vault: \(obsidian.name)")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                        }
+
+                        Button {
+                            openVaultPanel()
+                        } label: {
+                            Text("Open Vault Folder…")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.top, 6)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.top, 8)
-
-                Button("Open a different vault…") {
-                    openVaultPanel()
-                }
-                .buttonStyle(.bordered)
-            } else {
-                Button("Open Vault") {
-                    openVaultPanel()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.top, 8)
+                .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: 460)
         }
+        .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

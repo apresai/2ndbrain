@@ -25,7 +25,7 @@ var (
 var aiSetupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Guided AI provider setup wizard",
-	Long:  "Interactive wizard to configure Bedrock, OpenRouter, or Ollama. Validates credentials, helps pick models, and tests connectivity. Use flags to skip prompts.",
+	Long:  "Interactive wizard to configure Google Gemini, Bedrock, OpenRouter, Ollama, or bundled local models. Validates credentials, helps pick models, and tests connectivity. Use flags to skip prompts.",
 	Example: `  2nb ai setup                                      # interactive
   2nb ai setup --provider ollama                    # skip provider prompt
   2nb ai setup --provider bedrock --embedding-model amazon.titan-embed-text-v2:0`,
@@ -33,7 +33,7 @@ var aiSetupCmd = &cobra.Command{
 }
 
 func init() {
-	aiSetupCmd.Flags().StringVar(&setupProvider, "provider", "", "AI provider: bedrock, openrouter, ollama")
+	aiSetupCmd.Flags().StringVar(&setupProvider, "provider", "", "AI provider: gemini, bedrock, openrouter, ollama, llama-local")
 	aiSetupCmd.Flags().StringVar(&setupEmbeddingModel, "embedding-model", "", "Embedding model ID")
 	aiSetupCmd.Flags().StringVar(&setupGenerationModel, "generation-model", "", "Generation model ID")
 	_ = aiSetupCmd.RegisterFlagCompletionFunc("provider", completeProviders)
@@ -63,23 +63,26 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 	provider := setupProvider
 	if provider == "" {
 		fmt.Println("Select AI provider:")
-		fmt.Println("  1) bedrock     — AWS Bedrock: Claude Haiku 4.5 + Nova embeddings (default, recommended)")
-		fmt.Println("  2) openrouter  — OpenRouter API (opt-in; many models, pay-per-token)")
-		fmt.Println("  3) ollama      — Local models via Ollama (opt-in; free + private, requires install)")
-		fmt.Println("  4) llama-local — Bundled Gemma models via llama.cpp (opt-in; fully offline, no API key; downloads ~3-8 GB)")
-		choice := promptChoice(scanner, "Choice", 4)
-		provider = []string{"bedrock", "openrouter", "ollama", "llama-local"}[choice-1]
+		fmt.Println("  1) gemini      — Google Gemini (GCP / Vertex AI): Gemini 4 Hydrogen + Gemini Embedding 2 (default, recommended)")
+		fmt.Println("  2) bedrock     — AWS Bedrock: Claude Haiku 4.5 + Nova embeddings")
+		fmt.Println("  3) openrouter  — OpenRouter API (opt-in; many models, pay-per-token)")
+		fmt.Println("  4) ollama      — Local models via Ollama (opt-in; free + private, requires install)")
+		fmt.Println("  5) llama-local — Bundled Gemma models via llama.cpp (opt-in; fully offline, no API key; downloads ~3-8 GB)")
+		choice := promptChoice(scanner, "Choice", 5)
+		provider = []string{"gemini", "bedrock", "openrouter", "ollama", "llama-local"}[choice-1]
 	}
 
 	switch provider {
-	case "bedrock", "openrouter", "ollama", "llama-local":
+	case "gemini", "bedrock", "openrouter", "ollama", "llama-local":
 	default:
-		return fmt.Errorf("invalid provider %q (use: bedrock, openrouter, ollama, llama-local)", provider)
+		return fmt.Errorf("invalid provider %q (use: gemini, bedrock, openrouter, ollama, llama-local)", provider)
 	}
 	cfg.Provider = provider
 	// Enable the chosen provider: the opt-in providers ship disabled, so
 	// selecting one here makes its models visible in selection UIs.
 	switch provider {
+	case "gemini":
+		cfg.Gemini.Disabled = false
 	case "bedrock":
 		cfg.Bedrock.Disabled = false
 	case "openrouter":
@@ -93,6 +96,10 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 
 	// Step 2: Validate credentials.
 	switch provider {
+	case "gemini":
+		if err := setupGemini(ctx, scanner, &cfg); err != nil {
+			return err
+		}
 	case "bedrock":
 		if err := setupBedrock(ctx, scanner, &cfg); err != nil {
 			return err
@@ -239,6 +246,63 @@ func runAISetup(cmd *cobra.Command, args []string) error {
 }
 
 // --- Provider-specific credential setup ---
+
+func setupGemini(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig) error {
+	fmt.Println("\nChecking Google Cloud / Gemini credentials...")
+	if cfg.Gemini.Location == "" {
+		cfg.Gemini.Location = ai.DefaultGeminiLocation
+	}
+	if cfg.Gemini.AppLabel == "" {
+		cfg.Gemini.AppLabel = ai.DefaultGeminiAppLabel
+	}
+
+	if os.Getenv("GEMINI_API_KEY") != "" || ai.HasAPIKey("gemini") {
+		fmt.Println("  Found GEMINI_API_KEY.")
+		if promptYN(scanner, "Use GEMINI_API_KEY?", true) {
+			cfg.Gemini.UseVertexAI = false
+			return nil
+		}
+	}
+	if ai.CheckGeminiCredentials(ctx, cfg.Gemini) {
+		fmt.Println("  Found Application Default Credentials (ADC) for Google Cloud.")
+		cfg.Gemini.UseVertexAI = true
+		return nil
+	}
+
+	fmt.Println("  No active Gemini credentials detected.")
+	fmt.Println("  Select authentication method:")
+	fmt.Println("    1) Google Cloud Vertex AI (ADC: gcloud auth application-default login) [default]")
+	fmt.Println("    2) Gemini Developer API Key (GEMINI_API_KEY)")
+	choice := promptChoice(scanner, "Choice", 2)
+	if choice == 1 {
+		cfg.Gemini.UseVertexAI = true
+		resolvedProj := ai.ResolveGCPProject(cfg.Gemini.Project)
+		projPrompt := "GCP Project: "
+		if resolvedProj != "" {
+			projPrompt = fmt.Sprintf("GCP Project [%s]: ", resolvedProj)
+		}
+		project := promptLine(scanner, projPrompt)
+		if project != "" {
+			cfg.Gemini.Project = project
+		} else if resolvedProj != "" {
+			cfg.Gemini.Project = resolvedProj
+		}
+		loc := promptLine(scanner, fmt.Sprintf("GCP Location [%s]: ", cfg.Gemini.Location))
+		if loc != "" {
+			cfg.Gemini.Location = loc
+		}
+	} else {
+		cfg.Gemini.UseVertexAI = false
+		key := promptLine(scanner, "Enter GEMINI_API_KEY: ")
+		if key != "" {
+			if err := ai.SetAPIKey("gemini", key); err != nil {
+				return fmt.Errorf("store key: %w", err)
+			}
+			os.Setenv("GEMINI_API_KEY", key)
+		}
+	}
+	return nil
+}
 
 func setupBedrock(ctx context.Context, scanner *bufio.Scanner, cfg *ai.AIConfig) error {
 	fmt.Println("\nChecking AWS credentials...")
@@ -407,8 +471,8 @@ func ollamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 
 // llamaPullIfNeeded downloads a bundled local model if it isn't already cached,
 // after an opt-in prompt (weights are 100s of MB to GB — never downloaded
-// silently, matching re:Gist's on-device flow). Verifies the SHA256 pinned in
-// the manifest and shows a progress bar via enginePullProgress.
+// silently). Verifies the SHA256 pinned in the manifest and shows a progress
+// bar via enginePullProgress.
 func llamaPullIfNeeded(scanner *bufio.Scanner, modelID string) {
 	art, ok := llama.ArtifactFor(modelID)
 	if !ok {
@@ -531,19 +595,19 @@ func promptYN(scanner *bufio.Scanner, prompt string, defaultYes bool) bool {
 
 func easyModeDefaults(provider string) (embedID, genID string, dims int) {
 	switch provider {
-	case "bedrock":
-		// Single source of truth: the same Bedrock default the vault ships with
-		// (Nova-2 embeddings + Claude Haiku 4.5), not a divergent nova-micro.
+	case "gemini":
 		d := ai.DefaultAIConfig()
 		return d.EmbeddingModel, d.GenerationModel, d.Dimensions
+	case "bedrock":
+		return "amazon.nova-2-multimodal-embeddings-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0", 1024
 	case "openrouter":
 		return "nvidia/llama-nemotron-embed-vl-1b-v2:free", "google/gemma-4-31b-it:free", 1024
 	case "ollama":
 		return "nomic-embed-text", "qwen2.5:0.5b", 768
 	case "llama-local":
-		// The bundled stack: EmbeddingGemma 300M + Gemma 4 E2B (the smaller,
+		// The bundled stack: EmbeddingGemma 2 + Gemma 4 E2B (the smaller,
 		// ~3.1 GB generation model). Users can switch to E4B for higher quality.
-		return "embeddinggemma-300m", "gemma4-e2b", 768
+		return llama.DefaultEmbedModelID, "gemma4-e2b", 768
 	default:
 		return "", "", 0
 	}

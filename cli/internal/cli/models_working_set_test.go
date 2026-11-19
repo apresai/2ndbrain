@@ -37,13 +37,13 @@ func TestContract_ModelsListWorkingField(t *testing.T) {
 	_, root := newContractVault(t)
 	cfg := ai.DefaultAIConfig()
 
-	got, err := runCLIArgs(t, root, "models", "list", "--provider", "bedrock", "--json", "--porcelain")
+	got, err := runCLIArgs(t, root, "models", "list", "--provider", cfg.Provider, "--json", "--porcelain")
 	if err != nil {
 		t.Fatalf("models list: %v (out=%s)", err, truncate(got, 300))
 	}
 	models := decodeModelList(t, got)
 	if len(models) == 0 {
-		t.Fatal("bedrock catalog must not be empty")
+		t.Fatal("gemini catalog must not be empty")
 	}
 
 	for _, id := range []string{cfg.EmbeddingModel, cfg.GenerationModel} {
@@ -56,7 +56,7 @@ func TestContract_ModelsListWorkingField(t *testing.T) {
 		}
 	}
 
-	const unprobedID = "us.anthropic.claude-sonnet-4-6"
+	const unprobedID = "gemini-4-argon"
 	if m, ok := modelByID(models, unprobedID); ok && m.Working {
 		t.Errorf("%s is verified but unprobed — working must be false, got %+v", unprobedID, m)
 	}
@@ -79,7 +79,7 @@ func TestContract_ModelsListWorkingSetFilter(t *testing.T) {
 	_, root := newContractVault(t)
 	cfg := ai.DefaultAIConfig()
 
-	got, err := runCLIArgs(t, root, "models", "list", "--provider", "bedrock", "--working-set", "--json", "--porcelain")
+	got, err := runCLIArgs(t, root, "models", "list", "--provider", cfg.Provider, "--working-set", "--json", "--porcelain")
 	if err != nil {
 		t.Fatalf("models list --working-set: %v (out=%s)", err, truncate(got, 300))
 	}
@@ -94,16 +94,16 @@ func TestContract_ModelsListWorkingSetFilter(t *testing.T) {
 	}
 
 	// Record a passing probe the way `models verify` does, then re-list.
-	const probedID = "us.anthropic.claude-sonnet-4-6"
+	const probedID = "gemini-4-argon"
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
-		ID: probedID, Provider: "bedrock", Type: "generation",
+		ID: probedID, Provider: cfg.Provider, Type: "generation",
 		Tier: ai.TierUserVerified, TestedAt: time.Now().UTC().Format(time.RFC3339),
 		TestLatencyMs: 380,
 	}); err != nil {
 		t.Fatalf("seed passing probe: %v", err)
 	}
 
-	got, err = runCLIArgs(t, root, "models", "list", "--provider", "bedrock", "--working-set", "--json", "--porcelain")
+	got, err = runCLIArgs(t, root, "models", "list", "--provider", cfg.Provider, "--working-set", "--json", "--porcelain")
 	if err != nil {
 		t.Fatalf("models list --working-set after probe: %v (out=%s)", err, truncate(got, 300))
 	}
@@ -117,10 +117,10 @@ func TestContract_ModelsListWorkingSetFilter(t *testing.T) {
 
 	// An explicit disable removes it again: the working set is what a picker
 	// may offer, so a hidden model can never be a member.
-	if _, err := runCLIArgs(t, root, "models", "disable", probedID, "--provider", "bedrock", "--scope", "vault"); err != nil {
+	if _, err := runCLIArgs(t, root, "models", "disable", probedID, "--provider", cfg.Provider, "--scope", "vault"); err != nil {
 		t.Fatalf("models disable: %v", err)
 	}
-	got, err = runCLIArgs(t, root, "models", "list", "--provider", "bedrock", "--working-set", "--json", "--porcelain")
+	got, err = runCLIArgs(t, root, "models", "list", "--provider", cfg.Provider, "--working-set", "--json", "--porcelain")
 	if err != nil {
 		t.Fatalf("models list --working-set after disable: %v (out=%s)", err, truncate(got, 300))
 	}
@@ -136,7 +136,7 @@ func TestContract_ModelsListFailedActiveNotInWorkingSet(t *testing.T) {
 	_, root := newContractVault(t)
 	cfg := ai.DefaultAIConfig()
 	if err := ai.SaveUserCatalogEntry(ai.ScopeVault, root, ai.ModelInfo{
-		ID: cfg.GenerationModel, Provider: "bedrock", Type: "generation",
+		ID: cfg.GenerationModel, Provider: cfg.Provider, Type: "generation",
 		TestedAt:      time.Now().UTC().Format(time.RFC3339),
 		TestError:     "403 access denied",
 		TestErrorCode: string(ai.TestErrAccessDenied),
@@ -144,7 +144,7 @@ func TestContract_ModelsListFailedActiveNotInWorkingSet(t *testing.T) {
 		t.Fatalf("seed failed active probe: %v", err)
 	}
 
-	got, err := runCLIArgs(t, root, "models", "list", "--provider", "bedrock", "--json", "--porcelain")
+	got, err := runCLIArgs(t, root, "models", "list", "--provider", cfg.Provider, "--json", "--porcelain")
 	if err != nil {
 		t.Fatalf("models list: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestContract_ModelsListFailedActiveNotInWorkingSet(t *testing.T) {
 		t.Errorf("active + access_denied must serialize working:false, got %+v", active)
 	}
 
-	got, err = runCLIArgs(t, root, "models", "list", "--provider", "bedrock", "--working-set", "--json", "--porcelain")
+	got, err = runCLIArgs(t, root, "models", "list", "--provider", cfg.Provider, "--working-set", "--json", "--porcelain")
 	if err != nil {
 		t.Fatalf("models list --working-set: %v", err)
 	}

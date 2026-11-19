@@ -93,6 +93,215 @@ public final class DatabaseManager: Sendable {
         }
     }
 
+    /// Total number of indexed documents.
+    public func documentCount() throws -> Int {
+        try dbPool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents") ?? 0
+        }
+    }
+
+    /// Search-first note picker query across `documents.title`, `documents.path`,
+    /// and `chunks_fts` (falling back to `chunks.content LIKE` if `chunks_fts` is
+    /// absent or a query fails FTS5 parsing). Empty query returns most recently
+    /// modified notes up to `limit`.
+    public func searchNotes(query: String, limit: Int = 50) throws -> [NotePickerItem] {
+        let boundedLimit = max(1, min(limit, 500))
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return try dbPool.read { db in
+            if trimmed.isEmpty {
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT id, path, title, doc_type, status, modified_at
+                    FROM documents
+                    ORDER BY modified_at DESC, path ASC
+                    LIMIT ?
+                """, arguments: [boundedLimit])
+                return rows.map { row in
+                    NotePickerItem(
+                        id: row["id"] as String? ?? "",
+                        path: row["path"] as String? ?? "",
+                        title: row["title"] as String? ?? "",
+                        docType: row["doc_type"] as String? ?? "",
+                        status: row["status"] as String? ?? "",
+                        modifiedAt: row["modified_at"] as String? ?? "",
+                        snippet: nil,
+                        matchSource: "recent"
+                    )
+                }
+            }
+
+            var results: [NotePickerItem] = []
+            var seenIDs = Set<String>()
+            let likePattern = "%\(Self.escapeLike(trimmed))%"
+
+            // 1. Exact/title/path matches first.
+            let titlePathRows = try Row.fetchAll(db, sql: """
+                SELECT id, path, title, doc_type, status, modified_at,
+                       CASE
+                           WHEN LOWER(path) = LOWER(?) OR LOWER(title) = LOWER(?) THEN 0
+                           WHEN title LIKE ? ESCAPE '\\' THEN 1
+                           ELSE 2
+                       END AS rank
+                FROM documents
+                WHERE title LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'
+                ORDER BY rank ASC, modified_at DESC, path ASC
+                LIMIT ?
+            """, arguments: [trimmed, trimmed, likePattern, likePattern, likePattern, boundedLimit])
+
+            for row in titlePathRows {
+                let id = row["id"] as String? ?? ""
+                guard !id.isEmpty, seenIDs.insert(id).inserted else { continue }
+                let rank = row["rank"] as Int? ?? 2
+                results.append(NotePickerItem(
+                    id: id,
+                    path: row["path"] as String? ?? "",
+                    title: row["title"] as String? ?? "",
+                    docType: row["doc_type"] as String? ?? "",
+                    status: row["status"] as String? ?? "",
+                    modifiedAt: row["modified_at"] as String? ?? "",
+                    snippet: nil,
+                    matchSource: rank <= 1 ? "title" : "path"
+                ))
+            }
+
+            if results.count >= boundedLimit {
+                return Array(results.prefix(boundedLimit))
+            }
+
+            // 2. Body search via FTS5 `chunks_fts` when present.
+            let hasFTS = (try? Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts'"
+            )) != nil
+
+            let ftsQuery = Self.ftsMatchQuery(for: trimmed)
+            if hasFTS && !ftsQuery.isEmpty {
+                do {
+                    let ftsRows = try Row.fetchAll(db, sql: """
+                        WITH matched AS (
+                            SELECT d.id, d.path, d.title, d.doc_type, d.status, d.modified_at,
+                                   SUBSTR(c.content, 1, 160) AS snippet,
+                                   bm25(chunks_fts) AS score,
+                                   c.sort_order AS sort_order
+                            FROM chunks_fts
+                            JOIN chunks c ON c.rowid = chunks_fts.rowid
+                            JOIN documents d ON d.id = c.doc_id
+                            WHERE chunks_fts MATCH ?
+                        ),
+                        ranked AS (
+                            SELECT id, path, title, doc_type, status, modified_at, snippet, score,
+                                   ROW_NUMBER() OVER (PARTITION BY id ORDER BY score ASC, sort_order ASC) AS rn
+                            FROM matched
+                        )
+                        SELECT id, path, title, doc_type, status, modified_at, snippet
+                        FROM ranked
+                        WHERE rn = 1
+                        ORDER BY score ASC, modified_at DESC, path ASC
+                        LIMIT ?
+                    """, arguments: [ftsQuery, boundedLimit])
+
+                    for row in ftsRows {
+                        let id = row["id"] as String? ?? ""
+                        guard !id.isEmpty, seenIDs.insert(id).inserted else { continue }
+                        results.append(NotePickerItem(
+                            id: id,
+                            path: row["path"] as String? ?? "",
+                            title: row["title"] as String? ?? "",
+                            docType: row["doc_type"] as String? ?? "",
+                            status: row["status"] as String? ?? "",
+                            modifiedAt: row["modified_at"] as String? ?? "",
+                            snippet: Self.cleanSnippet(row["snippet"] as String?),
+                            matchSource: "content"
+                        ))
+                        if results.count >= boundedLimit {
+                            return Array(results.prefix(boundedLimit))
+                        }
+                    }
+                } catch {
+                    // Fall through to LIKE content search below.
+                }
+            }
+
+            // 3. Fallback / substring content LIKE search across chunks.
+            let contentRows = try Row.fetchAll(db, sql: """
+                WITH ranked AS (
+                    SELECT d.id, d.path, d.title, d.doc_type, d.status, d.modified_at,
+                           SUBSTR(c.content, 1, 160) AS snippet,
+                           ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY c.sort_order ASC) AS rn
+                    FROM chunks c
+                    JOIN documents d ON d.id = c.doc_id
+                    WHERE c.content LIKE ? ESCAPE '\\'
+                )
+                SELECT id, path, title, doc_type, status, modified_at, snippet
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY modified_at DESC, path ASC
+                LIMIT ?
+            """, arguments: [likePattern, boundedLimit])
+
+            for row in contentRows {
+                let id = row["id"] as String? ?? ""
+                guard !id.isEmpty, seenIDs.insert(id).inserted else { continue }
+                results.append(NotePickerItem(
+                    id: id,
+                    path: row["path"] as String? ?? "",
+                    title: row["title"] as String? ?? "",
+                    docType: row["doc_type"] as String? ?? "",
+                    status: row["status"] as String? ?? "",
+                    modifiedAt: row["modified_at"] as String? ?? "",
+                    snippet: Self.cleanSnippet(row["snippet"] as String?),
+                    matchSource: "content"
+                ))
+                if results.count >= boundedLimit {
+                    break
+                }
+            }
+
+            return Array(results.prefix(boundedLimit))
+        }
+    }
+
+    /// Convert a user query into a safe FTS5 MATCH expression matching `cli/internal/search`.
+    public static func ftsMatchQuery(for query: String) -> String {
+        let rawWords = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        var parts: [String] = []
+        for raw in rawWords {
+            var cleaned = raw
+                .replacingOccurrences(of: "\"", with: "")
+                .replacingOccurrences(of: "*", with: "")
+            while let last = cleaned.last, "?!.,;:".contains(last) {
+                cleaned.removeLast()
+            }
+            let lower = cleaned.lowercased()
+            guard !lower.isEmpty else { continue }
+            let needsQuotes = lower.unicodeScalars.contains { scalar in
+                !CharacterSet.alphanumerics.contains(scalar) && scalar != "_"
+            }
+            if needsQuotes {
+                parts.append("\"\(lower)\"")
+            } else {
+                parts.append(lower)
+            }
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func escapeLike(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    private static func cleanSnippet(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let collapsed = raw
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return collapsed.isEmpty ? nil : collapsed
+    }
+
     /// Full-text search using FTS5 (if available, falls back to LIKE).
     public func search(query: String, type: String? = nil, limit: Int = 20) throws -> [DocumentRecord] {
         try dbPool.read { db in
@@ -347,5 +556,42 @@ public struct DocumentRecord: Codable, FetchableRecord, PersistableRecord, Senda
         case indexedAt = "indexed_at"
         case contentHash = "content_hash"
         case frontmatter
+    }
+}
+
+/// Lightweight note item returned by `DatabaseManager.searchNotes(query:limit:)`
+/// and disk fallback for the search-first AI Polish picker.
+public struct NotePickerItem: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let path: String
+    public let title: String
+    public let docType: String
+    public let status: String
+    public let modifiedAt: String
+    public let snippet: String?
+    public let matchSource: String?
+
+    public var displayTitle: String {
+        title.isEmpty ? (path as NSString).lastPathComponent : title
+    }
+
+    public init(
+        id: String,
+        path: String,
+        title: String,
+        docType: String = "",
+        status: String = "",
+        modifiedAt: String = "",
+        snippet: String? = nil,
+        matchSource: String? = nil
+    ) {
+        self.id = id
+        self.path = path
+        self.title = title
+        self.docType = docType
+        self.status = status
+        self.modifiedAt = modifiedAt
+        self.snippet = snippet
+        self.matchSource = matchSource
     }
 }

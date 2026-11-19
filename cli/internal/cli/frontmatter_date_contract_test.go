@@ -260,7 +260,7 @@ func TestContract_ScalarPayloadIsOnePlainCell(t *testing.T) {
 		argv []string
 		want string
 	}{
-		{[]string{"config", "get", "ai.provider"}, "bedrock"},
+		{[]string{"config", "get", "ai.provider"}, "gemini"},
 		{[]string{"meta", "n.md", "--get", "title"}, "Note"},
 	} {
 		for _, format := range []string{"csv", "tsv"} {

@@ -1,106 +1,49 @@
+import SwiftUI
 import Testing
 @testable import SecondBrain
 
-@Test("Primary SwiftUI AI views can be constructed")
+@Test("Beta dashboard views can be constructed")
 @MainActor
-func primaryViewsConstruct() {
-    let model = CatalogModelInfo(
-        modelID: "view.test.model",
-        name: "View Test Model",
-        provider: "bedrock",
-        modelType: "generation",
-        vendor: nil,
-        vendorDisplay: nil,
-        family: nil,
-        versionSortKey: nil,
-        dimensions: nil,
-        priceIn: nil,
-        priceOut: nil,
-        priceRequest: nil,
-        priceSource: nil,
-        reachable: nil,
-        credentials: nil,
-        rateLimitRPS: nil,
-        rateLimitTPM: nil,
-        priceOverride: nil,
-        contextLen: nil,
-        recommendedSimilarityThreshold: nil,
-        local: nil,
-        tier: nil,
-        invokeStrategy: nil,
-        plane: nil,
-        region: nil,
-        enabled: nil,
-        active: nil,
-        configHint: nil,
-        notes: nil,
-        testedAt: nil,
-        testLatencyMs: nil,
-        testError: nil,
-        testErrorCode: nil,
-        benchmark: nil,
-        compatible: nil,
-        compatibilityReason: nil,
-        recommended: nil,
-        supportedDimensions: nil,
-        working: nil
-    )
-
-    let picker = ModelCatalogPickerView(
-        models: [model],
-        aiStatus: nil,
-        initialType: nil,
-        initialModelID: nil,
-        onClose: {},
-        onReload: {}
-    )
-    let hub = AIHubView(onClose: {})
-    let simple = SimpleModelsView()
+func betaDashboardViewsConstruct() {
     let home = HomeView()
-    let vendorPolicy = VendorPolicyView(models: [model], onValidate: { _ in })
+    let askSearch = AskSearchView()
+    let notePolish = NotePolishView()
+    let notes = NotesView(section: .constant(.linksAndSchema))
+    let activity = ActivityView(section: .constant(.actions))
+    let guiActions = GUIActionsView()
+    let lint = LintResultsView(isPresented: .constant(true), isInline: true)
+    let git = GitActivityView(isPresented: .constant(true), isInline: true)
+    let mcp = MCPStatusView(isPresented: .constant(true), isInline: true)
+    let aiUsage = AIUsageView()
+    let badge = BetaBadge()
 
-    #expect(String(describing: type(of: picker)) == "ModelCatalogPickerView")
-    #expect(String(describing: type(of: hub)) == "AIHubView")
-    #expect(String(describing: type(of: simple)) == "SimpleModelsView")
     #expect(String(describing: type(of: home)) == "HomeView")
-    #expect(String(describing: type(of: vendorPolicy)) == "VendorPolicyView")
+    #expect(String(describing: type(of: askSearch)) == "AskSearchView")
+    #expect(String(describing: type(of: notePolish)) == "NotePolishView")
+    #expect(String(describing: type(of: notes)) == "NotesView")
+    #expect(String(describing: type(of: activity)) == "ActivityView")
+    #expect(String(describing: type(of: guiActions)) == "GUIActionsView")
+    #expect(String(describing: type(of: lint)) == "LintResultsView")
+    #expect(String(describing: type(of: git)) == "GitActivityView")
+    #expect(String(describing: type(of: mcp)) == "MCPStatusView")
+    #expect(String(describing: type(of: aiUsage)) == "AIUsageView")
+    #expect(String(describing: type(of: badge)) == "BetaBadge")
 }
 
 @Test("Settings window views can be constructed")
 @MainActor
 func settingsViewsConstruct() {
-    // The Settings scene is now the app's primary configuration surface, so its
-    // views belong in the same smoke test as the rest: a body that fails to
-    // type-check or a bad @Environment wiring should fail here, not on Cmd+,.
     let settings = SettingsView()
-    // The same implementation also hosts the dashboard sidebar's Settings tab.
-    let inlineSettings = SettingsView(isInline: true)
-    let general = SettingsGeneralView()
     let ai = SettingsAIView()
-    let advanced = SettingsAdvancedView()
     let integrations = SettingsIntegrationsView()
+    let general = SettingsGeneralView()
+    let updates = UpdatesView()
+    let embeddedUpdates = UpdatesView(embedded: true)
 
     #expect(String(describing: type(of: settings)) == "SettingsView")
-    #expect(String(describing: type(of: inlineSettings)) == "SettingsView")
-    #expect(String(describing: type(of: general)) == "SettingsGeneralView")
     #expect(String(describing: type(of: ai)) == "SettingsAIView")
-    #expect(String(describing: type(of: advanced)) == "SettingsAdvancedView")
     #expect(String(describing: type(of: integrations)) == "SettingsIntegrationsView")
-}
-
-@Test("Testing tab views can be constructed")
-@MainActor
-func testingViewsConstruct() {
-    let benchRun = BenchRunModel()
-    let testing = TestingView(section: .constant(.validate), benchRun: benchRun)
-    let benchmarks = TestingBenchmarksView(benchRun: benchRun)
-    let quality = TestingQualityView(benchRun: benchRun)
-    // The Validate pane hosts the Models tab's mechanics in validate-only
-    // mode (one implementation, two hosts).
-    let validate = SimpleModelsView(validateOnly: true)
-
-    #expect(String(describing: type(of: testing)) == "TestingView")
-    #expect(String(describing: type(of: benchmarks)) == "TestingBenchmarksView")
-    #expect(String(describing: type(of: quality)) == "TestingQualityView")
-    #expect(String(describing: type(of: validate)) == "SimpleModelsView")
+    #expect(String(describing: type(of: general)) == "SettingsGeneralView")
+    #expect(String(describing: type(of: updates)) == "UpdatesView")
+    #expect(String(describing: type(of: embeddedUpdates)) == "UpdatesView")
 }

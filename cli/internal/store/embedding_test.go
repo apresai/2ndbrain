@@ -267,6 +267,52 @@ func TestEmbeddingCounts(t *testing.T) {
 	}
 }
 
+func TestDocEmbedSizingAndVaultCorpusSizing(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Empty vault sizing
+	docs, chunks, chars, err := db.VaultEmbedCorpusSizing()
+	if err != nil {
+		t.Fatalf("empty corpus sizing: %v", err)
+	}
+	if docs != 0 || chunks != 0 || chars != 0 {
+		t.Fatalf("empty corpus = (%d, %d, %d), want (0, 0, 0)", docs, chunks, chars)
+	}
+
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('a', 'a.md', 'A')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('b', 'b.md', 'B')`)
+	db.Conn().Exec(`INSERT INTO documents (id, path, title) VALUES ('empty', 'empty.md', 'Empty')`)
+	db.Conn().Exec(`INSERT INTO chunks (id, doc_id, heading_path, content, content_hash) VALUES ('a1', 'a', '(p)', 'hello', 'h1')`)
+	db.Conn().Exec(`INSERT INTO chunks (id, doc_id, heading_path, content, content_hash) VALUES ('a2', 'a', 'h2', 'world!!', 'h2')`)
+	db.Conn().Exec(`INSERT INTO chunks (id, doc_id, heading_path, content, content_hash) VALUES ('b1', 'b', '(p)', '0123456789', 'h3')`)
+
+	sizing, err := db.AllDocEmbedSizing()
+	if err != nil {
+		t.Fatalf("AllDocEmbedSizing: %v", err)
+	}
+	if sizing["a"] != (DocEmbedSizing{Chunks: 2, Chars: 12}) {
+		t.Errorf("doc a sizing = %+v, want {2, 12}", sizing["a"])
+	}
+	if sizing["b"] != (DocEmbedSizing{Chunks: 1, Chars: 10}) {
+		t.Errorf("doc b sizing = %+v, want {1, 10}", sizing["b"])
+	}
+	if _, exists := sizing["empty"]; exists {
+		t.Errorf("empty doc with no chunks should not appear in sizing map")
+	}
+
+	docs, chunks, chars, err = db.VaultEmbedCorpusSizing()
+	if err != nil {
+		t.Fatalf("VaultEmbedCorpusSizing: %v", err)
+	}
+	if docs != 2 || chunks != 3 || chars != 22 {
+		t.Errorf("corpus = (%d, %d, %d), want (2, 3, 22)", docs, chunks, chars)
+	}
+}
+
 func TestInvalidateAllEmbeddings(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

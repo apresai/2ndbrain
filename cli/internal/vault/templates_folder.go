@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -130,13 +131,48 @@ func readJSONBoolField(path, field string) bool {
 	return false
 }
 
+var (
+	tmplYAMLKeyLineRe     = regexp.MustCompile(`^[ \t]*([A-Za-z0-9_.-]+)[ \t]*:`)
+	tmplMarkdownHeadingRe = regexp.MustCompile(`^[ \t]*#{1,6}[ \t]`)
+)
+
+func isTemplateFenceLine(line string) bool {
+	if !strings.HasPrefix(line, "---") {
+		return false
+	}
+	return strings.Trim(line[3:], " \t\r") == ""
+}
+
+func isLeadingYAMLComment(lines []string, idx int) bool {
+	for j := idx + 1; j < len(lines); j++ {
+		next := strings.TrimSuffix(lines[j], "\r")
+		trimmed := strings.TrimSpace(next)
+		if trimmed == "" {
+			return false
+		}
+		if tmplYAMLKeyLineRe.MatchString(next) ||
+			strings.HasPrefix(trimmed, "<%") ||
+			strings.HasPrefix(trimmed, "{{") {
+			return true
+		}
+		if strings.HasPrefix(trimmed, "#") ||
+			strings.HasPrefix(next, " ") ||
+			strings.HasPrefix(next, "\t") {
+			continue
+		}
+		return false
+	}
+	return false
+}
+
 // HasTemplatePlaceholders reports whether a file's YAML frontmatter carries
-// unresolved {{...}} template tokens (Obsidian core Templates / Templater).
+// unresolved {{...}} or Templater <%...%> template tokens (Obsidian core
+// Templates / Templater).
 //
 // It is the FILE-level half of the template definition, and the backstop for a
 // template kept outside any template folder. Only the frontmatter block is
 // inspected, deliberately, so a note ABOUT templating whose body mentions {{ }}
-// is never mistaken for one.
+// or <% %> is never mistaken for one.
 //
 // It moved here from package cli so lint, import and the indexer share one
 // definition. The comment it carried there claimed "the indexer skips them
@@ -144,14 +180,68 @@ func readJSONBoolField(path, field string) bool {
 // about placeholders.
 func HasTemplatePlaceholders(raw []byte) bool {
 	s := string(raw)
-	if !strings.HasPrefix(s, "---") {
+	firstNL := strings.IndexByte(s, '\n')
+	if firstNL < 0 {
 		return false
 	}
-	rest := s[3:]
-	if end := strings.Index(rest, "\n---"); end >= 0 {
-		rest = rest[:end]
+	firstLine := strings.TrimSuffix(s[:firstNL], "\r")
+	if !isTemplateFenceLine(firstLine) {
+		return false
 	}
-	return strings.Contains(rest, "{{")
+	rest := s[firstNL+1:]
+	if rest == "" {
+		return false
+	}
+
+	// A leading `---` immediately followed by a blank line is a Markdown
+	// horizontal rule rather than YAML frontmatter.
+	nextNL := strings.IndexByte(rest, '\n')
+	var secondLine string
+	if nextNL < 0 {
+		secondLine = strings.TrimSuffix(rest, "\r")
+	} else {
+		secondLine = strings.TrimSuffix(rest[:nextNL], "\r")
+	}
+	if strings.TrimSpace(secondLine) == "" {
+		return false
+	}
+
+	lines := strings.Split(rest, "\n")
+	for i, rawLine := range lines {
+		line := strings.TrimSuffix(rawLine, "\r")
+		if isTemplateFenceLine(line) {
+			fm := strings.Join(lines[:i], "\n")
+			return strings.Contains(fm, "{{") || strings.Contains(fm, "<%")
+		}
+	}
+
+	// No closing `---` fence: bound inspection strictly to leading
+	// frontmatter/template lines so body prose is never scanned.
+	var fmLines []string
+	for i, rawLine := range lines {
+		line := strings.TrimSuffix(rawLine, "\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			break
+		}
+		if tmplMarkdownHeadingRe.MatchString(line) && !isLeadingYAMLComment(lines, i) {
+			break
+		}
+		if tmplYAMLKeyLineRe.MatchString(line) ||
+			strings.HasPrefix(trimmed, "#") ||
+			strings.HasPrefix(trimmed, "- ") ||
+			trimmed == "-" ||
+			strings.HasPrefix(line, " ") ||
+			strings.HasPrefix(line, "\t") ||
+			strings.HasPrefix(trimmed, "<%") ||
+			strings.HasPrefix(trimmed, "{{") {
+			fmLines = append(fmLines, line)
+			continue
+		}
+		break
+	}
+	fm := strings.Join(fmLines, "\n")
+	return strings.Contains(fm, "{{") || strings.Contains(fm, "<%")
 }
 
 // readJSONStringField reads one top-level string field out of a JSON file.

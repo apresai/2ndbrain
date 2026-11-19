@@ -57,6 +57,7 @@ var formatContractArgv = map[string][]string{
 	"2nb deadends":                    {"deadends"},
 	"2nb delete":                      {"delete", "spare.md", "--force"},
 	"2nb export-context":              {"export-context"},
+	"2nb fix":                         {"fix"},
 	"2nb folders":                     {"folders"},
 	"2nb graph":                       {"graph", "doc.md"},
 	"2nb index":                       {"index"},

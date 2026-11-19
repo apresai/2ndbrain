@@ -111,10 +111,11 @@ state_set() { # state_set <key> <value>
 artifact_sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 
 bundle_sha() {
-  # Hash the two Mach-Os that define this build. Faster and more stable than
+  # Hash the Mach-Os that define this build. Faster and more stable than
   # hashing the zip (ditto zips are not byte-reproducible across runs).
-  cat "$BUNDLE/Contents/MacOS/SecondBrain" "$BUNDLE/Contents/Resources/2nb" \
-    | shasum -a 256 | awk '{print $1}'
+  local files=("$BUNDLE/Contents/MacOS/SecondBrain" "$BUNDLE/Contents/Resources/2nb")
+  [ -f "$BUNDLE/Contents/Resources/llama/llama-server" ] && files+=("$BUNDLE/Contents/Resources/llama/llama-server")
+  cat "${files[@]}" | shasum -a 256 | awk '{print $1}'
 }
 
 bundle_version() {
@@ -314,9 +315,18 @@ else
     echo "==> Bundled CLI verified at v${BUNDLED_CLI_VERSION}"
 
     echo "==> Signing with Developer ID + hardened runtime"
-    # Sign nested code inside-out: the bundled 2nb binary FIRST, then the outer
-    # bundle. The outer codesign is intentionally not --deep, so it would leave the
-    # nested executable unsigned — and an unsigned nested binary fails notarization.
+    # Sign nested code inside-out: all dylibs first, then helper binaries
+    # (llama-server, llama-cli, 2nb), then the outer bundle.
+    if [ -d "$BUNDLE/Contents/Resources/llama" ]; then
+      find "$BUNDLE/Contents/Resources/llama" -type f -name "*.dylib" -exec \
+        codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.llama --sign "$SIGN_IDENTITY" {} +
+      if [ -f "$BUNDLE/Contents/Resources/llama/llama-server" ]; then
+        codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.llama-server --sign "$SIGN_IDENTITY" "$BUNDLE/Contents/Resources/llama/llama-server"
+      fi
+      if [ -f "$BUNDLE/Contents/Resources/llama/llama-cli" ]; then
+        codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.llama-cli --sign "$SIGN_IDENTITY" "$BUNDLE/Contents/Resources/llama/llama-cli"
+      fi
+    fi
     codesign --force --options runtime --timestamp -i dev.apresai.2ndbrain.cli --sign "$SIGN_IDENTITY" "$BUNDLED_CLI"
     codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BUNDLE"
     codesign --verify --strict --verbose=2 "$BUNDLE"
@@ -342,6 +352,14 @@ else
     }
     check_portable_macho "$BUNDLE/Contents/MacOS/SecondBrain"
     check_portable_macho "$BUNDLED_CLI"
+    if [ -f "$BUNDLE/Contents/Resources/llama/llama-server" ]; then
+      check_portable_macho "$BUNDLE/Contents/Resources/llama/llama-server"
+    fi
+    if [ -d "$BUNDLE/Contents/Resources/llama" ]; then
+      find "$BUNDLE/Contents/Resources/llama" -type f -name "*.dylib" | while read -r lib; do
+        check_portable_macho "$lib"
+      done
+    fi
     # The bundled 2nb must ship with the hardened runtime (notarization requires it).
     # Capture codesign's output first, then match a here-string: piping it into
     # `grep -q` lets grep close the pipe on its first match, which SIGPIPEs codesign,

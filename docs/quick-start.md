@@ -9,7 +9,8 @@ Get from zero to asking your Obsidian vault questions in about ten minutes. This
 - macOS 14+ with [Homebrew](https://brew.sh)
 - [Obsidian](https://obsidian.md) with a vault you already use (a brand-new vault works too)
 - For AI features, one of:
-  - AWS credentials with Bedrock model access (the default provider), or
+  - Google Gemini credentials (the native default provider) via `GEMINI_API_KEY` (BYOK) or Vertex AI on your GCP project with Google ADC (BYOP), or
+  - AWS credentials with Bedrock model access, or
   - [Ollama](https://ollama.com) for fully local AI, or
   - an OpenRouter API key
 
@@ -77,14 +78,30 @@ On first run the plugin opens a setup wizard (Download CLI → Connect AI → In
 2nb ai setup
 ```
 
-The wizard detects your credentials and walks you through provider and model choice. The default is AWS Bedrock with Claude Haiku 4.5 for generation and Amazon Nova-2 for embeddings; it verifies both models respond and reminds you to enable model access in the AWS console if needed.
+The wizard detects your credentials and walks you through provider and model choice. The native default is **Google Gemini** with `gemini-4-hydrogen` for generation and `gemini-embedding-2` (768 dimensions) for embeddings.
+
+**Open-Source BYOK Setup (Bring Your Own Key / Project):**
+2nb is open-source — you bring your own credentials (never hardcoding any personal accounts):
+- **Mode 1: Gemini API Key (BYOK)**: Get a key from [Google AI Studio](https://aistudio.google.com/) and run:
+  ```bash
+  export GEMINI_API_KEY="AIza..."
+  # OR store securely in macOS Keychain:
+  2nb config set-key gemini
+  ```
+  *(Note: `2nb` does NOT read `GOOGLE_API_KEY` to avoid SDK precedence conflicts).*
+- **Mode 2: Vertex AI on Google Cloud (BYOP)**: Use your own GCP project:
+  ```bash
+  gcloud auth application-default login
+  2nb config set ai.gemini.project <your-gcp-project-id>
+  # Optional: 2nb config set ai.gemini.location us-central1
+  ```
 
 Notes:
 
-- The dashboard's AI card does the same thing graphically, with a readiness dot and a Test button.
-- The dashboard runs without your shell's environment. Paste a Bedrock API key in **Settings (Cmd+,)**; that writes `~/.config/2nb/bedrock.json`, which both the app and a terminal `2nb` read. You can also `2nb config bedrock --set --region us-east-1 --token-stdin`, or set `AWS_BEARER_TOKEN_BEDROCK`. SigV4 via `~/.aws` still works.
+- The dashboard's AI card does the same thing graphically, with a readiness dot, a Test button, and an API key / project configuration field in **Settings (Cmd+,)**.
+- For AWS Bedrock: configure bearer token (`config bedrock` / `2nb config set-key bedrock`) or AWS SSO profile (`2nb config set ai.bedrock.profile my-profile`).
 - For fully local AI: `2nb ai local` checks Ollama readiness, then `2nb ai setup` and pick Ollama.
-- Ollama and OpenRouter are opt-in; selection UIs show only Bedrock until you enable another provider.
+- Bedrock, Ollama, and OpenRouter are supported alternative providers.
 
 Check status any time:
 

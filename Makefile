@@ -1,4 +1,4 @@
-.PHONY: test-live test-skill-eval build build-cli build-app build-app-release package-app notarize-app release-app release-app-status release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-release-script test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
+.PHONY: test-live test-skill-eval build build-cli build-app run-app build-app-release package-app notarize-app release-app release-app-status release-all install clean clean-dmg test test-battery test-usage test-swift test-gui test-release-script test-all version-swift version-plugin set-version bump-major bump-minor bump-build release release-local update-changelog sync-skills check-skills-sync
 
 VERSION := $(shell cat VERSION | tr -d '\n')
 MAJOR := $(word 1,$(subst ., ,$(VERSION)))
@@ -68,26 +68,47 @@ set-version:
 	@$(MAKE) version-swift version-plugin
 	@echo "Version: $$(cat VERSION)"
 
+vendor-llama:
+	@bash scripts/vendor-llama.sh build/llama
+
 build-cli:
 	$(MAKE) -C cli build
 
 APP_BUNDLE := app/.build/arm64-apple-macosx/debug/SecondBrain.app
 
-build-app: version-swift build-cli
+build-app: version-swift build-cli vendor-llama
 	cd app && swift build
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
-	@cp -f app/.build/arm64-apple-macosx/debug/SecondBrain $(APP_BUNDLE)/Contents/MacOS/SecondBrain
+	@bin_path=$$(cd app && swift build --show-bin-path); \
+	if [ -f "$$bin_path/SecondBrain" ]; then \
+		cp -f "$$bin_path/SecondBrain" $(APP_BUNDLE)/Contents/MacOS/SecondBrain; \
+	elif [ -f "app/.build/arm64-apple-macosx/debug/SecondBrain" ]; then \
+		cp -f app/.build/arm64-apple-macosx/debug/SecondBrain $(APP_BUNDLE)/Contents/MacOS/SecondBrain; \
+	fi
 	@# Bundle the version-matched 2nb CLI so the app never shells out to a stale
 	@# Homebrew formula (CLIPath.resolve() prefers Contents/Resources/2nb).
 	@cp -f cli/bin/2nb $(APP_BUNDLE)/Contents/Resources/2nb
 	@cp -f app/Resources/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	@sed 's/VERSIONPLACEHOLDER/$(VERSION)/g' <<< '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>SecondBrain</string><key>CFBundleIdentifier</key><string>dev.apresai.2ndbrain</string><key>CFBundleName</key><string>SecondBrain</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>VERSIONPLACEHOLDER</string><key>CFBundleVersion</key><string>VERSIONPLACEHOLDER</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/><key>CFBundleIconFile</key><string>AppIcon</string></dict></plist>' > $(APP_BUNDLE)/Contents/Info.plist
-	@codesign -s - --deep --force $(APP_BUNDLE) 2>/dev/null || true
+	@# Bundle the pinned llama.cpp runtime (zero Homebrew dependency).
+	@rm -rf $(APP_BUNDLE)/Contents/Resources/llama
+	@mkdir -p $(APP_BUNDLE)/Contents/Resources/llama
+	@cp -a build/llama/* $(APP_BUNDLE)/Contents/Resources/llama/
+	@# Inside-out codesign: dylibs first, helper binaries second, 2nb, then outer bundle.
+	@find $(APP_BUNDLE)/Contents/Resources/llama -type f -name "*.dylib" -exec codesign -s - --force {} + 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE)/Contents/Resources/llama/llama-server 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE)/Contents/Resources/llama/llama-cli 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE)/Contents/Resources/2nb 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE) 2>/dev/null || true
+
+run-app: build-app
+	@if pgrep -x SecondBrain >/dev/null 2>&1; then pkill -x SecondBrain; sleep 0.3; fi
+	@open $(APP_BUNDLE)
 
 APP_BUNDLE_RELEASE := app/.build/arm64-apple-macosx/release/SecondBrain.app
 
-build-app-release: version-swift build-cli
+build-app-release: version-swift build-cli vendor-llama
 	cd app && swift build -c release
 	@# Start from a clean bundle so stale files can't leak into a
 	@# signed/notarized release artifact, then bundle the freshly-built,
@@ -99,10 +120,19 @@ build-app-release: version-swift build-cli
 	@rm -rf $(APP_BUNDLE_RELEASE)
 	@mkdir -p $(APP_BUNDLE_RELEASE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE_RELEASE)/Contents/Resources
-	@cp -f app/.build/arm64-apple-macosx/release/SecondBrain $(APP_BUNDLE_RELEASE)/Contents/MacOS/SecondBrain
+	@bin_path_rel=$$(cd app && swift build -c release --show-bin-path); \
+	if [ -f "$$bin_path_rel/SecondBrain" ]; then \
+		cp -f "$$bin_path_rel/SecondBrain" $(APP_BUNDLE_RELEASE)/Contents/MacOS/SecondBrain; \
+	elif [ -f "app/.build/arm64-apple-macosx/release/SecondBrain" ]; then \
+		cp -f app/.build/arm64-apple-macosx/release/SecondBrain $(APP_BUNDLE_RELEASE)/Contents/MacOS/SecondBrain; \
+	fi
 	@cp -f cli/bin/2nb $(APP_BUNDLE_RELEASE)/Contents/Resources/2nb
 	@cp -f app/Resources/AppIcon.icns $(APP_BUNDLE_RELEASE)/Contents/Resources/AppIcon.icns
 	@sed 's/VERSIONPLACEHOLDER/$(VERSION)/g' <<< '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>SecondBrain</string><key>CFBundleIdentifier</key><string>dev.apresai.2ndbrain</string><key>CFBundleName</key><string>SecondBrain</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>VERSIONPLACEHOLDER</string><key>CFBundleVersion</key><string>VERSIONPLACEHOLDER</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/><key>CFBundleIconFile</key><string>AppIcon</string></dict></plist>' > $(APP_BUNDLE_RELEASE)/Contents/Info.plist
+	@# Bundle the pinned llama.cpp runtime (zero Homebrew dependency).
+	@rm -rf $(APP_BUNDLE_RELEASE)/Contents/Resources/llama
+	@mkdir -p $(APP_BUNDLE_RELEASE)/Contents/Resources/llama
+	@cp -a build/llama/* $(APP_BUNDLE_RELEASE)/Contents/Resources/llama/
 	@# Strip non-portable LC_RPATHs that `swift build` bakes into the executable
 	@# (notably the absolute Xcode toolchain path). They dangle on a Mac without
 	@# Xcode and are the documented SPM Gatekeeper footgun. Keep only the portable
@@ -112,7 +142,12 @@ build-app-release: version-swift build-cli
 	  | grep -vE '^(@executable_path|@loader_path|/usr/lib/swift)' \
 	  | while read -r rp; do echo "  strip dangling rpath: $$rp"; \
 	      install_name_tool -delete_rpath "$$rp" "$$exe" 2>/dev/null || true; done
-	@codesign -s - --deep --force $(APP_BUNDLE_RELEASE) 2>/dev/null || true
+	@# Inside-out codesign: dylibs first, helper binaries second, 2nb, then outer bundle.
+	@find $(APP_BUNDLE_RELEASE)/Contents/Resources/llama -type f -name "*.dylib" -exec codesign -s - --force {} + 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE_RELEASE)/Contents/Resources/llama/llama-server 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE_RELEASE)/Contents/Resources/llama/llama-cli 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE_RELEASE)/Contents/Resources/2nb 2>/dev/null || true
+	@codesign -s - --force $(APP_BUNDLE_RELEASE) 2>/dev/null || true
 
 package-app: build-app-release
 	@mkdir -p $(ARTIFACT_DIR)
@@ -153,7 +188,11 @@ install-app: build-app
 	@rm -rf ~/Applications/SecondBrain.app
 	@mkdir -p ~/Applications
 	@cp -R $(APP_BUNDLE) ~/Applications/SecondBrain.app
-	@codesign -s - --deep --force ~/Applications/SecondBrain.app
+	@find ~/Applications/SecondBrain.app/Contents/Resources/llama -type f -name "*.dylib" -exec codesign -s - --force {} + 2>/dev/null || true
+	@codesign -s - --force ~/Applications/SecondBrain.app/Contents/Resources/llama/llama-server 2>/dev/null || true
+	@codesign -s - --force ~/Applications/SecondBrain.app/Contents/Resources/llama/llama-cli 2>/dev/null || true
+	@codesign -s - --force ~/Applications/SecondBrain.app/Contents/Resources/2nb 2>/dev/null || true
+	@codesign -s - --force ~/Applications/SecondBrain.app 2>/dev/null || true
 	@echo "Installed SecondBrain.app to ~/Applications"
 
 install: build install-app
@@ -163,6 +202,7 @@ install: build install-app
 clean: clean-dmg
 	$(MAKE) -C cli clean
 	cd app && swift package clean
+	rm -rf build/llama
 
 # Sweep the local installer artifacts (one per release) that package-app /
 # release-app-local.sh produce. They are gitignored, already uploaded to their
@@ -207,20 +247,22 @@ test-skill-eval:
 # the developer's live vault.
 # Exported for the whole swift-test process so it covers every target regardless
 # of run order; the per-target run-once setenv is the bare-swift-test fallback.
+test-swift: build-cli
 test-swift: export 2NB_TEST := 1
+test-swift: export TWONB_CLI_PATH := $(CURDIR)/cli/bin/2nb
 test-swift:
 	cd app && swift test
 
 test-gui: install-app
-	SKIP_BUILD=1 ./tests/gui-test-crud.sh
-	SKIP_BUILD=1 ./tests/gui-test-navigation.sh
-	SKIP_BUILD=1 ./tests/gui-test-editor.sh
 	SKIP_BUILD=1 ./tests/gui-test-ui.sh
-	SKIP_BUILD=1 ./tests/gui-test-ai.sh
 	SKIP_BUILD=1 ./tests/gui-test-index.sh
-	SKIP_BUILD=1 ./tests/gui-test-graph.sh
+	SKIP_BUILD=1 ./tests/gui-test-ai.sh
 	SKIP_BUILD=1 ./tests/gui-test-vault-switch.sh
 	SKIP_BUILD=1 ./tests/gui-test-polish.sh
+	SKIP_BUILD=1 ./tests/gui-test-fix-vault.sh
+	SKIP_BUILD=1 ./tests/gui-test-local-gemma.sh
+	SKIP_BUILD=1 ./tests/gui-test-model-invocation.sh
+	SKIP_BUILD=1 ./tests/gui-test-eta-and-usage.sh
 
 test-release-script:
 	@bash tests/release-script-test.sh

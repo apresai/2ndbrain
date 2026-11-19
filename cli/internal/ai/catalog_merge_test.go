@@ -187,12 +187,12 @@ func TestIsActiveModel(t *testing.T) {
 	}{
 		{
 			name:   "matching embed",
-			model:  ModelInfo{Provider: "bedrock", Type: "embedding", ID: cfg.EmbeddingModel},
+			model:  ModelInfo{Provider: cfg.Provider, Type: "embedding", ID: cfg.EmbeddingModel},
 			expect: true,
 		},
 		{
 			name:   "matching gen",
-			model:  ModelInfo{Provider: "bedrock", Type: "generation", ID: cfg.GenerationModel},
+			model:  ModelInfo{Provider: cfg.Provider, Type: "generation", ID: cfg.GenerationModel},
 			expect: true,
 		},
 		{

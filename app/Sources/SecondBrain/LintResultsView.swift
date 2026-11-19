@@ -2,51 +2,251 @@ import SwiftUI
 import AppKit
 import SecondBrainCore
 
+/// Pure presentation & enablement logic for the single-button `Fix Vault` UX.
+/// View-free so every state transition and summary string is unit-testable.
+enum FixVaultPresentation {
+    static func canFixVault(_ report: FixVaultReport?) -> Bool {
+        guard let report else { return false }
+        return report.totalFixes > 0 || report.schemaUpdated || report.aiFixableCount > 0
+    }
+
+    static func canUndo(_ report: FixVaultReport?) -> Bool {
+        report?.undoAvailable == true
+    }
+
+    static func primaryButtonTitle(_ report: FixVaultReport?, isFixing: Bool) -> String {
+        if isFixing {
+            return "Fixing Vault…"
+        }
+        guard let report else {
+            return "Fix Vault"
+        }
+        let total = report.totalFixes + report.aiFixableCount
+        guard total > 0 else {
+            return "Fix Vault"
+        }
+        return "Fix Vault (\(total))"
+    }
+
+    static func summaryLine(fix: FixVaultReport, lint: LintReport?) -> String {
+        var parts: [String] = []
+        if fix.linksUpdated > 0 {
+            parts.append("\(fix.linksUpdated) link\(fix.linksUpdated == 1 ? "" : "s") updated")
+        }
+        if fix.linksUnlinked > 0 {
+            parts.append("\(fix.linksUnlinked) dead link\(fix.linksUnlinked == 1 ? "" : "s") unwrapped")
+        }
+        if fix.formattingFixed > 0 {
+            parts.append("\(fix.formattingFixed) formatting fix\(fix.formattingFixed == 1 ? "" : "es")")
+        }
+        if fix.schemaUpdated {
+            let count = max(fix.schemaIssuesResolved, fix.schemaStatusesAdded.count)
+            parts.append("\(count) schema update\(count == 1 ? "" : "s")")
+        }
+        let fmCount = fix.notes.reduce(0) { $0 + $1.frontmatterFixes.count }
+        if fmCount > 0 {
+            parts.append("\(fmCount) property fix\(fmCount == 1 ? "" : "es")")
+        }
+        if fix.aiFixableCount > 0 {
+            parts.append("\(fix.aiFixableCount) AI-fixable")
+        }
+        if fix.aiApplied && fix.aiFixesApplied > 0 {
+            parts.append("\(fix.aiFixesApplied) AI fix\(fix.aiFixesApplied == 1 ? "" : "es") applied")
+        }
+        if !fix.ambiguous.isEmpty {
+            let amb = fix.ambiguous.count
+            parts.append("\(amb) need\(amb == 1 ? "s" : "") your choice")
+        }
+        if !parts.isEmpty {
+            return parts.joined(separator: " · ")
+        }
+        if let lint, !lint.issues.isEmpty {
+            return "\(lint.issues.count) issue\(lint.issues.count == 1 ? "" : "s") need your review"
+        }
+        return "All \(fix.filesScanned) files look clean."
+    }
+
+    static func appliedBanner(_ report: FixVaultReport) -> (tone: BannerTone, message: String) {
+        if report.totalFixes > 0 {
+            let schemaSuffix = report.schemaUpdated ? " and updated schema" : ""
+            let aiSuffix = (report.aiApplied && report.aiFixesApplied > 0) ? " (\(report.aiFixesApplied) AI)" : ""
+            let undoSuffix = report.undoAvailable ? " Undo anytime." : ""
+            var message = "Fixed \(report.totalFixes) issue\(report.totalFixes == 1 ? "" : "s") across \(report.notesChanged) note\(report.notesChanged == 1 ? "" : "s")\(schemaSuffix)\(aiSuffix).\(undoSuffix)"
+            if let skip = report.aiSkippedReason, !skip.isEmpty {
+                message += " AI repair skipped: \(skip)"
+                return (.info, message)
+            }
+            if !report.warnings.isEmpty {
+                message += " Warning: \(report.warnings.joined(separator: "; "))"
+                return (.info, message)
+            }
+            return (.success, message)
+        }
+        if report.schemaUpdated {
+            let undoSuffix = report.undoAvailable ? " Undo anytime." : ""
+            var message = "Updated note schema statuses.\(undoSuffix)"
+            if let skip = report.aiSkippedReason, !skip.isEmpty {
+                message += " AI repair skipped: \(skip)"
+                return (.info, message)
+            }
+            if !report.warnings.isEmpty {
+                message += " Warning: \(report.warnings.joined(separator: "; "))"
+                return (.info, message)
+            }
+            return (.success, message)
+        }
+        if let skip = report.aiSkippedReason, !skip.isEmpty {
+            return (.error, "AI repair skipped: \(skip)")
+        }
+        if let warning = report.warnings.first, !warning.isEmpty {
+            return (.error, warning)
+        }
+        return (.info, "Vault had no automatic fixes to apply.")
+    }
+
+    static func undoBanner(_ result: FixUndoResult) -> (tone: BannerTone, message: String) {
+        let schemaSuffix = result.schemaRestored ? " and schema" : ""
+        return (
+            .info,
+            "Undid last fix: restored \(result.filesRestored) file\(result.filesRestored == 1 ? "" : "s")\(schemaSuffix)."
+        )
+    }
+
+    /// Filter out lint issues that `Fix Vault` will resolve (deterministically
+    /// or via AI repair) so the "Needs Your Choice" section only surfaces
+    /// genuine manual decisions (e.g. ambiguous links).
+    static func manualIssues(lint: LintReport, fix: FixVaultReport?) -> [LintIssue] {
+        guard let fix else { return lint.issues }
+
+        var handledTargets = Set<String>()
+        var handledMissingFields = Set<String>()
+        var handledLinkSyntaxPaths = Set<String>()
+        var handledDatePaths = Set<String>()
+        for note in fix.notes {
+            for la in note.linkActions {
+                if la.action == "relink" || la.action == "unlink" {
+                    handledTargets.insert("\(note.path)|\(la.from)")
+                } else if la.action == "format" {
+                    handledLinkSyntaxPaths.insert(note.path)
+                }
+            }
+            for ff in note.frontmatterFixes {
+                if ff.reason == "missing_required" {
+                    handledMissingFields.insert("\(note.path)|\(ff.field)")
+                } else if ff.reason == "unquote_date" || ff.reason == "formatting" {
+                    handledDatePaths.insert(note.path)
+                }
+            }
+        }
+        let addedStatuses = Set(fix.schemaStatusesAdded)
+        let ambiguousKeys = Set(fix.ambiguous.map { "\($0.path)|\($0.target)" })
+
+        var aiBrokenTargets = Set<String>()
+        var aiHandledPathKinds = Set<String>()
+        for ai in fix.aiFixableIssues {
+            if ai.kind == "broken_link" {
+                let target = ai.target ?? ""
+                let key = "\(ai.path)|\(target)"
+                if !ai.message.hasPrefix("ambiguous wikilink:") && !ambiguousKeys.contains(key) {
+                    aiBrokenTargets.insert(key)
+                }
+            } else {
+                aiHandledPathKinds.insert("\(ai.path)|\(ai.kind)")
+            }
+        }
+
+        var existingBrokenKeys = Set<String>()
+        var manual = lint.issues.filter { issue in
+            let finding = LintFinding.classify(issue: issue)
+            switch finding {
+            case .brokenLink(let msgTarget):
+                let target = (issue.target?.isEmpty == false ? issue.target : nil) ?? msgTarget
+                let key = "\(issue.path)|\(target)"
+                existingBrokenKeys.insert(key)
+                if issue.fix == "ambiguous" || ambiguousKeys.contains(key) {
+                    return true
+                }
+                return !handledTargets.contains(key) && !aiBrokenTargets.contains(key)
+            case .invalidEnum(let field, let value, _):
+                if field == "status" && addedStatuses.contains(value) {
+                    return false
+                }
+                if aiHandledPathKinds.contains("\(issue.path)|schema_enum") {
+                    return false
+                }
+                return true
+            case .missingField(let field, _):
+                if handledMissingFields.contains("\(issue.path)|\(field)")
+                    || aiHandledPathKinds.contains("\(issue.path)|missing_required") {
+                    return false
+                }
+                return true
+            case .parseError:
+                return !aiHandledPathKinds.contains("\(issue.path)|parse_error")
+            case .other:
+                if issue.kind == "link_syntax"
+                    && (handledLinkSyntaxPaths.contains(issue.path) || aiHandledPathKinds.contains("\(issue.path)|formatting")) {
+                    return false
+                }
+                if (issue.kind == "date_format" || issue.kind == "date_invalid")
+                    && (handledDatePaths.contains(issue.path) || aiHandledPathKinds.contains("\(issue.path)|formatting")) {
+                    return false
+                }
+                if aiHandledPathKinds.contains("\(issue.path)|formatting") {
+                    return false
+                }
+                return true
+            }
+        }
+
+        // Exact-basename ambiguous wikilinks (`[[dup]]`) are omitted by `2nb lint`
+        // (which only reports `ErrTargetNotFound`) yet surfaced in `fix.ambiguous`.
+        // Synthesize manual entries so "Needs Your Choice" and "Fix link…" stay
+        // consistent with `summaryLine`.
+        for amb in fix.ambiguous {
+            let key = "\(amb.path)|\(amb.target)"
+            if existingBrokenKeys.insert(key).inserted {
+                manual.append(
+                    LintIssue(
+                        path: amb.path,
+                        line: 1,
+                        level: "warning",
+                        message: "ambiguous wikilink: [[\(amb.target)]]",
+                        target: amb.target,
+                        fix: "ambiguous",
+                        driftTarget: nil,
+                        kind: "broken_link",
+                        field: nil,
+                        candidates: amb.candidates
+                    )
+                )
+            }
+        }
+        return manual
+    }
+}
+
 struct LintResultsView: View {
     @Environment(AppState.self) var appState
     @Binding var isPresented: Bool
     var isInline: Bool = false
 
-    /// The finding currently being fixed via the "Set value…" sheet.
     @State private var activeSetValue: ActiveSetValue?
-    /// The broken-link finding currently being repaired via the preview sheet.
     @State private var activeRepair: ActiveRepair?
-    /// The Fix-all confirm sheet (nil = closed); holds the pre-checked plan.
-    @State private var activeFixAll: FixAllPlan?
-    /// Inline result banner after a fix (green), a stale-finding cleanup
-    /// (orange informational), or a failure (orange error).
     @State private var actionMessage: String?
     @State private var actionTone: BannerTone = .success
-    /// Per-finding fix classification (keyed by `BrokenFinding.id`), computed by
-    /// probing each broken link's fixability once the report loads. Drives the
-    /// class-aware header counts, the per-row badges, and the Fix-all plan.
-    @State private var classifications: [String: LinkFixClass] = [:]
-    /// The full `--verdict` envelope per finding, so the resolution sheet can
-    /// reuse the bulk result (candidates + recommendation + llm outcome)
-    /// instead of re-running suggest-target on open.
-    @State private var bulkVerdicts: [String: SuggestVerdictEnvelope] = [:]
-    /// Findings whose fixability probe itself FAILED (CLI error), as opposed to
-    /// legitimately returning no match — rendered as a neutral badge, never as
-    /// a removal recommendation.
-    @State private var classifyFailed: Set<String> = []
-    /// The Remove-dead-links confirm sheet (nil = closed).
-    @State private var activeRemoveAll: RemovalPlan?
-    /// True while `classifyBrokenFindings` is probing suggest-target per finding.
-    @State private var classifying = false
-    /// The "Fix each" walkthrough: the non-one-click findings (decisions AND
-    /// removals) queued to step through the existing per-finding sheet, and the
-    /// 0-based index of the one currently shown. Empty means no walkthrough is
-    /// active (a single "Fix link…" opens the sheet in its normal one-off mode).
-    @State private var walkthroughQueue: [BrokenFinding] = []
-    @State private var walkthroughIndex = 0
 
     var body: some View {
+        let manualIssues = appState.lintReport.map {
+            FixVaultPresentation.manualIssues(lint: $0, fix: appState.fixReport)
+        } ?? []
+
         VStack(spacing: 0) {
             // Header
             HStack {
                 Image(systemName: "checkmark.seal")
                     .foregroundStyle(.secondary)
-                Text("Validate Knowledge Base")
+                Text("Links & Schema")
                     .font(.title3)
                     .fontWeight(.medium)
                 Spacer()
@@ -73,25 +273,62 @@ struct LintResultsView: View {
                 .background(actionTone.color.opacity(0.08))
             }
 
+            if let lintError = appState.lintError {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.octagon.fill")
+                        .foregroundStyle(.red)
+                    Text("Lint failed: \(lintError)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.red.opacity(0.08))
+            }
+
+            if let fixPreviewError = appState.fixPreviewError {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Fix preview unavailable: \(fixPreviewError)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.08))
+            }
+
             Divider()
 
-            // Content
-            if appState.isLinting {
+            // Primary Vault Health & Single-Button Action Card
+            if appState.lintReport != nil || appState.fixReport != nil {
+                vaultFixActionCard(manualIssueCount: manualIssues.count)
+                Divider()
+            }
+
+            // Main Content
+            if appState.isLinting && appState.lintReport == nil {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text("Checking...")
+                    Text("Scanning vault links and schemas…")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let report = appState.lintReport {
-                if report.issues.isEmpty {
+                let canFix = FixVaultPresentation.canFixVault(appState.fixReport)
+                if report.issues.isEmpty && !canFix && manualIssues.isEmpty && appState.fixPreviewError == nil {
                     VStack(spacing: 12) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 48))
                             .foregroundStyle(.green)
                         Text("No issues found!")
                             .font(.headline)
-                        Text("Your vault structure matches all schemas and contains no broken wikilinks.")
+                        Text("Your vault links, formatting, and schemas are clean across \(report.filesChecked) files.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -99,47 +336,81 @@ struct LintResultsView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    let findings = brokenFindings(report)
-                    if !findings.isEmpty {
-                        // Class-aware header: how many broken links can be fixed in
-                        // one click (drift repairs + confident relinks) vs how many
-                        // need a human decision, with a single "Fix all" that
-                        // applies every one-click case behind a preview confirm.
-                        classAwareHeader(findings)
-                        Divider()
-                    }
-                    List(report.issues) { issue in
-                        IssueRow(
-                            issue: issue,
-                            linkClass: linkClass(for: issue),
-                            probeFailed: probeFailed(for: issue),
-                            onOpenInObsidian: { openInObsidian(issue) },
-                            onSetValue: { setValue in activeSetValue = setValue },
-                            onRepair: { repair in activeRepair = repair },
-                            onRelink: { path, target, cand in
-                                Task { await applyInlineRelink(path: path, target: target, cand: cand) }
-                            },
-                            onUnlink: { path, target in
-                                Task { await applyInlineUnlink(path: path, target: target) }
+                    List {
+                        if let fixReport = appState.fixReport, (fixReport.totalFixes > 0 || fixReport.schemaUpdated) {
+                            Section("Planned Automatic Fixes (\(fixReport.totalFixes))") {
+                                if fixReport.schemaUpdated {
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: "doc.badge.gearshape")
+                                            .foregroundStyle(.green)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(".2ndbrain/schemas.yaml")
+                                                .font(.body)
+                                                .fontWeight(.medium)
+                                            Text("Allow common note statuses (\(fixReport.schemaStatusesAdded.joined(separator: ", "))) — resolves \(fixReport.schemaIssuesResolved) note\(fixReport.schemaIssuesResolved == 1 ? "" : "s") without rewriting prose.")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .padding(.vertical, 3)
+                                }
+
+                                ForEach(fixReport.notes) { note in
+                                    FixNotePreviewRow(note: note, onOpenInObsidian: {
+                                        openInObsidian(forPath: note.path)
+                                    })
+                                }
                             }
-                        )
+                        }
+
+                        if let fixReport = appState.fixReport, !fixReport.aiFixableIssues.isEmpty {
+                            Section("Planned AI Repairs (\(fixReport.aiFixableIssues.count))") {
+                                ForEach(fixReport.aiFixableIssues) { aiIssue in
+                                    AIFixIssuePreviewRow(issue: aiIssue, onOpenInObsidian: {
+                                        openInObsidian(forPath: aiIssue.path)
+                                    })
+                                }
+                            }
+                        }
+
+                        if !manualIssues.isEmpty {
+                            Section("Needs Your Choice (\(manualIssues.count))") {
+                                ForEach(manualIssues) { issue in
+                                    ManualIssueRow(
+                                        issue: issue,
+                                        candidates: ambiguousCandidates(for: issue),
+                                        onOpenInObsidian: { openInObsidian(forPath: issue.path) },
+                                        onSetValue: { activeSetValue = $0 },
+                                        onRepair: { activeRepair = $0 }
+                                    )
+                                }
+                            }
+                        }
                     }
                     .listStyle(.inset)
-                    // Newline separator: finding ids already contain "|"
-                    // (path|target), so a "|" join could collide across
-                    // distinct finding sets and skip re-classification.
-                    .task(id: findings.map(\.id).joined(separator: "\n")) {
-                        await classifyBrokenFindings(findings)
-                    }
                 }
+            } else if let lintError = appState.lintError {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.red)
+                    Text("Lint scan failed")
+                        .font(.headline)
+                    Text(lintError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 12) {
-                    Image(systemName: "questionmark.circle")
+                    Image(systemName: "checkmark.seal")
                         .font(.system(size: 48))
                         .foregroundStyle(.secondary)
-                    Text("Not validated yet")
+                    Text("Not scanned yet")
                         .font(.headline)
-                    Text("Run a validation scan to check for schema errors or broken links.")
+                    Text("Click Rescan to check broken links, formatting, and schema rules.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -161,15 +432,26 @@ struct LintResultsView: View {
                         isPresented = false
                     }
                 }
-                Button("Check Now") {
+                Button(appState.isLinting ? "Scanning…" : "Rescan") {
                     Task { await appState.runLint() }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(appState.isLinting)
+                .accessibilityIdentifier("notes.rescanButton")
+                .disabled(appState.isLinting || appState.isFixingVault || appState.vault == nil)
             }
             .padding(12)
         }
-        .frame(width: isInline ? nil : 580, height: isInline ? nil : 480)
+        .frame(width: isInline ? nil : 620, height: isInline ? nil : 520)
+        .task(id: appState.vault?.rootURL) {
+            if appState.lintReport == nil && !appState.isLinting && !appState.isFixingVault {
+                await appState.runLint()
+            }
+        }
+        .onAppear {
+            applyButtonCommand(appState.guiInputBridge.pendingButtonCommand)
+        }
+        .onChange(of: appState.guiInputBridge.pendingButtonCommand) { _, cmd in
+            applyButtonCommand(cmd)
+        }
         .sheet(item: $activeSetValue) { item in
             SetValueSheet(item: item) { field, value in
                 activeSetValue = nil
@@ -180,399 +462,334 @@ struct LintResultsView: View {
             .environment(appState)
         }
         .sheet(item: $activeRepair) { repair in
-            // In walkthrough mode the sheet resolving OR the user skipping just
-            // advances to the next queued finding (no per-step re-lint); the
-            // single end re-lint happens when the queue drains. In single mode
-            // it behaves exactly as before: banner + re-lint on resolve/stale.
-            let inQueue = !walkthroughQueue.isEmpty
             LinkResolutionSheet(
                 fix: repair,
-                queuePosition: inQueue ? (index: walkthroughIndex, total: walkthroughQueue.count) : nil,
-                preloaded: bulkVerdict(forPath: repair.path, target: repair.target),
                 onOpenInObsidian: { openInObsidian(forPath: repair.path) },
                 onResolved: { message in
-                    if inQueue {
-                        advanceWalkthrough()
-                    } else {
-                        activeRepair = nil
-                        actionTone = .success
-                        actionMessage = "\(message) Re-checking…"
-                        Task { await appState.runLint() }
-                    }
+                    activeRepair = nil
+                    actionTone = .success
+                    actionMessage = "\(message) Re-checking…"
+                    Task { await appState.runLint() }
                 },
                 onStale: { message in
-                    // The link no longer exists, so the finding is stale, not
-                    // failed: informational banner + re-lint so it disappears.
-                    if inQueue {
-                        advanceWalkthrough()
-                    } else {
-                        activeRepair = nil
-                        actionTone = .info
-                        actionMessage = "\(message) Re-checking…"
-                        Task { await appState.runLint() }
-                    }
-                },
-                onSkip: inQueue ? { advanceWalkthrough() } : nil
-            )
-            .environment(appState)
-        }
-        .sheet(item: $activeFixAll) { plan in
-            FixAllSheet(
-                rewrites: plan.rewrites,
-                onDone: { fixed, failed in
-                    activeFixAll = nil
-                    let banner = LinkFixOutcome.fixAllResultBanner(fixed: fixed, failed: failed)
-                    actionTone = banner.tone
-                    actionMessage = banner.message + " Re-checking…"
+                    activeRepair = nil
+                    actionTone = .info
+                    actionMessage = "\(message) Re-checking…"
                     Task { await appState.runLint() }
                 }
             )
             .environment(appState)
-        }
-        .sheet(item: $activeRemoveAll) { plan in
-            RemoveAllSheet(
-                findings: plan.findings,
-                onDone: { removed, failed in
-                    activeRemoveAll = nil
-                    let banner = LinkFixOutcome.removeAllResultBanner(removed: removed, failed: failed)
-                    actionTone = banner.tone
-                    actionMessage = banner.message + " Re-checking…"
-                    Task { await appState.runLint() }
-                }
-            )
-            .environment(appState)
-        }
-        // The walkthrough sheet dismissing to nil (queue drained, or the user
-        // cancelled mid-walk) ends the walkthrough: tear down the queue and
-        // re-lint once so every fix applied across the steps is reflected. In
-        // single-finding mode the queue is empty, so this is a no-op and the
-        // per-finding closures own their own re-lint (no double re-check).
-        .onChange(of: activeRepair?.id) { _, newID in
-            if newID == nil && !walkthroughQueue.isEmpty {
-                walkthroughQueue = []
-                walkthroughIndex = 0
-                actionTone = .success
-                actionMessage = "Finished stepping through broken links. Re-checking…"
-                Task { await appState.runLint() }
-            }
         }
     }
 
-    /// The class-aware header + Fix-all button shown above the findings list when
-    /// at least one broken link exists.
+    // MARK: - Vault Fix Card
+
     @ViewBuilder
-    private func classAwareHeader(_ findings: [BrokenFinding]) -> some View {
-        let classes = findings.compactMap { classifications[$0.id] }
-        let counts = FixAllPlanner.counts(classes)
-        // Ready only when the probe has finished AND produced a class for every
-        // finding, so a re-classification after a fix shows "checking fixes…"
-        // rather than a stale-but-complete count.
-        let ready = !classifying && classes.count == findings.count
-        HStack(spacing: 6) {
-            Image(systemName: "link")
-                .foregroundStyle(.secondary)
-            if !ready {
-                Text("\(findings.count) broken link\(findings.count == 1 ? "" : "s") · checking fixes…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text(FixAllPlanner.headerSummary(total: findings.count, counts: counts))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            // Step through the non-one-click findings (decisions + removals —
-            // the ones Fix-all can't resolve) one at a time via the per-finding sheet.
-            // Count from the deduped walkthrough queue, not counts.decision (which
-            // is per-occurrence), so the label matches the "N of M" the walk shows.
-            let walkCount = ready ? FixAllPlanner.walkthroughQueue(from: classifiedPairs(findings)).count : 0
-            if ready && walkCount >= 1 {
-                Button("Fix each (\(walkCount))") { startWalkthrough(findings) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(appState.isLinting)
-            }
-            // Bulk removal for the findings whose machine recommendation is
-            // unlink (nothing >= medium matched / the model declined). Always
-            // behind a pre-checked confirm sheet, never silent.
-            let removals = ready ? FixAllPlanner.removalPlan(from: classifiedPairs(findings)) : []
-            if ready && !removals.isEmpty {
-                Button("Remove dead links (\(removals.count))") {
-                    activeRemoveAll = RemovalPlan(findings: removals)
+    private func vaultFixActionCard(manualIssueCount: Int) -> some View {
+        let fix = appState.fixReport
+        let canFix = FixVaultPresentation.canFixVault(fix)
+        let canUndo = FixVaultPresentation.canUndo(fix)
+        let busy = appState.isLinting || appState.isFixingVault
+
+        HStack(spacing: 12) {
+            Image(systemName: canFix ? "wand.and.stars" : (manualIssueCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
+                .font(.title2)
+                .foregroundStyle(canFix ? Color.accentColor : (manualIssueCount == 0 ? Color.green : Color.orange))
+
+            VStack(alignment: .leading, spacing: 3) {
+                if let fix {
+                    let actionableTotal = fix.totalFixes + fix.aiFixableCount
+                    let affectedNotes = Set(fix.notes.map(\.path) + fix.aiFixableIssues.map(\.path)).count
+                    let headline: String = {
+                        if canFix {
+                            if actionableTotal > 0 {
+                                return "Ready to fix \(actionableTotal) issue\(actionableTotal == 1 ? "" : "s") across \(affectedNotes) note\(affectedNotes == 1 ? "" : "s")"
+                            }
+                            return "Ready to update vault schema"
+                        }
+                        return manualIssueCount == 0 ? "Vault links, formatting & schemas are clean" : "Manual review needed"
+                    }()
+                    Text(headline)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+
+                    Text(FixVaultPresentation.summaryLine(fix: fix, lint: appState.lintReport))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let lint = appState.lintReport {
+                    Text(lint.issues.isEmpty ? "Vault links & schemas are clean" : "\(lint.issues.count) issue\(lint.issues.count == 1 ? "" : "s") found")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
                 }
+            }
+
+            Spacer()
+
+            if canUndo {
+                Button("Undo Last Fix") {
+                    Task { await runUndoFixVault() }
+                }
+                .accessibilityIdentifier("notes.undoFixButton")
                 .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(appState.isLinting)
+                .disabled(busy)
             }
-            if ready && counts.oneClick >= 1 {
-                Button("Fix all") { activeFixAll = FixAllPlan(rewrites: fixAllPlan(findings)) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(appState.isLinting)
+
+            Button(FixVaultPresentation.primaryButtonTitle(fix, isFixing: appState.isFixingVault)) {
+                Task { await runFixVault() }
             }
+            .accessibilityIdentifier("notes.fixVaultButton")
+            .buttonStyle(.borderedProminent)
+            .disabled(busy || !canFix)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    /// Begin the "Fix each" walkthrough: build the non-one-click queue
-    /// (decisions and removals — the complement of the Fix-all plan) from the
-    /// current classifications and open the first finding in the per-finding
-    /// sheet. A no-op when everything is one-click.
-    /// Pair each finding with its classification (dropping any not yet
-    /// classified), the input both the Fix-each button count and the walkthrough
-    /// queue derive from, so they can never disagree.
-    private func classifiedPairs(_ findings: [BrokenFinding]) -> [(BrokenFinding, LinkFixClass)] {
-        findings.compactMap { f in classifications[f.id].map { (f, $0) } }
-    }
+    // MARK: - Actions
 
-    private func startWalkthrough(_ findings: [BrokenFinding]) {
-        let queue = FixAllPlanner.walkthroughQueue(from: classifiedPairs(findings))
-        guard let first = queue.first else { return }
-        walkthroughQueue = queue
-        walkthroughIndex = 0
-        activeRepair = ActiveRepair(path: first.path, target: first.target)
-    }
-
-    /// Advance the walkthrough to the next queued finding after a fix is applied
-    /// or the finding is skipped. When the queue is exhausted, drop the sheet to
-    /// nil; the `.onChange` on `activeRepair` then ends the walkthrough and
-    /// re-lints once.
-    private func advanceWalkthrough() {
-        let next = walkthroughIndex + 1
-        guard next < walkthroughQueue.count else {
-            activeRepair = nil
-            return
+    private func runFixVault() async {
+        do {
+            let report = try await appState.applyVaultFix()
+            let banner = FixVaultPresentation.appliedBanner(report)
+            actionTone = banner.tone
+            actionMessage = banner.message
+        } catch {
+            actionTone = .error
+            actionMessage = AppState.boundedRedacted((error as? CLIError)?.errorDescription ?? error.localizedDescription)
         }
-        walkthroughIndex = next
-        let finding = walkthroughQueue[next]
-        activeRepair = ActiveRepair(path: finding.path, target: finding.target)
     }
 
-    /// Open the note in Obsidian (not Finder), falling back to the file's
-    /// default handler if Obsidian isn't installed. Unlike the old behavior, the
-    /// panel stays open so the user can keep working through findings.
-    private func openInObsidian(_ issue: LintIssue) {
-        openInObsidian(forPath: issue.path)
+    private func runUndoFixVault() async {
+        do {
+            let result = try await appState.undoVaultFix()
+            let banner = FixVaultPresentation.undoBanner(result)
+            actionTone = banner.tone
+            actionMessage = banner.message
+        } catch {
+            actionTone = .error
+            actionMessage = AppState.boundedRedacted((error as? CLIError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    private func applyButtonCommand(_ cmd: GUIButtonCommand?) {
+        guard let cmd else { return }
+        switch cmd.targetIdentifier {
+        case "notes.fixVaultButton":
+            if appState.vault == nil || appState.isLinting || appState.isFixingVault || !FixVaultPresentation.canFixVault(appState.fixReport) {
+                appState.guiInputBridge.acknowledgeButtonDisabled(cmd.id, label: "notes.fixVaultButton")
+            } else {
+                appState.guiInputBridge.acknowledgeButtonClicked(
+                    cmd.id,
+                    label: FixVaultPresentation.primaryButtonTitle(appState.fixReport, isFixing: false)
+                )
+                Task { await runFixVault() }
+            }
+        case "notes.undoFixButton":
+            if appState.vault == nil || appState.isLinting || appState.isFixingVault || !FixVaultPresentation.canUndo(appState.fixReport) {
+                appState.guiInputBridge.acknowledgeButtonDisabled(cmd.id, label: "notes.undoFixButton")
+            } else {
+                appState.guiInputBridge.acknowledgeButtonClicked(cmd.id, label: "Undo Last Fix")
+                Task { await runUndoFixVault() }
+            }
+        case "notes.rescanButton":
+            if appState.vault == nil || appState.isLinting || appState.isFixingVault {
+                appState.guiInputBridge.acknowledgeButtonDisabled(cmd.id, label: "notes.rescanButton")
+            } else {
+                appState.guiInputBridge.acknowledgeButtonClicked(cmd.id, label: "Rescan")
+                Task { await appState.runLint() }
+            }
+        default:
+            break
+        }
+    }
+
+    private func ambiguousCandidates(for issue: LintIssue) -> [String] {
+        if let candidates = issue.candidates, !candidates.isEmpty {
+            return candidates
+        }
+        guard let fixReport = appState.fixReport else { return [] }
+        let target: String
+        if let t = issue.target, !t.isEmpty {
+            target = t
+        } else if case let .brokenLink(msgTarget) = LintFinding.classify(issue: issue) {
+            target = msgTarget
+        } else {
+            return []
+        }
+        return fixReport.ambiguous.first(where: { $0.path == issue.path && $0.target == target })?.candidates ?? []
     }
 
     private func openInObsidian(forPath path: String) {
         guard let vault = appState.vault else { return }
         let absURL = vault.rootURL.appendingPathComponent(path)
-        // Prefer the name Obsidian itself registers for this folder (handles a
-        // vault renamed inside Obsidian); fall back to the folder basename.
         let vaultName = ObsidianRegistry.load()?.vault(at: vault.rootURL)?.name
             ?? vault.rootURL.lastPathComponent
         ObsidianURL.open(vaultName: vaultName, relativePath: path, absoluteFileURL: absURL)
     }
+}
 
-    /// The broken-wikilink findings in report order, normalized to
-    /// `BrokenFinding`. The raw target and drift class come from the CLI's
-    /// additive lint fields when present; on a pre-classification CLI the target
-    /// falls back to `LintFinding.classify(message:)` and `fix` stays nil (the
-    /// flow then leans on suggest-target alone).
-    private func brokenFindings(_ report: LintReport) -> [BrokenFinding] {
-        report.issues.compactMap { issue -> BrokenFinding? in
-            let target: String
-            if let t = issue.target, !t.isEmpty {
-                target = t
-            } else if case let .brokenLink(t) = LintFinding.classify(message: issue.message) {
-                target = t
-            } else {
-                return nil
-            }
-            return BrokenFinding(
-                path: issue.path, target: target, fix: issue.fix, driftTarget: issue.driftTarget)
-        }
-    }
+// MARK: - Subviews
 
-    /// The stored classification for one issue's broken finding (nil for a
-    /// non-broken issue or before classification completes).
-    private func linkClass(for issue: LintIssue) -> LinkFixClass? {
-        findingID(for: issue).flatMap { classifications[$0] }
-    }
+private struct FixNotePreviewRow: View {
+    let note: FixNoteChange
+    let onOpenInObsidian: () -> Void
 
-    /// Whether the fixability probe itself failed for this issue's finding
-    /// (CLI error — the badge must not read as a dead link).
-    private func probeFailed(for issue: LintIssue) -> Bool {
-        findingID(for: issue).map { classifyFailed.contains($0) } ?? false
-    }
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(note.path)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
 
-    /// The stored `--verdict` envelope for this finding, so the resolution
-    /// sheet reuses the bulk probe instead of re-running suggest-target.
-    private func bulkVerdict(forPath path: String, target: String) -> SuggestVerdictEnvelope? {
-        bulkVerdicts["\(path)|\(target)"]
-    }
+                ForEach(note.linkActions) { la in
+                    HStack(spacing: 6) {
+                        Text(label(for: la))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(badge(for: la))
+                            .font(.caption2)
+                            .foregroundStyle(color(for: la))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(color(for: la).opacity(0.12)))
+                    }
+                }
 
-    private func findingID(for issue: LintIssue) -> String? {
-        let target: String
-        if let t = issue.target, !t.isEmpty {
-            target = t
-        } else if case let .brokenLink(t) = LintFinding.classify(message: issue.message) {
-            target = t
-        } else {
-            return nil
-        }
-        return "\(issue.path)|\(target)"
-    }
-
-    /// The Fix-all plan derived from the stored classifications: one-click
-    /// classes (drift repairs + confident relinks) become rewrites; ambiguous /
-    /// missing findings are excluded (they route to the per-finding sheet).
-    private func fixAllPlan(_ findings: [BrokenFinding]) -> [PlannedRewrite] {
-        FixAllPlanner.plan(from: findings.compactMap { f in
-            classifications[f.id].map { (f, $0) }
-        })
-    }
-
-    /// Probe each broken finding's fixability once, storing the result. A "drift"
-    /// finding needs no lookup (the CLI already resolved it); every other finding
-    /// asks `suggest-target --llm --verdict` (context-aware, LLM re-rank when
-    /// nothing is high-confidence, one machine recommendation) and classifies
-    /// from the envelope: high relink → one-click, medium relink → top picks,
-    /// unlink → removable. Probes run concurrently (bounded) since each is an
-    /// independent CLI call; a probe that ERRORS is recorded in
-    /// `classifyFailed` and degrades to the offline classification so a
-    /// transient failure is never presented as a dead link.
-    private func classifyBrokenFindings(_ findings: [BrokenFinding]) async {
-        guard !findings.isEmpty else {
-            classifications = [:]
-            bulkVerdicts = [:]
-            classifyFailed = []
-            classifying = false
-            return
-        }
-        classifying = true
-        var result: [String: LinkFixClass] = [:]
-        var verdicts: [String: SuggestVerdictEnvelope] = [:]
-        var failed: Set<String> = []
-
-        // Drift findings classify instantly; only the rest need a CLI probe.
-        var pending: [BrokenFinding] = []
-        var pendingIDs = Set<String>()
-        for f in findings {
-            if f.fix == "drift" {
-                result[f.id] = .repairable(driftTarget: f.driftTarget)
-            } else if pendingIDs.insert(f.id).inserted {
-                pending.append(f) // dedupe: one probe per (path, target)
-            }
-        }
-
-        // Bounded fan-out: at most maxConcurrentProbes suggest-target processes
-        // at a time (each may spend one generation call).
-        let maxConcurrentProbes = 4
-        await withTaskGroup(of: (String, SuggestVerdictEnvelope?).self) { group in
-            var iterator = pending.makeIterator()
-            var inFlight = 0
-            func addNext() {
-                guard let f = iterator.next() else { return }
-                inFlight += 1
-                group.addTask {
-                    let env = try? await appState.suggestTargetVerdict(target: f.target, sourcePath: f.path)
-                    return (f.id, env)
+                ForEach(note.frontmatterFixes) { ff in
+                    HStack(spacing: 6) {
+                        Text(frontmatterFixLabel(for: ff))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(frontmatterFixBadge(for: ff))
+                            .font(.caption2)
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.blue.opacity(0.12)))
+                    }
                 }
             }
-            for _ in 0..<maxConcurrentProbes { addNext() }
-            while inFlight > 0 {
-                guard let (id, env) = await group.next() else { break }
-                inFlight -= 1
-                if let env {
-                    verdicts[id] = env
-                } else {
-                    failed.insert(id)
-                }
-                addNext()
-            }
+            Spacer()
+            Button("Open", action: onOpenInObsidian)
+                .controlSize(.small)
         }
-
-        for f in pending {
-            if let env = verdicts[f.id] {
-                result[f.id] = FixAllPlanner.classify(fix: f.fix, envelope: env, driftTarget: f.driftTarget)
-            } else {
-                // Probe failed: degrade to the lint-only classification (never
-                // .removable — a transient error is not evidence of a dead link).
-                result[f.id] = FixAllPlanner.classify(fix: f.fix, candidates: [], driftTarget: f.driftTarget)
-            }
-        }
-        classifications = result
-        bulkVerdicts = verdicts
-        classifyFailed = failed
-        classifying = false
+        .padding(.vertical, 3)
     }
 
-    /// One-tap unlink from a removable row (remove the link, keep the text).
-    /// Snapshotted (reversible via polish --undo); re-lints on success.
-    private func applyInlineUnlink(path: String, target: String) async {
-        do {
-            let res = try await appState.unlink(path: path, target: target, preview: false)
-            let outcome = LinkFixOutcome.classify(result: res, target: target, verb: "unlink")
-            switch outcome {
-            case .success:
-                actionTone = .success
-                actionMessage = "Unlinked [[\(target)]] (text kept). Re-checking…"
-                await appState.runLint()
-            case .actionable(let message):
-                actionTone = .error
-                actionMessage = message
-            case .stale(let message):
-                actionTone = .info
-                actionMessage = "\(message) Re-checking…"
-                await appState.runLint()
-            }
-        } catch {
-            actionTone = .error
-            actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+    private func frontmatterFixLabel(for ff: FixFieldChange) -> String {
+        switch ff.reason {
+        case "unquote_date":
+            return "\(ff.field): unquote \(ff.to)"
+        case "parse_error":
+            return "Repair malformed YAML frontmatter"
+        case "formatting":
+            return "\(ff.field): \(ff.to)"
+        default:
+            return "set \(ff.field) = \(ff.to)"
         }
     }
 
-    /// One-tap relink from an inline recommendation on a list row. Snapshotted
-    /// (reversible via polish --undo); re-lints on success.
-    private func applyInlineRelink(path: String, target: String, cand: SuggestTargetResult) async {
-        let to = (cand.path as NSString).deletingPathExtension
-        do {
-            let res = try await appState.relink(path: path, from: target, to: to, preview: false)
-            let outcome = LinkFixOutcome.classify(result: res, target: target, verb: "repoint")
-            switch outcome {
-            case .success:
-                actionTone = .success
-                actionMessage = "Linked [[\(target)]] → [[\(cand.displayTitle)]]. Re-checking…"
-                await appState.runLint()
-            case .actionable(let message):
-                actionTone = .error
-                actionMessage = message
-            case .stale(let message):
-                actionTone = .info
-                actionMessage = "\(message) Re-checking…"
-                await appState.runLint()
-            }
-        } catch {
-            actionTone = .error
-            actionMessage = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+    private func frontmatterFixBadge(for ff: FixFieldChange) -> String {
+        switch ff.reason {
+        case "parse_error": return "YAML repair"
+        case "schema_enum": return "AI schema"
+        case "formatting": return "format"
+        default: return "frontmatter"
+        }
+    }
+
+    private func label(for action: FixLinkAction) -> String {
+        switch action.action {
+        case "relink":
+            return "[[\(action.from)]] → [[\(action.to ?? "")]]"
+        case "unlink":
+            return "[[\(action.from)]] → plain text"
+        case "format":
+            return "Format \(action.from) → \(action.to ?? "")"
+        default:
+            return action.from
+        }
+    }
+
+    private func badge(for action: FixLinkAction) -> String {
+        switch action.reason {
+        case "drift": return "drift"
+        case "moved_path": return "moved path"
+        case "obvious_match": return "obvious match"
+        case "dead_link": return "dead link"
+        case "link_syntax": return "syntax"
+        case "ai_suggest": return "AI match"
+        case "ai_disambiguate": return "AI context"
+        default: return action.action
+        }
+    }
+
+    private func color(for action: FixLinkAction) -> Color {
+        switch action.action {
+        case "relink": return .green
+        case "unlink": return .secondary
+        case "format": return .blue
+        default: return .secondary
         }
     }
 }
 
-/// One validation finding with its remediation affordances. Pure presentation:
-/// it classifies the message and surfaces the right buttons, delegating the
-/// actual work to the parent via closures.
-private struct IssueRow: View {
+private struct AIFixIssuePreviewRow: View {
+    let issue: AIFixableIssue
+    let onOpenInObsidian: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "wand.and.stars")
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(issue.path)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                    Text(kindLabel)
+                        .font(.caption2)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                }
+                Text(issue.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Open", action: onOpenInObsidian)
+                .controlSize(.small)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var kindLabel: String {
+        switch issue.kind {
+        case "parse_error": return "YAML repair"
+        case "schema_enum": return "schema enum"
+        case "missing_required": return "required field"
+        case "broken_link": return "AI link"
+        case "formatting": return "formatting"
+        default: return issue.kind
+        }
+    }
+}
+
+private struct ManualIssueRow: View {
     let issue: LintIssue
-    /// Fixability class for a broken-link finding (nil for other findings, or
-    /// before classification completes). Renders the subtle per-row badge and
-    /// (for `.recommend` / `.removable`) the inline actions.
-    let linkClass: LinkFixClass?
-    /// True when the fixability probe itself errored — the badge reads
-    /// "check failed", never a removal recommendation.
-    var probeFailed: Bool = false
+    let candidates: [String]
     let onOpenInObsidian: () -> Void
     let onSetValue: (ActiveSetValue) -> Void
     let onRepair: (ActiveRepair) -> Void
-    /// Inline one-tap relink from a recommended candidate (decision rows).
-    let onRelink: (_ path: String, _ target: String, _ cand: SuggestTargetResult) -> Void
-    /// Inline one-tap unlink from a removable row (remove link, keep text).
-    let onUnlink: (_ path: String, _ target: String) -> Void
 
-    private var finding: LintFinding { LintFinding.classify(message: issue.message) }
+    private var finding: LintFinding { LintFinding.classify(issue: issue) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -591,15 +808,13 @@ private struct IssueRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    if probeFailed {
-                        Text("check failed")
+                    if !candidates.isEmpty {
+                        Text("ambiguous (\(candidates.count))")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.orange)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                    } else if let linkClass {
-                        LinkClassBadge(linkClass: linkClass)
+                            .background(Capsule().fill(Color.orange.opacity(0.12)))
                     }
                 }
 
@@ -607,62 +822,10 @@ private struct IssueRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                // Removal recommendation: the CLI's verdict says nothing >=
-                // medium matches (or the model declined every candidate), so
-                // offer the one-tap Unlink inline. The Fix link sheet remains
-                // for picking a weak candidate or creating the note instead.
-                if case .removable = linkClass, !probeFailed,
-                   case let .brokenLink(target) = finding {
-                    HStack(spacing: 6) {
-                        Text("No existing note matches — remove the link, keep the text?")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Button("Unlink") {
-                            onUnlink(issue.path, target)
-                        }
-                        .controlSize(.mini)
-                        .buttonStyle(.bordered)
-                    }
-                    .padding(.top, 2)
-                }
-
-                // Top 2-3 recommendations for decision-class findings (medium/low
-                // search hits or LLM re-rank). High-confidence one-click cases
-                // go through Fix all / Fix link, not the inline list.
-                if case .recommend(let cands) = linkClass, !cands.isEmpty,
-                   case let .brokenLink(target) = finding {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Did you mean?")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        ForEach(Array(cands.prefix(FixAllPlanner.maxRecommendations))) { cand in
-                            HStack(spacing: 6) {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Text(cand.displayTitle)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                    if let reason = cand.reason, !reason.isEmpty {
-                                        Text(reason)
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                            .lineLimit(1)
-                                    }
-                                }
-                                Spacer(minLength: 4)
-                                if let conf = cand.confidence {
-                                    Text(conf)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Button("Link") {
-                                    onRelink(issue.path, target, cand)
-                                }
-                                .controlSize(.mini)
-                                .buttonStyle(.bordered)
-                            }
-                        }
-                    }
-                    .padding(.top, 2)
+                if !candidates.isEmpty {
+                    Text("Matches: \(candidates.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
 
                 HStack(spacing: 8) {
@@ -682,7 +845,8 @@ private struct IssueRow: View {
                         .controlSize(.small)
                     case let .brokenLink(target):
                         Button("Fix link…") {
-                            onRepair(ActiveRepair(path: issue.path, target: target))
+                            let resolvedTarget = (issue.target?.isEmpty == false ? issue.target : nil) ?? target
+                            onRepair(ActiveRepair(path: issue.path, target: resolvedTarget))
                         }
                         .controlSize(.small)
                     case .parseError, .other:
@@ -696,25 +860,6 @@ private struct IssueRow: View {
     }
 }
 
-/// Subtle capsule showing a broken link's fixability class. A one-click class
-/// (auto-repairable, did you mean?) tints green; a decision class (matches
-/// several, no matching note) tints orange. Kept small so it reads as a hint,
-/// not a control.
-private struct LinkClassBadge: View {
-    let linkClass: LinkFixClass
-
-    private var tint: Color { linkClass.isOneClick ? .green : .orange }
-
-    var body: some View {
-        Text(linkClass.badgeText)
-            .font(.caption2)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(Capsule().fill(tint.opacity(0.12)))
-    }
-}
-
 /// The broken-link finding being repaired in the preview sheet.
 struct ActiveRepair: Identifiable {
     let id = UUID()
@@ -722,268 +867,7 @@ struct ActiveRepair: Identifiable {
     let target: String
 }
 
-/// The Fix-all confirm sheet's payload: the pre-checked plan of one-click
-/// rewrites. Wrapped so it can drive `.sheet(item:)`.
-struct FixAllPlan: Identifiable {
-    let id = UUID()
-    let rewrites: [PlannedRewrite]
-}
-
-/// The Remove-dead-links confirm sheet's payload: the deduped `.removable`
-/// findings. Wrapped so it can drive `.sheet(item:)`.
-struct RemovalPlan: Identifiable {
-    let id = UUID()
-    let findings: [BrokenFinding]
-}
-
-/// One-tap confirm for the whole Fix-all plan. Lists every planned rewrite as a
-/// pre-checked `[[target]] -> [[chosen]]` row so nothing is applied blind, then
-/// applies each checked rewrite (`repair-links --write` / `relink --write`,
-/// each reversible with `polish --undo`) and reports the aggregate via
-/// `onDone`. Uses a SwiftUI sheet (like the per-finding sheet) since the
-/// checkbox list needs interactive controls an NSAlert can't host.
-private struct FixAllSheet: View {
-    @Environment(AppState.self) private var appState
-    @Environment(\.dismiss) private var dismiss
-    let rewrites: [PlannedRewrite]
-    /// Called with (fixed, failed) counts after the pass so the parent can show
-    /// the aggregate banner, dismiss, and re-lint.
-    let onDone: (_ fixed: Int, _ failed: Int) -> Void
-
-    /// Finding ids the user has left checked (all pre-checked on open).
-    @State private var checked: Set<String>
-    @State private var applying = false
-    @State private var errorText: String?
-
-    init(rewrites: [PlannedRewrite], onDone: @escaping (Int, Int) -> Void) {
-        self.rewrites = rewrites
-        self.onDone = onDone
-        _checked = State(initialValue: Set(rewrites.map(\.id)))
-    }
-
-    private var checkedCount: Int { checked.count }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Fix \(rewrites.count) link\(rewrites.count == 1 ? "" : "s")")
-                .font(.headline)
-            Text("Each rewrite points a broken link at an existing note. Uncheck any you want to skip. Each edited note can be reverted with 2nb polish --undo (which restores its most recent change); to roll back a whole batch, use Obsidian's file history or git.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(rewrites) { rewrite in
-                        Toggle(isOn: binding(for: rewrite)) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("[[\(rewrite.target)]] → [[\(rewrite.chosenDisplay)]]")
-                                    .font(.callout)
-                                HStack(spacing: 6) {
-                                    Text(rewrite.kindLabel)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                    Text(rewrite.path)
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                }
-                            }
-                        }
-                        .toggleStyle(.checkbox)
-                        .disabled(applying)
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            .frame(maxHeight: 260)
-
-            if let errorText {
-                Text(errorText)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Divider()
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(applying)
-                Button(applying ? "Fixing…" : "Fix \(checkedCount)") { apply() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(applying || checkedCount == 0)
-            }
-        }
-        .padding(16)
-        .frame(width: 520)
-    }
-
-    private func binding(for rewrite: PlannedRewrite) -> Binding<Bool> {
-        Binding(
-            get: { checked.contains(rewrite.id) },
-            set: { isOn in
-                if isOn { checked.insert(rewrite.id) } else { checked.remove(rewrite.id) }
-            }
-        )
-    }
-
-    /// Apply each checked rewrite sequentially. A rewrite counts as fixed when
-    /// the CLI reports a link was actually repaired/relinked; a no-op (the note
-    /// changed since the check) or an error counts as failed so the aggregate
-    /// banner is honest.
-    private func apply() {
-        let selected = rewrites.filter { checked.contains($0.id) }
-        guard !selected.isEmpty else { return }
-        applying = true
-        errorText = nil
-        Task {
-            var fixed = 0
-            var failed = 0
-            for rewrite in selected {
-                do {
-                    let result: PolishResult
-                    switch rewrite.action {
-                    case .repair:
-                        result = try await appState.repairLinks(
-                            path: rewrite.path, target: rewrite.target, preview: false)
-                    case .relink(let chosenPath, _):
-                        result = try await appState.relink(
-                            path: rewrite.path, from: rewrite.target, to: chosenPath, preview: false)
-                    }
-                    let n = result.linksRepaired?.count ?? 0
-                    if n > 0 { fixed += n } else { failed += 1 }
-                } catch {
-                    failed += 1
-                }
-            }
-            applying = false
-            onDone(fixed, failed)
-        }
-    }
-}
-
-/// One-tap confirm for the bulk Remove-dead-links pass. Lists every removable
-/// finding as a pre-checked "[[target]] in path" row (nothing is removed
-/// blind), then unlinks each checked one (`2nb unlink --write`, keeping the
-/// visible text, each reversible with `polish --undo`) and reports the
-/// aggregate via `onDone`. Mirrors FixAllSheet.
-private struct RemoveAllSheet: View {
-    @Environment(AppState.self) private var appState
-    @Environment(\.dismiss) private var dismiss
-    let findings: [BrokenFinding]
-    /// Called with (removed, failed) counts after the pass so the parent can
-    /// show the aggregate banner, dismiss, and re-lint.
-    let onDone: (_ removed: Int, _ failed: Int) -> Void
-
-    /// Finding ids the user has left checked (all pre-checked on open).
-    @State private var checked: Set<String>
-    @State private var applying = false
-    /// Set when the user cancels mid-pass: the loop stops after the in-flight
-    /// unlink (each can block on the CLI's post-write re-embed), reporting the
-    /// partial counts, so a slow or wedged CLI never strands the modal.
-    @State private var cancelRequested = false
-
-    init(findings: [BrokenFinding], onDone: @escaping (Int, Int) -> Void) {
-        self.findings = findings
-        self.onDone = onDone
-        _checked = State(initialValue: Set(findings.map(\.id)))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Remove \(findings.count) dead link\(findings.count == 1 ? "" : "s")")
-                .font(.headline)
-            Text("These links match no existing note confidently, so removing them is the recommended fix. Removal keeps the visible text and only strips the [[brackets]]. Uncheck any you want to keep. Each edited note can be reverted with 2nb polish --undo.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(findings, id: \.id) { finding in
-                        Toggle(isOn: binding(for: finding)) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("[[\(finding.target)]]")
-                                    .font(.callout)
-                                Text(finding.path)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .toggleStyle(.checkbox)
-                        .disabled(applying)
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            .frame(maxHeight: 260)
-
-            Divider()
-            HStack {
-                Spacer()
-                // Cancel stays enabled while applying: it stops the pass after
-                // the in-flight unlink (which can block on a slow re-embed)
-                // instead of stranding the user in an un-dismissable modal.
-                Button(applying ? "Stop" : "Cancel") {
-                    if applying { cancelRequested = true } else { dismiss() }
-                }
-                .keyboardShortcut(.cancelAction)
-                .disabled(cancelRequested)
-                Button(applying ? "Removing…" : "Remove \(checked.count)") { apply() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(applying || checked.isEmpty)
-            }
-        }
-        .padding(16)
-        .frame(width: 520)
-    }
-
-    private func binding(for finding: BrokenFinding) -> Binding<Bool> {
-        Binding(
-            get: { checked.contains(finding.id) },
-            set: { isOn in
-                if isOn { checked.insert(finding.id) } else { checked.remove(finding.id) }
-            }
-        )
-    }
-
-    /// Unlink each checked finding sequentially. A finding counts as removed
-    /// when the CLI reports a link was actually rewritten; a no-op (the note
-    /// changed since the check) or an error counts as failed so the aggregate
-    /// banner is honest. A cancel request stops before the next unlink and
-    /// reports the partial counts.
-    private func apply() {
-        let selected = findings.filter { checked.contains($0.id) }
-        guard !selected.isEmpty else { return }
-        applying = true
-        cancelRequested = false
-        Task {
-            var removed = 0
-            var failed = 0
-            for finding in selected {
-                if cancelRequested { break }
-                do {
-                    let result = try await appState.unlink(
-                        path: finding.path, target: finding.target, preview: false)
-                    let n = result.linksRepaired?.count ?? 0
-                    if n > 0 { removed += n } else { failed += 1 }
-                } catch {
-                    failed += 1
-                }
-            }
-            applying = false
-            onDone(removed, failed)
-        }
-    }
-}
-
-/// The finding being edited in the Set-value sheet. `allowed` non-empty means an
-/// enum (render a picker); empty means a free-text required field.
+/// The finding being edited in the Set-value sheet.
 struct ActiveSetValue: Identifiable {
     let id = UUID()
     let path: String
@@ -993,14 +877,11 @@ struct ActiveSetValue: Identifiable {
 }
 
 /// Sheet to set one frontmatter field, fixing a missing-required-field or
-/// invalid-enum finding. Enum findings get a picker of valid values; missing
-/// fields get a validated text field. The CLI schema-validates the write.
+/// invalid-enum finding.
 private struct SetValueSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     let item: ActiveSetValue
-    /// Called with (field, value) after a successful write so the parent can
-    /// dismiss, re-lint, and show a banner.
     let onSaved: (String, String) -> Void
 
     @State private var selected: String
@@ -1079,55 +960,25 @@ private struct SetValueSheet: View {
                 onSaved(item.field, value)
             } catch {
                 saving = false
-                errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+                errorText = AppState.boundedRedacted((error as? CLIError)?.errorDescription ?? error.localizedDescription)
             }
         }
     }
 }
 
-/// Resolves a broken `[[wikilink]]` with no dead ends. On open it concurrently
-/// loads a deterministic repair preview (`2nb repair-links` dry run) and ranked
-/// "did you mean?" candidates (`2nb suggest-target`), then presents, in priority
-/// order: Repair drift (when a confident target exists, with a diff), Did-you-mean
-/// suggestions (relink to a chosen note), Create the note, and Unlink (keep the
-/// text). Create and Unlink are ALWAYS offered, so every finding has a real fix.
-/// Every mutating action is reversible with `polish --undo`. Each action's
-/// result is classified by `LinkFixOutcome`: success and stale findings both
-/// dismiss and re-lint (green vs informational banner); actionable guidance
-/// keeps the sheet open so the user picks another option.
+/// Resolves an ambiguous or manual broken `[[wikilink]]` with choices to repoint,
+/// create the missing note, or unwrap to plain text.
 private struct LinkResolutionSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     let fix: ActiveRepair
-    /// Position within the "Fix each" walkthrough, e.g. (index: 1, total: 5).
-    /// Non-nil puts the sheet in queue mode: it shows a "2 of 5" progress
-    /// indicator and a Skip button. Nil is the normal single-finding mode
-    /// (opened from one "Fix link…" button).
     var queuePosition: (index: Int, total: Int)? = nil
-    /// The bulk classification's `--verdict` envelope for this finding, when
-    /// available: the sheet reuses it (candidates + recommendation + llm
-    /// outcome) instead of re-running suggest-target on open. Nil falls back
-    /// to a fresh fetch.
     var preloaded: SuggestVerdictEnvelope? = nil
-    /// Open the note in Obsidian (delegated to the parent, which knows the vault).
     let onOpenInObsidian: () -> Void
-    /// Called with a past-tense banner message after a successful resolution so
-    /// the parent can dismiss, re-lint, and show the green banner.
     let onResolved: (String) -> Void
-    /// Called when the link no longer exists (a stale finding) so the parent
-    /// can dismiss, re-lint, and show an informational banner instead of a
-    /// false success or an in-sheet dead end.
     let onStale: (String) -> Void
-    /// In queue mode, skip this finding and advance to the next. Nil in
-    /// single-finding mode, where no Skip button is shown.
     var onSkip: (() -> Void)? = nil
 
-    /// Which action to visually recommend, in BOTH modes (queue and single):
-    /// driven by the CLI's verdict when one is available (relink → the top
-    /// suggestion, unlink → removal), else the shape heuristic (suggestions
-    /// exist → relink, none → unlink). Suppressed while loading and when a
-    /// confident drift repair exists (that section is already labeled
-    /// "recommended").
     private enum RecommendedAction: Equatable { case relinkTop, unlink }
     private var recommendedAction: RecommendedAction? {
         guard !loading, confidentRepair == nil else { return nil }
@@ -1140,18 +991,11 @@ private struct LinkResolutionSheet: View {
     @State private var loading = true
     @State private var repairPreview: PolishResult?
     @State private var suggestions: [SuggestTargetResult] = []
-    /// The machine recommendation for this finding (from the preloaded bulk
-    /// envelope or the sheet's own fetch); nil when the probe failed.
     @State private var verdict: SuggestRecommendation?
-    /// Non-error guidance when an action found the link but could not fix it
-    /// (e.g. no confident target): the sheet stays open so the user picks
-    /// another option.
     @State private var guidanceText: String?
     @State private var errorText: String?
     @State private var busy = false
 
-    /// The single confident repair, if `repair-links` found one (case/separator
-    /// drift to exactly one existing note).
     private var confidentRepair: RepairLinkRepair? {
         repairPreview?.linksRepaired?.first
     }
@@ -1189,8 +1033,6 @@ private struct LinkResolutionSheet: View {
                         if !filteredSuggestions.isEmpty {
                             suggestSection
                         }
-                        // A path-qualified target ("folder/note") names a
-                        // location, not a title to mint, so Create doesn't apply.
                         if FixAllPlanner.canCreateNote(forTarget: fix.target) {
                             createSection
                         }
@@ -1225,9 +1067,6 @@ private struct LinkResolutionSheet: View {
                     Button("Skip") { onSkip() }
                         .disabled(busy)
                 }
-                // In queue mode this stops the whole walkthrough (the parent's
-                // onChange on `activeRepair` re-lints once); in single mode it
-                // just closes the sheet.
                 Button(queuePosition == nil ? "Cancel" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(busy)
@@ -1237,8 +1076,6 @@ private struct LinkResolutionSheet: View {
         .frame(width: 480)
         .task { await load() }
     }
-
-    // MARK: Sections
 
     @ViewBuilder
     private func repairSection(_ r: RepairLinkRepair, preview p: PolishResult) -> some View {
@@ -1306,9 +1143,6 @@ private struct LinkResolutionSheet: View {
         }
     }
 
-    /// Repoint the broken link at the chosen candidate note (`.md` dropped).
-    /// Shared by the plain and recommended Link buttons so preselection changes
-    /// only the button's prominence, never the action.
     private func relinkAction(_ cand: SuggestTargetResult) {
         let to = (cand.path as NSString).deletingPathExtension
         run("Linked [[\(fix.target)]] → [[\(cand.displayTitle)]].") {
@@ -1360,8 +1194,6 @@ private struct LinkResolutionSheet: View {
         }
     }
 
-    /// Remove the broken link, keeping its visible text. Shared by the plain and
-    /// recommended Unlink buttons.
     private func unlinkAction() {
         run("Unlinked [[\(fix.target)]].") {
             let res = try await appState.unlink(path: fix.path, target: fix.target, preview: false)
@@ -1369,15 +1201,6 @@ private struct LinkResolutionSheet: View {
         }
     }
 
-    // MARK: Logic
-
-    /// Drop the finding's own note (a note is never a fix for its own broken
-    /// link). The CLI's --source exclusion already guarantees this; the local
-    /// filter is defense-in-depth for a CLI whose exclusion no-ops (an older
-    /// CLI without the flag returns no suggestions at all, so there is nothing
-    /// to filter here). Also drop any suggestion that duplicates the confident
-    /// repair target (compared by the note's bare name) so it isn't offered
-    /// twice.
     private var filteredSuggestions: [SuggestTargetResult] {
         let withoutSource = suggestions.filter { $0.path != fix.path }
         guard let n = confidentRepair?.newTarget, !n.isEmpty else { return withoutSource }
@@ -1390,19 +1213,11 @@ private struct LinkResolutionSheet: View {
     private func load() async {
         loading = true
         errorText = nil
-        // Repair preview and suggestions are independent — fetch concurrently.
-        // repair-links can error (e.g. read-only file); suggestions degrade to
-        // no-verdict rather than erroring.
         async let repairResult: PolishResult? = try? await appState.repairLinks(path: fix.path, target: fix.target, preview: true)
         if let preloaded {
-            // Reuse the bulk classification's probe: no second generation
-            // spend on open, and the sheet agrees with the row badge.
             suggestions = preloaded.candidates
             verdict = preloaded.recommendation
         } else {
-            // No bulk result (opened before classification finished, or the
-            // bulk probe failed): fetch fresh. A failed fetch leaves verdict
-            // nil so the recommendation falls back to the shape heuristic.
             if let env = try? await appState.suggestTargetVerdict(target: fix.target, sourcePath: fix.path) {
                 suggestions = env.candidates
                 verdict = env.recommendation
@@ -1416,12 +1231,6 @@ private struct LinkResolutionSheet: View {
         loading = false
     }
 
-    /// Run a mutating resolution. `work` returns the classified outcome:
-    /// `.success` dismisses via `onResolved` (green banner + re-lint);
-    /// `.actionable` shows guidance in-sheet and keeps the sheet open (the link
-    /// still exists, the user should pick another option); `.stale` dismisses
-    /// via `onStale` (informational banner + re-lint) so a finding whose link
-    /// no longer exists disappears instead of stranding the user in the sheet.
     private func run(_ successMessage: String, _ work: @escaping () async throws -> LinkFixOutcome) {
         busy = true
         guidanceText = nil
@@ -1440,7 +1249,7 @@ private struct LinkResolutionSheet: View {
                 }
             } catch {
                 busy = false
-                errorText = (error as? CLIError)?.errorDescription ?? error.localizedDescription
+                errorText = AppState.boundedRedacted((error as? CLIError)?.errorDescription ?? error.localizedDescription)
             }
         }
     }

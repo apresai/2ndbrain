@@ -146,7 +146,7 @@ func TestUpdateZshrc_PlacesBlockBeforeConditionalReturn(t *testing.T) {
 	existing := strings.Join([]string{
 		"# zshrc",
 		"export PATH=$HOME/bin:$PATH",
-		`[[ "$TERM_PROGRAM" == "antigravity" ]] && return`,
+		`[[ "$TERM_PROGRAM" == "vscode" ]] && return`,
 		"autoload -Uz compinit",
 		"compinit -i",
 		"",
@@ -238,7 +238,7 @@ func TestBuildZshrcBlock_Contents(t *testing.T) {
 }
 
 func TestCompletionDirsFromZshrc_PrioritizesHomePaths(t *testing.T) {
-	home := filepath.Join(string(filepath.Separator), "Users", "chad")
+	home := filepath.Join(string(filepath.Separator), "Users", "alice")
 	content := strings.Join([]string{
 		"fpath=(/opt/homebrew/share/zsh/site-functions $fpath)",
 		"fpath=($HOME/.zfunc ~/.zsh/completions $fpath)",
@@ -450,7 +450,7 @@ func TestFirstTopLevelReturnOrExitLine(t *testing.T) {
 		},
 		{
 			name:  "conditional && return",
-			lines: []string{"export X=1", `[[ "$TERM_PROGRAM" == "antigravity" ]] && return`, "compinit"},
+			lines: []string{"export X=1", `[[ "$TERM_PROGRAM" == "vscode" ]] && return`, "compinit"},
 			want:  1,
 		},
 		{

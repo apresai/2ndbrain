@@ -16,6 +16,13 @@ enum LintFinding: Equatable {
     /// Anything else the classifier doesn't recognize.
     case other
 
+    static func classify(issue: LintIssue) -> LintFinding {
+        if issue.kind == "broken_link", let target = issue.target, !target.isEmpty {
+            return .brokenLink(target: target)
+        }
+        return classify(message: issue.message)
+    }
+
     static func classify(message: String) -> LintFinding {
         if let target = brokenLinkTarget(message) {
             return .brokenLink(target: target)
@@ -35,10 +42,13 @@ enum LintFinding: Equatable {
     // MARK: - Parsers (format mirrors lint.go message strings)
 
     private static func brokenLinkTarget(_ m: String) -> String? {
-        let prefix = "broken wikilink: [["
-        guard m.hasPrefix(prefix), m.hasSuffix("]]") else { return nil }
-        let target = String(m.dropFirst(prefix.count).dropLast(2))
-        return target.isEmpty ? nil : target
+        for prefix in ["broken wikilink: [[", "ambiguous wikilink: [["] {
+            if m.hasPrefix(prefix), m.hasSuffix("]]") {
+                let target = String(m.dropFirst(prefix.count).dropLast(2))
+                return target.isEmpty ? nil : target
+            }
+        }
+        return nil
     }
 
     private static func missingField(_ m: String) -> (field: String, type: String)? {

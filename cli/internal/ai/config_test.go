@@ -9,11 +9,17 @@ import (
 func TestDefaultAIConfig(t *testing.T) {
 	cfg := DefaultAIConfig()
 
-	if cfg.Provider != "bedrock" {
-		t.Errorf("default provider = %q, want bedrock", cfg.Provider)
+	if cfg.Provider != "gemini" {
+		t.Errorf("default provider = %q, want gemini", cfg.Provider)
 	}
-	if cfg.Dimensions != 1024 {
-		t.Errorf("default dimensions = %d, want 1024", cfg.Dimensions)
+	if cfg.Dimensions != 768 {
+		t.Errorf("default dimensions = %d, want 768", cfg.Dimensions)
+	}
+	if cfg.Gemini.Project != "" {
+		t.Errorf("default project = %q, want empty (BYOK)", cfg.Gemini.Project)
+	}
+	if cfg.Gemini.Location != "us-central1" {
+		t.Errorf("default location = %q, want us-central1", cfg.Gemini.Location)
 	}
 	if cfg.Bedrock.Region != "us-east-1" {
 		t.Errorf("default region = %q, want us-east-1", cfg.Bedrock.Region)
@@ -24,11 +30,11 @@ func TestDefaultAIConfig(t *testing.T) {
 	if cfg.OpenRouter.APIKeyEnv != "OPENROUTER_API_KEY" {
 		t.Errorf("default openrouter key env = %q", cfg.OpenRouter.APIKeyEnv)
 	}
-	if cfg.EmbeddingModel == "" {
-		t.Error("default embedding model is empty")
+	if cfg.EmbeddingModel != "gemini-embedding-2" {
+		t.Errorf("default embedding model = %q, want gemini-embedding-2", cfg.EmbeddingModel)
 	}
-	if cfg.GenerationModel == "" {
-		t.Error("default generation model is empty")
+	if cfg.GenerationModel != "gemini-4-hydrogen" {
+		t.Errorf("default generation model = %q, want gemini-4-hydrogen", cfg.GenerationModel)
 	}
 	if cfg.SimilarityThreshold != 0 {
 		t.Errorf("default SimilarityThreshold = %v, want 0 (so the resolution chain falls through to the per-model recommendation)", cfg.SimilarityThreshold)
@@ -102,6 +108,8 @@ func TestRecommendedSimilarityThresholdFor(t *testing.T) {
 		{"nomic has estimate", "ollama", "nomic-embed-text", 0.50},
 		{"mxbai has estimate", "ollama", "mxbai-embed-large", 0.55},
 		{"all-minilm small-dim estimate", "ollama", "all-minilm", 0.35},
+		{"embeddinggemma-2 asymmetric default", "llama-local", "embeddinggemma-2", 0.60},
+		{"legacy embeddinggemma-300m keeps its threshold", "llama-local", "embeddinggemma-300m", 0.35},
 		{"unknown model returns zero", "bedrock", "nonexistent-model", 0},
 		{"empty provider returns zero", "", "amazon.nova-2-multimodal-embeddings-v1:0", 0},
 		{"empty model returns zero", "bedrock", "", 0},
@@ -424,4 +432,94 @@ func TestUserThresholdRow_PerScopeOnRawRows(t *testing.T) {
 				row.RecommendedSimilarityThreshold, scope, ok)
 		}
 	})
+}
+
+func TestResolveTaskPreset(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  AIConfig
+		want string
+	}{
+		{"empty defaults to search", AIConfig{}, "search"},
+		{"whitespace defaults to search", AIConfig{TaskPreset: "   "}, "search"},
+		{"explicit search", AIConfig{TaskPreset: "search"}, "search"},
+		{"code", AIConfig{TaskPreset: "code"}, "code"},
+		{"qa", AIConfig{TaskPreset: "qa"}, "qa"},
+		{"none", AIConfig{TaskPreset: "none"}, "none"},
+		{"symmetric normalizes to none", AIConfig{TaskPreset: "symmetric"}, "none"},
+		{"uppercase code", AIConfig{TaskPreset: "CODE"}, "code"},
+		{"whitespace trimmed", AIConfig{TaskPreset: "  qa  "}, "qa"},
+		{"unrecognized defaults to search", AIConfig{TaskPreset: "invalid-preset"}, "search"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.ResolveTaskPreset(); got != tt.want {
+				t.Errorf("ResolveTaskPreset() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsValidTaskPreset(t *testing.T) {
+	tests := []struct {
+		val  string
+		want bool
+	}{
+		{"search", true},
+		{"code", true},
+		{"qa", true},
+		{"none", true},
+		{"symmetric", true},
+		{"SEARCH", true},
+		{"  code  ", true},
+		{"", false},
+		{"   ", false},
+		{"invalid", false},
+		{"123", false},
+	}
+	for _, tt := range tests {
+		if got := IsValidTaskPreset(tt.val); got != tt.want {
+			t.Errorf("IsValidTaskPreset(%q) = %v, want %v", tt.val, got, tt.want)
+		}
+	}
+}
+
+func TestAIConfig_MixedProviders(t *testing.T) {
+	setupHome(t)
+	cfg := DefaultAIConfig() // gemini + gemini-embedding-2 + gemini-4-hydrogen
+	if cfg.IsMixedProviders() {
+		t.Fatal("default config should not report mixed providers")
+	}
+	if cfg.EffectiveEmbeddingProvider() != "gemini" || cfg.EffectiveGenerationProvider() != "gemini" {
+		t.Fatalf("unexpected default effective providers: embed=%q gen=%q", cfg.EffectiveEmbeddingProvider(), cfg.EffectiveGenerationProvider())
+	}
+	if got := cfg.ActiveProviders(); len(got) != 1 || got[0] != "gemini" {
+		t.Fatalf("default ActiveProviders() = %v, want [gemini]", got)
+	}
+
+	// Mix: local EmbeddingGemma on llama-local + Gemini 4 Hydrogen on gemini.
+	cfg.EmbeddingProvider = "llama-local"
+	cfg.EmbeddingModel = "embeddinggemma-2"
+	cfg.GenerationProvider = "gemini"
+	cfg.GenerationModel = "gemini-4-hydrogen"
+
+	if !cfg.IsMixedProviders() {
+		t.Fatal("expected IsMixedProviders() = true when embed=llama-local and gen=gemini")
+	}
+	if cfg.EffectiveEmbeddingProvider() != "llama-local" {
+		t.Errorf("EffectiveEmbeddingProvider() = %q, want llama-local", cfg.EffectiveEmbeddingProvider())
+	}
+	if cfg.EffectiveGenerationProvider() != "gemini" {
+		t.Errorf("EffectiveGenerationProvider() = %q, want gemini", cfg.EffectiveGenerationProvider())
+	}
+
+	active := cfg.ActiveProviders()
+	if len(active) != 2 || active[0] != "llama-local" || active[1] != "gemini" {
+		t.Errorf("ActiveProviders() = %v, want [llama-local gemini]", active)
+	}
+
+	gotThresh, src := cfg.ResolveSimilarityThresholdFull("")
+	if gotThresh != 0.60 || src != ThresholdSourceModel {
+		t.Errorf("mixed ResolveSimilarityThresholdFull = (%v, %q), want (0.60, %q)", gotThresh, src, ThresholdSourceModel)
+	}
 }

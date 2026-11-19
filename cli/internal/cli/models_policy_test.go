@@ -478,8 +478,17 @@ func TestModelsPolicy_VaultOverridesGlobalInShow(t *testing.T) {
 // generation model's vendor leaves it enabled and warns.
 func TestModelsPolicy_ActiveModelGuardWarns(t *testing.T) {
 	_, root := newContractVault(t)
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.provider", "bedrock"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.embedding_model", "amazon.nova-2-multimodal-embeddings-v1:0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLIArgs(t, root, "config", "set", "ai.generation_model", "us.anthropic.claude-haiku-4-5-20251001-v1:0"); err != nil {
+		t.Fatal(err)
+	}
 
-	// Default config: generation = anthropic haiku, embedding = amazon nova.
+	// Bedrock config: generation = anthropic haiku, embedding = amazon nova.
 	// cohere-only excludes both active models.
 	got, err := runCLIArgs(t, root,
 		"models", "policy", "set",

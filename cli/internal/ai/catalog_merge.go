@@ -174,6 +174,50 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 	return result, nil
 }
 
+// LookupLocalModelPricing resolves pricing and locality metadata for
+// (provider, modelID) strictly from local catalogs (BuiltinCatalog merged
+// with global + per-vault user models.yaml), performing zero network I/O.
+func LookupLocalModelPricing(vaultRoot, provider, modelID string) ModelInfo {
+	catalog := BuiltinCatalog()
+	user := LoadUserCatalog(vaultRoot)
+	if len(user) > 0 {
+		catalog = overlay(catalog, user, true)
+		reconcileBuiltinFacts(user, &catalog)
+	}
+
+	var best ModelInfo
+	found := false
+	for _, m := range catalog {
+		if m.ID != modelID {
+			continue
+		}
+		if provider != "" && m.Provider != provider {
+			continue
+		}
+		if !found {
+			best = m
+			found = true
+			continue
+		}
+		// Prefer entries with known pricing, then route-less canonical entries.
+		bestPriced := HasKnownPricing(best)
+		curPriced := HasKnownPricing(m)
+		if curPriced && !bestPriced {
+			best = m
+		} else if curPriced == bestPriced && m.Plane == "" && m.Region == "" && (best.Plane != "" || best.Region != "") {
+			best = m
+		}
+	}
+	if found {
+		return best
+	}
+	return ModelInfo{
+		ID:       modelID,
+		Provider: provider,
+		Local:    !IsCloudProvider(provider, false),
+	}
+}
+
 // isActiveModel returns true if the row is the ROUTE the config names for its
 // slot.
 //
@@ -184,9 +228,6 @@ func BuildModelList(ctx context.Context, opts MergedListOptions) (*MergedModelLi
 // plane and region, so it still matches on id alone and behaves as before
 // until the route is picked.
 func isActiveModel(m ModelInfo, cfg AIConfig) bool {
-	if m.Provider != cfg.Provider {
-		return false
-	}
 	var want RouteKey
 	switch m.Type {
 	case "embedding":
@@ -194,6 +235,9 @@ func isActiveModel(m ModelInfo, cfg AIConfig) bool {
 	case "generation":
 		want = cfg.GenerationRoute()
 	default:
+		return false
+	}
+	if m.Provider != want.Provider {
 		return false
 	}
 	if want.ID == "" || m.ID != want.ID {

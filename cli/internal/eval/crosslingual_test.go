@@ -12,7 +12,7 @@ import (
 // languages embeds far closer to the English anchor than an unrelated concept
 // does. Credential-gated (real Bedrock, no mocks):
 //
-//	source ~/.secrets/shell.zsh
+//	# Export AWS / Bedrock credentials in your shell environment
 //	go test ./internal/eval/ -run CrossLingual -v
 func TestNovaCrossLingual_Bedrock(t *testing.T) {
 	cfg := ai.DefaultAIConfig()

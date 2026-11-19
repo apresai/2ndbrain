@@ -67,8 +67,8 @@ func TestBuildDoctorChecks_BogusProvider(t *testing.T) {
 // TestBuildDoctorChecks_DisabledActiveProvider: ai.<provider>.disabled=true on
 // the active provider is contradictory and must fail.
 func TestBuildDoctorChecks_DisabledActiveProvider(t *testing.T) {
-	cfg := ai.DefaultAIConfig() // bedrock active
-	cfg.Bedrock.Disabled = true
+	cfg := ai.DefaultAIConfig() // gemini active
+	cfg.Gemini.Disabled = true
 	st := doctorVaultState{totalDocs: 0}
 
 	checks := buildDoctorChecks(context.Background(), "", cfg, nil, st)
@@ -78,10 +78,10 @@ func TestBuildDoctorChecks_DisabledActiveProvider(t *testing.T) {
 }
 
 // TestBuildDoctorChecks_DimensionMismatch: an ai.dimensions that is neither the
-// default NOR a supported Matryoshka width (768 for Nova) must fail with a hint.
+// default NOR a supported Matryoshka width (512 for gemini-embedding-2) must fail with a hint.
 func TestBuildDoctorChecks_DimensionMismatch(t *testing.T) {
-	cfg := ai.DefaultAIConfig() // nova-2 → 1024d default, supports 256/384/1024/3072
-	cfg.Dimensions = 768        // not a supported Nova width
+	cfg := ai.DefaultAIConfig() // gemini-embedding-2 → 768d default, supports 768/1024/1536/3072
+	cfg.Dimensions = 512        // not a supported gemini width
 	st := doctorVaultState{totalDocs: 0}
 
 	checks := buildDoctorChecks(context.Background(), "", cfg, nil, st)
@@ -95,11 +95,11 @@ func TestBuildDoctorChecks_DimensionMismatch(t *testing.T) {
 }
 
 // TestBuildDoctorChecks_SupportedMatryoshkaDimensionPasses guards the fix: a
-// deliberate non-default but SUPPORTED Matryoshka width (Nova 256) is a valid
+// deliberate non-default but SUPPORTED Matryoshka width (gemini 1024) is a valid
 // choice `config set` blesses, so `config doctor` must not flag it as a defect.
 func TestBuildDoctorChecks_SupportedMatryoshkaDimensionPasses(t *testing.T) {
-	cfg := ai.DefaultAIConfig() // nova-2; supports 256/384/1024/3072
-	cfg.Dimensions = 256        // valid Matryoshka width, not the 1024 default
+	cfg := ai.DefaultAIConfig() // gemini-embedding-2; supports 768/1024/1536/3072
+	cfg.Dimensions = 1024       // valid Matryoshka width, not the 768 default
 	st := doctorVaultState{totalDocs: 0}
 
 	checks := buildDoctorChecks(context.Background(), "", cfg, nil, st)

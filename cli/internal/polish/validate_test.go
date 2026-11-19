@@ -119,6 +119,15 @@ func TestCodeSpansEqual(t *testing.T) {
 	if CodeSpansEqual(orig, changedInline) {
 		t.Errorf("inline code edited → should be unequal")
 	}
+	multiOrig := "Check ``foo ` bar Core Target baz ` qux`` here."
+	multiSame := "Inspect ``foo ` bar Core Target baz ` qux`` carefully."
+	if !CodeSpansEqual(multiOrig, multiSame) {
+		t.Errorf("identical multi-backtick inline code with inner backticks → should be equal")
+	}
+	multiChanged := "Check ``foo ` bar Changed baz ` qux`` here."
+	if CodeSpansEqual(multiOrig, multiChanged) {
+		t.Errorf("middle of multi-backtick inline code edited → should be unequal")
+	}
 }
 
 func TestHeadingStructureEqual(t *testing.T) {

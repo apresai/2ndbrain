@@ -27,15 +27,15 @@ func TestDefaultConfig_NoLegacyEmbeddingBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AI.Provider != "bedrock" {
-		t.Errorf("default provider = %q, want bedrock", cfg.AI.Provider)
+	if cfg.AI.Provider != "gemini" {
+		t.Errorf("default provider = %q, want gemini", cfg.AI.Provider)
 	}
 	if !cfg.AI.Ollama.Disabled || !cfg.AI.OpenRouter.Disabled {
 		t.Errorf("Ollama/OpenRouter should ship disabled (opt-in): ollama=%v openrouter=%v",
 			cfg.AI.Ollama.Disabled, cfg.AI.OpenRouter.Disabled)
 	}
-	if cfg.AI.Bedrock.Disabled {
-		t.Error("Bedrock should be enabled by default")
+	if cfg.AI.Gemini.Disabled {
+		t.Error("Gemini should be enabled by default")
 	}
 }
 
