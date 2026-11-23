@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.24.2] - 2026-11-23
+
 ### Fixed
 - **Remaining main-thread and Keychain-timeout cleanup in the macOS app.** Checking whether a requested note exists when opening **Notes > AI Polish** now runs off the main thread instead of querying SQLite on it, and Keychain lookups/writes now reuse the cancellable process watchdog so timers clear immediately on exit and a wedged `security` child escalates to `SIGKILL` after the grace window
 
