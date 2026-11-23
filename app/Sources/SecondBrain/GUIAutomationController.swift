@@ -207,6 +207,20 @@ final class GUIAutomationController {
             return await handleReturnKey()
         case "screenshot":
             return captureScreenshot(to: req.path)
+        case "close_main_window":
+            guard let window = NSApp.windows.first(where: MainWindow.isDashboard) else {
+                return .failure("No dashboard window to close")
+            }
+            window.close()
+            return .success("closed_main_window")
+        case "window_state":
+            let dashboards = NSApp.windows.filter(MainWindow.isDashboard)
+            let visible = dashboards.filter(\.isVisible).count
+            return .success("dashboards=\(dashboards.count) visible=\(visible)")
+        case "status_open_main_window":
+            // The menu bar item's "Open 2ndbrain" action.
+            appDelegate?.showMainWindow()
+            return .success("requested_main_window")
         default:
             return .failure("Unknown automation op: \(req.op)")
         }

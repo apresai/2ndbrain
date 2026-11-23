@@ -5,13 +5,22 @@ import SecondBrainCore
 struct SecondBrainApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState()
+    /// The vault bind runs once per process, not once per window: a
+    /// dashboard window reopened after being closed must not re-run
+    /// openVault, which resets the watcher, the timers and per-vault state.
+    @State private var didBindInitialVault = false
     var body: some Scene {
-        WindowGroup {
+        // An explicit id so the window can be recreated after it is closed
+        // (see AppDelegate.showMainWindow). The app outlives its window in
+        // the menu bar, and without this a closed dashboard never came back.
+        WindowGroup(id: MainWindow.sceneID) {
             ContentView()
                 .environment(appState)
                 .frame(minWidth: 800, minHeight: 500)
                 .onAppear {
                     appDelegate.configure(appState: appState)
+                    guard !didBindInitialVault else { return }
+                    didBindInitialVault = true
                     // If an explicit test or CLI override vault was passed, open it immediately
                     if let vaultOverride = LaunchOptions.current.vaultPath {
                         appState.openVault(at: URL(fileURLWithPath: vaultOverride), persistLastVault: false)
@@ -159,7 +168,9 @@ struct SecondBrainApp: App {
                 .disabled(appState.vault == nil)
 
                 Button("Quick Ask & Search Panel") {
-                    appState.showQuickSearch = true
+                    // Direct, not through appState.showQuickSearch: that flag
+                    // is consumed by the dashboard window, which may be closed.
+                    appDelegate.toggleQuickSearch()
                 }
 
                 Button("Polish Note with Gemini…") {
@@ -222,6 +233,17 @@ struct SecondBrainApp: App {
         if panel.runModal() == .OK, let url = panel.url {
             appState.openPickedVault(at: url)
         }
+    }
+}
+
+/// The dashboard window's scene identity. SwiftUI names the NSWindow
+/// "<sceneID>-AppWindow-<n>", which is how AppKit code tells the dashboard
+/// apart from the Settings window and the quick-search panel.
+enum MainWindow {
+    static let sceneID = "main"
+
+    @MainActor static func isDashboard(_ window: NSWindow) -> Bool {
+        window.identifier?.rawValue.hasPrefix(sceneID + "-") == true
     }
 }
 

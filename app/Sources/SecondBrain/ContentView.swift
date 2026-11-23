@@ -44,6 +44,7 @@ struct BetaBadge: View {
 struct ContentView: View {
     @Environment(AppState.self) var appState
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @State private var selection: DashboardTab = .home
     // Owned here so menu items and Home quick actions can deep-link to a
     // specific pane inside a group tab, and so the pane survives switching tabs.
@@ -56,33 +57,25 @@ struct ContentView: View {
         mainLayout
             // Routing lives in DashboardRoute so it is testable. Pairs of
             // targets land on the same tab and differ only in the section.
-            .onChange(of: appState.requestedTab) { _, tab in
-                if let tab {
-                    selection = tab
-                    appState.requestedTab = nil
-                }
+            // One-shot route requests. Each handler drains through
+            // consumePendingRoutes, and so does onAppear: a request made
+            // while no dashboard window existed (the window was closed and
+            // the app lived on in the menu bar) is still pending when the
+            // reopened window appears, and onChange alone never fires for a
+            // value that was already set.
+            .onAppear {
+                appState.openMainWindowAction = { [openWindow] in openWindow(id: MainWindow.sceneID) }
+                consumePendingRoutes()
             }
-            .onChange(of: appState.showAskSearch) { _, show in
-                if show { route(.askSearch); appState.showAskSearch = false }
-            }
-            .onChange(of: appState.showLintResults) { _, show in
-                if show { route(.lintResults); appState.showLintResults = false }
-            }
-            .onChange(of: appState.showNotePolish) { _, show in
-                if show { route(.notePolish); appState.showNotePolish = false }
-            }
-            .onChange(of: appState.showGUIActions) { _, show in
-                if show { route(.guiActions); appState.showGUIActions = false }
-            }
-            .onChange(of: appState.showGitActivity) { _, show in
-                if show { route(.gitActivity); appState.showGitActivity = false }
-            }
-            .onChange(of: appState.showMCPStatus) { _, show in
-                if show { route(.mcpStatus); appState.showMCPStatus = false }
-            }
-            .onChange(of: appState.showAIUsage) { _, show in
-                if show { route(.aiUsage); appState.showAIUsage = false }
-            }
+            .onChange(of: appState.requestedTab) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showAskSearch) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showLintResults) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showNotePolish) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showGUIActions) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showGitActivity) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showMCPStatus) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showAIUsage) { _, _ in consumePendingRoutes() }
+            .onChange(of: appState.showSettingsRequest) { _, _ in consumePendingRoutes() }
             .onChange(of: selection) { _, newValue in
                 appState.actionTracker.record(
                     category: .navigation,
@@ -125,13 +118,6 @@ struct ContentView: View {
             }
             .onChange(of: appState.showIndexProgress) { _, visible in
                 appState.actionTracker.updateStatus { $0.indexSheetVisible = visible }
-            }
-            .onChange(of: appState.showSettingsRequest) { _, show in
-                if show {
-                    appState.showSettingsRequest = false
-                    NSApp.activate()
-                    openSettings()
-                }
             }
             .task {
                 guard !checkedFirstRunOnboarding else { return }
@@ -183,6 +169,25 @@ struct ContentView: View {
                 ))
                 .environment(appState)
             }
+    }
+
+    private func consumePendingRoutes() {
+        if let tab = appState.requestedTab {
+            selection = tab
+            appState.requestedTab = nil
+        }
+        if appState.showAskSearch { route(.askSearch); appState.showAskSearch = false }
+        if appState.showLintResults { route(.lintResults); appState.showLintResults = false }
+        if appState.showNotePolish { route(.notePolish); appState.showNotePolish = false }
+        if appState.showGUIActions { route(.guiActions); appState.showGUIActions = false }
+        if appState.showGitActivity { route(.gitActivity); appState.showGitActivity = false }
+        if appState.showMCPStatus { route(.mcpStatus); appState.showMCPStatus = false }
+        if appState.showAIUsage { route(.aiUsage); appState.showAIUsage = false }
+        if appState.showSettingsRequest {
+            appState.showSettingsRequest = false
+            NSApp.activate()
+            openSettings()
+        }
     }
 
     private func route(_ target: DashboardRoute.Target) {

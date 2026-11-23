@@ -6,6 +6,8 @@ import SecondBrainCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let log = Logger(subsystem: "dev.apresai.2ndbrain", category: "appdelegate")
     private var menuTrackingObserver: NSObjectProtocol?
+    private var windowCloseObserver: NSObjectProtocol?
+    private weak var appState: AppState?
     private var configuredAppState = false
     private var statusMenuController: StatusMenuController?
     private var quickSearchController: QuickSearchPanelController?
@@ -58,7 +60,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenuController?.tearDown()
     }
 
+    // MARK: - Dashboard window lifecycle
+
+    /// The app keeps running in the menu bar after its window closes. Stated
+    /// explicitly so the posture is a decision, and so every path below that
+    /// brings the window back is known to be required.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Dock click, `open -a`, or a relaunch of the running app. SwiftUI's
+    /// implicit reopen goes through the New Window command, which this app
+    /// removes, so a closed dashboard never returned: the process was alive,
+    /// had no window, and looked hung. Recreate it here.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if dashboardWindow() != nil {
+            showMainWindow()
+            return true
+        }
+        showMainWindow()
+        return false
+    }
+
+    /// Front the dashboard window, creating it when it has been closed.
+    func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = dashboardWindow() {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard let open = appState?.openMainWindowAction else {
+            log.error("dashboard window is closed and no openWindow action was captured")
+            return
+        }
+        appState?.actionTracker.record(
+            category: .navigation,
+            action: "window.reopen",
+            phase: .succeeded,
+            summary: "Reopened the dashboard window"
+        )
+        open()
+    }
+
+    private func dashboardWindow() -> NSWindow? {
+        NSApp.windows.first(where: MainWindow.isDashboard)
+    }
+
+    /// A route request (menu command, status item) made with no dashboard
+    /// window open has nothing to consume it. Reopen the window; its
+    /// ContentView drains the request on appear.
+    private func watchPendingRoutes() {
+        guard let appState else { return }
+        withObservationTracking {
+            _ = appState.hasPendingDashboardRoute
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, let appState = self.appState else { return }
+                if appState.hasPendingDashboardRoute, self.dashboardWindow() == nil {
+                    self.showMainWindow()
+                }
+                self.watchPendingRoutes()
+            }
+        }
+    }
+
+    private func observeDashboardClose() {
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let window = note.object as? NSWindow else { return }
+            Task { @MainActor [weak self] in
+                guard MainWindow.isDashboard(window) else { return }
+                self?.appState?.actionTracker.record(
+                    category: .navigation,
+                    action: "window.close",
+                    phase: .succeeded,
+                    summary: "Closed the dashboard window (app stays in the menu bar)"
+                )
+            }
+        }
+    }
+
     func configure(appState: AppState) {
+        if self.appState == nil {
+            self.appState = appState
+            watchPendingRoutes()
+            observeDashboardClose()
+        }
         guard !configuredAppState,
               ProcessInfo.processInfo.environment["2NB_TEST"] != "1" else {
             return
@@ -66,7 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configuredAppState = true
         let quickSearch = QuickSearchPanelController(appState: appState)
         self.quickSearchController = quickSearch
-        self.statusMenuController = StatusMenuController(appState: appState) {
+        self.statusMenuController = StatusMenuController(
+            appState: appState,
+            onOpenMainWindow: { [weak self] in self?.showMainWindow() }
+        ) {
             quickSearch.toggle()
         }
         if let controlDir = LaunchOptions.current.guiControlDir {

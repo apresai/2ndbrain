@@ -213,6 +213,9 @@ final class QuickSearchViewModel {
     func resetTransientState() {
         searchTask?.cancel()
         searchTask = nil
+        // The cancelled task returns early without clearing this, and the
+        // view model outlives the panel, so the spinner came back stuck.
+        isSearching = false
         errorMessage = nil
         copiedToast = nil
     }
