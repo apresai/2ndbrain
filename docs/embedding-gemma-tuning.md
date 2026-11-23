@@ -364,6 +364,8 @@ const (
 ```
 Individual inputs are capped at `4,500` runes, chunk arrays are partitioned into contiguous batches of $\le 8$ items and $\le 4,500$ total runes, and any multi-item batch error falls back to 1-by-1 embedding so one dense chunk cannot fail its neighbors.
 
+A rune cap is not a token cap. Dense text (tables, code, URLs, hex, non-Latin scripts) runs under two runes per token, so a 4,500-rune input can tokenize past the 2,048-token batch and the server answers HTTP 500 `input (N tokens) is too large to process`. A single input that draws that error is truncated to 3/4 of its runes and retried, up to `llamaEmbedShrinkAttempts` (5) times, with one INFO line per truncation (`embedOne`). Before this the chunk failed on every attempt, so its note never got an embedding and stayed out of semantic search. Do not raise `-b`/`-ub` to fix it: 2,048 is the model's context.
+
 ---
 
 ## 7. User-Facing Controls vs. Automated System Settings Matrix
