@@ -24,6 +24,11 @@ const engineBinaryName = "llama-server"
 // lookPath is exec.LookPath, indirected so tests can control PATH resolution.
 var lookPath = exec.LookPath
 
+// systemApplicationsDir is where a system-wide SecondBrain.app is looked for,
+// indirected so a test is not decided by whether the developer happens to
+// have the app installed in /Applications.
+var systemApplicationsDir = "/Applications"
+
 // executable is os.Executable, indirected so tests can control sibling resolution.
 var executable = os.Executable
 
@@ -152,7 +157,7 @@ func LocateEngine(override string) string {
 			return userAppServer
 		}
 	}
-	systemAppServer := filepath.Join("/Applications", "SecondBrain.app", "Contents", "Resources", "llama", engineBinaryName)
+	systemAppServer := filepath.Join(systemApplicationsDir, "SecondBrain.app", "Contents", "Resources", "llama", engineBinaryName)
 	if isExecutableFile(systemAppServer) {
 		return systemAppServer
 	}
@@ -204,7 +209,7 @@ func LocateCLI() string {
 			return userAppCLI
 		}
 	}
-	sysAppCLI := "/Applications/SecondBrain.app/Contents/Resources/2nb"
+	sysAppCLI := filepath.Join(systemApplicationsDir, "SecondBrain.app", "Contents", "Resources", "2nb")
 	if isExecutableFile(sysAppCLI) {
 		return sysAppCLI
 	}
