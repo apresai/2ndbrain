@@ -263,6 +263,7 @@ test-gui: install-app
 	SKIP_BUILD=1 ./tests/gui-test-local-gemma.sh
 	SKIP_BUILD=1 ./tests/gui-test-model-invocation.sh
 	SKIP_BUILD=1 ./tests/gui-test-eta-and-usage.sh
+	SKIP_BUILD=1 ./tests/gui-test-window-reopen.sh
 
 test-release-script:
 	@bash tests/release-script-test.sh

@@ -144,11 +144,13 @@ struct MenuStatusView: View {
 final class StatusMenuController: NSObject, NSMenuDelegate {
     private let appState: AppState
     private let onToggleQuickSearch: () -> Void
+    private let onOpenMainWindow: () -> Void
     private var statusItem: NSStatusItem?
     private let menu = NSMenu()
     private var isActive = true
 
-    init(appState: AppState, onToggleQuickSearch: @escaping () -> Void) {
+    init(appState: AppState, onOpenMainWindow: @escaping () -> Void, onToggleQuickSearch: @escaping () -> Void) {
+        self.onOpenMainWindow = onOpenMainWindow
         self.appState = appState
         self.onToggleQuickSearch = onToggleQuickSearch
         super.init()
@@ -270,13 +272,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openMainWindowAction() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let main = NSApp.windows.first(where: { !($0 is QuickSearchPanelWindow) && $0.canBecomeMain }) {
-            main.deminiaturize(nil)
-            main.makeKeyAndOrderFront(nil)
-        } else {
-            NSApp.windows.first?.makeKeyAndOrderFront(nil)
-        }
+        // Fronts the dashboard, recreating it when it was closed. Searching
+        // NSApp.windows for "some main-capable window" could only ever find
+        // an existing one, and matched the Settings window too.
+        onOpenMainWindow()
     }
 
     @objc private func openObsidianAction() {

@@ -84,6 +84,21 @@ final class AppState {
     var showOnboarding = false
     var showQuickSearch = false
 
+    /// True while a route request is waiting for a dashboard window to
+    /// consume it. ContentView drains these the moment they are set, so this
+    /// stays true only when no dashboard window exists; AppDelegate watches
+    /// it and reopens the window so the command is not silently dropped.
+    var hasPendingDashboardRoute: Bool {
+        requestedTab != nil || showAskSearch || showLintResults || showNotePolish
+            || showGUIActions || showGitActivity || showMCPStatus || showAIUsage
+            || showSettingsRequest || showMCPSetup || showOnboarding
+    }
+
+    /// Creates the dashboard window. Captured from SwiftUI's `openWindow`
+    /// by the first ContentView, because AppKit alone cannot instantiate a
+    /// SwiftUI scene once its window has been closed and destroyed.
+    @ObservationIgnored var openMainWindowAction: (() -> Void)?
+
     init() {
         let tracker = GUIActionTracker(overrideLogDir: LaunchOptions.current.guiLogDir)
         self.actionTracker = tracker
@@ -818,6 +833,7 @@ final class AppState {
                     do {
                         try process.run()
                     } catch {
+                        Self.releaseFailedLaunch(process, pipes: [stdoutPipe, stderrPipe])
                         continuation.resume(throwing: error)
                     }
                 }
@@ -1050,6 +1066,7 @@ final class AppState {
             do {
                 try process.run()
             } catch {
+                Self.releaseFailedLaunch(process, pipes: [stdout, process.standardError as? Pipe])
                 logger?.log("2nb --version failed to launch: \(Self.boundedRedacted(error.localizedDescription))")
                 continuation.resume(returning: nil)
             }
@@ -1113,6 +1130,7 @@ final class AppState {
                 do {
                     try process.run()
                 } catch {
+                    Self.releaseFailedLaunch(process, pipes: [stdout, stderr])
                     let safeErr = Self.boundedRedacted(error.localizedDescription)
                     logger?.log("brew upgrade twonb launch failed: \(safeErr)")
                     continuation.resume(throwing: error)
@@ -1705,9 +1723,12 @@ final class AppState {
                 }
             ) {
                 let args = Self.searchArgs(query: query, limit: limit, bm25Only: bm25Only)
-                let data = try await runCLI(args, cwd: vault.rootURL)
+                let data = try await runCLI(args, cwd: vault.rootURL, cancellable: true)
                 return try JSONDecoder().decode(CLISearchResponse.self, from: data)
             }
+            // A superseded search that finished anyway must not overwrite
+            // the newer query's status or spawn a metrics refresh.
+            try Task.checkCancellation()
             if !bm25Only {
                 self.lastSemanticWarnings = response.warnings ?? []
             }
@@ -3322,7 +3343,12 @@ final class AppState {
                     let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
                     continuation.resume(returning: (proc.terminationStatus, err, tailEvents))
                 }
-                do { try process.run() } catch { continuation.resume(throwing: error) }
+                do {
+                    try process.run()
+                } catch {
+                    Self.releaseFailedLaunch(process, pipes: [stdoutPipe, stderrPipe])
+                    continuation.resume(throwing: error)
+                }
             }
 
             for ev in result.tailEvents {
@@ -3718,12 +3744,12 @@ final class AppState {
             let stderr = Pipe()
             process.standardOutput = stdout
             process.standardError = stderr
-            if let stdin {
-                let input = Pipe()
-                process.standardInput = input
-                input.fileHandleForWriting.write(stdin)
-                try? input.fileHandleForWriting.close()
-            }
+            // The payload is written AFTER launch and off the main actor
+            // (feedStdin). Writing it here, before the child exists, blocks
+            // forever once it exceeds the 64 KB pipe buffer, because nothing
+            // can drain the pipe yet: a long Ask history froze the app.
+            let input: Pipe? = stdin == nil ? nil : Pipe()
+            if let input { process.standardInput = input }
 
             let drain = PipeDrain()
             stdout.fileHandleForReading.readabilityHandler = { handle in
@@ -3790,7 +3816,9 @@ final class AppState {
             do {
                 try process.run()
                 watchdog.arm()
+                Self.feedStdin(input, stdin)
             } catch {
+                Self.releaseFailedLaunch(process, pipes: [stdout, stderr, input])
                 let safeCmd = GUIActionTracker.redact(cmd)
                 let errText = error.localizedDescription
                 let safeErrText = Self.boundedRedacted(errText)
@@ -3816,7 +3844,23 @@ final class AppState {
     ///   progress (only `ai embed-probe` today; see `embedProbe` for the
     ///   rationale, which mirrors the streaming runners'). Every other call
     ///   keeps the default `true`.
-    func runCLI(_ args: [String], cwd: URL, stdin: Data? = nil, hangWatchdog: Bool = true) async throws -> Data {
+    /// - Parameter cancellable: cancelling the calling Task terminates the
+    ///   child and throws CancellationError. Only for READ-ONLY commands
+    ///   whose result is worthless once superseded (per-keystroke search):
+    ///   never for index or any write, which must run to completion.
+    func runCLI(_ args: [String], cwd: URL, stdin: Data? = nil, hangWatchdog: Bool = true, cancellable: Bool = false) async throws -> Data {
+        guard cancellable else {
+            return try await runCLIProcess(args, cwd: cwd, stdin: stdin, hangWatchdog: hangWatchdog, cancelBox: nil)
+        }
+        let box = ProcessCancelBox()
+        return try await withTaskCancellationHandler {
+            try await runCLIProcess(args, cwd: cwd, stdin: stdin, hangWatchdog: hangWatchdog, cancelBox: box)
+        } onCancel: {
+            box.cancel()
+        }
+    }
+
+    private func runCLIProcess(_ args: [String], cwd: URL, stdin: Data?, hangWatchdog: Bool, cancelBox: ProcessCancelBox?) async throws -> Data {
         let fullArgs = CLIPath.args(args, vault: cwd)
         let cmd = "2nb " + fullArgs.joined(separator: " ")
         log.info("CLI exec: \(cmd, privacy: .public)")
@@ -3835,12 +3879,12 @@ final class AppState {
             let stderr = Pipe()
             process.standardOutput = stdout
             process.standardError = stderr
-            if let stdin {
-                let input = Pipe()
-                process.standardInput = input
-                input.fileHandleForWriting.write(stdin)
-                try? input.fileHandleForWriting.close()
-            }
+            // The payload is written AFTER launch and off the main actor
+            // (feedStdin). Writing it here, before the child exists, blocks
+            // forever once it exceeds the 64 KB pipe buffer, because nothing
+            // can drain the pipe yet: a long Ask history froze the app.
+            let input: Pipe? = stdin == nil ? nil : Pipe()
+            if let input { process.standardInput = input }
 
             // Drain both pipes as data arrives. Without this the child blocks
             // on write() once its stdout exceeds the ~16-64KB pipe buffer
@@ -3885,6 +3929,10 @@ final class AppState {
                 drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: drain.stdoutData)
+                } else if cancelBox?.isCancelled == true {
+                    // Terminated on purpose because the caller was
+                    // cancelled: not a CLI failure, so nothing is logged.
+                    continuation.resume(throwing: CancellationError())
                 } else {
                     let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -3913,7 +3961,10 @@ final class AppState {
             do {
                 try process.run()
                 watchdog?.arm()
+                Self.feedStdin(input, stdin)
+                cancelBox?.attach(process)
             } catch {
+                Self.releaseFailedLaunch(process, pipes: [stdout, stderr, input])
                 let safeCmd = GUIActionTracker.redact(cmd)
                 let errText = error.localizedDescription
                 let safeErrText = Self.boundedRedacted(errText)
@@ -3930,6 +3981,34 @@ final class AppState {
                 }
                 continuation.resume(throwing: error)
             }
+        }
+    }
+
+    /// Writes a stdin payload to a child that has ALREADY launched, off the
+    /// main actor, then closes the pipe so the child sees EOF.
+    nonisolated static func feedStdin(_ pipe: Pipe?, _ data: Data?) {
+        guard let pipe else { return }
+        let handle = pipe.fileHandleForWriting
+        DispatchQueue.global(qos: .userInitiated).async {
+            // The throwing form: a child that exits before reading gives
+            // EPIPE as an error, where write(_:) raises an ObjC exception.
+            if let data { try? handle.write(contentsOf: data) }
+            try? handle.close()
+        }
+    }
+
+    /// Releases what a Process that never launched still holds. Its
+    /// terminationHandler (which captures the pipes) never fires and the
+    /// readability sources never see EOF, so each failed launch leaked six
+    /// file descriptors; a launch failure repeated by the 5 s MCP status
+    /// poll then exhausted the 256-descriptor limit within minutes, after
+    /// which every CLI-backed action in the app failed.
+    nonisolated static func releaseFailedLaunch(_ process: Process, pipes: [Pipe?]) {
+        process.terminationHandler = nil
+        for case let pipe? in pipes {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
         }
     }
 
@@ -3995,6 +4074,7 @@ final class AppState {
                 try process.run()
                 watchdog.arm()
             } catch {
+                Self.releaseFailedLaunch(process, pipes: [stdout, stderr])
                 log.error("CLI \(cmd) launch failed: \(error.localizedDescription)")
                 continuation.resume(throwing: error)
             }
@@ -4062,6 +4142,36 @@ final class AppState {
 /// child's pipes as data arrives — avoiding the pipe-buffer deadlock
 /// where a child blocks on write() past ~64KB and terminationHandler
 /// never fires.
+/// Lets a cancelled Task terminate the child it is waiting on. `cancel` can
+/// arrive before the process launches, so the flag is remembered and
+/// `attach` terminates a process that was cancelled before it started.
+final class ProcessCancelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+
+    func attach(_ process: Process) {
+        lock.lock()
+        self.process = process
+        let terminateNow = cancelled
+        lock.unlock()
+        if terminateNow, process.isRunning { process.terminate() }
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let process = self.process
+        lock.unlock()
+        if let process, process.isRunning { process.terminate() }
+    }
+}
+
 final class PipeDrain: @unchecked Sendable {
     private let lock = NSLock()
     private var _stdout = Data()

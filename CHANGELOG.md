@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(empty - ready for next release)
+### Fixed
+- **The macOS app no longer plays dead after its window is closed.** Closing the dashboard window leaves 2ndbrain running in the menu bar, and nothing could bring the window back: clicking the Dock icon, choosing **Open 2ndbrain** from the menu bar icon, and most menu commands and shortcuts all did nothing, so the app looked frozen until you quit it. All three now reopen the dashboard, a command issued with no window open reopens it on the pane you asked for, and reopening does not re-bind the vault
+- **Typing in Ask & Search no longer leaves a pile of searches running.** Each keystroke starts a new search, and the ones it replaced used to keep running to the end, several at once against a cold on-device embedding engine. A replaced search is now stopped, and the Quick Search panel no longer reopens showing a spinner from the search it abandoned
+- **A long Ask conversation can no longer freeze the app.** The conversation history is handed to `2nb ask` through a pipe, and once it grew past 64 KB the app wrote it before the command had started, which blocks forever. It is now written after launch, off the main thread
+- **A `2nb` that cannot be launched no longer exhausts the app's file descriptors.** Every failed launch leaked six descriptors, and the app checks MCP status every five seconds, so a missing or replaced `2nb` (during an upgrade, for example) used up the limit within minutes, after which nothing in the app that needs the CLI worked until relaunch
 
 ## [0.24.0] - 2026-11-18
 

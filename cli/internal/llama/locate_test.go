@@ -63,6 +63,11 @@ func TestLocateEngineFromPATH(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("APP", t.TempDir())
+	// /Applications is not under HOME: an installed SecondBrain.app there
+	// outranks PATH and decided this test on a developer machine.
+	origApps := systemApplicationsDir
+	systemApplicationsDir = t.TempDir()
+	t.Cleanup(func() { systemApplicationsDir = origApps })
 
 	want := filepath.Join(t.TempDir(), "llama-server")
 	if err := os.WriteFile(want, []byte("#!/bin/sh\n"), 0o755); err != nil {
