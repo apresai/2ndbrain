@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(empty - ready for next release)
+
+## [0.24.1] - 2026-11-22
+
 ### Fixed
 - **The macOS app no longer plays dead after its window is closed.** Closing the dashboard window leaves 2ndbrain running in the menu bar, and nothing could bring the window back: clicking the Dock icon, choosing **Open 2ndbrain** from the menu bar icon, and most menu commands and shortcuts all did nothing, so the app looked frozen until you quit it. All three now reopen the dashboard, a command issued with no window open reopens it on the pane you asked for, and reopening does not re-bind the vault
 - **The macOS app no longer stalls on slow disk, Keychain or database work.** Several things ran on the main thread and froze the window while they did: reading the Gemini key from the Keychain (indefinitely while a Keychain prompt waited), creating a vault, opening the index while the CLI was writing to it, reacting to a sync or `git pull`, previewing a search result on an iCloud or network vault, and diffing a long note in **AI Polish** (25 million steps and hundreds of megabytes for a 5,000-line note, repeated on every keystroke). All of them now run in the background, and the polish diff is computed once per change with a much faster algorithm
