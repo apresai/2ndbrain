@@ -30,6 +30,8 @@ We chose **Option B**. The 2ndbrain database will use an internal, self-generate
 
 The CLI and MCP server interfaces will expose relative paths as the unique identifier. 2ndbrain will read and respect UUIDs if they exist in file frontmatter for backward compatibility, but it will never write, generate, or require them.
 
+Because the path is the identity, the path wins when an id disagrees with it. A note deleted outside 2nb and recreated at the same path (a daily note rebuilt from its template, which mints a fresh id) arrives with an id that differs from the row still holding that path. The document upsert conflicts on id alone, so that used to fail on the `path` UNIQUE constraint on every index until a full index purged the stale row. `indexFile` now looks the path up inside the write transaction and replaces a row whose id differs (`store.DeleteDocumentTx`), so the lookup, the delete and the insert share one consistent view.
+
 ## Consequences
 
 * **Data Integrity:** Vanilla Obsidian vaults work out of the box with zero modifications to markdown files. Files remain completely untouched by the indexer.

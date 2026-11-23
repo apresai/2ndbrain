@@ -675,3 +675,46 @@ func TestPartitionLlamaEmbedBatches(t *testing.T) {
 		t.Errorf("longAndShort batches = %v, want %v", longBatches, wantLong)
 	}
 }
+
+func TestIsLlamaInputTooLarge(t *testing.T) {
+	tooLarge := &llamaPostError{err: fmt.Errorf(`llama-local http://127.0.0.1:1/v1/embeddings: status 500: {"error":{"code":500,"message":"input (2380 tokens) is too large to process. increase the physical batch size (current batch size: 2048)"}}`)}
+	if !isLlamaInputTooLarge(tooLarge) {
+		t.Error("the server's own oversized-input error was not recognized")
+	}
+	if !isLlamaInputTooLarge(fmt.Errorf("embed chunks: %w", tooLarge)) {
+		t.Error("a wrapped oversized-input error was not recognized")
+	}
+	if isLlamaInputTooLarge(&llamaPostError{err: fmt.Errorf("status 503: loading model")}) {
+		t.Error("an unrelated server error must not trigger truncation")
+	}
+	// Only a server response counts: the same words from elsewhere do not.
+	if isLlamaInputTooLarge(fmt.Errorf("too large to process")) {
+		t.Error("a non-server error must not trigger truncation")
+	}
+}
+
+func TestShrinkLlamaEmbedInput(t *testing.T) {
+	s := strings.Repeat("é", 4500)
+	got := shrinkLlamaEmbedInput(s)
+	if n := utf8.RuneCountInString(got); n != 3375 {
+		t.Errorf("shrunk to %d runes, want 3375", n)
+	}
+	if !utf8.ValidString(got) || !strings.HasPrefix(s, got) {
+		t.Error("shrink must keep a valid leading prefix")
+	}
+	// The retry loop must terminate: every step strictly shortens.
+	steps := 0
+	for cur := "abcdefgh"; cur != ""; cur = shrinkLlamaEmbedInput(cur) {
+		if steps++; steps > 20 {
+			t.Fatal("shrink did not converge to empty")
+		}
+	}
+	// Five attempts take the 4500-rune cap under a quarter of its size.
+	cur := s
+	for i := 0; i < llamaEmbedShrinkAttempts; i++ {
+		cur = shrinkLlamaEmbedInput(cur)
+	}
+	if n := utf8.RuneCountInString(cur); n >= 4500/4 {
+		t.Errorf("after %d attempts still %d runes", llamaEmbedShrinkAttempts, n)
+	}
+}

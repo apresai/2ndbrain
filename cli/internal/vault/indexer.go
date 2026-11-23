@@ -303,6 +303,26 @@ func indexFile(db *store.DB, absPath, relPath string) error {
 	}
 	defer tx.Rollback()
 
+	// The path is the note's identity, and the upsert conflicts on id alone.
+	// A file whose frontmatter id differs from the row already stored at this
+	// path (the note was deleted outside 2nb and recreated from a template,
+	// which mints a fresh id, before any index pass purged the old row) used
+	// to fail on the documents.path UNIQUE constraint on EVERY index until a
+	// full index happened to purge the stale row. That row describes a file
+	// that no longer exists under that id, so it goes, in this transaction:
+	// the lookup, the delete and the insert see one consistent view.
+	var staleID string
+	switch err := tx.QueryRow("SELECT id FROM documents WHERE path = ? AND id != ?", relPath, doc.ID).Scan(&staleID); {
+	case err == nil:
+		slog.Info("replacing index row for a recreated note", "path", relPath, "old_id", staleID, "new_id", doc.ID)
+		if err := db.DeleteDocumentTx(tx, staleID); err != nil {
+			return fmt.Errorf("replace the stale index row for %s: %w", relPath, err)
+		}
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return fmt.Errorf("look up the index row for %s: %w", relPath, err)
+	}
+
 	// Upsert document
 	if err := db.UpsertDocumentTx(tx, doc); err != nil {
 		return fmt.Errorf("upsert document: %w", err)

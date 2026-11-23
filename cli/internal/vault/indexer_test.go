@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/apresai/2ndbrain/internal/document"
 )
 
 // initTestVault mirrors testutil.NewTestVault but lives in-package so we can
@@ -67,39 +65,29 @@ func TestIndexSingleFile_IndexesWikilinks(t *testing.T) {
 	}
 }
 
-// TestIndexFile_RollsBackOnFailure asserts the transactional wrapper:
-// when indexFile fails mid-flight, no partial state should persist.
-// We trigger failure by feeding a document with no ID (the validator
-// inside indexFile errors before the first DB write, but a later failure
-// path would also leave the tx clean).
+// TestIndexFile_RollsBackOnFailure asserts the transactional wrapper: when
+// indexFile fails mid-flight, no partial state persists. The failure is forced
+// AFTER the document upsert, by a trigger that aborts the chunk insert, so the
+// documents row is the thing that must not survive. (This test used to get its
+// failure from a path collision between two ids, which was itself the bug
+// TestIndexSingleFile_RecreatedNoteWithNewIDReplacesTheOldRow covers.)
 func TestIndexFile_RollsBackOnFailure(t *testing.T) {
 	v := initTestVault(t)
 
-	// Pre-insert doc1 with path "bad.md" and ID "id-1"
-	doc1 := &document.Document{
-		ID: "id-1", Path: "bad.md", Title: "First",
-		Type: "note", Status: "draft", CreatedAt: "2025-01-01T00:00:00Z",
-		ModifiedAt: "2025-01-01T00:00:00Z", Frontmatter: map[string]any{},
-	}
-	if err := v.DB.UpsertDocument(doc1); err != nil {
+	if _, err := v.DB.Conn().Exec(
+		`CREATE TRIGGER fail_chunk_insert BEFORE INSERT ON chunks
+		 BEGIN SELECT RAISE(ABORT, 'forced chunk failure'); END`,
+	); err != nil {
 		t.Fatal(err)
 	}
 
-	abs := filepath.Join(v.Root, "bad.md")
-	// Write content for bad.md with a different ID "id-2".
-	// This causes a UNIQUE path constraint violation on indexing.
-	content := "---\nid: id-2\ntitle: Bad\ntype: note\nstatus: draft\n---\nbody"
-	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+	abs := writeDoc(t, v, "bad.md", "id-2", "Bad", "body with #tag and [[Link]]")
+	if err := indexFile(v.DB, abs, "bad.md"); err == nil {
+		t.Fatal("expected indexFile to fail on the aborted chunk insert")
 	}
 
-	err := indexFile(v.DB, abs, "bad.md")
-	if err == nil {
-		t.Fatal("expected error from indexFile with path collision")
-	}
-
-	// Confirm that the transaction rolled back and no chunks/tags/links leaked.
-	for _, table := range []string{"chunks", "tags", "links"} {
+	// The upsert ran before the failure; the rollback must have undone it.
+	for _, table := range []string{"documents", "chunks", "tags", "links"} {
 		var count int
 		if err := v.DB.Conn().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -240,5 +228,65 @@ base:
 	}
 	if baseChunks == 0 {
 		t.Error("expected config.base chunks, got 0")
+	}
+}
+
+// TestIndexSingleFile_RecreatedNoteWithNewIDReplacesTheOldRow is the
+// regression test for `UNIQUE constraint failed: documents.path`. A note that
+// is deleted outside 2nb and recreated at the same path from a template gets
+// a fresh frontmatter id while the old row still holds the path. The upsert
+// conflicts on id alone, so every index of that note failed until a full
+// index purged the stale row. Path is identity: the old row is replaced.
+func TestIndexSingleFile_RecreatedNoteWithNewIDReplacesTheOldRow(t *testing.T) {
+	v := initTestVault(t)
+
+	abs := writeDoc(t, v, "daily.md", "id-old", "Daily", "First body with [[Other]].")
+	if err := IndexSingleFile(v, abs); err != nil {
+		t.Fatalf("index original: %v", err)
+	}
+
+	if err := os.Remove(abs); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, v, "daily.md", "id-new", "Daily", "Second body.")
+	if err := IndexSingleFile(v, abs); err != nil {
+		t.Fatalf("index recreated note: %v", err)
+	}
+
+	var ids []string
+	rows, err := v.DB.Conn().Query("SELECT id FROM documents WHERE path = ?", "daily.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != 1 || ids[0] != "id-new" {
+		t.Fatalf("rows at daily.md = %v, want exactly [id-new]", ids)
+	}
+
+	// Nothing of the old row may outlive it.
+	for _, table := range []string{"chunks", "links"} {
+		col := "doc_id"
+		if table == "links" {
+			col = "source_id"
+		}
+		var n int
+		if err := v.DB.Conn().QueryRow("SELECT COUNT(*) FROM "+table+" WHERE "+col+" = ?", "id-old").Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 0 {
+			t.Errorf("%d %s rows still belong to the replaced id", n, table)
+		}
+	}
+
+	// Indexing it again is a plain update, not another replacement.
+	if err := IndexSingleFile(v, abs); err != nil {
+		t.Fatalf("reindex: %v", err)
 	}
 }

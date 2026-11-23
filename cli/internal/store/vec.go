@@ -180,6 +180,24 @@ func (db *DB) DeleteDocChunkVectors(docID string) error {
 	return err
 }
 
+// DeleteDocumentTx removes a document row and its chunk vectors inside tx.
+// chunks, tags, aliases and links cascade from the documents row; vec_chunks
+// (vec0) has no foreign key, so it is cleared explicitly, as DeleteDocument
+// does outside a transaction.
+func (db *DB) DeleteDocumentTx(tx *sql.Tx, docID string) error {
+	has, err := db.hasVecChunks()
+	if err != nil {
+		return err
+	}
+	if has {
+		if _, err := tx.Exec(`DELETE FROM vec_chunks WHERE doc_id = ?`, docID); err != nil {
+			return fmt.Errorf("delete chunk vectors: %w", err)
+		}
+	}
+	_, err = tx.Exec("DELETE FROM documents WHERE id = ?", docID)
+	return err
+}
+
 // VecSearchChunks runs a vec0 KNN over chunk vectors and returns the top-k
 // chunks (with their document) whose cosine similarity is >= minScore. Returns
 // ErrVecUnavailable when vec_chunks doesn't exist so the caller can fall back.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -210,6 +211,52 @@ func partitionLlamaEmbedBatches(formatted []string, maxItems, maxRunes int) [][2
 	return batches
 }
 
+// llamaEmbedShrinkAttempts bounds the truncate-and-retry loop for one input
+// the server rejects as too large. Each attempt keeps 3/4 of the runes, so
+// five attempts reach under a quarter of the original: far below any text
+// that 4500 runes could tokenize to.
+const llamaEmbedShrinkAttempts = 5
+
+// isLlamaInputTooLarge reports whether err is llama-server refusing an input
+// that tokenizes past its batch size. The rune cap is not a token cap: dense
+// text (tables, code, URLs, non-Latin scripts) runs under two runes per token,
+// so 4500 runes can exceed the 2048-token batch the embed role is started with.
+func isLlamaInputTooLarge(err error) bool {
+	var postErr *llamaPostError
+	return errors.As(err, &postErr) && strings.Contains(err.Error(), "too large to process")
+}
+
+// shrinkLlamaEmbedInput returns the leading 3/4 of s, cut on a rune boundary.
+// It always removes at least one rune from a non-empty string, so the retry
+// loop cannot spin on an input that will not get shorter.
+func shrinkLlamaEmbedInput(s string) string {
+	n := utf8.RuneCountInString(s)
+	if n <= 1 {
+		return ""
+	}
+	return capLlamaEmbedRunes(s, n*3/4)
+}
+
+// embedOne embeds a single input, truncating and retrying when the server
+// rejects it as too large. Without this an oversized chunk failed on every
+// attempt, so its note never got an embedding and stayed out of semantic
+// search. A truncated embedding of the chunk's leading text is the better
+// outcome, and it is logged, never silent.
+func (e *LlamaEmbedder) embedOne(ctx context.Context, embedURL, text string, dst [][]float32) error {
+	err := e.embedBatch(ctx, embedURL, []string{text}, dst)
+	for attempt := 0; attempt < llamaEmbedShrinkAttempts && err != nil && isLlamaInputTooLarge(err) && ctx.Err() == nil; attempt++ {
+		shorter := shrinkLlamaEmbedInput(text)
+		if shorter == "" {
+			break
+		}
+		slog.Info("embedding input exceeds the local engine's token batch; truncating and retrying",
+			"model", e.model, "runes_before", utf8.RuneCountInString(text), "runes_after", utf8.RuneCountInString(shorter))
+		text = shorter
+		err = e.embedBatch(ctx, embedURL, []string{text}, dst)
+	}
+	return err
+}
+
 type llamaPostError struct {
 	err error
 }
@@ -273,11 +320,17 @@ func (e *LlamaEmbedder) Embed(ctx context.Context, texts []string, opts ...Embed
 
 	for _, b := range partitionLlamaEmbedBatches(formatted, llamaEmbedMaxBatchSize, maxLlamaEmbedBatchRunes) {
 		start, end := b[0], b[1]
+		if end-start == 1 {
+			if err := e.embedOne(ctx, embedURL, formatted[start], results[start:end]); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if err := e.embedBatch(ctx, embedURL, formatted[start:end], results[start:end]); err != nil {
 			var postErr *llamaPostError
-			if end-start > 1 && errors.As(err, &postErr) && ctx.Err() == nil {
+			if errors.As(err, &postErr) && ctx.Err() == nil {
 				for i := start; i < end; i++ {
-					if singleErr := e.embedBatch(ctx, embedURL, formatted[i:i+1], results[i:i+1]); singleErr != nil {
+					if singleErr := e.embedOne(ctx, embedURL, formatted[i], results[i:i+1]); singleErr != nil {
 						return nil, singleErr
 					}
 				}
