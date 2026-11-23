@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Typing in Ask & Search no longer leaves a pile of searches running.** Each keystroke starts a new search, and the ones it replaced used to keep running to the end, several at once against a cold on-device embedding engine. A replaced search is now stopped, and the Quick Search panel no longer reopens showing a spinner from the search it abandoned
 - **A long Ask conversation can no longer freeze the app.** The conversation history is handed to `2nb ask` through a pipe, and once it grew past 64 KB the app wrote it before the command had started, which blocks forever. It is now written after launch, off the main thread
 - **A `2nb` that cannot be launched no longer exhausts the app's file descriptors.** Every failed launch leaked six descriptors, and the app checks MCP status every five seconds, so a missing or replaced `2nb` (during an upgrade, for example) used up the limit within minutes, after which nothing in the app that needs the CLI worked until relaunch
+- **A note that was deleted and recreated indexes again.** A daily note removed outside 2nb and rebuilt from its template gets a new id while the index still holds the old one at that path, and every attempt to index it failed with `UNIQUE constraint failed: documents.path` until a full `2nb index` ran. The old entry is now replaced on the spot
+- **Dense notes embed with the on-device model.** A chunk full of tables, code, URLs or non-Latin text can exceed the local engine's 2,048-token limit while still under 2nb's character cap. It was rejected on every attempt, so the note stayed out of semantic search. 2nb now shortens that chunk and retries, and logs when it does
 
 ## [0.24.0] - 2026-11-18
 
