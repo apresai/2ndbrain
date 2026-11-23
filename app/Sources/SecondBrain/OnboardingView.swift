@@ -85,6 +85,10 @@ struct OnboardingView: View {
     // Step 2: Gemini BYOK / BYOP inputs
     @State private var apiKeyInput = ""
     @State private var storedGeminiKey = ""
+    /// See SettingsAIView: unknown counts as "a key may exist", and a read
+    /// that started before a save cannot land after it.
+    @State private var storedGeminiKeyKnown = false
+    @State private var keyReadGeneration = 0
     @State private var projectInput = ""
     @State private var locationInput = GoogleRegions.defaultRegion
     @State private var probingGemini = false
@@ -617,7 +621,22 @@ struct OnboardingView: View {
         if !isTestEnvironment {
             detectedVaults = ObsidianRegistry.load()?.vaults.filter(\.exists) ?? []
         }
-        storedGeminiKey = appState.getStoredGeminiKey() ?? ""
+        keyReadGeneration &+= 1
+        let generation = keyReadGeneration
+        Task {
+            let lookup = await appState.lookupStoredGeminiKey()
+            guard generation == keyReadGeneration else { return }
+            switch lookup {
+            case .present(let key):
+                storedGeminiKey = key
+                storedGeminiKeyKnown = true
+            case .absent:
+                storedGeminiKey = ""
+                storedGeminiKeyKnown = true
+            case .unknown:
+                storedGeminiKeyKnown = false
+            }
+        }
     }
 
     private func loadSavedGeminiConfig() async {
@@ -676,7 +695,7 @@ struct OnboardingView: View {
             let verdict = CredentialVerdict(report.credentials)
             let persist = KeyPersistence.shouldPersistProbedKey(
                 verdict: verdict,
-                hasExistingKey: !storedGeminiKey.isEmpty
+                hasExistingKey: !storedGeminiKey.isEmpty || !storedGeminiKeyKnown
             )
             guard persist else {
                 geminiMessage = KeyPersistence.message(verdict: verdict, persisted: false, provider: "Gemini")
@@ -685,7 +704,9 @@ struct OnboardingView: View {
             }
 
             try await appState.saveGeminiKey(trimmed)
+            keyReadGeneration &+= 1
             storedGeminiKey = trimmed
+            storedGeminiKeyKnown = true
             apiKeyInput = ""
 
             if appState.vault != nil {

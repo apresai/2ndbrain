@@ -53,6 +53,53 @@ enum StartupSync {
 final class AppState {
     var vault: VaultManager?
     var database: DatabaseManager?
+    /// The off-main open started by openVault; `databaseReady()` awaits it.
+    @ObservationIgnored private var databaseOpenTask: Task<Void, Never>?
+
+    /// Waits until no index open is pending. Loops because a newer open
+    /// (another openVault, or the reopen after a rebuild) can replace the
+    /// task being awaited, and the replaced one finishes without assigning.
+    func databaseReady() async {
+        while let task = databaseOpenTask {
+            await task.value
+            if databaseOpenTask == task { break }
+        }
+    }
+
+    /// Opens `vm`'s index off the main actor and assigns it only if `vm` is
+    /// still the bound vault. The ONE path that assigns `database` from an
+    /// open, so the open on bind and the reopen after a rebuild cannot
+    /// interleave and leave the previous vault's index bound to the new one.
+    /// Opening sets WAL and runs the migrator, which takes the write lock
+    /// and waits up to the 5 s busy timeout while the CLI or an MCP server
+    /// is writing; that used to happen on the main actor.
+    @discardableResult
+    private func openDatabase(for vm: VaultManager, context: String) -> Task<Void, Never> {
+        databaseOpenTask?.cancel()
+        let dbPath = vm.indexDBPath
+        let task = Task { @MainActor [weak self] in
+            let result = await Task.detached { Result { try DatabaseManager(path: dbPath) } }.value
+            guard let self, !Task.isCancelled, self.vault === vm else { return }
+            switch result {
+            case .success(let db):
+                self.database = db
+                log.info("Database opened (\(context, privacy: .public)): \(dbPath)")
+            case .failure(let error):
+                let safeErr = Self.boundedRedacted(error.localizedDescription)
+                log.error("Failed to open index (\(context, privacy: .public)): \(safeErr)")
+                self.errorLogger?.log("Failed to open index (\(context)): \(safeErr)")
+                self.actionTracker.record(
+                    category: .vault,
+                    action: "vault.open_db",
+                    phase: .failed,
+                    summary: "Failed to open SQLite index for \(vm.rootURL.lastPathComponent)",
+                    detail: error.localizedDescription
+                )
+            }
+        }
+        databaseOpenTask = task
+        return task
+    }
     var fileWatcher: FSEventsWatcher?
 
     /// Structured GUI action and status telemetry (in-memory feed + OSLog +
@@ -197,7 +244,8 @@ final class AppState {
     var suppressedExternalPaths: [String: Date] = [:]
     var externalReindexTask: Task<Void, Never>?
     private var externalReindexInFlight = false
-    private let externalReindexDebounce: Duration = .seconds(1.5)
+    /// Settable so tests need not wait out the production debounce.
+    @ObservationIgnored var externalReindexDebounce: Duration = .seconds(1.5)
     private let bulkExternalReindexThreshold = 8
 
     // Git state
@@ -224,7 +272,20 @@ final class AppState {
     // provider unavailable, model mismatch, etc.) and views should show
     // a banner explaining why. Cleared on the next successful run.
     var lastSemanticWarnings: [String] = []
-    var isIndexing = false
+    var isIndexing = false {
+        didSet {
+            // Changes queued while a full index ran are kept (see
+            // drainExternalReindex) and drained once it finishes.
+            if oldValue, !isIndexing, !pendingExternalPaths.isEmpty, !pauseAutoSync {
+                externalReindexTask?.cancel()
+                externalReindexTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: self?.externalReindexDebounce ?? .seconds(1.5))
+                    guard let self, !Task.isCancelled else { return }
+                    await self.drainExternalReindex()
+                }
+            }
+        }
+    }
     var indexError: String?
     /// The most recent per-note reindex failure, from the watcher's
     /// `index --doc`. Distinct from `indexError`, which belongs to a full index
@@ -366,41 +427,32 @@ final class AppState {
             UserDefaults.standard.set(url.path, forKey: "lastVaultPath")
         }
 
-        // Open the shared SQLite index (same DB the Go CLI writes to)
+        // Open the shared SQLite index (same DB the Go CLI writes to) off the
+        // main actor. Opening sets WAL and runs the migrator, which takes the
+        // write lock and waits up to the 5 s busy timeout whenever the CLI or
+        // an MCP server is writing, and that wait used to happen right here.
+        self.database = nil
         if vm.isInitialized {
-            do {
-                self.database = try DatabaseManager(path: vm.indexDBPath)
-                log.info("Database opened: \(vm.indexDBPath)")
-            } catch {
-                let safeErr = Self.boundedRedacted(error.localizedDescription)
-                log.error("Failed to open index: \(safeErr)")
-                errorLogger?.log("Failed to open index: \(safeErr)")
-                actionTracker.record(
-                    category: .vault,
-                    action: "vault.open_db",
-                    phase: .failed,
-                    summary: "Failed to open SQLite index for \(vm.rootURL.lastPathComponent)",
-                    detail: error.localizedDescription
-                )
-            }
+            openDatabase(for: vm, context: "open")
             // No CLI sync needed: 2nb reads Obsidian's own registry to resolve
             // the active vault, the same source this app binds to, so a bare
             // terminal `2nb` already follows the open Obsidian vault.
         } else {
-            self.database = nil
+            databaseOpenTask?.cancel()
+            databaseOpenTask = nil
             log.notice("Vault not initialized (no .2ndbrain dir): \(url.path)")
         }
 
         self.errorLogger = ErrorLogger(vaultDotDir: vm.dotDirURL)
 
-        // Refresh file list
-        refreshFiles()
-        log.info("Vault loaded: \(self.files.count) files")
+        // The file list is walked off the main actor, so everything that
+        // reports its count waits for it.
+        self.files = []
+        let filesTask = refreshFiles()
 
         actionTracker.updateStatus { status in
             status.vaultPath = vm.rootURL.path
             status.vaultName = vm.rootURL.lastPathComponent
-            status.fileCount = self.files.count
             status.lastError = nil
             status.lastIndexError = nil
             status.lastIndexingProblemPath = nil
@@ -411,18 +463,24 @@ final class AppState {
             status.aiUsage30dCloudCalls = nil
             status.aiUsage30dLocalCalls = nil
         }
-        actionTracker.record(
-            category: .vault,
-            action: "vault.open",
-            phase: .succeeded,
-            summary: "Opened vault \(vm.rootURL.lastPathComponent) (\(self.files.count) notes)",
-            metadata: [
-                "vault": vm.rootURL.lastPathComponent,
-                "path": vm.rootURL.path,
-                "initialized": String(vm.isInitialized),
-                "files": "\(self.files.count)",
-            ]
-        )
+        Task { @MainActor [weak self] in
+            await filesTask?.value
+            guard let self, self.vault === vm else { return }
+            log.info("Vault loaded: \(self.files.count) files")
+            self.actionTracker.updateStatus { $0.fileCount = self.files.count }
+            self.actionTracker.record(
+                category: .vault,
+                action: "vault.open",
+                phase: .succeeded,
+                summary: "Opened vault \(vm.rootURL.lastPathComponent) (\(self.files.count) notes)",
+                metadata: [
+                    "vault": vm.rootURL.lastPathComponent,
+                    "path": vm.rootURL.path,
+                    "initialized": String(vm.isInitialized),
+                    "files": "\(self.files.count)",
+                ]
+            )
+        }
 
         // Refresh AI status, then catch up the index if notes were added or
         // removed in Obsidian while the app was closed (the file watcher only
@@ -456,16 +514,22 @@ final class AppState {
                 $0.hasSuffix(".md") || $0.hasSuffix("/config.yaml")
             }
         ) { @Sendable [weak self] paths in
+            // This runs on the watcher's own queue. The exclusion check reads
+            // Obsidian's settings and the whole note, and the file list walks
+            // the vault, so both happen here, off the main actor: during a
+            // sync or a git pull they used to stall the UI for every batch.
+            let mdPaths = paths.filter { path in
+                path.hasSuffix(".md") && !Self.shouldExcludeExternalIndexPath(path, vault: vm)
+            }
+            let configChanged = paths.contains { $0.hasSuffix("/config.yaml") }
             Task { @MainActor in
-                let mdPaths = paths.filter { path in
-                    guard path.hasSuffix(".md"), let vault = self?.vault else { return false }
-                    return !Self.shouldExcludeExternalIndexPath(path, vault: vault)
-                }
-                let configChanged = paths.contains { $0.hasSuffix("/config.yaml") }
+                // Changes queued against a vault that has since been closed
+                // belong to that vault.
+                guard self?.vault === vm else { return }
                 if !mdPaths.isEmpty {
                     self?.refreshFiles()
                     for path in mdPaths {
-                        self?.scheduleExternalReindex(path: path)
+                        self?.enqueueExternalReindex(path: path)
                     }
                 }
                 if configChanged {
@@ -478,24 +542,51 @@ final class AppState {
         self.fileWatcher = watcher
     }
 
-    func refreshFiles() {
-        guard let vault else { return }
-        let mdFiles = vault.listMarkdownFiles()
-        let items = mdFiles.map { url in
+    /// Refreshes `files` from disk. The walk runs off the main actor; a
+    /// refresh started later always wins over one started earlier, and a
+    /// result for a vault that is no longer bound is dropped.
+    @discardableResult
+    func refreshFiles() -> Task<Void, Never>? {
+        guard let vault else { return nil }
+        filesGeneration &+= 1
+        let generation = filesGeneration
+        let task = Task { @MainActor [weak self] in
+            let items = await Task.detached(priority: .userInitiated) { Self.listFileItems(vault) }.value
+            guard let self, generation == self.filesGeneration, self.vault === vault else { return }
+            self.files = items
+        }
+        return task
+    }
+
+    @ObservationIgnored private var filesGeneration = 0
+
+    nonisolated static func listFileItems(_ vault: VaultManager) -> [FileItem] {
+        vault.listMarkdownFiles().map { url in
             FileItem(
                 url: url,
                 name: url.deletingPathExtension().lastPathComponent,
                 relativePath: vault.relativePath(for: url)
             )
         }
-
-        self.files = items
     }
 
     func createVault(at url: URL) {
+        Task { await createVaultAsync(at: url) }
+    }
+
+    /// `2nb vault create` runs off the main actor: it used to run inside
+    /// this call with `waitUntilExit()`, holding the UI for its duration.
+    func createVaultAsync(at url: URL) async {
+        let boundBefore = vault
         do {
-            try VaultManager.initializeVault(at: url)
-            openVault(at: url, persistLastVault: true)
+            try await Task.detached { try VaultManager.initializeVault(at: url) }.value
+            // The main actor was free while the vault was created. If another
+            // vault was bound meanwhile, that choice is newer than this one.
+            if vault === boundBefore {
+                openVault(at: url, persistLastVault: true)
+            } else {
+                log.notice("Created vault at \(url.path) but another vault was bound meanwhile; not switching")
+            }
             actionTracker.record(
                 category: .vault,
                 action: "vault.create",
@@ -686,13 +777,16 @@ final class AppState {
                     process.standardError = stderrPipe
                     process.standardOutput = stdoutPipe
                     let drain = PipeDrain()
+                    // Termination waits for both pipes to reach EOF here rather than
+                    // reading them itself, which raced an in-flight readability callback.
+                    let eof = PipeEOF([stdoutPipe, stderrPipe])
 
                     // Drain stdout so a large summary can't fill the pipe buffer
                     // and deadlock the child before it exits.
                     stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
                         let chunk = handle.availableData
                         if chunk.isEmpty {
-                            handle.readabilityHandler = nil
+                            handle.readabilityHandler = nil; eof.reached(handle)
                         } else {
                             drain.appendStdout(chunk)
                         }
@@ -703,7 +797,7 @@ final class AppState {
                     stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                         let data = handle.availableData
                         if data.isEmpty {
-                            handle.readabilityHandler = nil
+                            handle.readabilityHandler = nil; eof.reached(handle)
                             return
                         }
                         drain.appendStderr(data)
@@ -821,10 +915,7 @@ final class AppState {
                     }
 
                     process.terminationHandler = { proc in
-                        stdoutPipe.fileHandleForReading.readabilityHandler = nil
-                        stderrPipe.fileHandleForReading.readabilityHandler = nil
-                        drain.appendStdout(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
-                        drain.appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                        _ = eof.wait(command: "2nb index")
                         let out = String(data: drain.stdoutData, encoding: .utf8) ?? ""
                         let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
                         continuation.resume(returning: (proc.terminationStatus, out, err))
@@ -853,13 +944,12 @@ final class AppState {
 
                 indexProgress?.elapsed = elapsed
 
-                // Reopen the database to pick up changes before flipping isIndexing.
-                do {
-                    self.database = try DatabaseManager(path: vault.indexDBPath)
-                } catch {
-                    let safeErr = Self.boundedRedacted(error.localizedDescription)
-                    log.error("Failed to reopen index database after rebuild: \(safeErr)")
-                    errorLogger?.log("Failed to reopen index database after rebuild: \(safeErr)")
+                // Reopen the database to pick up changes before flipping
+                // isIndexing. Through openDatabase, which binds it only if
+                // this vault is still the bound one: the user may have
+                // switched vaults while the rebuild ran.
+                if self.vault === vault {
+                    await openDatabase(for: vault, context: "reopen after rebuild").value
                 }
 
                 isIndexing = false
@@ -1104,19 +1194,19 @@ final class AppState {
                 // Drain both pipes as data arrives; brew's download/pour chatter
                 // can exceed the pipe buffer and deadlock an undrained child.
                 let drain = PipeDrain()
+                // Termination waits for both pipes to reach EOF here rather than
+                // reading them itself, which raced an in-flight readability callback.
+                let eof = PipeEOF([stdout, stderr])
                 stdout.fileHandleForReading.readabilityHandler = { handle in
                     let chunk = handle.availableData
-                    if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStdout(chunk) }
+                    if chunk.isEmpty { handle.readabilityHandler = nil; eof.reached(handle) } else { drain.appendStdout(chunk) }
                 }
                 stderr.fileHandleForReading.readabilityHandler = { handle in
                     let chunk = handle.availableData
-                    if chunk.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(chunk) }
+                    if chunk.isEmpty { handle.readabilityHandler = nil; eof.reached(handle) } else { drain.appendStderr(chunk) }
                 }
                 process.terminationHandler = { proc in
-                    stdout.fileHandleForReading.readabilityHandler = nil
-                    stderr.fileHandleForReading.readabilityHandler = nil
-                    drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
-                    drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                    _ = eof.wait(command: "brew upgrade twonb")
                     if proc.terminationStatus == 0 {
                         continuation.resume()
                     } else {
@@ -2405,6 +2495,12 @@ final class AppState {
         if Self.shouldExcludeExternalIndexPath(path, vault: vault) {
             return
         }
+        enqueueExternalReindex(path: path, now: now)
+    }
+
+    /// `scheduleExternalReindex` for a path whose exclusion check already
+    /// ran (the watcher runs it on its own queue).
+    func enqueueExternalReindex(path: String, now: Date = Date()) {
         suppressedExternalPaths = suppressedExternalPaths.filter { $0.value > now }
         let canon = Self.canonicalWatcherPath(path)
         if let expiry = suppressedExternalPaths[canon], expiry > now {
@@ -2432,12 +2528,14 @@ final class AppState {
     /// `2nb index` rather than spawning one subprocess per file.
     private func drainExternalReindex() async {
         guard !pauseAutoSync, !externalReindexInFlight, let vault else { return }
-        // A full index (manual Sync or the startup catch-up) is already running
-        // and will pick up every current file, so don't start a second, racing
-        // `2nb index` on the same SQLite DB. Drop the queued paths — the running
-        // full scan covers them; anything written after it passes is re-caught by
-        // the watcher once isIndexing clears.
-        guard !isIndexing else { pendingExternalPaths.removeAll(); return }
+        // A full index (manual Sync or the startup catch-up) is already running,
+        // so don't start a second, racing `2nb index` on the same SQLite DB.
+        // KEEP the queued paths: a note saved after the full scan passed it
+        // is not in that scan, and the watcher will not report it again
+        // unless it changes again. They used to be dropped here, which lost
+        // such edits. isIndexing's didSet drains them when the index ends;
+        // re-indexing a note the scan did cover is a cheap no-op.
+        guard !isIndexing else { return }
         externalReindexInFlight = true
         defer { externalReindexInFlight = false }
 
@@ -2468,8 +2566,14 @@ final class AppState {
             // the rest of the batch, so a single broken file could leave a
             // whole sync's worth of edits unindexed.
             for path in paths.sorted() {
-                guard FileManager.default.fileExists(atPath: path) else { continue }
-                if Self.shouldExcludeExternalIndexPath(path, vault: vault) { continue }
+                // Re-checked at drain time (the note may have become a
+                // template since it was queued), off the main actor because
+                // the check reads the whole note.
+                let excluded = await Task.detached(priority: .utility) {
+                    !FileManager.default.fileExists(atPath: path)
+                        || Self.shouldExcludeExternalIndexPath(path, vault: vault)
+                }.value
+                if excluded { continue }
                 let rel = vault.relativePath(for: URL(fileURLWithPath: path))
                 let noteStart = ContinuousClock.now
                 do {
@@ -2812,28 +2916,14 @@ final class AppState {
         ) {
             // For Gemini, store API key if provided (Keychain and CLI keystore)
             if (provider == "gemini" || provider == "google") && !geminiKey.isEmpty {
-                let sec = Process()
-                sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-                sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain",
-                                 "-a", "gemini", "-w", geminiKey, "-U"]
-                sec.standardOutput = FileHandle.nullDevice
-                sec.standardError = FileHandle.nullDevice
-                try? sec.run()
-                sec.waitUntilExit()
+                try await storeKeychainSecret(account: "gemini", secret: geminiKey)
 
                 _ = try? await runCLIGlobal(["config", "set-key", "gemini"], stdin: Self.setKeyStdinData(geminiKey))
             }
 
             // For OpenRouter, store API key in Keychain first
             if provider == "openrouter" && !openrouterKey.isEmpty {
-                let sec = Process()
-                sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-                sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain",
-                                 "-a", "openrouter", "-w", openrouterKey, "-U"]
-                sec.standardOutput = FileHandle.nullDevice
-                sec.standardError = FileHandle.nullDevice
-                try sec.run()
-                sec.waitUntilExit()
+                try await storeKeychainSecret(account: "openrouter", secret: openrouterKey)
             }
 
             // Write config values sequentially
@@ -3108,23 +3198,108 @@ final class AppState {
     }
 
     /// Read stored Gemini API key from macOS Keychain if available.
-    func getStoredGeminiKey() -> String? {
-        let sec = Process()
-        sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        sec.arguments = ["find-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini", "-w"]
-        let pipe = Pipe()
-        sec.standardOutput = pipe
-        sec.standardError = FileHandle.nullDevice
-        do {
-            try sec.run()
-            sec.waitUntilExit()
-            if sec.terminationStatus == 0 {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let str, !str.isEmpty { return str }
+    /// The stored Gemini key, or why there is none. `unknown` (the lookup
+    /// timed out, could not launch, or failed for another reason) is not
+    /// `absent`: callers keep what they showed before and must not treat it
+    /// as "no key", or an unreachable probe would overwrite a real key.
+    enum StoredKeyLookup: Equatable, Sendable {
+        case present(String)
+        case absent
+        case unknown
+    }
+
+    func lookupStoredGeminiKey() async -> StoredKeyLookup {
+        let outcome = await Self.runSecurity(
+            ["find-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini", "-w"],
+            captureStdout: true,
+            timeout: 15
+        )
+        return Self.storedKeyLookup(from: outcome)
+    }
+
+    nonisolated static func storedKeyLookup(from outcome: SecurityOutcome) -> StoredKeyLookup {
+        switch outcome {
+        case .exited(0, let data):
+            let key = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return key.isEmpty ? .absent : .present(key)
+        case .exited(44, _):
+            // errSecItemNotFound: there is genuinely no stored key.
+            return .absent
+        case .exited, .timedOut, .launchFailed:
+            return .unknown
+        }
+    }
+
+    enum SecurityOutcome: Sendable, Equatable {
+        case exited(Int32, Data)
+        case timedOut
+        case launchFailed
+    }
+
+    /// Stores a secret with `security add-generic-password`, throwing unless
+    /// it exited 0. Writes used to ignore the outcome entirely, so a denied
+    /// or failed store reported success.
+    private func storeKeychainSecret(account: String, secret: String) async throws {
+        let outcome = await Self.runSecurity(
+            ["add-generic-password", "-s", "dev.apresai.2ndbrain", "-a", account, "-w", secret, "-U"]
+        )
+        guard case .exited(0, _) = outcome else {
+            let reason: String
+            switch outcome {
+            case .exited(let status, _): reason = "security exited \(status)"
+            case .timedOut: reason = "security timed out (is a Keychain prompt waiting?)"
+            case .launchFailed: reason = "could not run /usr/bin/security"
             }
-        } catch {}
-        return nil
+            throw CLIError.nonZeroExit(-1, message: "Could not store the \(account) key in the Keychain: \(reason)")
+        }
+    }
+
+    /// Runs `/usr/bin/security` without blocking the caller's thread. Every
+    /// keychain call used to `waitUntilExit()` on the main actor, which froze
+    /// the UI for as long as `security` took (indefinitely while it waits on
+    /// a keychain prompt), and three of them followed `try? run()` with
+    /// `waitUntilExit()`, which raises an uncatchable exception when the
+    /// launch failed. Returns nil when it could not be launched.
+    ///
+    /// The tool, not SecItem*, because the stored item's access list names
+    /// /usr/bin/security (it created the item), so an in-process read would
+    /// raise a keychain permission prompt for the app.
+    nonisolated static func runSecurity(
+        _ args: [String],
+        captureStdout: Bool = false,
+        timeout: TimeInterval = 120
+    ) async -> SecurityOutcome {
+        let timedOut = TimeoutFlag()
+        return await withCheckedContinuation { continuation in
+            let sec = Process()
+            sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            sec.arguments = args
+            // The output is one short line at most, so reading it after exit
+            // cannot fill the pipe buffer.
+            let pipe: Pipe? = captureStdout ? Pipe() : nil
+            sec.standardOutput = pipe ?? FileHandle.nullDevice
+            sec.standardError = FileHandle.nullDevice
+            sec.terminationHandler = { proc in
+                let data = pipe?.fileHandleForReading.readDataToEndOfFile() ?? Data()
+                try? pipe?.fileHandleForReading.close()
+                continuation.resume(returning: timedOut.isSet ? .timedOut : .exited(proc.terminationStatus, data))
+            }
+            do {
+                try sec.run()
+            } catch {
+                releaseFailedLaunch(sec, pipes: [pipe])
+                continuation.resume(returning: .launchFailed)
+                return
+            }
+            // Bounded: an unanswered keychain prompt no longer freezes the
+            // UI, but the caller's spinner should not wait on it forever.
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if sec.isRunning {
+                    timedOut.set()
+                    sec.terminate()
+                }
+            }
+        }
     }
 
     static func setKeyStdinData(_ key: String) -> Data {
@@ -3140,13 +3315,7 @@ final class AppState {
             action: "settings.save_gemini_key",
             startSummary: "Save Gemini API key to Keychain & CLI keystore"
         ) {
-            let sec = Process()
-            sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-            sec.arguments = ["add-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini", "-w", trimmed, "-U"]
-            sec.standardOutput = FileHandle.nullDevice
-            sec.standardError = FileHandle.nullDevice
-            try? sec.run()
-            sec.waitUntilExit()
+            try await storeKeychainSecret(account: "gemini", secret: trimmed)
 
             return try await runCLIGlobal(["config", "set-key", "gemini"], stdin: Self.setKeyStdinData(trimmed))
         }
@@ -3161,13 +3330,25 @@ final class AppState {
             summary: "Clear Gemini API key from Keychain"
         )
         let start = ContinuousClock.now
-        let sec = Process()
-        sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        sec.arguments = ["delete-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini"]
-        sec.standardOutput = FileHandle.nullDevice
-        sec.standardError = FileHandle.nullDevice
-        try? sec.run()
-        sec.waitUntilExit()
+        // 44 is errSecItemNotFound: nothing to remove is not a failure.
+        let failure: String?
+        switch await Self.runSecurity(["delete-generic-password", "-s", "dev.apresai.2ndbrain", "-a", "gemini"]) {
+        case .exited(0, _), .exited(44, _): failure = nil
+        case .exited(let status, _): failure = "security exited \(status)"
+        case .timedOut: failure = "security timed out (is a Keychain prompt waiting?)"
+        case .launchFailed: failure = "could not run /usr/bin/security"
+        }
+        if let failure {
+            actionTracker.record(
+                category: .settings,
+                action: "settings.clear_gemini_key",
+                phase: .failed,
+                durationMs: elapsedMilliseconds(since: start),
+                summary: "Could not clear Gemini API key from Keychain",
+                detail: failure
+            )
+            throw CLIError.nonZeroExit(-1, message: "Could not remove the Gemini key from the Keychain: \(failure)")
+        }
         actionTracker.record(
             category: .settings,
             action: "settings.clear_gemini_key",
@@ -3319,11 +3500,14 @@ final class AppState {
                 process.standardOutput = stdoutPipe
                 process.standardError = stderrPipe
                 let drain = PipeDrain()
+                // Termination waits for both pipes to reach EOF here rather than
+                // reading them itself, which raced an in-flight readability callback.
+                let eof = PipeEOF([stdoutPipe, stderrPipe])
                 let stream = PullEventStream()
 
                 stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                     let chunk = handle.availableData
-                    if chunk.isEmpty { handle.readabilityHandler = nil; return }
+                    if chunk.isEmpty { handle.readabilityHandler = nil; eof.reached(handle); return }
                     let events = stream.ingest(chunk)
                     guard !events.isEmpty else { return }
                     Task { @MainActor [weak self] in
@@ -3332,14 +3516,11 @@ final class AppState {
                 }
                 stderrPipe.fileHandleForReading.readabilityHandler = { handle in
                     let d = handle.availableData
-                    if d.isEmpty { handle.readabilityHandler = nil } else { drain.appendStderr(d) }
+                    if d.isEmpty { handle.readabilityHandler = nil; eof.reached(handle) } else { drain.appendStderr(d) }
                 }
                 process.terminationHandler = { proc in
-                    stdoutPipe.fileHandleForReading.readabilityHandler = nil
-                    stderrPipe.fileHandleForReading.readabilityHandler = nil
-                    var tailEvents = stream.ingest(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
-                    tailEvents.append(contentsOf: stream.flush())
-                    drain.appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                    _ = eof.wait(command: "2nb ai engine pull")
+                    let tailEvents = stream.flush()
                     let err = String(data: drain.stderrData, encoding: .utf8) ?? ""
                     continuation.resume(returning: (proc.terminationStatus, err, tailEvents))
                 }
@@ -3752,10 +3933,13 @@ final class AppState {
             if let input { process.standardInput = input }
 
             let drain = PipeDrain()
+            // Termination waits for both pipes to reach EOF here rather than
+            // reading them itself, which raced an in-flight readability callback.
+            let eof = PipeEOF([stdout, stderr])
             stdout.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
-                    handle.readabilityHandler = nil
+                    handle.readabilityHandler = nil; eof.reached(handle)
                 } else {
                     drain.appendStdout(chunk)
                 }
@@ -3763,7 +3947,7 @@ final class AppState {
             stderr.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
-                    handle.readabilityHandler = nil
+                    handle.readabilityHandler = nil; eof.reached(handle)
                 } else {
                     drain.appendStderr(chunk)
                 }
@@ -3780,10 +3964,7 @@ final class AppState {
 
             process.terminationHandler = { [actionTracker] proc in
                 watchdog.cancel()
-                stdout.fileHandleForReading.readabilityHandler = nil
-                stderr.fileHandleForReading.readabilityHandler = nil
-                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
-                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                let outputComplete = eof.wait(command: cmd)
                 if proc.terminationStatus != 0 && !expectNonZeroExit {
                     let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -3805,6 +3986,10 @@ final class AppState {
                             metadata: ["exitCode": String(proc.terminationStatus)]
                         )
                     }
+                }
+                guard outputComplete else {
+                    continuation.resume(throwing: CLIError.outputIncomplete(cmd))
+                    return
                 }
                 continuation.resume(returning: CLIRawResult(
                     stdout: drain.stdoutData,
@@ -3891,10 +4076,13 @@ final class AppState {
             // (e.g. `models list --discover` returns ~180KB of JSON),
             // deadlocking because terminationHandler never fires.
             let drain = PipeDrain()
+            // Termination waits for both pipes to reach EOF here rather than
+            // reading them itself, which raced an in-flight readability callback.
+            let eof = PipeEOF([stdout, stderr])
             stdout.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
-                    handle.readabilityHandler = nil
+                    handle.readabilityHandler = nil; eof.reached(handle)
                 } else {
                     drain.appendStdout(chunk)
                 }
@@ -3902,7 +4090,7 @@ final class AppState {
             stderr.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
-                    handle.readabilityHandler = nil
+                    handle.readabilityHandler = nil; eof.reached(handle)
                 } else {
                     drain.appendStderr(chunk)
                 }
@@ -3920,14 +4108,11 @@ final class AppState {
 
             process.terminationHandler = { [actionTracker] proc in
                 watchdog?.cancel()
-                // Detach the handlers so no late reads fire after we resume.
-                stdout.fileHandleForReading.readabilityHandler = nil
-                stderr.fileHandleForReading.readabilityHandler = nil
-                // Flush any bytes that arrived between the last handler call
-                // and process exit.
-                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
-                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
-                if proc.terminationStatus == 0 {
+                // Every byte is in `drain` once both pipes reach EOF.
+                let outputComplete = eof.wait(command: cmd)
+                if !outputComplete {
+                    continuation.resume(throwing: CLIError.outputIncomplete(cmd))
+                } else if proc.terminationStatus == 0 {
                     continuation.resume(returning: drain.stdoutData)
                 } else if cancelBox?.isCancelled == true {
                     // Terminated on purpose because the caller was
@@ -4036,10 +4221,13 @@ final class AppState {
             process.standardOutput = stdout
             process.standardError = stderr
             let drain = PipeDrain()
+            // Termination waits for both pipes to reach EOF here rather than
+            // reading them itself, which raced an in-flight readability callback.
+            let eof = PipeEOF([stdout, stderr])
             stdout.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
-                    handle.readabilityHandler = nil
+                    handle.readabilityHandler = nil; eof.reached(handle)
                 } else {
                     drain.appendStdout(chunk)
                 }
@@ -4047,7 +4235,7 @@ final class AppState {
             stderr.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
-                    handle.readabilityHandler = nil
+                    handle.readabilityHandler = nil; eof.reached(handle)
                 } else {
                     drain.appendStderr(chunk)
                 }
@@ -4059,14 +4247,15 @@ final class AppState {
             }
             process.terminationHandler = { proc in
                 watchdog.cancel()
-                stdout.fileHandleForReading.readabilityHandler = nil
-                stderr.fileHandleForReading.readabilityHandler = nil
-                drain.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
-                drain.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+                let outputComplete = eof.wait(command: cmd)
                 let errMsg = String(data: drain.stderrData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if proc.terminationStatus != 0 {
                     log.debug("CLI \(cmd) exited \(proc.terminationStatus) (allowed)")
+                }
+                guard outputComplete else {
+                    continuation.resume(throwing: CLIError.outputIncomplete(cmd))
+                    return
                 }
                 continuation.resume(returning: (drain.stdoutData, errMsg, proc.terminationStatus))
             }
@@ -4169,6 +4358,52 @@ final class ProcessCancelBox: @unchecked Sendable {
         let process = self.process
         lock.unlock()
         if let process, process.isRunning { process.terminate() }
+    }
+}
+
+/// Waits for a set of pipes to reach EOF, as signalled by their readability
+/// handlers. A termination handler used to clear the handlers and then call
+/// readDataToEndOfFile itself, but clearing a handler does not wait for a
+/// callback already running on another queue, so the two readers raced and
+/// output could arrive out of order (corrupting JSON). Each pipe's EOF is
+/// counted once; a pipe a stray grandchild keeps open cannot wedge the
+/// caller, because `wait` gives up after a bound and detaches what is left.
+final class TimeoutFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+    func set() { lock.lock(); value = true; lock.unlock() }
+}
+
+final class PipeEOF: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private let pipes: [Pipe]
+    private var seen = Set<ObjectIdentifier>()
+
+    init(_ pipes: [Pipe]) {
+        self.pipes = pipes
+    }
+
+    /// Called from a readability handler when it reads an empty chunk.
+    func reached(_ handle: FileHandle) {
+        lock.lock()
+        let first = seen.insert(ObjectIdentifier(handle)).inserted
+        let done = first && seen.count == pipes.count
+        lock.unlock()
+        if done { semaphore.signal() }
+    }
+
+    /// Blocks until every pipe reached EOF, or `timeout` passes. Called from
+    /// a termination handler, never from the main actor.
+    func wait(timeout: TimeInterval = 5, command: String) -> Bool {
+        if semaphore.wait(timeout: .now() + timeout) == .success { return true }
+        for pipe in pipes { pipe.fileHandleForReading.readabilityHandler = nil }
+        // Usually a descendant that inherited the pipe and kept it open. The
+        // child's own output has almost always arrived by now, but not
+        // provably, so it is named rather than passed off as complete.
+        log.error("CLI \(GUIActionTracker.redact(command), privacy: .public): output pipes still open \(Int(timeout)) s after exit; output may be incomplete")
+        return false
     }
 }
 
@@ -5083,6 +5318,9 @@ enum CLIError: LocalizedError {
     /// the user instead of a bare exit code.
     case nonZeroExit(Int32, message: String)
     case indexRebuildInProgress
+    /// The command exited but its output pipes never reached EOF, so what
+    /// was captured may be cut short (see PipeEOF).
+    case outputIncomplete(String)
 
     var errorDescription: String? {
         switch self {
@@ -5091,11 +5329,13 @@ enum CLIError: LocalizedError {
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? "CLI exited with code \(code)" : trimmed
         case .indexRebuildInProgress: return "Index rebuild is in progress; wait for it to finish before changing the active model"
+        case .outputIncomplete(let command):
+            return "\(GUIActionTracker.redact(command)) exited, but its output did not finish arriving; try again"
         }
     }
 }
 
-struct FileItem: Identifiable {
+struct FileItem: Identifiable, Sendable {
     let id = UUID()
     let url: URL
     let name: String

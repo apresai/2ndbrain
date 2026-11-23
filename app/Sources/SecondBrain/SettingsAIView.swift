@@ -278,6 +278,13 @@ struct SettingsAIView: View {
     @State private var customRegion = ""
     @State private var newGeminiKey = ""
     @State private var storedGeminiKey = ""
+    /// False until a Keychain read has answered, and again after one that
+    /// could not tell. Unknown counts as "a key may exist", so an
+    /// unreachable probe never overwrites a real stored key.
+    @State private var storedGeminiKeyKnown = false
+    /// Bumped by every save and clear, so a read that started before one of
+    /// them cannot land afterwards and restore the old key.
+    @State private var keyReadGeneration = 0
     @State private var enteringGeminiKey = false
 
     @State private var status: AIStatusInfo?
@@ -1498,7 +1505,9 @@ struct SettingsAIView: View {
             if reloadPending { reloadPending = false; Task { await reload() } }
         }
 
-        storedGeminiKey = appState.getStoredGeminiKey() ?? ""
+        // Off the critical path: a slow Keychain answer must not hold up
+        // the rest of the pane.
+        refreshStoredGeminiKey()
 
         guard appState.vault != nil else {
             status = nil
@@ -1685,7 +1694,7 @@ struct SettingsAIView: View {
         let verdict = CredentialVerdict(report.credentials)
         let persist = KeyPersistence.shouldPersistProbedKey(
             verdict: verdict,
-            hasExistingKey: !storedGeminiKey.isEmpty
+            hasExistingKey: !storedGeminiKey.isEmpty || !storedGeminiKeyKnown
         )
         guard persist else {
             message = KeyPersistence.message(
@@ -1703,7 +1712,9 @@ struct SettingsAIView: View {
                 geminiProject = ""
                 savedGeminiProject = ""
             }
+            keyReadGeneration &+= 1
             storedGeminiKey = key
+            storedGeminiKeyKnown = true
             newGeminiKey = ""
             enteringGeminiKey = false
             message = KeyPersistence.message(
@@ -1717,6 +1728,25 @@ struct SettingsAIView: View {
         }
     }
 
+    private func refreshStoredGeminiKey() {
+        keyReadGeneration &+= 1
+        let generation = keyReadGeneration
+        Task {
+            let lookup = await appState.lookupStoredGeminiKey()
+            guard generation == keyReadGeneration else { return }
+            switch lookup {
+            case .present(let key):
+                storedGeminiKey = key
+                storedGeminiKeyKnown = true
+            case .absent:
+                storedGeminiKey = ""
+                storedGeminiKeyKnown = true
+            case .unknown:
+                storedGeminiKeyKnown = false
+            }
+        }
+    }
+
     private func clearGeminiKey() async {
         busy = true
         defer { busy = false }
@@ -1724,7 +1754,9 @@ struct SettingsAIView: View {
         testError = nil
         do {
             try await appState.clearGeminiKey()
+            keyReadGeneration &+= 1
             storedGeminiKey = ""
+            storedGeminiKeyKnown = true
             selfTest = nil
             message = "Gemini API key removed."
         } catch {

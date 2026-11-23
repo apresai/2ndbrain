@@ -196,6 +196,10 @@ struct NotePreviewPane: View {
 
     @State private var noteText: String = ""
     @State private var loadError: String?
+    /// The result whose body `noteText` holds. While it differs from the
+    /// selected result the body is still loading, and the previous note's
+    /// text must not sit under the new note's header.
+    @State private var loadedResultID: String?
 
     var body: some View {
         if let result {
@@ -225,6 +229,9 @@ struct NotePreviewPane: View {
                             Text(loadError)
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
+                        } else if loadedResultID != result.id {
+                            ProgressView()
+                                .controlSize(.small)
                         } else if noteText.isEmpty {
                             Text("Empty note body.")
                                 .font(.callout)
@@ -241,7 +248,7 @@ struct NotePreviewPane: View {
                 }
             }
             .task(id: "\(result.id)|\(vaultRoot?.path ?? "")") {
-                loadPreview(for: result)
+                await loadPreview(for: result)
             }
         } else {
             ContentUnavailableView(
@@ -313,17 +320,27 @@ struct NotePreviewPane: View {
         vaultRoot?.appendingPathComponent(result.path)
     }
 
-    private func loadPreview(for result: CLISearchResult) {
+    /// The read and the markdown parse run off the main actor: arrowing
+    /// through results reads a note per step, and on a large note or an
+    /// iCloud or network vault that read used to block the UI. A task the
+    /// selection has already moved past drops its result.
+    private func loadPreview(for result: CLISearchResult) async {
         loadError = nil
         guard let url = fileURL(for: result) else {
             noteText = ""
             loadError = "No vault bound."
+            loadedResultID = result.id
             return
         }
-        do {
-            let raw = try String(contentsOf: url, encoding: .utf8)
-            noteText = NoteCitation.previewBody(fromMarkdown: raw)
-        } catch {
+        let loaded = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
+            Result { NoteCitation.previewBody(fromMarkdown: try String(contentsOf: url, encoding: .utf8)) }
+        }.value
+        guard !Task.isCancelled else { return }
+        loadedResultID = result.id
+        switch loaded {
+        case .success(let text):
+            noteText = text
+        case .failure(let error):
             noteText = ""
             loadError = "Unable to read note from disk (\(error.localizedDescription))."
         }
