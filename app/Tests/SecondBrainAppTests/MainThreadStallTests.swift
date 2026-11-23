@@ -130,6 +130,40 @@ func storedKeyLookupMapping() {
     #expect(AppState.storedKeyLookup(from: .launchFailed) == .unknown)
 }
 
+@Test("runSecurity escalates to SIGKILL when a child ignores SIGTERM")
+func runSecurityEscalatesToSigkill() async throws {
+    let script = try makeScript("trap '' TERM; sleep 30")
+    let start = ContinuousClock.now
+    let outcome = await AppState.runSecurity(
+        [],
+        timeout: 0.2,
+        killGrace: 0.2,
+        executablePath: script.path
+    )
+    let elapsed = ContinuousClock.now - start
+    #expect(outcome == .timedOut)
+    #expect(elapsed < .seconds(5), "expected SIGKILL escalation, took \(elapsed)")
+}
+
+@Test("NotePolishView.noteExists checks disk and database off the main actor")
+func polishNoteExistsChecksDiskAndDB() async throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("PolishNoteExists-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let note = root.appendingPathComponent("present.md")
+    try "hello".write(to: note, atomically: true, encoding: .utf8)
+    let vault = VaultManager(rootURL: root)
+
+    let found = await Task.detached {
+        NotePolishView.noteExists(path: "present.md", vault: vault, database: nil)
+    }.value
+    let missing = await Task.detached {
+        NotePolishView.noteExists(path: "missing.md", vault: vault, database: nil)
+    }.value
+    #expect(found)
+    #expect(!missing)
+}
+
 // MARK: - File watcher
 
 @Test("Stopping and dropping watchers while events arrive is safe, and a stopped watcher delivers nothing")

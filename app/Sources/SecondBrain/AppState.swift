@@ -3267,37 +3267,44 @@ final class AppState {
     nonisolated static func runSecurity(
         _ args: [String],
         captureStdout: Bool = false,
-        timeout: TimeInterval = 120
+        timeout: TimeInterval = 120,
+        killGrace: TimeInterval = CLIWatchdog.killGrace,
+        executablePath: String = "/usr/bin/security"
     ) async -> SecurityOutcome {
         let timedOut = TimeoutFlag()
         return await withCheckedContinuation { continuation in
             let sec = Process()
-            sec.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            sec.executableURL = URL(fileURLWithPath: executablePath)
             sec.arguments = args
             // The output is one short line at most, so reading it after exit
             // cannot fill the pipe buffer.
             let pipe: Pipe? = captureStdout ? Pipe() : nil
             sec.standardOutput = pipe ?? FileHandle.nullDevice
             sec.standardError = FileHandle.nullDevice
+
+            let watchdog = CLIWatchdogTimer(
+                process: sec,
+                command: executablePath,
+                timeout: timeout,
+                killGrace: killGrace
+            ) { _ in
+                timedOut.set()
+            }
+
             sec.terminationHandler = { proc in
+                watchdog.cancel()
                 let data = pipe?.fileHandleForReading.readDataToEndOfFile() ?? Data()
                 try? pipe?.fileHandleForReading.close()
                 continuation.resume(returning: timedOut.isSet ? .timedOut : .exited(proc.terminationStatus, data))
             }
             do {
                 try sec.run()
+                watchdog.arm()
             } catch {
+                watchdog.cancel()
                 releaseFailedLaunch(sec, pipes: [pipe])
                 continuation.resume(returning: .launchFailed)
                 return
-            }
-            // Bounded: an unanswered keychain prompt no longer freezes the
-            // UI, but the caller's spinner should not wait on it forever.
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if sec.isRunning {
-                    timedOut.set()
-                    sec.terminate()
-                }
             }
         }
     }

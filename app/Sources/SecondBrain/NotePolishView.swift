@@ -71,6 +71,8 @@ struct NotePolishView: View {
     @State private var statusIsError = false
     @State private var searchTask: Task<Void, Never>?
     @State private var searchGeneration = 0
+    @State private var requestedNoteTask: Task<Void, Never>?
+    @State private var requestedNoteGeneration = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -81,6 +83,9 @@ struct NotePolishView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: appState.vault?.rootURL) {
+            requestedNoteTask?.cancel()
+            requestedNoteTask = nil
+            requestedNoteGeneration &+= 1
             selectedPath = ""
             selectedNoteItem = nil
             preview = nil
@@ -103,6 +108,8 @@ struct NotePolishView: View {
         .onDisappear {
             searchTask?.cancel()
             searchTask = nil
+            requestedNoteTask?.cancel()
+            requestedNoteTask = nil
         }
         .onChange(of: searchQuery) { _, next in
             scheduleNoteSearch(for: next, immediate: false)
@@ -491,15 +498,28 @@ struct NotePolishView: View {
         applyBacklinks = false
     }
 
-    private func applyRequestedPolishNotePath(_ requested: String?) {
-        guard let requested, !requested.isEmpty, let vault = appState.vault else { return }
-        let fileURL = vault.rootURL.appendingPathComponent(requested)
-        let inDB = (try? appState.database?.document(atPath: requested)) != nil
+    nonisolated static func noteExists(path: String, vault: VaultManager, database: DatabaseManager?) -> Bool {
+        let fileURL = vault.rootURL.appendingPathComponent(path)
+        let inDB = (try? database?.document(atPath: path)) != nil
         let onDisk = FileManager.default.fileExists(atPath: fileURL.path)
-        guard inDB || onDisk else { return }
+        return inDB || onDisk
+    }
 
-        if selectedPath != requested {
-            selectNote(path: requested)
+    private func applyRequestedPolishNotePath(_ requested: String?) {
+        requestedNoteTask?.cancel()
+        requestedNoteTask = nil
+        requestedNoteGeneration &+= 1
+        guard let requested, !requested.isEmpty, let vault = appState.vault else { return }
+        let gen = requestedNoteGeneration
+        let db = appState.database
+        requestedNoteTask = Task {
+            let exists = await Task.detached(priority: .userInitiated) {
+                Self.noteExists(path: requested, vault: vault, database: db)
+            }.value
+            guard !Task.isCancelled, gen == requestedNoteGeneration, appState.vault === vault, exists else { return }
+            if selectedPath != requested {
+                selectNote(path: requested)
+            }
         }
     }
 

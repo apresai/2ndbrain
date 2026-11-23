@@ -80,8 +80,11 @@ enum CLIWatchdog {
 final class CLIWatchdogTimer: @unchecked Sendable {
     private let process: Process
     private let command: String
+    private let timeout: TimeInterval
+    private let killGrace: TimeInterval
     private let onEvent: @Sendable (String) -> Void
     private let lock = NSLock()
+    private var cancelled = false
     private var termItem: DispatchWorkItem?
     private var killItem: DispatchWorkItem?
 
@@ -89,9 +92,17 @@ final class CLIWatchdogTimer: @unchecked Sendable {
     ///   description when a signal is actually sent, so the kill is
     ///   attributable in the logs instead of surfacing as a bare non-zero
     ///   exit with empty stderr.
-    init(process: Process, command: String, onEvent: @escaping @Sendable (String) -> Void) {
+    init(
+        process: Process,
+        command: String,
+        timeout: TimeInterval = CLIWatchdog.timeout,
+        killGrace: TimeInterval = CLIWatchdog.killGrace,
+        onEvent: @escaping @Sendable (String) -> Void
+    ) {
         self.process = process
         self.command = command
+        self.timeout = timeout
+        self.killGrace = killGrace
         self.onEvent = onEvent
     }
 
@@ -99,13 +110,13 @@ final class CLIWatchdogTimer: @unchecked Sendable {
     func arm(queue: DispatchQueue = .global(qos: .utility)) {
         lock.lock()
         defer { lock.unlock() }
-        guard termItem == nil else { return }
+        guard !cancelled, termItem == nil else { return }
         let term = DispatchWorkItem { [weak self] in self?.fire(.sigterm) }
         let kill = DispatchWorkItem { [weak self] in self?.fire(.sigkill) }
         termItem = term
         killItem = kill
-        queue.asyncAfter(deadline: .now() + CLIWatchdog.timeout, execute: term)
-        queue.asyncAfter(deadline: .now() + CLIWatchdog.timeout + CLIWatchdog.killGrace, execute: kill)
+        queue.asyncAfter(deadline: .now() + timeout, execute: term)
+        queue.asyncAfter(deadline: .now() + timeout + killGrace, execute: kill)
     }
 
     /// Call from the terminationHandler: a finished child needs no signal.
@@ -113,8 +124,11 @@ final class CLIWatchdogTimer: @unchecked Sendable {
     func cancel() {
         lock.lock()
         defer { lock.unlock() }
+        cancelled = true
         termItem?.cancel()
         killItem?.cancel()
+        termItem = nil
+        killItem = nil
     }
 
     private func fire(_ verdict: CLIWatchdog.Verdict) {
@@ -123,10 +137,10 @@ final class CLIWatchdogTimer: @unchecked Sendable {
         guard process.isRunning else { return }
         switch verdict {
         case .sigterm:
-            onEvent("CLI watchdog: \(command) still running after \(Int(CLIWatchdog.timeout))s; sending SIGTERM")
+            onEvent("CLI watchdog: \(command) still running after \(Int(timeout))s; sending SIGTERM")
             process.terminate()
         case .sigkill:
-            onEvent("CLI watchdog: \(command) ignored SIGTERM for \(Int(CLIWatchdog.killGrace))s; sending SIGKILL")
+            onEvent("CLI watchdog: \(command) ignored SIGTERM for \(Int(killGrace))s; sending SIGKILL")
             kill(process.processIdentifier, SIGKILL)
         case .wait:
             break
