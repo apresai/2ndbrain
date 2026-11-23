@@ -674,7 +674,12 @@ final class QuickSearchPanelController {
     private var panel: QuickSearchPanelWindow?
     private var keyMonitor: Any?
     private var resignObserver: NSObjectProtocol?
-    private var isObservingSize = false
+    /// Bumped by every show and hide. An observation registered under an
+    /// older value is stale and lets itself lapse instead of re-registering.
+    /// A Bool used to gate this, so an observation armed before a hide was
+    /// revived by the next show and ran beside the new one: one extra live
+    /// observer per close and reopen with a query in the field.
+    private var sizeObservationGeneration = 0
     private var lastExpanded = false
     private var pinnedTopY: CGFloat?
 
@@ -749,7 +754,7 @@ final class QuickSearchPanelController {
         if QLPreviewPanel.sharedPreviewPanelExists(), let ql = QLPreviewPanel.shared(), ql.isVisible {
             ql.orderOut(nil)
         }
-        isObservingSize = false
+        sizeObservationGeneration &+= 1
         removeMonitors()
         viewModel.resetTransientState()
         panel?.orderOut(nil)
@@ -793,12 +798,12 @@ final class QuickSearchPanelController {
     }
 
     private func observePanelSize() {
-        isObservingSize = true
-        trackSizeChange()
+        sizeObservationGeneration &+= 1
+        trackSizeChange(generation: sizeObservationGeneration)
     }
 
-    private func trackSizeChange() {
-        guard isObservingSize else { return }
+    private func trackSizeChange(generation: Int) {
+        guard generation == sizeObservationGeneration else { return }
         withObservationTracking {
             let expanded = viewModel.isExpanded
             if expanded != lastExpanded, let panel, panel.isVisible {
@@ -814,7 +819,7 @@ final class QuickSearchPanelController {
             }
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                self?.trackSizeChange()
+                self?.trackSizeChange(generation: generation)
             }
         }
     }

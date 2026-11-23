@@ -17,6 +17,7 @@ private func withOpenAppStateVault(_ body: (AppState, URL) async throws -> Void)
     try VaultManager.initializeVault(at: root)
     let state = AppState()
     state.openVault(at: root)
+    await state.databaseReady()
     try await body(state, root)
 }
 

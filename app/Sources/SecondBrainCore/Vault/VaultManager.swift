@@ -54,41 +54,21 @@ public final class VaultManager: @unchecked Sendable {
         process.arguments = ["vault", "create", url.path]
         let errPipe = Pipe()
         process.standardError = errPipe
-        process.standardOutput = Pipe() // discard the "Next steps" banner
+        // Discard the "Next steps" banner. It used to go to a Pipe nobody
+        // read, which deadlocks the child once it fills the pipe buffer.
+        process.standardOutput = FileHandle.nullDevice
         try process.run()
+        // Read stderr to EOF BEFORE waiting, so a long error cannot fill the
+        // pipe and block the child's exit. This blocks the calling thread for
+        // the life of the command: callers on the main actor go through
+        // AppState.createVaultAsync, which runs this detached.
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            let stderr = String(
-                data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                encoding: .utf8
-            ) ?? ""
+            let stderr = String(data: errData, encoding: .utf8) ?? ""
             throw VaultError.cliFailed("vault create exit \(process.terminationStatus): \(stderr)")
         }
-    }
-
-    /// Run the CLI indexer on this vault.
-    public func runIndex() throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-        process.arguments = CLIPath.args(["index"], vault: rootURL)
-        process.currentDirectoryURL = rootURL
-        try process.run()
-        process.waitUntilExit()
-    }
-
-    /// Run the CLI linter and return JSON results.
-    public func runLint() throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: CLIPath.resolve())
-        process.arguments = CLIPath.args(["lint", "--json"], vault: rootURL)
-        process.currentDirectoryURL = rootURL
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        try process.run()
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
     }
 
     /// List all markdown files in the vault.

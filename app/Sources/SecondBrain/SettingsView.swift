@@ -88,10 +88,22 @@ private struct SettingsPane<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @State private var measuredHeight: CGFloat = 0
 
+    private var maxHeight: CGFloat {
+        max(minHeight, (NSScreen.main?.visibleFrame.height ?? 820) - 140)
+    }
+
     private var clampedHeight: CGFloat {
-        let maxHeight = max(minHeight, (NSScreen.main?.visibleFrame.height ?? 820) - 140)
         let target = measuredHeight > 0 ? measuredHeight : minHeight
         return min(max(target, minHeight), maxHeight)
+    }
+
+    /// The window is sized to the content, so a scroller is needed only when
+    /// the content is taller than the screen allows. Showing one otherwise
+    /// ("Always show scroll bars", or mid-animation while the frame is still
+    /// shorter than the content) narrows the content, rewraps its text,
+    /// changes the measured height, and re-sizes the window again.
+    private var needsScroller: Bool {
+        measuredHeight > maxHeight + 1
     }
 
     var body: some View {
@@ -105,6 +117,7 @@ private struct SettingsPane<Content: View>: View {
                     }
                 )
         }
+        .scrollIndicators(needsScroller ? .automatic : .never)
         .onPreferenceChange(SettingsHeightKey.self) { height in
             if height > 0, abs(height - measuredHeight) > 1 {
                 measuredHeight = height
