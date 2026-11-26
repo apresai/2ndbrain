@@ -13,7 +13,7 @@ require (
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/text v0.44.0
-	google.golang.org/genai v1.77.0
+	google.golang.org/genai v1.79.1
 	google.golang.org/grpc v1.85.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.60.1

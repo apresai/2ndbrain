@@ -556,9 +556,30 @@ func TestGemini_ProbeMode_APIKeyIgnoresVertex(t *testing.T) {
 	if got := client.ClientConfig().Backend; got != genai.BackendGeminiAPI {
 		t.Errorf("backend = %v, want BackendGeminiAPI", got)
 	}
+	if got := client.ClientConfig().HTTPOptions.APIVersion; got != "v1beta" {
+		t.Errorf("APIVersion = %q, want v1beta", got)
+	}
 	p := NewGeminiProviderWithClient(client, cfg, "", "", 0)
 	if p.isVertexAI() {
 		t.Error("apikey mode must not attribute requests to Vertex AI")
+	}
+}
+
+func TestGemini_ClientConfig_APIVersionPinned(t *testing.T) {
+	vcfg := geminiVertexClientConfig("proj-1", "us-central1")
+	if vcfg.Backend != genai.BackendVertexAI {
+		t.Errorf("Vertex backend = %v, want BackendVertexAI", vcfg.Backend)
+	}
+	if vcfg.HTTPOptions.APIVersion != "v1" {
+		t.Errorf("Vertex APIVersion = %q, want v1", vcfg.HTTPOptions.APIVersion)
+	}
+
+	acfg := geminiAPIClientConfig("test-key")
+	if acfg.Backend != genai.BackendGeminiAPI {
+		t.Errorf("Gemini API backend = %v, want BackendGeminiAPI", acfg.Backend)
+	}
+	if acfg.HTTPOptions.APIVersion != "v1beta" {
+		t.Errorf("Gemini API APIVersion = %q, want v1beta", acfg.HTTPOptions.APIVersion)
 	}
 }
 
