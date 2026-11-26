@@ -120,6 +120,23 @@ func geminiUsesVertex(cfg GeminiConfig) bool {
 	return cfg.UseVertexAI || ResolveGCPProject(cfg.Project) != ""
 }
 
+func geminiVertexClientConfig(project, location string) *genai.ClientConfig {
+	return &genai.ClientConfig{
+		Backend:     genai.BackendVertexAI,
+		Project:     project,
+		Location:    location,
+		HTTPOptions: genai.HTTPOptions{APIVersion: "v1"},
+	}
+}
+
+func geminiAPIClientConfig(apiKey string) *genai.ClientConfig {
+	return &genai.ClientConfig{
+		Backend:     genai.BackendGeminiAPI,
+		APIKey:      apiKey,
+		HTTPOptions: genai.HTTPOptions{APIVersion: "v1beta"},
+	}
+}
+
 // NewGeminiClient initializes a Google GenAI SDK client for either Vertex AI
 // or Gemini API. Strictly enforces project rules: GOOGLE_API_KEY is prohibited.
 func NewGeminiClient(ctx context.Context, cfg GeminiConfig) (*genai.Client, error) {
@@ -133,11 +150,7 @@ func NewGeminiClient(ctx context.Context, cfg GeminiConfig) (*genai.Client, erro
 		if project == "" {
 			return nil, fmt.Errorf("no GCP project configured. Set ai.gemini.project with '2nb config set ai.gemini.project <your-gcp-project-id>' or set GOOGLE_CLOUD_PROJECT")
 		}
-		return genai.NewClient(ctx, &genai.ClientConfig{
-			Backend:  genai.BackendVertexAI,
-			Project:  project,
-			Location: ResolveGCPLocation(cfg.Location),
-		})
+		return genai.NewClient(ctx, geminiVertexClientConfig(project, ResolveGCPLocation(cfg.Location)))
 	}
 
 	// Smooth BYOK ergonomics: fallback to Gemini API (API key)
@@ -154,10 +167,7 @@ func NewGeminiClient(ctx context.Context, cfg GeminiConfig) (*genai.Client, erro
 		}
 	}
 
-	return genai.NewClient(ctx, &genai.ClientConfig{
-		Backend: genai.BackendGeminiAPI,
-		APIKey:  apiKey,
-	})
+	return genai.NewClient(ctx, geminiAPIClientConfig(apiKey))
 }
 
 // CheckGeminiCredentials reports whether valid Google / Gemini credentials exist.
